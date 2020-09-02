@@ -16,7 +16,7 @@ class BondDigital:
     def __init__(self,source,target,overlat,t):
         self.source=source
         self.target=target
-        self.overlat=overlat
+        self.overlat=np.array(overlat)
         self.t=t
 
 class BondPhysical:
