@@ -898,7 +898,7 @@ def __toHome():
             exit()
         __toHome()
 
-def createKPOINTS(rpath,gam=False,getKMesh=False): # if getKMesh, no file will be created
+def createKPOINTS(rpath=None,gam=False,getKMesh=False): # if getKMesh, no file will be created
     global lat,nkpts
     a1, a2, a3=lat[0], lat[1], lat[2]
     a1_len=np.sqrt(np.dot(a1,a1))
@@ -926,6 +926,7 @@ def createKPOINTS(rpath,gam=False,getKMesh=False): # if getKMesh, no file will b
     if getKMesh: # if getKMesh, no file will be created
         return [np.array([k1,k2,k3]) for k1 in kpts1 for k2 in kpts2 for k3 in kpts3]
     
+    assert rpath!=None
     # write KPOINTS file
     with open(rpath+'KPOINTS','w') as f_kpt:
         f_kpt.write('Automatic generate via XXZ\n')

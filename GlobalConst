@@ -1,0 +1,135 @@
+POTROOT=/home/vasp/POT/PAW_PBE/
+OVERIDE=1
+PBSMODE=0       # 0: SMP mode; 1: cluster mode
+VERBOSE=F       # output detail log
+
+PBC=2
+ENMAX_aug=100
+METAGGA=F
+NCORE=24        # total cores in resource pool
+NODES=1         # total nodes in cluster resource pool
+PPN=24          # PPN=NCORE/NODES
+NPAR=1          #
+KPAR=4          # maximally permitted KPAR
+PREC=M
+ADDGRID=F
+LREAL=T
+GPUMODE=F
+
+PROPOSAL=F        # if set to T then entering rlx loop
+CELLRLX=2         # D.O.F of lattice in rlx, in x,y,z order
+IONRLX=T          # if turn off, no structural opt. would perform (only static calc.)
+RLXONLY=F         # only conduct rlx
+EDIFFG =-1e-3
+NSW=300
+CHECKEAZYAXIS=T   # check the anisotropy after rlx
+CHECKINTEMAG=F    # check the integrity of mag. mom.
+PHONON=F          # calc eigenvalues for PHONON
+PHONON_SC=2 2 1   # the supercell utilized for phonon calc
+MINFREQUENCY=-0.1 # if there is eig < this value the structure is thought to be unstable
+
+DOSCALC=F
+RWIGSOVERLAP=0.1 # overlapping percent between Wigner-Sigze balls
+NEDOS=2000
+PERTURBANI=F
+DOSKFACTOR=1
+NBANDFACTOR=1
+PDOS=px,pz,py;dxy,dyz,dxz,dz2,x2-y2
+DOSLEGEND=F     # show legend for dos diagram
+BANDCALC=F
+KINTERVAL=30
+BANDLOW=-3
+BANDHIGH=2
+LBOUND=F
+ANIPOLAR=T      # calc ncl energy in polar coor.
+NTHETA=10        # total theta sampling
+LOCALFRAMERANGE=1.5 # searching nearby atoms to form local frame
+
+IVDW=-1              # <0: close, 11: D2, 12: D3
+
+EXHCALC=1            # 1: only prepare files | 2: DFT calc but no cvg-check | 3: all
+CALCANI=z
+PRECHECKAFM=F        # entering 1NN calc. to check if leading J1 is AFM-type
+ALGO=N
+OPTAMIX=F            # set to T to scan AMIX for tackling hard cvg. in some mag. sys.
+AMIX0=0.02
+AMIX_step=0.02
+nAMIX=15
+AMIX=0.02             # if OPTAMIX=F then utilize folloing mixing parameters
+BMIX=0.0001
+BIMX_MAG=0.0001
+TIME=0.4
+EDIFF=1E-6
+CDIFF=0.005
+CPERCENTAGE=0.3      # cvg. criteria for exchange interactions
+CTYPE=CT
+COUPLINGTOL=0.1      # Jn < ctol*J1 will be kicked out in cvg. stage
+BONDTOL=0.01
+MAGTOL=0.4           # calc_mag < std_mag*METALSOLFT*(1-magtol) triggers failed calc.
+TOTMAGTOL=0.1
+FIXTOTMAG=F          # if True then set NUPDOWN to fix the total magmom in colinear calc.
+initMagEnhance=0.0   # echance the initial moment according to standard values
+METALSOLFT=1.0       # 
+SYMPREC=1e-4
+SYMAFM=-1            # useless
+ISMEAR=0
+SIGMA=0.05
+NELM=100
+
+MAGTYPE=FULL         # ISING(colinear) | XXZ | HEISENBERG | FULL(fully anisotropic)
+MINMAG=0.4
+MAXSTR=5             # useless
+BONDSEARCHRANGE=2    # the size of supercell used to search nNN bonds
+MAXCOMB=1000         # 
+NINFO4STR=200        # 
+MAXTRISTR=5          # total FM-AFM settings
+MAXRANGE=3
+CALRANGE=3
+MAXINV=4
+MINCELL=1
+MAXCELL=4
+KDEN=40
+SYMEXPAND=T
+RSVSYM=2
+PGHOLD=0.5
+DFTSTD=vasp_std
+DFTNCL=vasp_ncl
+DFTGAM=vasp_gcl
+DFTOPT=vasp_opt
+waitBeforeDFT=0
+MAXDFTTIME=86400
+BONDBIAS=0.1
+BONDINPT=20
+ZAXIS=0 0 1
+LAMBDA0=1
+DLAMBDA=3
+
+U0=0.0
+DU=0.1
+USTEP=1
+HFSCREEN=-1
+
+FORCEZ=1
+DSN=0.5
+SWNKPT=32
+SWCVG=1e-5
+SWTMIN=0.5
+SWTMAX=1.2
+SCFGRID=100
+
+MCCALC=F
+MCSIZE=16
+THERMALIZATION=20000
+SWEEPS=100000
+MCALGO=loop
+MINTEMP=5
+MAXTEMP=200
+TMIN=50
+TSTEP=1.0
+TOVERLAP=0.2
+MCCORE=72
+CVGRANGE=5
+MAXMCSTEP=128
+SPINFOLD=1    #multilply local_s & divide J to keep E and test classical limit
+
+EV2K=11588.75

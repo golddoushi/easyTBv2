@@ -1,6 +1,8 @@
 from scipy.sparse import coo_matrix
+from scipy import integrate
 import scipy.sparse.linalg as linalg
 import numpy as np
+import time
 
 class Ham:
     def __init__(self):
@@ -23,11 +25,14 @@ class Ham:
         self.tList.append(tk.conjugate())
         return
 
-    def buildHkFromHr(self,Hr,kpt):
+    def buildHkFromHr(self,Hr,kpt,getHk=False):
         for bondDigital in Hr.bondList:
             #print(bondDigital.source,bondDigital.target,bondDigital.overlat)
             if bondDigital.source<=bondDigital.target: # upper triangular matrix
                 self.addHopping(bondDigital.source,bondDigital.target,bondDigital.t,overLat=bondDigital.overlat,kpt=kpt)
+        if getHk:
+            return coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=complex).toarray()
+        return
 
     # exact diagonal
     def sovle_exact(self,vec=False):
@@ -51,20 +56,57 @@ class Ham:
         self.csr=coo.tocsr() if parserMethod else coo.toarray()
 
 
+class Green:
 
-def getGreen_E(orbList,bondList,E=0.,filling=0.5,eta=0.1):
-    totOrb=len(orbList)
-    ham=Ham()
-    for bond in bondList:
-        ham.addHopping(bond.sourceOrb.id,bond.targetOrb.id,bond.t)
-    for i in range(totOrb):
-        ham.addHopping(i,i,0)
+    def __init__(self):
+        pass
 
-    eigList=ham.solve(k=int(totOrb*filling),which='SM')
-    #print(eigList)
-    #print(ham.csr)
-    #exit()
-    return sum([1./(E-eig+1j*eta) for eig in eigList])
-    
-    
+    def calcBulkSusceptibility(self,hr,kmesh,a=0,b=2,R=[-1,0,0],fermi=0.,eta=0.01):
+        '''Linear response approximation
+           \chi = Int_-inf^fermi{dz G(aR,b0,z)G(b0,aR,z)}
+           using Gaussian integration along semi-circle in upper complex plane
+        '''
+        self.norbital=hr.norb
+        self.nkpts=len(kmesh)
+        self.HkList=[]
+        #find bottom of eigenvalues.
+        eig_min=100.
+        time0=time.time()
+        for kpt in kmesh:
+            _ham=Ham()
+            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
+            self.HkList.append(Hk)
+            eig=np.min(_ham.sovle_exact())
+            eig_min=eig if eig < eig_min else eig_min
+        print('Hk constructed in %.3fs, found band edge locates at %.6f'%(time.time()-time0,eig_min))
 
+        eig_min-=5
+        ox=(fermi+eig_min)/2
+        r=(fermi-eig_min)/2
+        
+        #fourierBasis=np.array([np.exp(np.pi*2j*np.dot(kpt,np.array(R))) for kpt in kmesh])
+        
+        def getGG(zlist=0.):
+            val=[]
+            for z in zlist:
+                G_aRb0=0.j
+                G_b0aR=0.j
+                for ikpt, kpt in enumerate(kmesh):
+                    Hk=self.HkList[ikpt]
+                    Gk=np.linalg.inv((z+eta*1j)*np.eye(self.norbital)-Hk)
+                    G_aRb0+=np.exp(np.pi*2j*np.dot(kpt,np.array(R)))*Gk[a][b]/self.nkpts
+                    G_b0aR+=np.exp(np.pi*2j*np.dot(kpt,-np.array(R)))*Gk[b][a]/self.nkpts
+                val.append(G_aRb0*G_b0aR)
+            return np.array(val)
+        
+        def onCircle(theta):
+            z=r*np.exp(1j*theta,dtype=complex)+ox
+            #print(len(z))
+            return getGG(z).real*r
+        
+        time0=time.time()
+        inte,err=integrate.quadrature(onCircle,a=np.pi,b=0,maxiter=200)
+        print(inte,err)
+        print('Integration finished in %.3fs'%(time.time()-time0))
+        #print(onCircle(np.array([np.pi])))
+        return inte

@@ -134,7 +134,7 @@ class Node:
     
 def getCombinationLoop(input_list=[],ncomb=1,maxComb=-1):
     totInput=len(input_list)
-    index_list=[i for i in range(totInput)]
+    #index_list=[i for i in range(totInput)]
     # create linked list
     rootNode=Node(value=0,maxValue=totInput-1)
     for i in range(1,ncomb):
