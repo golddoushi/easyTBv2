@@ -243,15 +243,8 @@ def getFormula(ele_str_list,nion_list):
         formula=formula+ele+str(nion) if nion>1 else formula+ele
     return formula
 
-def getIrreducibleKmesh(kmesh,source_list=[],DNA=[]):
+def getIrreducibleKmesh(kmesh,DNA=[]):
     global lat, pos_ions, ele_str, nions, tot_ions
-
-    def isInverted(index):
-        if len(source_list) == 0: 
-            return False
-        for isource in source_list:
-            if index==isource:
-                return True
 
     def isZeroVector(vec):
         '''check if the vec is zero vec or just over 1.'''
@@ -369,6 +362,7 @@ def getIrreducibleKmesh(kmesh,source_list=[],DNA=[]):
     #for rotat in rotation_frac_reciprocal:
     #    print rotat[0]
     # generate irreducible kmesh
+    equalIndex=[]
     irkmesh=[]
     weight=[]
     for kpt in kmesh:
@@ -381,15 +375,17 @@ def getIrreducibleKmesh(kmesh,source_list=[],DNA=[]):
             if isZeroVector(exist-optimal_rep):#checkIfNew(exist,equal_kpts,getIndex=True)>0:
                 weight[iexist]+=1
                 newKpt=False
+                equalIndex.append(iexist)
                 break
         if newKpt:
             irkmesh.append(optimal_rep)
             weight.append(1)
+            equalIndex.append(-1)
     #print('irreducible k-points and weights (TRS included):')
     #for x,y in zip(irkmesh,weight):
     #    print(x,y)
     #exit()
-    return irkmesh, weight
+    return irkmesh, weight, equalIndex
 
 def readPrototypeAndCreateAllInitialPOSCAR(pathOfPrototype,pathOfMainDir):
     global title,scale,lat,ele_str,nions,tot_ions,type, pos_ions
@@ -898,7 +894,48 @@ def __toHome():
             exit()
         __toHome()
 
-def createKPOINTS(rpath=None,gam=False,getKMesh=False): # if getKMesh, no file will be created
+def plotKSampling(kmesh):
+    global lat
+    plt.figure(figsize=(6,6))
+    def drawBorder(endPoint,color='red'):
+        px,py=endPoint[0],endPoint[1]
+        plt.plot([px+py,px-py],[py-px,py+px],c=color)
+    lat_inv=np.linalg.inv(lat)*2*np.pi
+    #kmesh=np.array([[k1,k2,k3] for k1 in kpts1 for k2 in kpts2 for k3 in kpts3])
+    kmesh_cart=np.dot(lat_inv,kmesh.T).transpose()
+    xmax,xmin,ymax,ymin=np.max(kmesh_cart[:,0]),np.min(kmesh_cart[:,0]),np.max(kmesh_cart[:,1]),np.min(kmesh_cart[:,1])
+    length=np.max([xmax-xmin,ymax-ymin])*1.2
+    ox,oy=(xmax+xmin)/2, (ymax+ymin)/2
+    for ikpt, kpt in enumerate(kmesh_cart):
+        kx, ky, _ = kpt
+        plt.scatter(kx,ky,c='black')
+        plt.annotate('%d'%ikpt,(kx,ky))
+    # irreducible BZ
+    
+    g1=np.array([lat_inv[0][0]/2, lat_inv[1][0]/2])
+    g2=np.array([lat_inv[0][1]/2, lat_inv[1][1]/2])
+
+    plt.plot([0,g1[0]],[0,g1[1]],c='blue') # g1
+    plt.plot([0,g2[0]],[0,g2[1]],c='blue') # g2
+    plt.plot([g1[0]-g2[0],g1[0]+g2[0]],[g1[1]-g2[1],g1[1]+g2[1]],c='blue') # g1
+    plt.plot([g2[0]-g1[0],g2[0]+g1[0]],[g2[1]-g1[1],g2[1]+g1[1]],c='blue') # g2
+    plt.plot([-g1[0]+g2[0],-g1[0]-g2[0]],[-g1[1]+g2[1],-g1[1]-g2[1]],c='blue') # g1
+    plt.plot([-g2[0]+g1[0],-g2[0]-g1[0]],[-g2[1]+g1[1],-g2[1]-g1[1]],c='blue') # g2
+
+    drawBorder(g1)
+    drawBorder(g2)
+    drawBorder(-g1)
+    drawBorder(-g2)
+    drawBorder(g1+g2)
+    drawBorder(g1-g2)
+    drawBorder(g2-g1)
+    drawBorder(-g1-g2)
+        
+    plt.xlim(ox-length/2,ox+length/2)
+    plt.ylim(oy-length/2,oy+length/2)
+    plt.show()
+
+def createKPOINTS(rpath=None,gam=False,getKMesh=False,forceBoder=False): # if getKMesh, no file will be created
     global lat,nkpts
     a1, a2, a3=lat[0], lat[1], lat[2]
     a1_len=np.sqrt(np.dot(a1,a1))
@@ -907,9 +944,14 @@ def createKPOINTS(rpath=None,gam=False,getKMesh=False): # if getKMesh, no file w
     nkpt1=np.max([int(param.KDEN/a1_len),1])
     nkpt2=np.max([int(param.KDEN/a2_len),1])
     nkpt3=np.max([int(param.KDEN/a3_len),1])
+    if forceBoder:
+        nkpt1=int((nkpt1+1)/2)*2
+        nkpt2=int((nkpt2+1)/2)*2
+        nkpt3=int((nkpt3+1)/2)*2
     nkpt3=1 if (param.PBC==2 or param.PBC==1 or param.PBC==0) else nkpt3
     nkpt2=1 if (param.PBC==1 or param.PBC==0) else nkpt2
     nkpt1=1 if (param.PBC==0) else nkpt1
+    
     if gam:
         nkpt1=nkpt2=nkpt3=1
     nkpts=nkpt1*nkpt2*nkpt3

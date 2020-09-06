@@ -8,6 +8,7 @@ class Hr:
             data=fin.read().split('\n')
             print('reading file %s, title line:%s'%(filepath,data[0]))
             self.norb=int(data[1])
+            self.onsite=[0.]*self.norb
 
             totWaveVectors=int(data[2])
             iline=3
@@ -22,9 +23,12 @@ class Hr:
             while(True):
                 lineinfo=data[iline].split()
                 if len(lineinfo)==7:
-                    R1, R2, R3, sourceID, targetID, t_real, t_imag=lineinfo
-                    t=float(t_real) if ignoreImagPart else float(t_real) + 1j*float(t_imag)
-                    self.bondList.append(lat.BondDigital(int(sourceID)-1,int(targetID)-1,[int(R1),int(R2),int(R3)],t))
+                    R1, R2, R3, sourceID, targetID, t_real, t_imag = int(lineinfo[0]),int(lineinfo[1]),int(lineinfo[2]),int(lineinfo[3])-1,int(lineinfo[4])-1,float(lineinfo[5]),float(lineinfo[6])
+                    t=t_real if ignoreImagPart else t_real + 1j*t_imag
+                    self.bondList.append(lat.BondDigital(sourceID,targetID,[R1,R2,R3],t))
+                    if R1==0 and R2 ==0 and R3==0 and sourceID==targetID:
+                        self.onsite[sourceID]=t_real
+                        assert t_imag<1e-4, 'found complex onsite energy on orb%d'%sourceID
                     iline+=1
                 else:
                     break
