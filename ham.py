@@ -362,7 +362,8 @@ class Green:
                 _gk=np.linalg.inv((z+eta*1j)*np.eye(norb)-_hk)
                 g00+=_gk[0,0]*_weight/totalWeight
                 rou+=sum(np.diagonal(_gk))*_weight/totalWeight
-                rou_perturb+=(_gk[0,0]*_gk[0,0]+_gk[0,1]*_gk[1,0])*_weight/totalWeight
+                for iorb in range(norb):
+                    rou_perturb+=_gk[iorb,0]*_gk[0,iorb]*_weight/totalWeight
             
             factor=delta/(1-delta*g00)
             rou+=rou_perturb*factor/totalWeight
@@ -423,23 +424,40 @@ class Green:
         plt.plot(energyAxis,dosDnAxis)
         plt.show()
     
+    def calcHorizontallyMagneticPerturbatedSpinPolarizedDOSViaDirectInversion(self,hr_up,hr_dn,delta=1.,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+        assert hr_up.norb==hr_dn.norb, 'The norb is inconsistent in the two hr file'
+        totCell=Lx*Ly*Lz
+        norb=hr_up.norb*totCell*2
+        halfNorb=int(norb/2)
+        _ham=Ham().buildWholeSpinPolarizedHam(hr_up,hr_dn,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        _ham[0,halfNorb]=delta
+        _ham[halfNorb,0]=delta
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosUpAxis, dosDnAxis=[], []
+        for z in energyAxis:
+            G=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham)
+            #print(type(np.diagonal(G)),halfNorb)
+            #exit()
+            dosUpAxis.append(sum(np.diagonal(G)[:halfNorb]).imag/(-np.pi)/totCell)
+            dosDnAxis.append(sum(np.diagonal(G)[halfNorb:]).imag/(np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dosUpAxis)
+        plt.plot(energyAxis,dosDnAxis)
+        plt.show()
+
     def calcSpinPolarizedDOSViaFourier(self,hr_up,hr_dn,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500):
         norb=int(hr_up.norb)
         kmesh=pR.createKPOINTS(getKMesh=True)
-        irkmesh, weight, equalIndex=pR.getIrreducibleKmesh(kmesh)
+        irkmesh, weight, _=pR.getIrreducibleKmesh(kmesh)
         totalWeight=sum(weight)
         print('via symmetry considerations, only %d/%d kpoints involved'%(len(irkmesh),len(kmesh)))
 
         HkList=[]
-        eigmin, eigmax= 100, -100
         time0=time.time()
         for kpt in irkmesh:
             _ham=Ham()
             Hk=_ham.buildSpinPolarizedHk(hr_up,hr_dn,kpt,getHk=True)
-            #eigList=_ham.sovle_exact()
-            #_eigmin, _eigmax=np.min(eigList), np.max(eigList)
-            #eigmin = _eigmin if _eigmin < eigmin else eigmin
-            #eigmax = _eigmax if _eigmax > eigmax else eigmax
             HkList.append(Hk)
         print('Hk constructured in %.3fs'%(time.time()-time0))
 
@@ -452,6 +470,51 @@ class Green:
                 _gk=np.linalg.inv((z+eta*1j)*np.eye(norb*2)-_hk)
                 rou_up+=sum(np.diagonal(_gk)[:norb])*_weight/totalWeight
                 rou_dn+=sum(np.diagonal(_gk)[norb:])*_weight/totalWeight
+            dosUpAxis.append(rou_up.imag/(-np.pi))
+            dosDnAxis.append(rou_dn.imag/(np.pi))
+
+        plt.figure()
+        plt.plot(energyAxis,dosUpAxis)
+        plt.plot(energyAxis,dosDnAxis)
+        plt.show()
+
+    def calcHorizontallyMagneticPerturbatedDOSViaFourier(self,hr_up,hr_dn,delta=1.,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500):
+        norb=int(hr_up.norb)
+        kmesh=pR.createKPOINTS(getKMesh=True)
+        irkmesh, weight, equalIndex=pR.getIrreducibleKmesh(kmesh)
+        totalWeight=sum(weight)
+        print('via symmetry considerations, only %d/%d kpoints involved'%(len(irkmesh),len(kmesh)))
+
+        HkList=[]
+        time0=time.time()
+        for kpt in irkmesh:
+            _ham=Ham()
+            Hk=_ham.buildSpinPolarizedHk(hr_up,hr_dn,kpt,getHk=True)
+            HkList.append(Hk)
+        print('Hk constructured in %.3fs'%(time.time()-time0))
+
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosUpAxis, dosDnAxis=[], []
+        for z in energyAxis:
+            rou_up, rou_dn=0.j, 0.j
+            rou_up_perturb, rou_dn_perturb=0.j, 0.j
+            g00_up, g00_dn =0.j, 0.j
+            for _hk, _weight in zip(HkList,weight):
+                _gk=np.linalg.inv((z+eta*1j)*np.eye(2*norb)-_hk)
+
+                g00_up+=_gk[0,0]*_weight/totalWeight
+                g00_dn+=_gk[norb,norb]*_weight/totalWeight
+
+                rou_up+=sum(np.diagonal(_gk)[:norb])*_weight/totalWeight
+                rou_dn+=sum(np.diagonal(_gk)[norb:])*_weight/totalWeight
+                for i in range(norb):
+                    rou_up_perturb+=_gk[i,0]*_gk[0,i]*_weight/totalWeight
+                    rou_dn_perturb+=_gk[norb+i,norb]*_gk[norb,norb+i]*_weight/totalWeight
+            
+            factor=delta*delta/(1-delta*delta*g00_up*g00_dn)
+            rou_up+=rou_up_perturb*factor*g00_dn/totalWeight
+            rou_dn+=rou_dn_perturb*factor*g00_up/totalWeight
+
             dosUpAxis.append(rou_up.imag/(-np.pi))
             dosDnAxis.append(rou_dn.imag/(np.pi))
 
