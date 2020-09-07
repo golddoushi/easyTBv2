@@ -29,6 +29,20 @@ class Ham:
             return coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=complex).toarray()
         return
 
+    def buildSpinPolarizedHk(self,Hr_up,Hr_dn,kpt,getHk=False):
+        assert Hr_up.norb==Hr_dn.norb, 'the file of spin up and down should involve the same quantity of orbitals'
+        norb=Hr_up.norb
+        # spin up
+        for bondUpDigital in Hr_up.bondList:
+            self.addHopping(bondUpDigital.source,bondUpDigital.target,bondUpDigital.t,overLat=bondUpDigital.overlat,kpt=kpt)
+        # spin down
+        for bondDnDigital in Hr_dn.bondList:
+            self.addHopping(bondDnDigital.source+norb,bondDnDigital.target+norb,bondDnDigital.t,overLat=bondDnDigital.overlat,kpt=kpt)
+        
+        if getHk:
+            return coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=complex).toarray()
+        return
+
     def buildWholeHam(self,Hr,Lx=1,Ly=1,Lz=1,getHam=True):
         for bondDigital in Hr.bondList:
             for Rx in range(Lx):
@@ -408,22 +422,40 @@ class Green:
         plt.plot(energyAxis,dosUpAxis)
         plt.plot(energyAxis,dosDnAxis)
         plt.show()
-        '''
-        _ham_up=Ham().buildWholeHam(hr_up,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
-        _ham_dn=Ham().buildWholeHam(hr_dn,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+    
+    def calcSpinPolarizedDOSViaFourier(self,hr_up,hr_dn,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500):
+        norb=int(hr_up.norb)
+        kmesh=pR.createKPOINTS(getKMesh=True)
+        irkmesh, weight, equalIndex=pR.getIrreducibleKmesh(kmesh)
+        totalWeight=sum(weight)
+        print('via symmetry considerations, only %d/%d kpoints involved'%(len(irkmesh),len(kmesh)))
+
+        HkList=[]
+        eigmin, eigmax= 100, -100
+        time0=time.time()
+        for kpt in irkmesh:
+            _ham=Ham()
+            Hk=_ham.buildSpinPolarizedHk(hr_up,hr_dn,kpt,getHk=True)
+            #eigList=_ham.sovle_exact()
+            #_eigmin, _eigmax=np.min(eigList), np.max(eigList)
+            #eigmin = _eigmin if _eigmin < eigmin else eigmin
+            #eigmax = _eigmax if _eigmax > eigmax else eigmax
+            HkList.append(Hk)
+        print('Hk constructured in %.3fs'%(time.time()-time0))
+
         energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
-        dos_upAxis=[]
-        dos_dnAxis=[]
+        dosUpAxis, dosDnAxis=[], []
         for z in energyAxis:
-            G_up=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham_up)
-            G_dn=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham_dn)
-            dos_upAxis.append(sum(np.diagonal(G_up)).imag/(-np.pi)/totCell)
-            dos_dnAxis.append(sum(np.diagonal(G_dn)).imag/(np.pi)/totCell)
+            rou_up=0.j
+            rou_dn=0.j
+            for _hk, _weight in zip(HkList,weight):
+                _gk=np.linalg.inv((z+eta*1j)*np.eye(norb*2)-_hk)
+                rou_up+=sum(np.diagonal(_gk)[:norb])*_weight/totalWeight
+                rou_dn+=sum(np.diagonal(_gk)[norb:])*_weight/totalWeight
+            dosUpAxis.append(rou_up.imag/(-np.pi))
+            dosDnAxis.append(rou_dn.imag/(np.pi))
 
         plt.figure()
-        plt.plot(energyAxis,dos_upAxis)
-        plt.plot(energyAxis,dos_dnAxis)
+        plt.plot(energyAxis,dosUpAxis)
+        plt.plot(energyAxis,dosDnAxis)
         plt.show()
-        '''
-
-    # spin polarized
