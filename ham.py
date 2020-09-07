@@ -43,6 +43,37 @@ class Ham:
         if getHam:
             return coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=complex).toarray()
         return
+    
+    def buildWholeSpinPolarizedHam(self,Hr_up,Hr_dn,Lx=1,Ly=1,Lz=1,getHam=True):
+        totCell=Lx*Ly*Lz
+        totOrb=Hr_up.norb*totCell
+        # construct the part of spin up
+        for bondUpDigital in Hr_up.bondList:
+            for Rx in range(Lx):
+                for Ry in range(Ly):
+                    for Rz in range(Lz):
+                        overLat_tmp=(bondUpDigital.overlat+np.array([Rx,Ry,Rz]))
+                        Rx_, Ry_, Rz_=np.array([overLat_tmp[0]%Lx,overLat_tmp[1]%Ly,overLat_tmp[2]%Lz])
+                        #print(overLat_fixed)
+                        sourceID_up=bondUpDigital.source +  Rx*Hr_up.norb +  Ry*Lx*Hr_up.norb +  Rz*Lx*Ly*Hr_up.norb
+                        targetID_up=bondUpDigital.target + Rx_*Hr_up.norb + Ry_*Lx*Hr_up.norb + Rz_*Lx*Ly*Hr_up.norb
+                        self.addHopping(sourceID_up,targetID_up,bondUpDigital.t)
+        # construct the part of spin dn
+        for bondDnDigital in Hr_dn.bondList:
+            for Rx in range(Lx):
+                for Ry in range(Ly):
+                    for Rz in range(Lz):
+                        overLat_tmp=(bondDnDigital.overlat+np.array([Rx,Ry,Rz]))
+                        Rx_, Ry_, Rz_=np.array([overLat_tmp[0]%Lx,overLat_tmp[1]%Ly,overLat_tmp[2]%Lz])
+                        #print(overLat_fixed)
+                        sourceID_dn=totOrb + bondDnDigital.source +  Rx*Hr_up.norb +  Ry*Lx*Hr_up.norb +  Rz*Lx*Ly*Hr_up.norb
+                        targetID_dn=totOrb + bondDnDigital.target + Rx_*Hr_up.norb + Ry_*Lx*Hr_up.norb + Rz_*Lx*Ly*Hr_up.norb
+                        self.addHopping(sourceID_dn,targetID_dn,bondDnDigital.t)
+
+        if getHam:
+            return coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=complex).toarray()
+        return
+    
     # exact diagonal
     def sovle_exact(self,vec=False):
         self.imagHopping=True
@@ -168,7 +199,6 @@ class Green:
             print(hr_tmp.T)
             exit()
         
-    
     def calcJ(self,hrUP,hrDN,orbList=[0],R=[-1,0,0],fermi=0.,eta=0.0001):
         '''Linear response approximation
            \chi = Int_-inf^fermi{dz G(aR,b0,z)G(b0,aR,z)}
@@ -332,12 +362,7 @@ class Green:
     def calcDOSViaDirectInversion(self,hr,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
         totCell=Lx*Ly*Lz
         norb=hr.norb*totCell
-        #print(norb)
-        #exit()
         _ham=Ham().buildWholeHam(hr,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
-        #_ham[0][0]=-1
-        #print(_ham[0][0])
-        #exit()
         energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
         dosAxis=[]
         for z in energyAxis:
@@ -348,4 +373,57 @@ class Green:
         plt.plot(energyAxis,dosAxis)
         plt.show()
         
+    def calcPerturbDOSViaDirectInversion(self,hr,deta=-1,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+        totCell=Lx*Ly*Lz
+        norb=hr.norb*totCell
+        _ham=Ham().buildWholeHam(hr,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        _ham[0][0]=-deta
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosAxis=[]
+        for z in energyAxis:
+            G=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham)
+            dosAxis.append(sum(np.diagonal(G)).imag/(-np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dosAxis)
+        plt.show()
+
+    # spin polarized
+    def calcSpinPolarizedDOSViaDirectInversion(self,hr_up,hr_dn,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+        assert hr_up.norb==hr_dn.norb, 'The norb is inconsistent in the two hr file'
+        totCell=Lx*Ly*Lz
+        norb=hr_up.norb*totCell*2
+        halfNorb=int(norb/2)
+        _ham=Ham().buildWholeSpinPolarizedHam(hr_up,hr_dn,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosUpAxis, dosDnAxis=[], []
+        for z in energyAxis:
+            G=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham)
+            #print(type(np.diagonal(G)),halfNorb)
+            #exit()
+            dosUpAxis.append(sum(np.diagonal(G)[:halfNorb]).imag/(-np.pi)/totCell)
+            dosDnAxis.append(sum(np.diagonal(G)[halfNorb:]).imag/(np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dosUpAxis)
+        plt.plot(energyAxis,dosDnAxis)
+        plt.show()
+        '''
+        _ham_up=Ham().buildWholeHam(hr_up,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        _ham_dn=Ham().buildWholeHam(hr_dn,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dos_upAxis=[]
+        dos_dnAxis=[]
+        for z in energyAxis:
+            G_up=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham_up)
+            G_dn=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham_dn)
+            dos_upAxis.append(sum(np.diagonal(G_up)).imag/(-np.pi)/totCell)
+            dos_dnAxis.append(sum(np.diagonal(G_dn)).imag/(np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dos_upAxis)
+        plt.plot(energyAxis,dos_dnAxis)
+        plt.show()
+        '''
+
     # spin polarized
