@@ -33,4 +33,8 @@ gr=hamilton.Green()
 #gr.calcSpinPolarizedDOSViaDirectInversion(hr_s,hr_d,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
 #gr.calcSpinPolarizedDOSViaFourier(hr_s,hr_d,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
 #gr.calcHorizontallyMagneticPerturbatedSpinPolarizedDOSViaDirectInversion(hr_s,hr_d,delta=1.,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
-gr.calcHorizontallyMagneticPerturbatedDOSViaFourier(hr_s,hr_d,delta=1.,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
+#gr.calcHorizontallyMagneticPerturbatedDOSViaFourier(hr_s,hr_d,delta=1.,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
+#gr.calcPerturbDOSViaDirectInversionDoubleCenters(hr_s,scatter1=(0,0,-0.5),scatter2=(1,0,-0.5),eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
+#gr.calcPerturbDOSViaFourierDoubleCenters(hr_s,scatter1=(np.array([0,0,0]),0,-0.5),scatter2=(np.array([0,1,0]),0,-0.5),order=15,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
+
+

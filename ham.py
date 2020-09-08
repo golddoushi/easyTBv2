@@ -300,7 +300,7 @@ class Green:
         #print(onCircle(np.array([np.pi])))
         return inte
 
-    # spin compensated
+    # spin compensated single scattering center
     def calcDOSViaFourier(self,hr,orbList=[0],eta=0.1,NEDOS=500):
         norb=hr.norb
         kmesh=pR.createKPOINTS(getKMesh=True)
@@ -398,6 +398,173 @@ class Green:
         for z in energyAxis:
             G=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham)
             dosAxis.append(sum(np.diagonal(G)).imag/(-np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dosAxis)
+        plt.show()
+
+    # double scattering centers
+    def calcPerturbDOSViaDirectInversionDoubleCenters(self,hr,scatter1=(0,0,-1),scatter2=(2,1,-1),eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+        '''
+        scatter[0], scatter[1]: R, l, corresponding to the position of scattering centers
+        scatter[1]: delta, corresponding to the potential of responsible scattering
+        '''
+        totCell=Lx*Ly*Lz
+        norb=hr.norb*totCell
+        iorb1=scatter1[1]*totCell+scatter1[0]
+        iorb2=scatter2[1]*totCell+scatter2[0]
+        _ham=Ham().buildWholeHam(hr,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        _ham[iorb1][iorb1]=scatter1[2]
+        _ham[iorb2][iorb2]=scatter2[2]
+        #print(_ham)
+        #exit()
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosAxis=[]
+        for z in energyAxis:
+            G=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham)
+            dosAxis.append(sum(np.diagonal(G)).imag/(-np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dosAxis)
+        plt.show()
+
+    def calcPerturbDOSViaFourierDoubleCenters(self,hr,scatter1=(np.array([0,0,0]),0,-1),scatter2=(np.array([2,1,0]),1,-1),order=3,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500):
+        '''
+        scatter[0]: R, scatter[1]: l, these two define the position of scattering centers
+        scatter[1]: delta, corresponding to the potential of responsible scattering
+        '''
+        def calcPerturbationOnRoute(scatterRouteList,scatterPotential,glineMatrix,plineMatrix):
+            totalContribution=0.j
+            for scatterRoute in scatterRouteList:
+                #print('route:',scatterRoute)
+                routeLength=len(scatterRoute)
+                plineID0=scatterRoute[0]
+                plineID1=scatterRoute[routeLength-1]
+                pline=plineMatrix[plineID0][plineID1]
+                #print('external line contribution:',pline)
+
+                gline=1.
+                for id in range(routeLength-1):
+                    gline*=glineMatrix[scatterRoute[id]][scatterRoute[id+1]]
+                #print('internal line contribution:',gline)
+
+                potential=1.
+                for id in scatterRoute:
+                    potential*=scatterPotential[id]
+                #print('potential contribution:',potential)
+                totalContribution+=pline*gline*potential
+                #print('route contribution:',pline*gline*potential)
+            #print('total contribution:',totalContribution)
+            return totalContribution
+        
+        norb=hr.norb
+        kmesh=pR.createKPOINTS(getKMesh=True)
+        irkmesh=kmesh
+        weight=[1 for i in irkmesh]
+        #irkmesh, weight, equalIndex=pR.getIrreducibleKmesh(kmesh)
+        totalWeight=sum(weight)
+        #print('via symmetry considerations, only %d/%d kpoints involved'%(len(irkmesh),len(kmesh)))
+
+        HkList=[]
+        for kpt in irkmesh:
+            _ham=Ham()
+            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
+            HkList.append(Hk)
+
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosAxis=[]
+        for z in energyAxis:
+            #z=-2.5180360721442887
+            rou=0.j
+            g11,g12,g21,g22=0.j,0.j,0.j,0.j
+            p11,p12,p21,p22=0.j,0.j,0.j,0.j
+
+            g00=0.j
+            rou_perturb_ref=0.j
+            # calc scattering elements
+            for kpt, _hk, _weight in zip(irkmesh,HkList,weight):
+                _gk=np.linalg.inv((z+eta*1j)*np.eye(norb)-_hk)
+                # internal line
+                g11+=_gk[scatter1[1],scatter1[1]]*_weight/totalWeight
+                g22+=_gk[scatter2[1],scatter2[1]]*_weight/totalWeight
+                g12+=np.exp(2j*np.pi*np.dot(kpt,scatter1[0]-scatter2[0]))*_gk[scatter1[1],scatter2[1]]*_weight/totalWeight
+                g21+=np.exp(2j*np.pi*np.dot(kpt,scatter2[0]-scatter1[0]))*_gk[scatter2[1],scatter1[1]]*_weight/totalWeight
+                
+                # external line
+                p11+=np.dot(_gk[:,scatter1[1]],_gk[scatter1[1],:])*_weight/totalWeight
+                p22+=np.dot(_gk[:,scatter2[1]],_gk[scatter2[1],:])*_weight/totalWeight
+                p12+=np.exp(-2j*np.pi*np.dot(kpt,scatter1[0]-scatter2[0]))*np.dot(_gk[:,scatter1[1]],_gk[scatter2[1],:])*_weight/totalWeight
+                p21+=np.exp(-2j*np.pi*np.dot(kpt,scatter2[0]-scatter1[0]))*np.dot(_gk[:,scatter2[1]],_gk[scatter1[1],:])*_weight/totalWeight
+
+                # unperturbated dos
+                rou+=sum(np.diagonal(_gk))*_weight/totalWeight
+
+                g00+=_gk[scatter1[1],scatter1[1]]*_weight/totalWeight
+                rou_perturb_ref+=np.dot(_gk[:,scatter1[1]],_gk[scatter1[1],:])*_weight/totalWeight
+            
+            #rou_perturb_ref/=totalWeight
+            rou_perturb_ref=rou_perturb_ref*scatter1[2]/(1-scatter1[2]*g00)/totalWeight
+            '''
+            print('accurate perturb:',rou_perturb_ref)
+            print('delta:',scatter1[2])
+            print('g00',g00)
+            print('G0 dot G0:',rou_perturb_ref)
+            print('delta dot g00 |r|:%.6f'%abs(scatter1[2]*g00),scatter1[2]*g00)
+            '''
+            # calc the modification due to perturbation
+            scatterIDList=[[0],[1]]
+            scatterPotential=[scatter1[2],scatter2[2]]
+            gline=[[g11,g12],
+                   [g21,g22]]
+            pline=[[p11/totalWeight,p12/totalWeight],
+                   [p21/totalWeight,p22/totalWeight]]
+            perturb_old=calcPerturbationOnRoute(scatterIDList,scatterPotential,gline,pline)
+            #perturb0=perturb_old
+            '''
+            print('now the paramter of iterative')
+            print('gline')
+            print(gline)
+            print('pline')
+            print(pline)
+            print('potential:')
+            print(scatterPotential)
+            print('0th order:',perturb_old/totalWeight)
+            '''
+            # iteratively calc the perturbation itself
+            rou_perturb=0.j
+            norder=0
+            while(True):
+                norder+=1
+                if norder>order:
+                    break
+                rou_perturb+=perturb_old
+                scatterIDList_update=[]
+                for scatterRoute in scatterIDList:
+                    #print(scatterRoute)
+                    route1=list(scatterRoute)
+                    route2=list(scatterRoute)
+                    route1.extend([0])
+                    route2.extend([1])
+                    scatterIDList_update.append(route1)
+                    scatterIDList_update.append(route2)
+                scatterIDList=scatterIDList_update
+                #print(scatterIDList)
+                #exit()
+                perturb_new=calcPerturbationOnRoute(scatterIDList,scatterPotential,gline,pline)
+                #print('%dth order'%norder,perturb_new)
+                if abs(perturb_new.imag)<np.min([abs(rou.imag*0.1),0.001]):
+                    #print(z)
+                    break
+                if abs(perturb_new)>1.5:
+                    rou_perturb=0#perturb0
+                    print('failed iteration at energy:',z)
+                    break
+                perturb_old=perturb_new
+            #rou+=rou_perturb
+            #print(z,rou_perturb,rou_perturb_ref)
+            rou+=rou_perturb
+            dosAxis.append(rou.imag/(-np.pi))
+            #exit()
 
         plt.figure()
         plt.plot(energyAxis,dosAxis)
@@ -507,9 +674,11 @@ class Green:
 
                 rou_up+=sum(np.diagonal(_gk)[:norb])*_weight/totalWeight
                 rou_dn+=sum(np.diagonal(_gk)[norb:])*_weight/totalWeight
-                for i in range(norb):
-                    rou_up_perturb+=_gk[i,0]*_gk[0,i]*_weight/totalWeight
-                    rou_dn_perturb+=_gk[norb+i,norb]*_gk[norb,norb+i]*_weight/totalWeight
+                rou_up_perturb+=np.dot(_gk[:norb,0],_gk[0,:norb])*_weight/totalWeight
+                rou_dn_perturb+=np.dot(_gk[norb:,norb],_gk[norb,norb:])*_weight/totalWeight
+                #for i in range(norb):
+                #    rou_up_perturb+=_gk[i,0]*_gk[0,i]*_weight/totalWeight
+                #    rou_dn_perturb+=_gk[norb+i,norb]*_gk[norb,norb+i]*_weight/totalWeight
             
             factor=delta*delta/(1-delta*delta*g00_up*g00_dn)
             rou_up+=rou_up_perturb*factor*g00_dn/totalWeight
@@ -522,3 +691,5 @@ class Green:
         plt.plot(energyAxis,dosUpAxis)
         plt.plot(energyAxis,dosDnAxis)
         plt.show()
+
+    
