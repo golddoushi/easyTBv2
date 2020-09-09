@@ -451,9 +451,21 @@ class Green:
                 potential=1.
                 for id in scatterRoute:
                     potential*=scatterPotential[id]
-                #print('potential contribution:',potential)
-                totalContribution+=pline*gline*potential
-                #print('route contribution:',pline*gline*potential)
+                
+                # include the geometric series
+                # decide the largest term
+
+                onLineOriginalContribution=pline*gline*potential
+                #print('route contribution before series fixing:',onLineOriginalContribution)
+                onLineFullContribution=onLineOriginalContribution
+                '''
+                Now I cannot find a way to solve this bowling up
+                '''
+                #for id in scatterRoute:
+                #    onLineFullContribution-=onLineOriginalContribution
+                #    onLineFullContribution+=pline*gline*potential/(1-scatterPotential[id]*glineMatrix[id][id])
+                #print('route contribution:',onLineFullContribution)
+                totalContribution+=onLineFullContribution#pline*gline*potential
             #print('total contribution:',totalContribution)
             return totalContribution
         
@@ -479,8 +491,8 @@ class Green:
             g11,g12,g21,g22=0.j,0.j,0.j,0.j
             p11,p12,p21,p22=0.j,0.j,0.j,0.j
 
-            g00=0.j
-            rou_perturb_ref=0.j
+            #g00=0.j
+            #rou_perturb_ref=0.j
             # calc scattering elements
             for kpt, _hk, _weight in zip(irkmesh,HkList,weight):
                 _gk=np.linalg.inv((z+eta*1j)*np.eye(norb)-_hk)
@@ -499,12 +511,13 @@ class Green:
                 # unperturbated dos
                 rou+=sum(np.diagonal(_gk))*_weight/totalWeight
 
-                g00+=_gk[scatter1[1],scatter1[1]]*_weight/totalWeight
-                rou_perturb_ref+=np.dot(_gk[:,scatter1[1]],_gk[scatter1[1],:])*_weight/totalWeight
+                #g00+=_gk[scatter1[1],scatter1[1]]*_weight/totalWeight
+                #rou_perturb_ref+=np.dot(_gk[:,scatter1[1]],_gk[scatter1[1],:])*_weight/totalWeight
             
-            #rou_perturb_ref/=totalWeight
-            rou_perturb_ref=rou_perturb_ref*scatter1[2]/(1-scatter1[2]*g00)/totalWeight
+            #rou_perturb_ref_tmp=rou_perturb_ref
+            #rou_perturb_ref=rou_perturb_ref*scatter1[2]/(1-scatter1[2]*g00)/totalWeight
             '''
+            print('accurate perturb before series fixing:',rou_perturb_ref_tmp*scatter1[2]/totalWeight)
             print('accurate perturb:',rou_perturb_ref)
             print('delta:',scatter1[2])
             print('g00',g00)
@@ -528,11 +541,13 @@ class Green:
             print(pline)
             print('potential:')
             print(scatterPotential)
-            print('0th order:',perturb_old/totalWeight)
+            print('0th order:',perturb_old)
             '''
             # iteratively calc the perturbation itself
             rou_perturb=0.j
             norder=0
+            perturb_tmp=[perturb_old]
+            cnt=0
             while(True):
                 norder+=1
                 if norder>order:
@@ -547,24 +562,46 @@ class Green:
                     route2.extend([1])
                     scatterIDList_update.append(route1)
                     scatterIDList_update.append(route2)
+                    #if scatterRoute[len(scatterRoute)-1]==0:
+                    #    scatterRoute.append(1)
+                    #else:
+                    #    scatterRoute.append(0)
                 scatterIDList=scatterIDList_update
                 #print(scatterIDList)
                 #exit()
                 perturb_new=calcPerturbationOnRoute(scatterIDList,scatterPotential,gline,pline)
+                perturb_tmp.append(perturb_new)
                 #print('%dth order'%norder,perturb_new)
-                if abs(perturb_new.imag)<np.min([abs(rou.imag*0.1),0.001]):
+                #if abs(perturb_new.imag)<np.min([abs(rou.imag*0.1),0.001]) and cnt==0:
                     #print(z)
+                #    break
+                #if abs(perturb_new)>abs(perturb_old) or cnt>0:
+                #print(abs(perturb_new/perturb_old))
+                cnt+=1
+                if cnt==8:
+                    #if abs(perturb_new/perturb_old)>1:
+                    #    print('Bowling up at energy:%.3f with r_new/r_old'%z)
+                    perturb_new_list=list(perturb_tmp)
+                    zerothPerturb=perturb_new_list.pop(0)
+                    perturb_old_list=list(perturb_tmp)
+                    perturb_old_list.pop(len(perturb_old_list)-1)
+                    divide=np.array(perturb_new_list)/np.array(perturb_old_list)
+                    #print(abs(divide))
+                    #print(divide)
+                    meanDivide=np.mean(divide)
+                    #print('mean divide:',meanDivide)
+                    if abs(meanDivide)>1:
+                        print('***Bowling up at energy:%.3f'%z)
+                        rou_perturb=zerothPerturb/(1-meanDivide)
+                        break
+                    rou_perturb=sum(perturb_tmp[:7])+perturb_tmp[7]/(1-divide[7])#zerothPerturb/(1-meanDivide)
                     break
-                if abs(perturb_new)>1.5:
-                    rou_perturb=0#perturb0
-                    print('failed iteration at energy:',z)
-                    break
+                    #break
                 perturb_old=perturb_new
-            #rou+=rou_perturb
+                
             #print(z,rou_perturb,rou_perturb_ref)
             rou+=rou_perturb
             dosAxis.append(rou.imag/(-np.pi))
-            #exit()
 
         plt.figure()
         plt.plot(energyAxis,dosAxis)
