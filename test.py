@@ -24,6 +24,7 @@ pR.readPOS('./spg156FeTeIU0.0.vasp')
 
 hr_s=reader.Hr('./simpleHR.txt')
 hr_d=reader.Hr('./simpleHR_dn.txt')
+hr_g=reader.Hr('./simpleGraphene.txt')
 #gr.testG(hr_s,orbList=[0,1],fermi=0,eta=0.05)
 gr=hamilton.Green()
 #gr.calcBands(hr_s,orbList=[0,1],fermi=0,eta=0.1,resolution=200)
@@ -34,9 +35,18 @@ gr=hamilton.Green()
 #gr.calcSpinPolarizedDOSViaFourier(hr_s,hr_d,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
 #gr.calcHorizontallyMagneticPerturbatedSpinPolarizedDOSViaDirectInversion(hr_s,hr_d,delta=1.,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
 #gr.calcHorizontallyMagneticPerturbatedDOSViaFourier(hr_s,hr_d,delta=1.,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
-#gr.calcPerturbDOSViaDirectInversionDoubleCenters(hr_s,scatter1=(0,0,-0.1),scatter2=(12,0,-0.1),eta=0.02,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
-#gr.calcPerturbDOSViaFourierDoubleCenters(hr_s,scatter1=(np.array([0,0,0]),0,-0.1),scatter2=(np.array([2,2,0]),0,-0.1),order=15,eta=0.02,energyRange=(-3.5,3.5),NEDOS=500)
-#gr.calcHorizontallyMagneticPerturbatedDOSViaDirectInversionDoubleCenters(hr_s,hr_d,scatter1=(0,0,-0.5),scatter2=(12,0,-0.5),eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
-gr.calcHorizontallyMagneticPerturbatedDOSViaFourierDoubleCenters(hr_s,hr_d,scatter1=(np.array([0,0,0]),0,-0.5),scatter2=(np.array([2,2,0]),0,-0.5),order=15,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
+#gr.calcPerturbDOSViaDirectInversionDoubleCenters(hr_g,scatter1=(np.array([0,0,0]),0,-0.3),scatter2=(np.array([2,2,0]),0,-0.3),eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
+#gr.calcPerturbDOSViaFourierDoubleCenters(hr_g,scatter1=(np.array([0,0,0]),0,-0.3),scatter2=(np.array([2,2,0]),0,-0.3),order=15,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500)
+#gr.calcHorizontallyMagneticPerturbatedDOSViaDirectInversionDoubleCenters(hr_s,hr_d,scatter1=(np.array([0,0,0]),0,-0.3),scatter2=(np.array([0,0,0]),1,-0.3),eta=0.035,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
+#gr.calcHorizontallyMagneticPerturbatedDOSViaFourierDoubleCenters(hr_s,hr_d,scatter1=(np.array([0,0,0]),0,-0.3),scatter2=(np.array([0,0,0]),1,-0.3),order=15,eta=0.035,energyRange=(-3.5,3.5),NEDOS=500)
 
-
+'''
+scatterList=[[[np.array([0,0,0]),0],[np.array([0,0,0]),1],-1],
+             [[np.array([0,0,0]),1],[np.array([0,0,0]),0],-1],
+             [[np.array([0,0,0]),0],[np.array([1,0,0]),1],-1],
+             [[np.array([1,0,0]),1],[np.array([0,0,0]),0],-1],
+             [[np.array([0,0,0]),0],[np.array([0,-1,0]),1],-1],
+             [[np.array([0,-1,0]),1],[np.array([0,0,0]),0],-1],
+             ]
+gr.calcMatrixPerturbatedDOSViaExact(hr_g,scatterList,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1)
+'''

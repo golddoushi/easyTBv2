@@ -51,8 +51,10 @@ class Ham:
                         overLat_tmp=(bondDigital.overlat+np.array([Rx,Ry,Rz]))
                         Rx_, Ry_, Rz_=np.array([overLat_tmp[0]%Lx,overLat_tmp[1]%Ly,overLat_tmp[2]%Lz])
                         #print(overLat_fixed)
+                        # index style: orbID + (Rx,Ry,Rz) \dot (norb,Lx*norb,Lx*Ly*norb)
                         sourceID=bondDigital.source +  Rx*Hr.norb +  Ry*Lx*Hr.norb +  Rz*Lx*Ly*Hr.norb
                         targetID=bondDigital.target + Rx_*Hr.norb + Ry_*Lx*Hr.norb + Rz_*Lx*Ly*Hr.norb
+                        #print(sourceID,targetID,bondDigital.t)
                         self.addHopping(sourceID,targetID,bondDigital.t)
         if getHam:
             return coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=complex).toarray()
@@ -404,15 +406,19 @@ class Green:
         plt.show()
 
     # double scattering centers
-    def calcPerturbDOSViaDirectInversionDoubleCenters(self,hr,scatter1=(0,0,-1),scatter2=(2,1,-1),eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+    def calcPerturbDOSViaDirectInversionDoubleCenters(self,hr,scatter1,scatter2,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
         '''
         scatter[0], scatter[1]: R, l, corresponding to the position of scattering centers
         scatter[1]: delta, corresponding to the potential of responsible scattering
         '''
         totCell=Lx*Ly*Lz
         norb=hr.norb*totCell
-        iorb1=scatter1[1]*totCell+scatter1[0]
-        iorb2=scatter2[1]*totCell+scatter2[0]
+
+        BravaisIndex=np.array([hr.norb,Lx*hr.norb,Lx*Ly*hr.norb])
+        iorb1=scatter1[1] + np.dot(scatter1[0]%np.array([Lx,Ly,Lz]),BravaisIndex)
+        iorb2=scatter2[1] + np.dot(scatter2[0]%np.array([Lx,Ly,Lz]),BravaisIndex)
+        print('impose horizontal magnetic impurities on orb%d and orb%d'%(iorb1,iorb2))
+
         _ham=Ham().buildWholeHam(hr,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
         _ham[iorb1][iorb1]=scatter1[2]
         _ham[iorb2][iorb2]=scatter2[2]
@@ -589,7 +595,7 @@ class Green:
                     #print(abs(divide))
                     #print(divide)
                     meanDivide=np.mean(divide)
-                    #print('mean divide:',meanDivide)
+                    print('r: %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f last %.6f'%(*abs(divide),perturb_tmp[7].imag))
                     if abs(meanDivide)>1:
                         print('***Bowling up at energy:%.3f'%z)
                         rou_perturb=zerothPerturb/(1-meanDivide)
@@ -729,13 +735,16 @@ class Green:
         plt.plot(energyAxis,dosDnAxis)
         plt.show()
 
-    def calcHorizontallyMagneticPerturbatedDOSViaDirectInversionDoubleCenters(self,hr_up,hr_dn,scatter1=(0,0,-1),scatter2=(2,1,-1),eta=0.1,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+    def calcHorizontallyMagneticPerturbatedDOSViaDirectInversionDoubleCenters(self,hr_up,hr_dn,scatter1,scatter2,eta=0.1,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
         assert hr_up.norb==hr_dn.norb, 'The norb is inconsistent in the two hr file'
         totCell=Lx*Ly*Lz
         norb=hr_up.norb*totCell*2
         halfNorb=int(norb/2)
-        iorb1=scatter1[1]*totCell+scatter1[0]
-        iorb2=scatter2[1]*totCell+scatter2[0]
+        
+        BravaisIndex=np.array([hr_up.norb,Lx*hr_up.norb,Lx*Ly*hr_up.norb])
+        iorb1=scatter1[1] + np.dot(scatter1[0]%np.array([Lx,Ly,Lz]),BravaisIndex)
+        iorb2=scatter2[1] + np.dot(scatter2[0]%np.array([Lx,Ly,Lz]),BravaisIndex)
+        print('impose horizontal magnetic impurities on orb%d and orb%d'%(iorb1,iorb2))
 
         _ham=Ham().buildWholeSpinPolarizedHam(hr_up,hr_dn,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
         _ham[iorb1,iorb1+halfNorb]=scatter1[2]
@@ -791,11 +800,8 @@ class Green:
         
         norb=int(hr_up.norb)
         kmesh=pR.createKPOINTS(getKMesh=True)
-        #irkmesh=kmesh
         weight=[1 for i in kmesh]
-        #irkmesh, weight, equalIndex=pR.getIrreducibleKmesh(kmesh)
         totalWeight=sum(weight)
-        #print('via symmetry considerations, only %d/%d kpoints involved'%(len(irkmesh),len(kmesh)))
 
         HkList=[]
         for kpt in kmesh:
@@ -809,15 +815,12 @@ class Green:
         energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
         dosUpAxis,dosDnAxis=[],[]
         for z in energyAxis:
-            #z=-2.5180360721442887
             rou_up, rou_dn=0.j, 0.j
             g11_up,g12_up,g21_up,g22_up=0.j,0.j,0.j,0.j
             g11_dn,g12_dn,g21_dn,g22_dn=0.j,0.j,0.j,0.j
             p11_up,p12_up,p21_up,p22_up=0.j,0.j,0.j,0.j
             p11_dn,p12_dn,p21_dn,p22_dn=0.j,0.j,0.j,0.j
 
-            #g00=0.j
-            #rou_perturb_ref=0.j
             # calc scattering elements
             for kpt, _hk, _weight in zip(kmesh,HkList,weight):
                 _gk=np.linalg.inv((z+eta*1j)*np.eye(norb*2)-_hk)
@@ -847,19 +850,6 @@ class Green:
                 rou_up+=sum(np.diagonal(_gk)[:norb])*_weight/totalWeight
                 rou_dn+=sum(np.diagonal(_gk)[norb:])*_weight/totalWeight
 
-                #g00+=_gk[scatter1[1],scatter1[1]]*_weight/totalWeight
-                #rou_perturb_ref+=np.dot(_gk[:,scatter1[1]],_gk[scatter1[1],:])*_weight/totalWeight
-            
-            #rou_perturb_ref_tmp=rou_perturb_ref
-            #rou_perturb_ref=rou_perturb_ref*scatter1[2]/(1-scatter1[2]*g00)/totalWeight
-            '''
-            print('accurate perturb before series fixing:',rou_perturb_ref_tmp*scatter1[2]/totalWeight)
-            print('accurate perturb:',rou_perturb_ref)
-            print('delta:',scatter1[2])
-            print('g00',g00)
-            print('G0 dot G0:',rou_perturb_ref)
-            print('delta dot g00 |r|:%.6f'%abs(scatter1[2]*g00),scatter1[2]*g00)
-            '''
             # calc the modification due to perturbation
             scatterIDList=[[0,0],[0,1],[1,0],[1,0]]
             scatterPotential=[scatter1[2],scatter2[2]]
@@ -875,17 +865,7 @@ class Green:
             pline=[pline_up,pline_dn]
 
             perturb_up_old, perturb_dn_old=calcPerturbationOnRoute(scatterIDList,scatterPotential,gline,pline)
-            #perturb0=perturb_old
-            '''
-            print('now the paramter of iterative')
-            print('gline')
-            print(gline)
-            print('pline')
-            print(pline)
-            print('potential:')
-            print(scatterPotential)
-            print('0th order:',perturb_old)
-            '''
+            
             # iteratively calc the perturbation itself
             rou_up_perturb, rou_dn_perturb=0.j, 0.j
             norder=0
@@ -912,26 +892,14 @@ class Green:
                     scatterIDList_update.append(route2)
                     scatterIDList_update.append(route3)
                     scatterIDList_update.append(route4)
-                    #if scatterRoute[len(scatterRoute)-1]==0:
-                    #    scatterRoute.append(1)
-                    #else:
-                    #    scatterRoute.append(0)
                 scatterIDList=scatterIDList_update
                 #print(scatterIDList)
                 #exit()
                 perturb_up_new,perturb_dn_new=calcPerturbationOnRoute(scatterIDList,scatterPotential,gline,pline)
                 perturb_up_tmp.append(perturb_up_new)
                 perturb_dn_tmp.append(perturb_dn_new)
-                #print('%dth order'%norder,perturb_new)
-                #if abs(perturb_new.imag)<np.min([abs(rou.imag*0.1),0.001]) and cnt==0:
-                    #print(z)
-                #    break
-                #if abs(perturb_new)>abs(perturb_old) or cnt>0:
-                #print(abs(perturb_new/perturb_old))
                 cnt+=1
                 if cnt==4:
-                    #if abs(perturb_new/perturb_old)>1:
-                    #    print('Bowling up at energy:%.3f with r_new/r_old'%z)
                     perturb_up_new_list, perturb_dn_new_list=list(perturb_up_tmp),list(perturb_dn_tmp)
                     zerothPerturbUp,zerothPerturbDn=perturb_up_new_list.pop(0),perturb_dn_new_list.pop(0)
                     perturb_up_old_list,perturb_dn_old_list=list(perturb_up_tmp),list(perturb_dn_tmp)
@@ -939,12 +907,9 @@ class Green:
                     perturb_dn_old_list.pop(len(perturb_dn_old_list)-1)
                     divide_up=np.array(perturb_up_new_list)/np.array(perturb_up_old_list)
                     divide_dn=np.array(perturb_dn_new_list)/np.array(perturb_dn_old_list)
-                    #print(abs(divide))
-                    #print(divide)
                     meanDivideUp, meanDivideDn=np.mean(divide_up), np.mean(divide_dn)
-                    #print('mean divide:',meanDivide)
-                    print('up: %.6f %.6f %.6f %.6f theta: %.6f %.6f %.6f %.6f'%(*abs(divide_up),*(np.log(divide_up/abs(divide_up),dtype=complex).imag)))
-                    print('dn: %.6f %.6f %.6f %.6f theta: %.6f %.6f %.6f %.6f'%(*abs(divide_dn),*(np.log(divide_dn/abs(divide_dn),dtype=complex).imag)))
+                    print('up: %.6f %.6f %.6f %.6f theta: %.6f %.6f %.6f %.6f last %.6f'%(*abs(divide_up),*(np.log(divide_up/abs(divide_up),dtype=complex).imag),perturb_up_tmp[3].imag))
+                    print('dn: %.6f %.6f %.6f %.6f theta: %.6f %.6f %.6f %.6f last %.6f'%(*abs(divide_dn),*(np.log(divide_dn/abs(divide_dn),dtype=complex).imag),perturb_dn_tmp[3].imag))
                     if abs(meanDivideUp)>1:
                         print('***Spin up is bowling up at energy:%.3f'%z)
                         rou_up_perturb=zerothPerturbUp/(1-meanDivideUp)
@@ -960,7 +925,6 @@ class Green:
                     
                 perturb_up_old, perturb_dn_old=perturb_up_new, perturb_dn_new
                 
-            #print(z,rou_perturb,rou_perturb_ref)
             rou_up+=rou_up_perturb
             rou_dn+=rou_dn_perturb
             dosUpAxis.append(rou_up.imag/(-np.pi))
@@ -969,5 +933,37 @@ class Green:
         plt.figure()
         plt.plot(energyAxis,dosUpAxis)
         plt.plot(energyAxis,dosDnAxis)
+        plt.show()
+
+
+    def calcMatrixPerturbatedDOSViaExact(self,hr,scatterList,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+        '''
+        in scatterList
+        scatter[0]: R_source, iorb_source
+        scatter[1]: R_target, iorb_target
+        scatter[2]: new matrix element
+        '''
+        totCell=Lx*Ly*Lz
+        norb=hr.norb#*totCell
+        totOrb=totCell*norb
+        BravaisIndex=np.array([norb,Lx*norb,Lx*Ly*norb])
+        _ham=Ham().buildWholeHam(hr,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        for scatter in scatterList:
+
+            iorb_source=scatter[0][1] + np.dot(scatter[0][0]%np.array([Lx,Ly,Lz]),BravaisIndex)
+            iorb_target=scatter[1][1] + np.dot(scatter[1][0]%np.array([Lx,Ly,Lz]),BravaisIndex)
+            print(_ham[iorb_source][iorb_target])
+            _ham[iorb_source][iorb_target]=scatter[2]
+            print(scatter[0][0]%np.array([Lx,Ly,Lz]),scatter[1][0]%np.array([Lx,Ly,Lz]))
+            print(iorb_source,iorb_target,scatter[2])
+        
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosAxis=[]
+        for z in energyAxis:
+            G=np.linalg.inv((z+eta*1j)*np.eye(totOrb)-_ham)
+            dosAxis.append(sum(np.diagonal(G)).imag/(-np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dosAxis)
         plt.show()
 
