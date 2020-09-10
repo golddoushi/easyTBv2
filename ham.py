@@ -729,4 +729,245 @@ class Green:
         plt.plot(energyAxis,dosDnAxis)
         plt.show()
 
-    
+    def calcHorizontallyMagneticPerturbatedDOSViaDirectInversionDoubleCenters(self,hr_up,hr_dn,scatter1=(0,0,-1),scatter2=(2,1,-1),eta=0.1,energyRange=(-3.5,3.5),NEDOS=500,Lx=1,Ly=1,Lz=1):
+        assert hr_up.norb==hr_dn.norb, 'The norb is inconsistent in the two hr file'
+        totCell=Lx*Ly*Lz
+        norb=hr_up.norb*totCell*2
+        halfNorb=int(norb/2)
+        iorb1=scatter1[1]*totCell+scatter1[0]
+        iorb2=scatter2[1]*totCell+scatter2[0]
+
+        _ham=Ham().buildWholeSpinPolarizedHam(hr_up,hr_dn,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
+        _ham[iorb1,iorb1+halfNorb]=scatter1[2]
+        _ham[iorb1+halfNorb,iorb1]=scatter1[2]
+        _ham[iorb2,iorb2+halfNorb]=scatter2[2]
+        _ham[iorb2+halfNorb,iorb2]=scatter2[2]
+
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosUpAxis, dosDnAxis=[], []
+        for z in energyAxis:
+            G=np.linalg.inv((z+eta*1j)*np.eye(norb)-_ham)
+            dosUpAxis.append(sum(np.diagonal(G)[:halfNorb]).imag/(-np.pi)/totCell)
+            dosDnAxis.append(sum(np.diagonal(G)[halfNorb:]).imag/(np.pi)/totCell)
+
+        plt.figure()
+        plt.plot(energyAxis,dosUpAxis)
+        plt.plot(energyAxis,dosDnAxis)
+        plt.show()
+
+    def calcHorizontallyMagneticPerturbatedDOSViaFourierDoubleCenters(self,hr_up,hr_dn,scatter1=(np.array([0,0,0]),0,-1),scatter2=(np.array([2,1,0]),1,-1),order=3,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500):
+        '''
+        scatter[0]: R, scatter[1]: l, these two define the position of scattering centers
+        scatter[1]: delta, corresponding to the potential of responsible scattering
+        '''
+        def calcPerturbationOnRoute(scatterRouteList,scatterPotential,glineMatrix,plineMatrix):
+            if len(scatterRouteList[0])%2==1:
+                return [0, 0]
+            
+            totalContributionList=[]
+            for i in range(2): # for two spin tunnels
+                iele=i
+                totalContribution=0.j
+                for scatterRoute in scatterRouteList:
+                    #print('route:',scatterRoute)
+                    routeLength=len(scatterRoute)
+                    plineID0=scatterRoute[0]
+                    plineID1=scatterRoute[routeLength-1]
+                    pline=plineMatrix[iele%2][plineID0][plineID1]
+                    #print('external line contribution:',pline)
+                    iele+=1
+                    gline=1.
+                    for id in range(routeLength-1):
+                        gline*=glineMatrix[iele%2][scatterRoute[id]][scatterRoute[id+1]]
+                        iele+=1
+                
+                    potential=1.
+                    for id in scatterRoute:
+                        potential*=scatterPotential[id]
+                
+                    totalContribution+=pline*gline*potential
+                totalContributionList.append(totalContribution)
+            return totalContributionList
+        
+        norb=int(hr_up.norb)
+        kmesh=pR.createKPOINTS(getKMesh=True)
+        #irkmesh=kmesh
+        weight=[1 for i in kmesh]
+        #irkmesh, weight, equalIndex=pR.getIrreducibleKmesh(kmesh)
+        totalWeight=sum(weight)
+        #print('via symmetry considerations, only %d/%d kpoints involved'%(len(irkmesh),len(kmesh)))
+
+        HkList=[]
+        for kpt in kmesh:
+            Hk=Ham().buildSpinPolarizedHk(hr_up,hr_dn,kpt,getHk=True)
+            HkList.append(Hk)
+
+        #oz=(energyRange[0]+energyRange[1])/2
+        #r=abs(energyRange[1]-energyRange[0])/2
+        #thetaAxis=np.linspace(1,0,NEDOS)
+        #energyAxis=[r*np.exp(1j*np.pi*theta)+oz for theta in thetaAxis]
+        energyAxis=np.linspace(energyRange[0],energyRange[1],NEDOS)
+        dosUpAxis,dosDnAxis=[],[]
+        for z in energyAxis:
+            #z=-2.5180360721442887
+            rou_up, rou_dn=0.j, 0.j
+            g11_up,g12_up,g21_up,g22_up=0.j,0.j,0.j,0.j
+            g11_dn,g12_dn,g21_dn,g22_dn=0.j,0.j,0.j,0.j
+            p11_up,p12_up,p21_up,p22_up=0.j,0.j,0.j,0.j
+            p11_dn,p12_dn,p21_dn,p22_dn=0.j,0.j,0.j,0.j
+
+            #g00=0.j
+            #rou_perturb_ref=0.j
+            # calc scattering elements
+            for kpt, _hk, _weight in zip(kmesh,HkList,weight):
+                _gk=np.linalg.inv((z+eta*1j)*np.eye(norb*2)-_hk)
+                # internal line
+                g11_up+=_gk[scatter1[1],scatter1[1]]*_weight/totalWeight
+                g22_up+=_gk[scatter2[1],scatter2[1]]*_weight/totalWeight
+                g12_up+=np.exp(2j*np.pi*np.dot(kpt,scatter1[0]-scatter2[0]))*_gk[scatter1[1],scatter2[1]]*_weight/totalWeight
+                g21_up+=np.exp(2j*np.pi*np.dot(kpt,scatter2[0]-scatter1[0]))*_gk[scatter2[1],scatter1[1]]*_weight/totalWeight
+
+                g11_dn+=_gk[scatter1[1]+norb,scatter1[1]+norb]*_weight/totalWeight
+                g22_dn+=_gk[scatter2[1]+norb,scatter2[1]+norb]*_weight/totalWeight
+                g12_dn+=np.exp(2j*np.pi*np.dot(kpt,scatter1[0]-scatter2[0]))*_gk[scatter1[1]+norb,scatter2[1]+norb]*_weight/totalWeight
+                g21_dn+=np.exp(2j*np.pi*np.dot(kpt,scatter2[0]-scatter1[0]))*_gk[scatter2[1]+norb,scatter1[1]+norb]*_weight/totalWeight
+                
+                # external line
+                p11_up+=np.dot(_gk[:,scatter1[1]],_gk[scatter1[1],:])*_weight/totalWeight
+                p22_up+=np.dot(_gk[:,scatter2[1]],_gk[scatter2[1],:])*_weight/totalWeight
+                p12_up+=np.exp(-2j*np.pi*np.dot(kpt,scatter1[0]-scatter2[0]))*np.dot(_gk[:,scatter1[1]],_gk[scatter2[1],:])*_weight/totalWeight
+                p21_up+=np.exp(-2j*np.pi*np.dot(kpt,scatter2[0]-scatter1[0]))*np.dot(_gk[:,scatter2[1]],_gk[scatter1[1],:])*_weight/totalWeight
+
+                p11_dn+=np.dot(_gk[:,scatter1[1]+norb],_gk[scatter1[1]+norb,:])*_weight/totalWeight
+                p22_dn+=np.dot(_gk[:,scatter2[1]+norb],_gk[scatter2[1]+norb,:])*_weight/totalWeight
+                p12_dn+=np.exp(-2j*np.pi*np.dot(kpt,scatter1[0]-scatter2[0]))*np.dot(_gk[:,scatter1[1]+norb],_gk[scatter2[1]+norb,:])*_weight/totalWeight
+                p21_dn+=np.exp(-2j*np.pi*np.dot(kpt,scatter2[0]-scatter1[0]))*np.dot(_gk[:,scatter2[1]+norb],_gk[scatter1[1]+norb,:])*_weight/totalWeight
+
+                # unperturbated dos
+                rou_up+=sum(np.diagonal(_gk)[:norb])*_weight/totalWeight
+                rou_dn+=sum(np.diagonal(_gk)[norb:])*_weight/totalWeight
+
+                #g00+=_gk[scatter1[1],scatter1[1]]*_weight/totalWeight
+                #rou_perturb_ref+=np.dot(_gk[:,scatter1[1]],_gk[scatter1[1],:])*_weight/totalWeight
+            
+            #rou_perturb_ref_tmp=rou_perturb_ref
+            #rou_perturb_ref=rou_perturb_ref*scatter1[2]/(1-scatter1[2]*g00)/totalWeight
+            '''
+            print('accurate perturb before series fixing:',rou_perturb_ref_tmp*scatter1[2]/totalWeight)
+            print('accurate perturb:',rou_perturb_ref)
+            print('delta:',scatter1[2])
+            print('g00',g00)
+            print('G0 dot G0:',rou_perturb_ref)
+            print('delta dot g00 |r|:%.6f'%abs(scatter1[2]*g00),scatter1[2]*g00)
+            '''
+            # calc the modification due to perturbation
+            scatterIDList=[[0,0],[0,1],[1,0],[1,0]]
+            scatterPotential=[scatter1[2],scatter2[2]]
+            gline_up=[[g11_up,g12_up],
+                      [g21_up,g22_up]]
+            gline_dn=[[g11_dn,g12_dn],
+                      [g21_dn,g22_dn]]
+            gline=[gline_up,gline_dn]
+            pline_up=[[p11_up/totalWeight,p12_up/totalWeight],
+                      [p21_up/totalWeight,p22_up/totalWeight]]
+            pline_dn=[[p11_dn/totalWeight,p12_dn/totalWeight],
+                      [p21_dn/totalWeight,p22_dn/totalWeight]]
+            pline=[pline_up,pline_dn]
+
+            perturb_up_old, perturb_dn_old=calcPerturbationOnRoute(scatterIDList,scatterPotential,gline,pline)
+            #perturb0=perturb_old
+            '''
+            print('now the paramter of iterative')
+            print('gline')
+            print(gline)
+            print('pline')
+            print(pline)
+            print('potential:')
+            print(scatterPotential)
+            print('0th order:',perturb_old)
+            '''
+            # iteratively calc the perturbation itself
+            rou_up_perturb, rou_dn_perturb=0.j, 0.j
+            norder=0
+            perturb_up_tmp, perturb_dn_tmp=[perturb_up_old], [perturb_dn_old]
+            cnt=0
+            while(True):
+                norder+=1
+                if norder>order:
+                    break
+                rou_up_perturb+=perturb_up_old
+                rou_dn_perturb+=perturb_dn_old
+                scatterIDList_update=[]
+                for scatterRoute in scatterIDList:
+                    #print(scatterRoute)
+                    route1=list(scatterRoute)
+                    route2=list(scatterRoute)
+                    route3=list(scatterRoute)
+                    route4=list(scatterRoute)
+                    route1.extend([0,0])
+                    route2.extend([0,1])
+                    route3.extend([1,0])
+                    route4.extend([1,1])
+                    scatterIDList_update.append(route1)
+                    scatterIDList_update.append(route2)
+                    scatterIDList_update.append(route3)
+                    scatterIDList_update.append(route4)
+                    #if scatterRoute[len(scatterRoute)-1]==0:
+                    #    scatterRoute.append(1)
+                    #else:
+                    #    scatterRoute.append(0)
+                scatterIDList=scatterIDList_update
+                #print(scatterIDList)
+                #exit()
+                perturb_up_new,perturb_dn_new=calcPerturbationOnRoute(scatterIDList,scatterPotential,gline,pline)
+                perturb_up_tmp.append(perturb_up_new)
+                perturb_dn_tmp.append(perturb_dn_new)
+                #print('%dth order'%norder,perturb_new)
+                #if abs(perturb_new.imag)<np.min([abs(rou.imag*0.1),0.001]) and cnt==0:
+                    #print(z)
+                #    break
+                #if abs(perturb_new)>abs(perturb_old) or cnt>0:
+                #print(abs(perturb_new/perturb_old))
+                cnt+=1
+                if cnt==4:
+                    #if abs(perturb_new/perturb_old)>1:
+                    #    print('Bowling up at energy:%.3f with r_new/r_old'%z)
+                    perturb_up_new_list, perturb_dn_new_list=list(perturb_up_tmp),list(perturb_dn_tmp)
+                    zerothPerturbUp,zerothPerturbDn=perturb_up_new_list.pop(0),perturb_dn_new_list.pop(0)
+                    perturb_up_old_list,perturb_dn_old_list=list(perturb_up_tmp),list(perturb_dn_tmp)
+                    perturb_up_old_list.pop(len(perturb_up_old_list)-1)
+                    perturb_dn_old_list.pop(len(perturb_dn_old_list)-1)
+                    divide_up=np.array(perturb_up_new_list)/np.array(perturb_up_old_list)
+                    divide_dn=np.array(perturb_dn_new_list)/np.array(perturb_dn_old_list)
+                    #print(abs(divide))
+                    #print(divide)
+                    meanDivideUp, meanDivideDn=np.mean(divide_up), np.mean(divide_dn)
+                    #print('mean divide:',meanDivide)
+                    print('up: %.6f %.6f %.6f %.6f theta: %.6f %.6f %.6f %.6f'%(*abs(divide_up),*(np.log(divide_up/abs(divide_up),dtype=complex).imag)))
+                    print('dn: %.6f %.6f %.6f %.6f theta: %.6f %.6f %.6f %.6f'%(*abs(divide_dn),*(np.log(divide_dn/abs(divide_dn),dtype=complex).imag)))
+                    if abs(meanDivideUp)>1:
+                        print('***Spin up is bowling up at energy:%.3f'%z)
+                        rou_up_perturb=zerothPerturbUp/(1-meanDivideUp)
+                    else:
+                        rou_up_perturb=sum(perturb_up_tmp[:3])+perturb_up_tmp[3]/(1-divide_up[3])
+                    if abs(meanDivideDn)>1:
+                        print('***Spin dn is bowling up at energy:%.3f'%z)
+                        rou_dn_perturb=zerothPerturbDn/(1-meanDivideDn)
+                    else:
+                        rou_dn_perturb=sum(perturb_dn_tmp[:3])+perturb_dn_tmp[3]/(1-divide_dn[3])
+                    
+                    break
+                    
+                perturb_up_old, perturb_dn_old=perturb_up_new, perturb_dn_new
+                
+            #print(z,rou_perturb,rou_perturb_ref)
+            rou_up+=rou_up_perturb
+            rou_dn+=rou_dn_perturb
+            dosUpAxis.append(rou_up.imag/(-np.pi))
+            dosDnAxis.append(rou_dn.imag/np.pi)
+
+        plt.figure()
+        plt.plot(energyAxis,dosUpAxis)
+        plt.plot(energyAxis,dosDnAxis)
+        plt.show()
+
