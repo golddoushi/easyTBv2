@@ -935,7 +935,7 @@ def plotKSampling(kmesh):
     plt.ylim(oy-length/2,oy+length/2)
     plt.show()
 
-def createKPOINTS(rpath=None,gam=False,getKMesh=False,forceBoder=False): # if getKMesh, no file will be created
+def createKPOINTS(rpath=None,gam=False,getKMesh=False,forceBoder=False,provideSize=None): # if getKMesh, no file will be created
     global lat,nkpts
     a1, a2, a3=lat[0], lat[1], lat[2]
     a1_len=np.sqrt(np.dot(a1,a1))
@@ -955,6 +955,8 @@ def createKPOINTS(rpath=None,gam=False,getKMesh=False,forceBoder=False): # if ge
     if gam:
         nkpt1=nkpt2=nkpt3=1
     nkpts=nkpt1*nkpt2*nkpt3
+    if provideSize!=None:
+        nkpt1, nkpt2, nkpt3 = provideSize
     # Monkhorst-Pack sampling
     kpts1=np.array([(2*r-nkpt1+1)/2./nkpt1 for r in range(nkpt1)])
     kpts2=np.array([(2*r-nkpt2+1)/2./nkpt2 for r in range(nkpt2)])

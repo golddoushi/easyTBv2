@@ -29,9 +29,8 @@ class Hr:
                     if R1==0 and R2 ==0 and R3==0 and sourceID==targetID:
                         self.onsite[sourceID]=t_real
                         assert t_imag<1e-4, 'found complex onsite energy on orb%d'%sourceID
-                    iline+=1
-                else:
-                    break
+                iline+=1
                 if iline>=len(data):break
-            
+            #print(self.bondList)
+            #exit()
             print('file %s has been successfully read in %.3fms'%(filepath,1000*(time.time()-time0)))
