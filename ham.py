@@ -1072,6 +1072,7 @@ class Green:
         plt.plot(energyAxis,dosAxis)
         plt.show()
 
+    # energy calculator
     def calcMatrixPerturbatedEnergyViaExact(self,hr,scatterList,eta=0.01,energyRange=(-5.0,0),Lx=1,Ly=1,Lz=1):
         '''
         in scatterList
@@ -1085,48 +1086,22 @@ class Green:
         BravaisIndex=np.array([norb,Lx*norb,Lx*Ly*norb])
         _ham=Ham().buildWholeHam(hr,Lx=Lx,Ly=Ly,Lz=Lz,getHam=True)
         for scatter in scatterList:
-
             iorb_source=scatter[0][1] + np.dot(scatter[0][0]%np.array([Lx,Ly,Lz]),BravaisIndex)
             iorb_target=scatter[1][1] + np.dot(scatter[1][0]%np.array([Lx,Ly,Lz]),BravaisIndex)
-            #print(_ham[iorb_source][iorb_target])
             _ham[iorb_source][iorb_target]+=scatter[2]
-            #print(scatter[0][0]%np.array([Lx,Ly,Lz]),scatter[1][0]%np.array([Lx,Ly,Lz]))
-            #print(iorb_source,iorb_target,scatter[2])
         
         r=(energyRange[1]-energyRange[0])/2
         o=(energyRange[0]+energyRange[1])/2
-
-        def getE(z):
-            E=z
-            #G=np.linalg.inv((E+eta*1j)*np.eye(totOrb)-_ham)
-            #dos=sum(np.diagonal(G)).imag/(-np.pi)/totCell
-            dos=1./(E+eta*1j).imag/(-np.pi)
-            return dos
         
         def getEOnCircle(theta):
-            #print(theta)
             z=r*np.exp(1j*theta)
             E=z+o
-            #G=np.linalg.inv((E+eta*1j)*np.eye(totOrb)-_ham)
-            #dos=sum(np.diagonal(G)).imag/(-np.pi)/totCell
-            dos=E*E#1./(E+eta*1j).imag/(-np.pi)
-            return (dos*1j*z).real
-        '''
-        def getEOnCircleList(theta):
-            z=r*np.exp(1j*theta)
-            EList=z+o
-            GList=[np.linalg.inv((E+eta*1j)*np.eye(totOrb)-_ham) for E in EList]
-            dos=np.array([sum(np.diagonal(G)).imag/(-np.pi)/totCell for G in GList])
-            #dos=EList*EList
-            return (dos*1j*z).real
-        '''
-        time0=time.time()
-        #inte,err=integrate.quad(getE,a=energyRange[0],b=energyRange[1])
-        #print(inte,err)
-        inte,err=integrate.quad(getEOnCircle,a=2*np.pi,b=0.)
-        #inte,err=integrate.quadrature(getEOnCircleList,a=np.pi,b=0.)
-        print(inte,err)
-        print('Integration finished in %.3fs'%(time.time()-time0))
+            G=np.linalg.inv((E+eta*1j)*np.eye(totOrb)-_ham)
+            dos=sum(np.diagonal(G))/(-np.pi)/totCell
+            totalEnergy=E*dos
+            return (totalEnergy*1j*z).imag
+        
+        inte,err=integrate.quad(getEOnCircle,a=np.pi,b=0.)
         return inte
 
     def calcMatrixPerturbatedEnergyViaFourier(self,hr,scatterList,eta=0.01,energyRange=(-5.0,0),NEDOS=500,Lx=1,Ly=1,Lz=1,globalCutOrder=8,diverseCutOrder=2,skipOdds=False):
@@ -1164,8 +1139,6 @@ class Green:
         kmesh=pR.createKPOINTS(getKMesh=True,provideSize=[Lx,Ly,Lz])
         weight=[1 for i in kmesh]
         totalWeight=sum(weight)
-        print(totalWeight)
-        #exit()
 
         HkList=[]
         for kpt in kmesh:
@@ -1173,18 +1146,18 @@ class Green:
             Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
             HkList.append(Hk)
 
-        thetaAxis=np.linspace(np.pi,0,NEDOS)
         r=(energyRange[1]-energyRange[0])/2
         o=(energyRange[0]+energyRange[1])/2
-        energyAxis=r*np.exp(1j*thetaAxis)+o
-        dosAxis=[]
-        for z in energyAxis:
+
+        def getEOnCircle(theta):
+            z=r*np.exp(1j*theta)
+            E=z+o
             rou=0.j
             g_internal=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
             g_external_contracted=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
             
             for kpt, _hk in zip(kmesh,HkList):
-                _gk=np.linalg.inv((z+eta*1j)*np.eye(norb)-_hk)
+                _gk=np.linalg.inv((E+eta*1j)*np.eye(norb)-_hk)
                 for irow in range(scatteringOrder):
                     R_left, orbID_left=relevantOrbList[irow]
                     for icol in range(scatteringOrder):
@@ -1216,24 +1189,20 @@ class Green:
                     meanDivide=np.mean(divide)
                     
                     if abs(divide[globalCutOrder-1])>1 and abs(perturb_tmp[globalCutOrder].imag/totalWeight)>10:
-                        print('***Bowling up at energy:%.3f, mean factor %.6f'%(z,abs(meanDivide)))
+                        print('***Bowling up at complex energy:(%.3f %.3f), mean factor %.6f'%(E.real,E.imag,abs(meanDivide)))
                         print('r:',(' %.6f'*globalCutOrder)%(*abs(divide),), 'last %.6f'%(perturb_tmp[globalCutOrder].imag))
                         rou_perturb=sum(perturb_tmp[:diverseCutOrder])+perturb_tmp[diverseCutOrder]/(1-meanDivide)#zerothPerturb/(1-meanDivide)
                     else:
-                        #print(len(perturb_tmp),globalCutOrder)
-                        #print(perturb_tmp[:globalCutOrder])
-                        #exit()
                         rou_perturb=sum(perturb_tmp[:(globalCutOrder-1)])+perturb_tmp[(globalCutOrder-1)]/(1-divide[(globalCutOrder-1)])
                     break
                 cnt+=1
                 perturb_matrix=perturb_matrix.dot(g_internal).dot(scatteringCenter)
-                #perturb_matrix_trace=sum(np.diagonal(perturb_matrix))
-                #perturb_tmp.append(perturb_matrix_trace)
 
             rou+=rou_perturb
-            dosAxis.append(rou.imag/(-np.pi)/totalWeight) # DOS per cell
-
-        plt.figure()
-        plt.plot(thetaAxis,dosAxis)
-        plt.show()
+            dos=rou/(-np.pi)/totalWeight # DOS per cell
+            totalEnergy=E*dos
+            return (totalEnergy*1j*z).imag
+        
+        inte,err=integrate.quad(getEOnCircle,a=np.pi,b=0.)
+        return inte
 
