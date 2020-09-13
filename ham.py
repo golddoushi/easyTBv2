@@ -691,7 +691,7 @@ class Green:
         E_minus,E_minus_err=self.calcMatrixPerturbatedEnergyViaFourier(hr,scatterTheOppoDirectionList,eta=eta,energyRange=energyRange,Lx=Lx,Ly=Ly,Lz=Lz,getErr=True,skipOdds=True)
         print("Energy obtained in %.3fs ===> opposite biasing: %.6f +- %.6f"%(time.time()-time0,E_minus,E_minus_err))
         
-        J=(E_plus-E_minus)/(-2.)#/(S**2)
+        J=(E_plus-E_minus)/2.#/(S**2)
         return J
 
 

@@ -1175,6 +1175,8 @@ class Bond:
         self.calcStatue=[] # store some info. in DFT calc.
         self.DNALabels=[]
 
+        self.couplingNumber=-1
+
     def calcCoordinates(self,lat):
         self.sourceCoorFrac=self.sourceOrb.pos
         self.targetCoorFrac=self.targetOrb.pos+self.overLat
@@ -1207,159 +1209,6 @@ class Bond:
         self.localFrameCart=np.array([xaxis,yaxis,zaxis])
         self.localFrameFrac=np.dot(self.localFrameCart,self.lat_inv)
     
-    '''
-    def findMandatoryEazyPlane(self,lat,pos,rotations,translations):
-        bondUnitVec=self.targetCoorCart-self.sourceCoorCart
-        bondUnitVec/=np.sqrt(sum(bondUnitVec*bondUnitVec))
-        def getDistance2FromBondCenter(ion_pos):
-            r=np.dot(ion_pos-self.bondCenter,lat)
-            return sum(r*r)
-
-        def getOrthogonalityFromBondCenter(ion_pos):
-            r=np.dot(ion_pos-self.bondCenter,lat)
-            r/=np.sqrt(sum(r*r))
-            return abs(sum(r*bondUnitVec))
-
-        def getLatticeVecIndexRange(index):
-            return np.min([0,index]), np.max([0,index])+1
-
-        def twoVecAreParallel(v1,v2):
-            if abs(abs(np.dot(v1,v2))-1)<param.SYMPREC:
-                return True
-            return False
-
-        r1Min, r1Max=getLatticeVecIndexRange(self.overLat[0])
-        r2Min, r2Max=getLatticeVecIndexRange(self.overLat[1])
-        r3Min, r3Max=getLatticeVecIndexRange(self.overLat[2])
-        r1_opt, r2_opt, r3_opt, ion_opt, dis_opt= 0, 0, 0, 0, 10
-        dataList=[]
-        for r1 in range(r1Min,r1Max):
-            for r2 in range(r2Min,r2Max):
-                for r3 in range(r3Min,r3Max):
-                    for iion_pos, ion_pos in enumerate(pos):
-                        distance=getDistance2FromBondCenter(ion_pos+np.array([r1,r2,r3]))
-                        #print(distance)
-                        dataList.append([distance,iion_pos,r1,r2,r3])
-                        #if distance < dis_opt:
-                            #r1_opt, r2_opt, r3_opt, ion_opt, dis_opt= r1, r2, r3, iion_pos, distance
-        dataList=np.array(dataList)
-        distanceList=dataList[:,0]
-        sortIndexList=aux.quicksort(list(distanceList))
-        shortestDistance=10
-        for dis in distanceList:
-            if dis < shortestDistance and dis > param.SYMPREC:
-                shortestDistance=dis
-        candidatePool=[]
-        for index in sortIndexList:
-            dis = dataList[index][0]
-            if dis > param.SYMPREC and dis < shortestDistance*param.LOCALFRAMERANGE:
-                candidatePool.append(dataList[index])
-            elif dis > param.SYMPREC:
-                break
-        #print(candidatePool)
-        xaxis=self.targetCoorCart-self.sourceCoorCart
-        #print('now in the bond itself')
-        #print('orb%d - orb%d'%(self.sourceOrb.id,self.targetOrb.id))
-        #print('bond vec',xaxis)
-        xaxis/=np.sqrt(np.dot(xaxis,xaxis))
-        orthorgonalList=[getOrthogonalityFromBondCenter(pos[int(candidate[1])]+np.array(candidate[2:5])) for candidate in candidatePool]
-        sortIndexList=aux.quicksort(orthorgonalList) if len(orthorgonalList)>0 else [0]
-        # For now, let us skip the automatical generation of zaxis, but use the mannual setting 
-        if False and abs(orthorgonalList[0]-1)>param.SYMPREC: # scattering is not parallel to path
-            candidate=candidatePool[sortIndexList[0]]
-            dis_opt, ion_opt, r1_opt, r2_opt, r3_opt=candidate
-            #print(dis_opt, ion_opt, r1_opt, r2_opt, r3_opt)
-            zaxis=np.dot(pos[int(ion_opt)]+np.array([r1_opt,r2_opt,r3_opt])-self.bondCenter,lat)
-            zaxis/=np.sqrt(np.dot(zaxis,zaxis))
-        else: # scattering is the source and target themselves
-            #print("Warning: cannot find scaterring close and nonparralel to bond")
-            #print("bond id: %d source: %d target: %d overLat: %d %d %d"%(
-            #    self.id,self.sourceOrb.id,self.targetOrb.id,self.overLat[0],self.overLat[1],self.overLat[2]
-            #))
-            #print("assume zaxis = %.3f %.3f %.3f"%(param.ZAXIS[0],param.ZAXIS[1],param.ZAXIS[2]))
-            zaxis=np.array(param.ZAXIS)
-            if twoVecAreParallel(zaxis,xaxis):
-                print("however bond direction is parallel to zaxis, therefore, chose 1 0 0 as x-direction")
-                xaxis=np.array([1,0,0])
-            else:
-                yaxis=np.cross(zaxis,xaxis)
-                xaxis=np.cross(yaxis,zaxis)
-        yaxis=np.cross(zaxis,xaxis)
-        # check orthorgonality 
-        yaxis_len=np.sqrt(np.dot(yaxis,yaxis))
-        
-        assert abs(yaxis_len-1)<param.SYMPREC, 'Error: yaxis vanishes, it may be attributed to the bond direction'
-
-        lat_inv=np.linalg.inv(lat)
-        self.localXAxisCart=xaxis
-        self.localYAxisCart=yaxis
-        self.localZAxisCart=zaxis
-        self.localXAxisFrac=np.dot(xaxis,lat_inv)
-        self.localYAxisFrac=np.dot(yaxis,lat_inv)
-        self.localZAxisFrac=np.dot(zaxis,lat_inv)
-        #print('xaxis (bond vec): %.6f %.6f %.6f'%(self.localXAxisFrac[0],self.localXAxisFrac[1],self.localXAxisFrac[2]))
-        #print('yaxis (bond vec): %.6f %.6f %.6f'%(self.localYAxisFrac[0],self.localYAxisFrac[1],self.localYAxisFrac[2]))
-        #print('zaxis (bond vec): %.6f %.6f %.6f'%(self.localZAxisFrac[0],self.localZAxisFrac[1],self.localZAxisFrac[2]))
-    
-    def broadcastLocalFrame(self,lat):
-        #a1=self.localXAxisFrac+self.bondCenter
-        #a2=self.localYAxisFrac+self.bondCenter
-        #a3=self.localZAxisFrac+self.bondCenter
-        #lat_inv=np.linalg.inv(lat)
-        #print('start broadcasting local frame, self report')
-        self.showLocalFrameInFrac()
-        for bond, trans in zip(self.sameTypeBondList,self.sameTypeBondTransList):
-            rotate=trans[0]
-            #translate=trans[1]
-            #print('rotate:')
-            #print(rotate)
-            #print('trans:')
-            #print(translate)
-            #print("let's see the bond vec")
-            #print(np.dot(self.bondVec,lat_inv))
-            #print(np.dot(bond.bondVec,lat_inv))
-            #print('transmit to bond%d, orb%d-orb%d overLat [%d %d %d]'%(bond.id,bond.sourceOrb.id,bond.targetOrb.id,bond.overLat[0],bond.overLat[1],bond.overLat[2]))
-            #print('direct calc the local frame should be:')
-            #xaxis=bond.targetCoorCart-bond.sourceCoorCart
-            #xaxis/=np.sqrt(np.dot(xaxis,xaxis))
-            #zaxis=np.array(param.ZAXIS)
-            #yaxis=np.cross(zaxis,xaxis)
-            #xaxis=np.cross(yaxis,zaxis)
-            #localXAxisFrac=np.dot(xaxis,lat_inv)
-            #localYAxisFrac=np.dot(yaxis,lat_inv)
-            #localZAxisFrac=np.dot(zaxis,lat_inv)
-            #print(localXAxisFrac)
-            #print(localYAxisFrac)
-            #print(localZAxisFrac)
-
-            #transformed_center=np.dot(rotate,self.bondCenter)+translate
-
-            bond.localXAxisFrac=np.dot(rotate,self.localXAxisFrac)
-            bond.localYAxisFrac=np.dot(rotate,self.localYAxisFrac)
-            bond.localZAxisFrac=np.dot(rotate,self.localZAxisFrac)
-            bond.localXAxisCart=np.dot(bond.localXAxisFrac,lat)
-            bond.localYAxisCart=np.dot(bond.localYAxisFrac,lat)
-            bond.localZAxisCart=np.dot(bond.localZAxisFrac,lat)
-
-            #print('with symmetric rotation, we get ')
-            #bond.showLocalFrameInFrac()
-            #print(bond.localXAxisFrac)
-            #print(bond.localYAxisFrac)
-            #print(bond.localZAxisFrac)
-            #print()
-            
-            #if self.bondType==0:
-            #    print('========')
-                #self.showLocalFrameInFrac()
-            #    bond.showLocalFrameInFrac()
-                #print(rotate)
-                #print(translate)
-                #print(self.sourceOrb.pos,bond.sourceOrb.pos)
-                #print(self.targetOrb.pos,bond.targetOrb.pos)
-                #print(self.localXAxisFrac)
-                #print(bond.localXAxisFrac)
-            #exit()
-    '''
     def broadCastExchange(self,type='Ising'):
         for bond in self.sameTypeBondList:
             bond.E0=self.E0
@@ -1386,116 +1235,18 @@ class Bond:
         for i in range(3):
             print("%.6f %.6f %.6f"%(self.localFrameCart[i][0],self.localFrameCart[i][1],self.localFrameCart[i][2]))
         print("end of local frame")
-    '''
-    def checkIfTheBondHasSameTypeWithMe(self,bond_ref,rotations,translations):
-        # screening by bond length
-        if abs(self.bondLen-bond_ref.bondLen)>param.SYMPREC:
-            return False
-        # screening by point symmetry
-        symIndex1=self.sourceOrb.getThePositionInMyKindList(bond_ref.sourceOrb)
-        symIndex2=self.targetOrb.getThePositionInMyKindList(bond_ref.targetOrb)
-        symOpOverlapList=aux.findTheSameNumberInTwoList(symIndex1,symIndex2)
-        # check the line symmetry
-        for symOpID in symOpOverlapList:
-            print('=consider classification=')
-            print('bond%d ~= bond%d via'%(self.id,bond_ref.id))
-            rotate=self.sourceOrb.sameTypeOrbTransList[symOpID][0]
-            translate=self.sourceOrb.sameTypeOrbTransList[symOpID][1]
-            print(rotate)
-            print(translate)
-            print('self bond',self.sourceOrb.pos,self.targetOrb.pos,self.overLat)
-            print('ref  bond',bond_ref.sourceOrb.pos,bond_ref.targetOrb.pos,bond_ref.overLat)
-            #print('source over lat:',self.sourceOrb.sameTypeOrbOverLatList[symOpID])
-            #print('target over lat:',self.targetOrb.sameTypeOrbOverLatList[symOpID])
-            print('>>>>>test the direct applying of sym. op. on self bond')
-            transSource=np.dot(rotate,self.sourceOrb.pos)+translate
-            transTarget=np.dot(rotate,(self.targetOrb.pos+self.overLat))+translate
-            print('->trans bond',transSource,transTarget)
-            diff_source=transSource-bond_ref.sourceOrb.pos
-            diff_target=transTarget-bond_ref.targetOrb.pos
-            diff_vec1=diff_target-diff_source
-            print('->diff source and target:',diff_source,diff_target)
-            if np.dot(diff_vec1,diff_vec1)<param.SYMPREC:
-                print('coincide')
-                return True
-            diff_source2=transSource-bond_ref.targetOrb.pos
-            diff_target2=transTarget-bond_ref.sourceOrb.pos
-            diff_vec2=diff_target2-diff_source2
-            print('->diff2 source and target:',diff_source2,diff_target2)
-            if np.dot(diff_vec2,diff_vec2)<param.SYMPREC:
-                print('coincide with reversing')
-                return True
-            print('cannot coincide')
-        #exit()
-        return False#aux.doesTheTwoListHaveSameNumber(symIndex1,symIndex2)
-
-    def defineBondClassAndTrans(self,bondClass,rotations,translations):
-        def isZeroVector(vec):
-            #check if the vec is zero vec or just over 1.
-            for x in vec:
-                if abs(x%1)>param.SYMPREC and abs(1-x%1)>param.SYMPREC and abs(2-x%1)>param.SYMPREC:
-                    return False
-            return True
-        self.sameTypeBondList=bondClass
-        self.sameTypeBondTransList=[]
-        print('origin bond%d orb%d - orb%d over [%d %d %d]'%(self.id,self.sourceOrb.id,self.targetOrb.id,self.overLat[0],self.overLat[1],self.overLat[2]))
-        for bond in bondClass:
-            print('consider bond%d orb%d-orb%d over [%d %d %d]'%(bond.id,bond.sourceOrb.id,bond.targetOrb.id,bond.overLat[0],bond.overLat[1],bond.overLat[2]))
-            symOpID1=self.sourceOrb.getThePositionInMyKindList(bond.sourceOrb)
-            symOpID2=self.targetOrb.getThePositionInMyKindList(bond.targetOrb)
-            #symOpOverlap=aux.findTheFirstSameNumberAmongTwoList(symOpID1,symOpID2)
-            symOpOverlapList=aux.findTheSameNumberInTwoList(symOpID1,symOpID2)
-            diff_overLat=bond.overLat-self.overLat
-            symOpOverlapList=[symOpID for symOpID in symOpOverlapList if (self.sourceOrb.sameTypeOrbOverLatList[symOpID]==self.targetOrb.sameTypeOrbOverLatList[symOpID]+diff_overLat).all()]
-            print(symOpID1)
-            print(symOpID2)
-            print(symOpOverlapList)
-            if len(symOpOverlapList)==1:
-                symOpOverlapIndex=symOpOverlapList[0]
-                rotate, translate=rotations[symOpOverlapIndex], translations[symOpOverlapIndex]
-                transformedCenter=np.dot(rotate,self.bondCenter)+translate
-                dcenter=transformedCenter-bond.bondCenter
-                print(symOpOverlapList)
-                print(rotate)
-                print(translate)
-                print(self.sourceOrb.pos,self.targetOrb.pos+self.overLat)
-                print(bond.sourceOrb.pos,bond.targetOrb.pos+bond.overLat)
-                assert isZeroVector(dcenter), "the bond center was not tranformed properly"
-                self.sameTypeBondTransList.append([rotations[symOpOverlapIndex],translations[symOpOverlapIndex]])
-                #print(self.id,bond.id)
-                #print(symOpID1)
-                #print(symOpID2)
-                #print(symOpOverlap)
-                #print(rotations[symOpOverlap])
-                #print(self.sourceOrb.sameTypeOrbTransList[symOpOverlap])
-                #print(translations[symOpOverlap])
-                #print(self.sourceOrb.pos,bond.sourceOrb.pos)
-                #print(self.targetOrb.pos,bond.targetOrb.pos)
-                #exit()
-            elif len(symOpOverlapList)>1:
-                #print("Warning: found more than one symmetry Operator to recover the bond, maybe you should enlarge the supercell")
-                #print("bond%d type%d ~ bond%d type%d"%(self.id,self.bondType,bond.id,bond.bondType))
-                for isymOpOverlapIndex, symOpOverlapIndex in enumerate(symOpOverlapList):
-                    rotate, translate=rotations[symOpOverlapIndex], translations[symOpOverlapIndex]
-                    #print('sym%d, rotate and translate'%isymOpOverlapIndex)
-                    #print(rotate)
-                    #print(translate)
-                    transformedCenter=np.dot(rotate,self.bondCenter)+translate
-                    #print('self bond fractional coor. orb%d orb%d [%d %d %d]'%(self.sourceOrb.id,self.targetOrb.id,self.overLat[0],self.overLat[1],self.overLat[2]))
-                    #print(self.sourceCoorFrac,self.targetCoorFrac,self.bondCenter)
-                    #print('transformed fractional coor. orb%d orb%d [%d %d %d]'%(bond.sourceOrb.id,bond.targetOrb.id,bond.overLat[0],bond.overLat[1],bond.overLat[2]))
-                    #print(bond.sourceCoorFrac,bond.targetCoorFrac,bond.bondCenter)
-                    dcenter=transformedCenter-bond.bondCenter
-                    #print('dcenter:',dcenter)
-                    if isZeroVector(dcenter):
-                        break
-                assert isZeroVector(dcenter), "the bond center was not tranformed properly"
-                self.sameTypeBondTransList.append([rotations[symOpOverlapIndex],translations[symOpOverlapIndex]])
-                
-        if len(self.sameTypeBondTransList)!=len(self.sameTypeBondList):
-            print("Error: cannot find the symmetry operator for some bonds in kind <<< posReader::Bond::defineBondClassAndTrans")
-    '''
-    def report(self):
+    
+    def report(self,short=False):
+        print('bond%d is reporting'%self.id)
+        print('bond type %d'%self.bondType)
+        print('link %s-%s and %s-%s'%(self.sourceOrb.label,self.sourceOrb.wyckoffs,self.targetOrb.label,self.targetOrb.wyckoffs))
+        print('link orb%d - orb%d [%d %d %d]'%(self.sourceOrb.id,self.targetOrb.id,*self.overLat))
+        print("length: %.3f"%self.bondLen)
+        print('(%.6f %.6f %.6f) - (%.6f %.6f %.6f)'%(self.sourceCoorFrac[0],self.sourceCoorFrac[1],self.sourceCoorFrac[2],self.targetCoorFrac[0],self.targetCoorFrac[1],self.targetCoorFrac[2]))
+        if short:
+            print('there are %d bond with the same type (classified via length)'%(len(self.sameTypeBondList)))
+            return
+        
         sameTypeID=[]
         for bond in self.sameTypeBondList:
             # build the sametype list
@@ -1505,14 +1256,8 @@ class Bond:
                     existed=True
                     break
             if not existed: sameTypeID.append(bond.id)
-
-        print('bond%d is reporting'%self.id)
-        print('bond type %d'%self.bondType)
-        print('link %s-%s and %s-%s'%(self.sourceOrb.label,self.sourceOrb.wyckoffs,self.targetOrb.label,self.targetOrb.wyckoffs))
-        print('link orb%d - orb%d'%(self.sourceOrb.id,self.targetOrb.id))
-        print("length: %.3f"%self.bondLen)
-        print('(%.6f %.6f %.6f) - (%.6f %.6f %.6f)'%(self.sourceCoorFrac[0],self.sourceCoorFrac[1],self.sourceCoorFrac[2],self.targetCoorFrac[0],self.targetCoorFrac[1],self.targetCoorFrac[2]))
         print('there are %d bond with the same type'%(len(sameTypeID)))
+        
         if param.VERBOSE:
             for bond in self.sameTypeBondList:
                 print('%d - %d [%d %d %d] centred at (%.3f %.3f %.3f)'%(
@@ -1550,9 +1295,6 @@ class Bond:
                 if abs(x%1)>param.SYMPREC and abs(1-x%1)>param.SYMPREC and abs(2-x%1)>param.SYMPREC:
                     return False
             return True
-
-        #def checkTheTransOfFrame(frame1,frame2):
-        #    return [checkTheParallelOrAntiParallel(vec1, vec2) for vec1, vec2 in zip(frame1,frame2)]
 
         self.sameTypeBondList=[]
         self.sameTypeBondOverLatList=[]
@@ -1679,12 +1421,6 @@ def findBondListAndClassifyThem(rotations, translations, source_list=[],maxRange
     global pos_ions, lat, orbList, bondList
     lat_inv=np.linalg.inv(lat)
     print("--->>> start classifying bonds <<<---")
-    #if param.VERBOSE:
-    #    print("Symmetric operations:")
-    #    for rotate, translate in zip(rotations,translations):
-    #        print('------')
-    #        print(rotate)
-    #        print(translate)
     aux.showElapsedTime(offset=True)
     bondList_all, bondLen=findBondList(source_list=source_list,maxRange=maxRange,tolerance=tolerance,getBondLen=True)
     aux.showElapsedTime(extraInfo='searching links');aux.showElapsedTime(offset=True)
@@ -1704,25 +1440,6 @@ def findBondListAndClassifyThem(rotations, translations, source_list=[],maxRange
         for bond in bondListWithSameLength:
             bond.defineBondTypeAndTrans(bondListWithSameLength, rotations, translations)
         aux.showElapsedTime(extraInfo='classify bonds with %dth length'%iBondLength);aux.showElapsedTime(offset=True)
-    #check the consistency
-    '''
-    for bond in bondList_flat:
-        print('--->>>> bond%d orb%d-orb%d [%d %d %d] related symmetric bonds:'%(bond.id,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat))
-        for symBond, symOp, overLat, parity in zip(bond.sameTypeBondList,bond.sameTypeBondTransList,bond.sameTypeBondOverLatList,bond.sameTypeBondParityList):
-            print('symmetric operation')
-            print(symOp[0],symOp[1])
-            print('original:',bond.sourceCoorFrac,bond.targetCoorFrac)
-            print('trans:',np.dot(symOp[0],bond.sourceCoorFrac)+symOp[1],np.dot(symOp[0],bond.targetCoorFrac)+symOp[1])
-            print('bond%d orb%d-orb%d [%d %d %d]'%(symBond.id,symBond.sourceOrb.id,symBond.targetOrb.id,*symBond.overLat))
-            print(symBond.sourceCoorFrac,symBond.targetCoorFrac)
-            print('over lat:',overLat,'parity:',parity)
-            print(bond.localFrameFrac)
-            print(np.dot(bond.localFrameFrac,symOp[0].T))
-            print(symBond.localFrameFrac)
-            print()
-        print(len(bond.sameTypeBondList),len(bond.sameTypeBondTransList))    
-        exit()
-    '''
     
     bondListWithClassification=[]
     def getBondTypeInCurrentList(inquir_bond,startID=0):
@@ -1750,6 +1467,60 @@ def findBondListAndClassifyThem(rotations, translations, source_list=[],maxRange
     #    print(bond.id,bond.bondType)
     aux.showElapsedTime(extraInfo='sort bonds into type-hierarchy');aux.showElapsedTime(offset=True)
     print("--->>> bonds are successfully classified <<<---")
+    return bondListWithClassification
+
+def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.01):#,additionTranslation=[np.array([0,0,0])]):
+    global pos_ions, lat, orbList, bondList
+    lat_inv=np.linalg.inv(lat)
+    print("--->>> start classifying bonds <<<---")
+    aux.showElapsedTime(offset=True)
+    bondList_all, bondLen=findBondList(source_list=source_list,maxRange=maxRange,tolerance=tolerance,getBondLen=True)
+    aux.showElapsedTime(extraInfo='searching links');aux.showElapsedTime(offset=True)
+    bondList_flat=[]
+    id=0
+    for iBondLength in range(param.MAXRANGE):
+        bondListWithSameLength=[]
+        for bond in bondList_all[iBondLength]:  # bond with same length
+            sourceOrb=orbList[bond[0][0]]
+            targetOrb=orbList[bond[0][1]]
+            overLat=bond[1]
+            newBond=Bond(id, sourceOrb, targetOrb, overLat, lat, lat_inv)
+            bondList_flat.append(newBond)
+            bondListWithSameLength.append(newBond)
+            id+=1
+        aux.showElapsedTime(extraInfo='construct bonds with %dth length'%iBondLength);aux.showElapsedTime(offset=True)
+        for bond in bondListWithSameLength:
+            bond.sameTypeBondList=bondListWithSameLength
+        #    bond.defineBondTypeAndTrans(bondListWithSameLength, rotations, translations)
+        aux.showElapsedTime(extraInfo='classify bonds with %dth length'%iBondLength);aux.showElapsedTime(offset=True)
+    
+    bondListWithClassification=[]
+    def getBondTypeInCurrentList(inquir_bond,startID=0):
+        totType=len(bondListWithClassification)
+        for ibondType in range(startID,totType):
+            bondType=bondListWithClassification[ibondType]
+            for bond in bondType:
+                if abs(bond.bondLen-inquir_bond.bondLen)<param.SYMPREC:
+                    return ibondType
+                #if bond.checkIfTheBondHasSameTypeWithMe(inquir_bond,rotations,translations):
+                #    return ibondType
+        #print(inquir_bond.bondLen,inquir_bond.sourceOrb.label,inquir_bond.targetOrb.label)
+        return -1 # <0 means this is a new type of bond
+    # generate classified list
+    for bond in bondList_flat:
+        bondTypeID=getBondTypeInCurrentList(bond)
+        if bondTypeID>=0:
+            bond.bondType=bondTypeID
+            bondListWithClassification[bondTypeID].append(bond)
+        else:
+            bond.bondType=len(bondListWithClassification)
+            bondListWithClassification.append([bond])
+    # check the bond type
+    #for bond in bondList_flat:
+    #    print(bond.id,bond.bondType,bond.bondLen)
+    #exit()
+    aux.showElapsedTime(extraInfo='sort bonds into type-hierarchy');aux.showElapsedTime(offset=True)
+    print("--->>> bonds are successfully classified according to bond length <<<---")
     return bondListWithClassification
 
 def getDfFactor(source_list=[],basicRotation=[],cRange=2,tolerance=0.01,MAXINV=100,getBonds=False,getTrans=False):

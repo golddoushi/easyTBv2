@@ -4,13 +4,17 @@ import numpy as np
 import posReader as pR
 import paramReader
 paramReader.readGlobalConst()
+import couplingCalc as cc
 import matplotlib.pyplot as plt
 
+cc.mainLoop('./mcalc/graphene/',[0,1],[1,1],[0.5,0.5])
+
+exit()
 pR.readPOS('./spg156FeTeIU0.0.vasp')
 hr_g=reader.Hr()
 #hr_g.readDoubleFiles('./wannier90.dn_hr.dat','./wannier90.up_hr.dat')
-#hr_g.readSingleFile('./simpleGraphene.txt')
-hr_g.readDoubleFiles('./CrI3.dn_hr.dat','./CrI3.up_hr.dat')
+hr_g.readSingleFile('./simpleGraphene.txt')
+#hr_g.readDoubleFiles('./CrI3.dn_hr.dat','./CrI3.up_hr.dat')
 #gr.testG(hr_s,orbList=[0,1],fermi=0,eta=0.05)
 gr=hamilton.Green()
 #gr.calcBands(hr_g,orbList=[0,1,2,3,4,5],fermi=-2.6,eta=0.1,resolution=200)
@@ -35,7 +39,7 @@ gr=hamilton.Green()
 #E_exact=gr.calcMatrixPerturbatedEnergyViaFourier(hr_g,scatterList,eta=0.0001,energyRange=(-5.,0.),Lx=10,Ly=10,Lz=1,globalCutOrder=12,diverseCutOrder=2,skipOdds=True,onlyPerturbatedEnergy=True)
 #print(E_exact)
 
-J=gr.calcJ(hr_g,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[5,6,7,8,9],targetR=[1,1,0],eta=0.0001,energyRange=(-10.0,-2.5),Lx=10,Ly=10,Lz=1,globalCutOrder=8,diverseCutOrder=2,linearPerturb=True)
-#J=gr.calcJExact(hr_g,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[0,1,0],eta=0.0001,energyRange=(-10.0,-0.762),Lx=5,Ly=5,Lz=1)
+J=gr.calcJ(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[1],targetR=[0,0,0],eta=0.0001,energyRange=(-5.0,0.),Lx=5,Ly=5,Lz=1,globalCutOrder=8,diverseCutOrder=2,linearPerturb=True)
+#J=gr.calcJExact(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[1],targetR=[0,0,0],eta=0.0001,energyRange=(-5.0,0.),Lx=5,Ly=5,Lz=1)
 print(J)
 
