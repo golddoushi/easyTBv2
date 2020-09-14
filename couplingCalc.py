@@ -136,11 +136,20 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
     #if param.MAGTYPE=='ISING':
     #    calcIsotropicJ(mainDir,bondList=bondListWithClassification,supercellSize=[sizeL,sizeW,sizeH])
 
-def calcIsotropicJ(mainDir,fermi=0,eta=0.01):
+def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
+    '''
+    mainDir: the position of Hr file
+    fermi: assumed Fermi level
+    eta: eta of retarded Green's function
+    emptySpace: preserved distance from band edge for the integration of Green's function 
+    '''
     global bondList, supercellSize
     # read in Hr
     hr=reader.Hr()
     fileList=aux.ls(mainDir)
+    # check if the J.txt exsited
+
+    
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
     if len(hrFileList)==2:
         hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=True)
@@ -152,12 +161,30 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01):
     else:
         print("Error: found more than two hr file in %s, pls. clean up tge directory"%mainDir)
         exit()
-
+        
     # create Green's function
     gr=hamilton.Green()
     kmesh=pR.createKPOINTS(provideSize=supercellSize,getKMesh=True)
     emin,emax=gr.calcFullDOS(hr,kmesh=kmesh,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True)
-    #lowerBound
+    
+    for ibondType, bondType in enumerate(bondList):
+        print("Now evaluate the bondType%d"%ibondType)
+        bond=bondType[0]
+        J=gr.calcJ(hr,sourceOrbList=bond.sourceOrb.wannIDList,
+                   targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
+                   eta=eta,energyRange=(emin-emptySpace,fermi),
+                   Lx=supercellSize[0],Ly=supercellSize[1],Lz=supercellSize[2],
+                   linearPerturb=True)
+        bond.exchangeEnergy=J
+        bond.broadCastExchange(type='Ising')
+    
+    with open(mainDir+'J.txt','w') as fJ:
+        fJ.write('Isotropic exchange energy J*S^2 up to %dNN calculated by Greens function\n'%(param.CALRANGE))
+        
+        for ibondType, bondType in enumerate(bondList):
+            bond=bondType[0]
+            fJ.write('%dNN ion%d - ion%d [%d %d %d] J=%.6f\n'%(
+                (ibondType+1), bond.sourceOrb.id, bond.targetOrb.id, *bond.overLat, bond.exchangeEnergy))
     
 def __updateSource(source_list,ini_mag,ini_S,size=2):
     outSource=[]

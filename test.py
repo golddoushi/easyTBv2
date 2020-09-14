@@ -7,8 +7,8 @@ paramReader.readGlobalConst()
 import couplingCalc as cc
 import matplotlib.pyplot as plt
 
-cc.classifyBonds(mainDir='./mcalc/graphene/', source_list=[0,1], wann_list=[[0,2],[1,3]], ini_S=[0.5,0.5],completelyConfine=True)
-cc.calcIsotropicJ(mainDir='./mcalc/graphene/',fermi=0,eta=0.01)
+cc.classifyBonds(mainDir='./mcalc/graphene/', source_list=[0,1], wann_list=[[0],[1]], ini_S=[0.5,0.5],completelyConfine=True)
+cc.calcIsotropicJ(mainDir='./mcalc/graphene/',fermi=0,eta=0.0001,emptySpace=5)
 exit()
 pR.readPOS('./spg156FeTeIU0.0.vasp')
 hr_g=reader.Hr()
