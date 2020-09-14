@@ -192,6 +192,45 @@ class Green:
         plt.imshow(DOS,extent=(-5,5,-5,5),origin='lower')
         plt.show()
                 
+    def calcFullDOS(self,hr,fermi=0,eta=0.01,NEDOS=1000,kmesh=[],mainDir=None,saveFig=True):
+        norb=hr.norb
+        EkList=[]
+        time0=time.time()
+        kmesh=pR.createKPOINTS(getKMesh=True) if len(kmesh)==0 else kmesh
+        for ikpt, kpt in enumerate(kmesh):
+            _ham=Ham()
+            _ham.buildHkFromHr(hr,kpt,getHk=True)
+            eigs=_ham.sovle_exact()
+            EkList.extend(eigs)
+        Emin, Emax = np.min(EkList), np.max(EkList)
+        print('Spectra solved in %.3fs'%(time.time()-time0))
+        print('band range: %.6f-%.6f'%(Emin,Emax))
+        
+        enhancementForEnergyRange=(Emax-Emin)*0.05
+        energyAXIS=np.linspace(Emin-enhancementForEnergyRange,Emax+enhancementForEnergyRange,NEDOS)
+        DOS=[]
+        for z in energyAXIS:
+            _dos_tmp=0
+            for energy in EkList:
+                gk=1./(z-energy+eta*1j)
+                _dos_tmp+=gk.imag/(-np.pi)
+            DOS.append(_dos_tmp)
+        ymax=np.max(DOS)*1.05
+        plt.figure()
+        plt.plot(energyAXIS,DOS)
+        plt.plot([fermi,fermi],[0,ymax],'--')
+        plt.xlim(Emin-enhancementForEnergyRange,Emax+enhancementForEnergyRange)
+        plt.ylim(0,ymax)
+        plt.yticks([])
+        plt.ylabel(r'DOS')
+        plt.xlabel(r'Energy')
+        plt.show()
+        if saveFig:
+            assert mainDir!=None, 'We need path or directory to save the figure'
+            plt.savefig(mainDir+'DOS.png')
+        plt.close()
+        return Emin, Emax
+
     def testG(self,hr,orbList=[0],fermi=0,eta=0.1):
         norb=hr.norb
         HkList=[]

@@ -76,7 +76,7 @@ ISMEAR=0
 SIGMA=0.05
 NELM=100
 
-MAGTYPE=FULL         # ISING(colinear) | XXZ | HEISENBERG | FULL(fully anisotropic)
+MAGTYPE=ISING        # ISING(colinear) | XXZ | HEISENBERG | FULL(fully anisotropic)
 MINMAG=0.4
 MAXSTR=5             # useless
 BONDSEARCHRANGE=1    # the size of supercell used to search nNN bonds

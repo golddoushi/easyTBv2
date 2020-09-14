@@ -46,6 +46,9 @@ class Orb:
         self.rwigs=1
 
         self.index_tmp=0 # one interface to store some information for external module
+
+        self.wannIDList=[]  # the IDs of Wannier orbitals attached to this ions are listed here
+                            # if spin-polarized model or SOC model was assumed, former and later half list represent spin-up and spin-dn Wannier orbitals. 
     
     def defineOrbTypeAndTrans(self,orbTypeList,rotations,translations):
         # construct equal orbitals corresponding to standard transformations
@@ -77,7 +80,7 @@ class Orb:
     def getThePositionInMyKindList(self,orb_ref):
         return [iorb for iorb, orb in enumerate(self.sameTypeOrbList) if orb.id==orb_ref.id]
 
-def readPOS(path='./POSCAR',ini_mag=[],ini_S=[],rotations=[],translations=[]):
+def readPOS(path='./POSCAR',ini_mag=[],ini_S=[],wann_ID=[],rotations=[],translations=[]):
     global title,scale,lat,ele_str,nions,tot_ions,type,pos_ions,orbList,bondList
     global ncount
     lat=[]
@@ -107,7 +110,7 @@ def readPOS(path='./POSCAR',ini_mag=[],ini_S=[],rotations=[],translations=[]):
     ncount=0
     __toHome()
     if len(ini_mag)>0:
-        getAllOrbs(ini_mag=ini_mag,ini_S=ini_S,rotations=rotations,translations=translations)
+        getAllOrbs(ini_mag=ini_mag,ini_S=ini_S,wann_ID=wann_ID,rotations=rotations,translations=translations)
 
 def getTypeNumberList(DNA=[],getLabels=False): # get numbers consist of type of each ions
     global nions,tot_ions,ele_str
@@ -135,7 +138,7 @@ def getWholeSymmetryOperator(DNA=[],getSymObj=False):
         return sym
     return rotations, translations_std
 
-def getAllOrbs(ini_mag,ini_S,rotations=[],translations=[]):
+def getAllOrbs(ini_mag,ini_S,rotations=[],translations=[],wann_ID=[]):
     global pos_ions, ele_str, rwigs, orbList
     typeNumber, labels=getTypeNumberList(DNA=ini_mag,getLabels=True)
     #try:
@@ -145,6 +148,10 @@ def getAllOrbs(ini_mag,ini_S,rotations=[],translations=[]):
     #    exit()
     sym=getWholeSymmetryOperator(DNA=ini_mag,getSymObj=True)
     orbList=[Orb(ipos,typeNumber[ipos],labels[ipos],pos_ions[ipos],ini_S[ipos],ini_mag[ipos],wyckoffs=sym['wyckoffs'][ipos]) for ipos in range(len(pos_ions))]
+    # add ini_orb informations
+    if len(wann_ID)>0:
+        for orb, WannierIDList in zip(orbList,wann_ID):
+            orb.wannIDList=WannierIDList
     # classification
     wykoffsList=[]
     for orb in orbList:
@@ -163,8 +170,14 @@ def getAllOrbs(ini_mag,ini_S,rotations=[],translations=[]):
         for orb in orbType:
             orb.defineOrbTypeAndTrans(orbType,rotations,translations)
     print('orbitals are successfully classified according to symmetry')
+    if len(wann_ID)==0:
+        for iorbType, orbType in enumerate(wykoffsList):
+            print('type%d: %s-%s num.: %d'%(iorbType,orbType[0].label,orbType[0].wyckoffs,len(orbType)))
+        return
+    
     for iorbType, orbType in enumerate(wykoffsList):
-        print('type%d: %s-%s num.: %d'%(iorbType,orbType[0].label,orbType[0].wyckoffs,len(orbType)))
+        for orb in orbType:
+            print('type%d: %s-%s with Wannier'%(iorbType,orb.label,orb.wyckoffs)+(' orb%d'*len(orb.wannIDList))%(*orb.wannIDList,))
     
 def findBestRWIGS(ini_rwigs):
     global pos_ions, ele_str, rwigs, orbList

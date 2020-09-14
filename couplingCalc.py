@@ -15,26 +15,16 @@ import shutil
 import numpy as np
 import time
 #import WannierKit
+import hrReader as reader
+import ham as hamilton
 
-'''
-global dftscript_std, dftscript_ncl
-global couplingDir
-global anistropyDir
-global banStrategy
-global FMEnergy
-'''
+global bondList, supercellSize
 
-def mainLoop(mainDir, source_list, ini_mag, ini_S, completelyConfine=True):
-    #global couplingDir, dftscript_std, dftscript_ncl, banStrategy, FMEnergy
-    #couplingDir=mainDir+'coupling/'
-    #anistropyDir=mainDir+'anistropy/'
-    # create dir for coupling and anistropy calc. and create POTCAR
-    #aux.createDir(couplingDir)
-    #aux.createDir(anistropyDir)
-    #filepath=mainDir+'POSCAR'
+def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True):
+    global bondList, supercellSize
     pR.clean()
+    ini_mag=[S*2 for S in ini_S]
     pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S)
-    #rotations,translations=pR.getWholeSymmetryOperator()
     
     # loop to find the proper supercell size
     sizeL,sizeW,sizeH=param.MINCELL,param.MINCELL,param.MINCELL
@@ -128,7 +118,7 @@ def mainLoop(mainDir, source_list, ini_mag, ini_S, completelyConfine=True):
     
     # construct representative orbitals and bonds
     pR.clean()
-    pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S)
+    pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S,wann_ID=wann_list)
     bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list,maxRange=np.max([sizeL,sizeW,sizeH]),tolerance=param.SYMPREC)
     print('following bonds are to be evaluated')
     for ibondType, bondType in enumerate(bondListWithClassification):
@@ -141,24 +131,34 @@ def mainLoop(mainDir, source_list, ini_mag, ini_S, completelyConfine=True):
             bond.overLat[0],bond.overLat[1],bond.overLat[2]
         ))
     
-    '''
-    # start calc. in supercell
-    scDir=couplingDir+'sc%dx%dx%d/'%(sizeL,sizeW,sizeH)
-    aux.createDir(scDir)
-    shutil.move(mainDir+'POSCAR.tmp',scDir+'POSCAR')
-    aux.cp(mainDir+"POTCAR",scDir+'POTCAR')
-    if param.MAGTYPE=='ISING':
-        print('>>>>>> start calculations for each bond type with ISING mode (scalar J) <<<<<<')
-        status=calcIsingBond(scDir,orbList,bondList)
+    bondList=bondListWithClassification
+    supercellSize=[sizeL,sizeW,sizeH]
+    #if param.MAGTYPE=='ISING':
+    #    calcIsotropicJ(mainDir,bondList=bondListWithClassification,supercellSize=[sizeL,sizeW,sizeH])
+
+def calcIsotropicJ(mainDir,fermi=0,eta=0.01):
+    global bondList, supercellSize
+    # read in Hr
+    hr=reader.Hr()
+    fileList=aux.ls(mainDir)
+    hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
+    if len(hrFileList)==2:
+        hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=True)
+    elif len(hrFileList)==1:
+        hr.readSingleFile(hrFileList[0],ignoreImagPart=True)
+    elif len(hrFileList)==0:
+        print("Error: cannot find Hr file in %s, pls. provide Hr file with name hr(.up or .dn) in %s"%(mainDir,mainDir))
+        exit()
+    else:
+        print("Error: found more than two hr file in %s, pls. clean up tge directory"%mainDir)
+        exit()
+
+    # create Green's function
+    gr=hamilton.Green()
+    kmesh=pR.createKPOINTS(provideSize=supercellSize,getKMesh=True)
+    emin,emax=gr.calcFullDOS(hr,kmesh=kmesh,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True)
+    #lowerBound
     
-    if param.MAGTYPE=='FULL':
-        print('>>>>>> start calculations for each bond type with FULL mode (J with nine independent matrix elements) <<<<<<')
-        status=calcFullAnisotropicBond(scDir,orbList,bondList)
-    
-    if status: cleanAllPOTCAR(scDir) # clean file
-    bondListWholeFlatten=[bond for bond in bondType for bondType in bondListWithClassification]
-    return status, orbList, bondListWholeFlatten
-    '''
 def __updateSource(source_list,ini_mag,ini_S,size=2):
     outSource=[]
     outMag=[]
