@@ -1189,6 +1189,7 @@ class Bond:
         self.DNALabels=[]
 
         self.couplingNumber=-1
+        self.sameLinkList=[]
 
     def calcCoordinates(self,lat):
         self.sourceCoorFrac=self.sourceOrb.pos
@@ -1222,8 +1223,10 @@ class Bond:
         self.localFrameCart=np.array([xaxis,yaxis,zaxis])
         self.localFrameFrac=np.dot(self.localFrameCart,self.lat_inv)
     
-    def broadCastExchange(self,type='Ising'):
+    def broadCastExchange(self,type='Ising',verbose=False):
         for bond in self.sameTypeBondList:
+            if verbose:
+                print('Setting exchange energy %.6f to bond%d (ion%d-ion%d [%d %d %d] bond length:%.3f)'%(self.exchangeEnergy,bond.id,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen))
             bond.E0=self.E0
             if type=='Ising':
                 bond.exchangeEnergy=self.exchangeEnergy
@@ -1439,6 +1442,9 @@ def findBondListAndClassifyThem(rotations, translations, source_list=[],maxRange
     aux.showElapsedTime(extraInfo='searching links');aux.showElapsedTime(offset=True)
     bondList_flat=[]
     id=0
+    if len(bondLen)<param.MAXRANGE:
+        print('cannot found enough bond types for the consideration of %d/%dNN'%(len(bondLen),param.MAXRANGE))
+        return[]
     for iBondLength in range(param.MAXRANGE):
         bondListWithSameLength=[]
         for bond in bondList_all[iBondLength]:  # bond with same length
@@ -1488,6 +1494,9 @@ def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.0
     print("--->>> start classifying bonds <<<---")
     aux.showElapsedTime(offset=True)
     bondList_all, bondLen=findBondList(source_list=source_list,maxRange=maxRange,tolerance=tolerance,getBondLen=True)
+    if len(bondLen)<param.MAXRANGE:
+        print('cannot found enough bond types for the consideration of %d/%dNN'%(len(bondLen),param.MAXRANGE))
+        return[]
     aux.showElapsedTime(extraInfo='searching links');aux.showElapsedTime(offset=True)
     bondList_flat=[]
     id=0

@@ -17,6 +17,7 @@ import time
 #import WannierKit
 import hrReader as reader
 import ham as hamilton
+import fileio
 
 global bondList, supercellSize
 
@@ -43,6 +44,32 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
         pR.readPOS(path=mainDir+'POSCAR.tmp',ini_mag=ini_mag_lo,ini_S=ini_S_lo)
         # analyse bonds
         bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list_lo,maxRange=param.BONDSEARCHRANGE,tolerance=param.SYMPREC)
+        if len(bondListWithClassification)==0:
+            print(">>>>>> supercell is not large enough <<<<<<")
+            if param.PBC==1:
+                sizeL+=1
+            if param.PBC==2:
+                if param.SYMEXPAND:
+                    sizeL+=1;sizeW+=1
+                else:
+                    if phase%2==0:
+                        sizeL+=1
+                    else:
+                        sizeW+=1
+                    phase+=1
+            if param.PBC==3:
+                if param.SYMEXPAND:
+                    sizeL+=1;sizeW+=1;sizeH+=1
+                else:
+                    if phase%3==0:
+                        sizeL+=1
+                    elif phase%3==1:
+                        sizeW+=1
+                    else:
+                        sizeH+=1
+                    phase+=1
+            continue
+
         bondLengthMax=np.max([bondType[0].bondLen for bondType in bondListWithClassification])
         bondConfinedList=[]
         print('>>>>>> information for bonds <<<<<<')
@@ -55,7 +82,8 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
             for ibond, bond in enumerate(bondType):
                 bondList, bondLength=pR.findBondList(source_list=[bond.sourceOrb.id,bond.targetOrb.id],dimmerMode=True,intraCell=True,
                                                      maxRange=1,tolerance=param.SYMPREC,getBondLen=True)
-                bond.couplingNumber=len(bondList[0])
+                #bond.couplingNumber=len(bondList[0])
+                bond.sameLinkList=bondList[0]
                 if len(bondLength)>1: # there is other possible link
                     secondNNisOutOfConsideration=(bondLength[1]>bondLengthMax+param.SYMPREC)
                     #print("Round bonds are longer than %.3f"%bondLength[1])
@@ -68,7 +96,7 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
                 else:
                     bondConfinedForEachType.append(bond) # there is not any other possible link, this bond thus is well confined in SC
                     #print("No round bonds are possible")
-            print('There are %d links with the same length as bond%d in SC'%(bond.couplingNumber,bond.id))
+            print('There are %d links with the same length as bond%d in SC'%(len(bond.sameLinkList),bond.id))
             bondConfinedList.append(bondConfinedForEachType)
         # verify strategies
         allBondTypesAreConfined=True
@@ -80,9 +108,11 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
         if completelyConfine:
             for ibondType, bondType in enumerate(bondListWithClassification):
                 for ibond, bond in enumerate(bondType):
-                    if bond.couplingNumber>1:
+                    if len(bond.sameLinkList)>1:
                         allBondTypesAreConfined=False
-                        print("bond%d in bondType%d have %d>1 links in the supercell"%(bond.id,bond.couplingNumber,ibondType))
+                        print("bond%d in bondType%d have %d>1 links in the supercell"%(bond.id,ibondType,len(bond.sameLinkList)))
+                        for sameLink in bond.sameLinkList:
+                            print('orb%d-orb%d over [%d %d %d]'%(*sameLink[0],*sameLink[1]))
                         break
                 if not allBondTypesAreConfined:
                     break
@@ -147,9 +177,13 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
     # read in Hr
     hr=reader.Hr()
     fileList=aux.ls(mainDir)
-    # check if the J.txt exsited
+    # Try to read existed J.txt
+    if fileio.readJ(mainDir,bondList):
+        print('%sJ.txt has been read succesfully'%mainDir)
+        for bondType in bondList:
+            bondType[0].broadCastExchange(verbose=True)
+        return
 
-    
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
     if len(hrFileList)==2:
         hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=True)
@@ -178,13 +212,7 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
         bond.exchangeEnergy=J
         bond.broadCastExchange(type='Ising')
     
-    with open(mainDir+'J.txt','w') as fJ:
-        fJ.write('Isotropic exchange energy J*S^2 up to %dNN calculated by Greens function\n'%(param.CALRANGE))
-        
-        for ibondType, bondType in enumerate(bondList):
-            bond=bondType[0]
-            fJ.write('%dNN ion%d - ion%d [%d %d %d] J=%.6f\n'%(
-                (ibondType+1), bond.sourceOrb.id, bond.targetOrb.id, *bond.overLat, bond.exchangeEnergy))
+    fileio.writeJ(mainDir, bondList, supercellSize)
     
 def __updateSource(source_list,ini_mag,ini_S,size=2):
     outSource=[]
