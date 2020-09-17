@@ -118,58 +118,13 @@ class Green:
     def __init__(self):
         pass
 
-    def calcBulkSusceptibility(self,hr,kmesh,a=0,b=2,R=[-1,0,0],fermi=0.,eta=0.01):
-        '''Linear response approximation
-           \chi = Int_-inf^fermi{dz G(aR,b0,z)G(b0,aR,z)}
-           using Gaussian integration along semi-circle in upper complex plane
-        '''
-        self.norbital=hr.norb
-        self.nkpts=len(kmesh)
-        self.HkList=[]
-        #find bottom of eigenvalues.
-        eig_min=100.
-        time0=time.time()
-        for kpt in kmesh:
-            _ham=Ham()
-            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
-            self.HkList.append(Hk)
-            eig=np.min(_ham.sovle_exact())
-            eig_min=eig if eig < eig_min else eig_min
-        print('Hk constructed in %.3fs, found band edge locates at %.6f'%(time.time()-time0,eig_min))
-
-        eig_min-=5
-        ox=(fermi+eig_min)/2
-        r=(fermi-eig_min)/2
-        
-        #fourierBasis=np.array([np.exp(np.pi*2j*np.dot(kpt,np.array(R))) for kpt in kmesh])
-        
-        def getGG(zlist=0.):
-            val=[]
-            for z in zlist:
-                G_aRb0=0.j
-                G_b0aR=0.j
-                for ikpt, kpt in enumerate(kmesh):
-                    Hk=self.HkList[ikpt]
-                    Gk=np.linalg.inv((z+eta*1j)*np.eye(self.norbital)-Hk)
-                    G_aRb0+=np.exp(np.pi*2j*np.dot(kpt,np.array(R)))*Gk[a][b]/self.nkpts
-                    G_b0aR+=np.exp(np.pi*2j*np.dot(kpt,-np.array(R)))*Gk[b][a]/self.nkpts
-                val.append(G_aRb0*G_b0aR)
-            return np.array(val)
-        
-        def onCircle(theta):
-            z=r*np.exp(1j*theta,dtype=complex)+ox
-            #print(len(z))
-            return getGG(z).real*r
-        
-        time0=time.time()
-        inte,err=integrate.quadrature(onCircle,a=np.pi,b=0,maxiter=200)
-        print(inte,err)
-        print('Integration finished in %.3fs'%(time.time()-time0))
-        #print(onCircle(np.array([np.pi])))
-        return inte
-
-    def calcBands(self,hr,orbList=[0],fermi=0,eta=0.1,resolution=100):
+    def calcBands(self,hr,orbList=[0],spin_polarized=False,fermi=0,eta=0.1,resolution=100):
         norb=hr.norb
+        if len(orbList)==0:
+            orbList=[i for i in range(norb)]
+        if spin_polarized:
+            orbUpList=orbList[:len(orbList)//2]
+            orbDnList=orbList[len(orbList)//2:]
         HkList=[]
         
         time0=time.time()
@@ -181,12 +136,29 @@ class Green:
             
         print('Hk constructed in %.3fs'%(time.time()-time0))
         energyAXIS=np.linspace(fermi-3,fermi+2,resolution)
+        '''
+        if spin_polarized:
+            DOS=[]
+            for z in energyAXIS:
+                _dos_k=[]
+                for _hk in HkList:
+                    gk=np.linalg.inv((z+eta*1j)*np.eye(norb)-_hk)
+                    _dos_k.append(sum(np.diagonal(gk)[orbList]).imag/(-np.pi))
+                DOS.append(_dos_k)
+            plt.figure()
+            plt.imshow(DOS,extent=(-5,5,-5,5),origin='lower')
+            plt.show()
+            return
+        '''
         DOS=[]
         for z in energyAXIS:
             _dos_k=[]
             for _hk in HkList:
                 gk=np.linalg.inv((z+eta*1j)*np.eye(norb)-_hk)
-                _dos_k.append(sum(np.diagonal(gk)[orbList]).imag/(-np.pi))
+                if spin_polarized:
+                    _dos_k.append(sum(np.diagonal(gk)[orbUpList]-np.diagonal(gk)[orbDnList]).imag/(-np.pi))
+                else:
+                    _dos_k.append(sum(np.diagonal(gk)[orbList]).imag/(-np.pi))
             DOS.append(_dos_k)
         plt.figure()
         plt.imshow(DOS,extent=(-5,5,-5,5),origin='lower')
@@ -224,12 +196,41 @@ class Green:
         plt.yticks([])
         plt.ylabel(r'DOS')
         plt.xlabel(r'Energy')
-        plt.show()
         if saveFig:
             assert mainDir!=None, 'We need path or directory to save the figure'
             plt.savefig(mainDir+'DOS.png')
+        plt.show()
         plt.close()
         return Emin, Emax
+
+    def calcFullBands(self,hr,fermi=0,mainDir=None,saveFig=True):
+        eigList=[]
+        time0=time.time()
+        kmesh=pR.autoGenerateKpath2D(onlyGetKPTList=True)
+        kaxis=[]
+        for ikpt, kpt in enumerate(kmesh):
+            _ham=Ham()
+            _ham.buildHkFromHr(hr,kpt,getHk=True)
+            eigList.append(_ham.sovle_exact())
+            kaxis.append(ikpt)
+        
+        eigList=np.array(eigList)
+        print('Hk constructed in %.3fs'%(time.time()-time0))
+        nbands=len(eigList[0])
+        plt.figure()
+        for ibands in range(nbands):
+            plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
+        plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
+        plt.xlim(0,ikpt)
+        plt.ylim(fermi-3,fermi+2)
+        plt.xticks([])
+        plt.xlabel('K')
+        plt.ylabel('Energy')
+        if saveFig:
+            assert mainDir!=None, 'We need path or directory to save the figure'
+            plt.savefig(mainDir+'Bands.png')
+        plt.show()
+        plt.close()
 
     def testG(self,hr,orbList=[0],fermi=0,eta=0.1):
         norb=hr.norb

@@ -7,17 +7,18 @@ paramReader.readGlobalConst()
 import couplingCalc as cc
 import matplotlib.pyplot as plt
 
-cc.classifyBonds(mainDir='./mcalc/graphene/', source_list=[0,1], wann_list=[[0],[1]], ini_S=[0.5,0.5],completelyConfine=True)
-cc.calcIsotropicJ(mainDir='./mcalc/graphene/',fermi=0,eta=0.0001,emptySpace=5)
+cc.classifyBonds(mainDir='./mcalc/FeSeI/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0,0],completelyConfine=True)
+cc.calcIsotropicJ(mainDir='./mcalc/FeSeI/',fermi=-1.2971,eta=0.0001,emptySpace=5)
 exit()
+
 pR.readPOS('./spg156FeTeIU0.0.vasp')
 hr_g=reader.Hr()
-#hr_g.readDoubleFiles('./wannier90.dn_hr.dat','./wannier90.up_hr.dat')
-hr_g.readSingleFile('./simpleGraphene.txt')
+hr_g.readDoubleFiles('./mcalc/FeSBr/wannier90.dn_hr.dat','./mcalc/FeSBr/wannier90.up_hr.dat')
+#hr_g.readSingleFile('./simpleGraphene.txt')
 #hr_g.readDoubleFiles('./CrI3.dn_hr.dat','./CrI3.up_hr.dat')
 #gr.testG(hr_s,orbList=[0,1],fermi=0,eta=0.05)
-gr=hamilton.Green()
-#gr.calcBands(hr_g,orbList=[0,1,2,3,4,5],fermi=-2.6,eta=0.1,resolution=200)
+#gr=hamilton.Green()
+#gr.calcBands(hr_g,orbList=[],spin_polarized=True,fermi=-2.7017,eta=0.1,resolution=200)
 #exit()
 #scatterList=[[[np.array([0,0,0]),0],[np.array([0,0,0]),1], 0.5],
 #             [[np.array([0,0,0]),1],[np.array([0,0,0]),0], 0.5],
