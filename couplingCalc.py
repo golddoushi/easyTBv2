@@ -199,15 +199,15 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
     # create Green's function
     gr=hamilton.Green()
     kmesh=pR.createKPOINTS(provideSize=supercellSize,getKMesh=True)
-    emin,emax=gr.calcFullDOS(hr,kmesh=kmesh,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True)
-    gr.calcFullBands(hr,fermi=fermi,mainDir=mainDir,saveFig=True)
+    emin,emax,fermi_adjusted=gr.calcFullDOS(hr,kmesh=kmesh,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True)
+    gr.calcFullBands(hr,fermi=fermi_adjusted,mainDir=mainDir,saveFig=True)
 
     for ibondType, bondType in enumerate(bondList):
         print("Now evaluate the bondType%d"%ibondType)
         bond=bondType[0]
         J=gr.calcJ(hr,sourceOrbList=bond.sourceOrb.wannIDList,
                    targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
-                   eta=eta,energyRange=(emin-emptySpace,fermi),
+                   eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
                    Lx=supercellSize[0],Ly=supercellSize[1],Lz=supercellSize[2],
                    linearPerturb=True)
         bond.exchangeEnergy=J

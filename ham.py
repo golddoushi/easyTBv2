@@ -7,6 +7,7 @@ import time
 import posReader as pR
 import paramReader
 import matplotlib.pyplot as plt
+import auxiliary
 
 class Ham:
     def __init__(self):
@@ -175,9 +176,22 @@ class Green:
             eigs=_ham.sovle_exact()
             EkList.extend(eigs)
         Emin, Emax = np.min(EkList), np.max(EkList)
+
+        eigs_flat=list(EkList)
+        auxiliary.quicksort(eigs_flat)
+        #print(eigs_flat)
+        for ieig, eig in enumerate(eigs_flat):
+            if eig>fermi:
+                break
+        occupationNumber=int(np.around(1.0*ieig/(ikpt+1)))*(ikpt+1)
+        fermi_adjusted=(eigs_flat[occupationNumber]+eigs_flat[occupationNumber-1])/2
+
         print('Spectra solved in %.3fs'%(time.time()-time0))
         print('band range: %.6f-%.6f'%(Emin,Emax))
-        
+        print('level%d %.4f < fermi: %.4f < level%d %.4f'%(ieig,eigs_flat[ieig-1],fermi,ieig+1,eigs_flat[ieig]))
+        print('occupied %.3f states per kpt --> modified to %d occupation --> %.4f < adjust fermi: %.4f < %.4f'%(1.0*ieig/(ikpt+1),occupationNumber,eigs_flat[occupationNumber-1],fermi_adjusted,eigs_flat[occupationNumber]))
+        #exit()
+
         enhancementForEnergyRange=(Emax-Emin)*0.05
         energyAXIS=np.linspace(Emin-enhancementForEnergyRange,Emax+enhancementForEnergyRange,NEDOS)
         DOS=[]
@@ -201,7 +215,7 @@ class Green:
             plt.savefig(mainDir+'DOS.png')
         plt.show()
         plt.close()
-        return Emin, Emax
+        return Emin, Emax, fermi_adjusted
 
     def calcFullBands(self,hr,fermi=0,mainDir=None,saveFig=True):
         eigList=[]
