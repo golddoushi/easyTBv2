@@ -189,7 +189,7 @@ class Green:
         print('Spectra solved in %.3fs'%(time.time()-time0))
         print('band range: %.6f-%.6f'%(Emin,Emax))
         print('level%d %.4f < fermi: %.4f < level%d %.4f'%(ieig,eigs_flat[ieig-1],fermi,ieig+1,eigs_flat[ieig]))
-        print('occupied %.3f states per kpt --> modified to %d occupation --> %.4f < adjust fermi: %.4f < %.4f'%(1.0*ieig/(ikpt+1),occupationNumber,eigs_flat[occupationNumber-1],fermi_adjusted,eigs_flat[occupationNumber]))
+        print('(not use now) occupied %.3f states per kpt --> modified to %d occupation --> %.4f < adjust fermi: %.4f < %.4f'%(1.0*ieig/(ikpt+1),occupationNumber,eigs_flat[occupationNumber-1],fermi_adjusted,eigs_flat[occupationNumber]))
         #exit()
 
         enhancementForEnergyRange=(Emax-Emin)*0.05
@@ -215,12 +215,22 @@ class Green:
             plt.savefig(mainDir+'DOS.png')
         plt.show()
         plt.close()
-        return Emin, Emax, fermi_adjusted
+        return Emin, Emax, fermi#fermi_adjusted
 
     def calcFullBands(self,hr,fermi=0,mainDir=None,saveFig=True):
         eigList=[]
         time0=time.time()
-        kmesh=pR.autoGenerateKpath2D(onlyGetKPTList=True)
+        if mainDir!=None: # read in kpath
+            kmesh=[]
+            with open(mainDir+'KPOINTS','r') as fin:
+                data=fin.read().split('\n')
+                nkpts=int(data[1])
+                for iline in range(3,3+nkpts):
+                    k1,k2,k3,weight=data[iline].split()
+                    kmesh.append(np.array([float(k1),float(k2),float(k3)]))
+        else:
+            kmesh=pR.autoGenerateKpath2D(onlyGetKPTList=True)
+            nkpts=len(kmesh)
         kaxis=[]
         for ikpt, kpt in enumerate(kmesh):
             _ham=Ham()
@@ -243,6 +253,13 @@ class Green:
         if saveFig:
             assert mainDir!=None, 'We need path or directory to save the figure'
             plt.savefig(mainDir+'Bands.png')
+            
+            with open(mainDir+'tbBands.txt','w') as fout:
+                fout.write('#k energy\n')
+                for ibands in range(nbands):
+                    for ikpt in range(nkpts):
+                        fout.write('%d %.6f\n'%(ikpt,eigList[ikpt,ibands]))
+                    fout.wirte('\n')
         plt.show()
         plt.close()
 

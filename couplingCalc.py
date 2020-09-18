@@ -203,8 +203,8 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
     gr.calcFullBands(hr,fermi=fermi_adjusted,mainDir=mainDir,saveFig=True)
 
     for ibondType, bondType in enumerate(bondList):
-        print("Now evaluate the bondType%d"%ibondType)
         bond=bondType[0]
+        print("Now evaluate the bondType%d orb%d-orb%d [%d %d %d]"%(ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat))
         J=gr.calcJ(hr,sourceOrbList=bond.sourceOrb.wannIDList,
                    targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
                    eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
