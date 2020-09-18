@@ -253,13 +253,13 @@ class Green:
         if saveFig:
             assert mainDir!=None, 'We need path or directory to save the figure'
             plt.savefig(mainDir+'Bands.png')
-            
+
             with open(mainDir+'tbBands.txt','w') as fout:
                 fout.write('#k energy\n')
                 for ibands in range(nbands):
                     for ikpt in range(nkpts):
                         fout.write('%d %.6f\n'%(ikpt,eigList[ikpt,ibands]))
-                    fout.wirte('\n')
+                    fout.write('\n')
         plt.show()
         plt.close()
 

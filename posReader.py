@@ -1543,6 +1543,7 @@ def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.0
     #exit()
     aux.showElapsedTime(extraInfo='sort bonds into type-hierarchy');aux.showElapsedTime(offset=True)
     print("--->>> bonds are successfully classified according to bond length <<<---")
+    bondList=bondList_flat
     return bondListWithClassification
 
 def getDfFactor(source_list=[],basicRotation=[],cRange=2,tolerance=0.01,MAXINV=100,getBonds=False,getTrans=False):

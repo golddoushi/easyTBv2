@@ -177,13 +177,15 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
     # read in Hr
     hr=reader.Hr()
     fileList=aux.ls(mainDir)
+
     # Try to read existed J.txt
     if fileio.readJ(mainDir,bondList):
         print('%sJ.txt has been read succesfully'%mainDir)
         for bondType in bondList:
             bondType[0].broadCastExchange(verbose=True)
+        writeMCSolverIsingFile(mainDir)
         return
-
+    
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
     if len(hrFileList)==2:
         hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=True)
@@ -214,6 +216,7 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
         bond.broadCastExchange(type='Ising')
     
     fileio.writeJ(mainDir, bondList, supercellSize)
+    writeMCSolverIsingFile(mainDir)
     
 def __updateSource(source_list,ini_mag,ini_S,size=2):
     outSource=[]
@@ -233,3 +236,43 @@ def __updateSource(source_list,ini_mag,ini_S,size=2):
             outS.append(S)
     return outSource,outMag,outS
           
+def writeMCSolverIsingFile(path):
+    magOrbList=[orb for orb in pR.orbList if abs(orb.spin)>0]
+    for iorb, orb in enumerate(magOrbList):
+        orb.index_tmp=iorb
+    with open(path+pR.getUniqueName()+'.txt','w') as f:
+        f.write("This is mcsolver's save file, version: 2.2\n")
+        f.write('Lattice:\n')
+        for vec in pR.lat:
+            f.write('%.9f %.9f %.9f\n'%(vec[0],vec[1],vec[2]))
+        f.write('Supercell used in MC simulations:\n')
+        if param.PBC==3:
+            f.write('16 16 16\n')
+        elif param.PBC==2:
+            f.write('16 16 1\n')
+        elif param.PBC==1:
+            f.write('16 1 1\n')
+        elif param.PBC==0:
+            f.write('1 1 1\n')
+        else:
+            print('cannot write mcsolver file for ndimension>3')
+            return
+        f.write('Orbitals in cell:\n')
+        f.write('%d\n'%len(magOrbList))
+        f.write('Postions, initial spin states and onsite-anisotropy of every orbitals:\n')
+        for orb in magOrbList:
+            factor=param.EV2K/abs(orb.spin)
+            f.write('orb %d : type %d spin %.1f pos [%.9f %.9f %.9f] Dz: %.9f Dx: %.9f Dy: %.9f\n'%(
+                orb.index_tmp,orb.type,orb.spin*orb.magmom/abs(orb.magmom),*orb.pos,orb.D[2]*factor,orb.D[0]*factor,orb.D[1]*factor
+            ))
+        f.write('Bonds:\n')
+        f.write('%d\n'%len(pR.bondList))
+        f.write('id, source, target, overLat, Jz, Jx, Jy of each bond:\n')
+        for bond in pR.bondList:
+            s1=abs(bond.sourceOrb.spin)
+            s2=abs(bond.targetOrb.spin)
+            factor=param.EV2K/s1/s2
+            f.write('bond %d: Jz %.9f Jx %.9f Jy %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
+                bond.id, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, 0, 0, 0, 0, 0, 0,
+                bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat
+            ))
