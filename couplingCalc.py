@@ -18,6 +18,7 @@ import time
 import hrReader as reader
 import ham as hamilton
 import fileio
+import matplotlib.pyplot as plt
 
 global bondList, supercellSize
 
@@ -184,6 +185,7 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
         for bondType in bondList:
             bondType[0].broadCastExchange(verbose=True)
         writeMCSolverIsingFile(mainDir)
+        calcSpinWaveSpectra(mainDir)
         return
     
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
@@ -217,6 +219,7 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
     
     fileio.writeJ(mainDir, bondList, supercellSize)
     writeMCSolverIsingFile(mainDir)
+    calcSpinWaveSpectra(mainDir)
     
 def __updateSource(source_list,ini_mag,ini_S,size=2):
     outSource=[]
@@ -276,3 +279,39 @@ def writeMCSolverIsingFile(path):
                 bond.id, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, 0, 0, 0, 0, 0, 0,
                 bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat
             ))
+
+def calcSpinWaveSpectra(path):
+    kmesh=[]
+    with open(path+'KPOINTS','r') as fin:
+        data=fin.read().split('\n')
+        nkpts=int(data[1])
+        for iline in range(3,3+nkpts):
+            k1,k2,k3,weight=data[iline].split()
+            kmesh.append(np.array([float(k1),float(k2),float(k3)]))
+    
+    eigList,kaxis=[],[]
+    for ikpt, kpt in enumerate(kmesh):
+        _ham=hamilton.Ham()
+        for bond in pR.bondList:
+            t=bond.exchangeEnergy
+            # exchange 
+            _ham.addHopping(bond.sourceOrb.id,bond.targetOrb.id,t,bond.overLat,kpt)
+            _ham.addHopping(bond.targetOrb.id,bond.sourceOrb.id,t,-bond.overLat,kpt)
+            # onsite
+            _ham.addHopping(bond.sourceOrb.id,bond.sourceOrb.id,-t,np.zeros(3),kpt)
+            _ham.addHopping(bond.targetOrb.id,bond.targetOrb.id,-t,np.zeros(3),kpt)
+        eigList.append(_ham.sovle_exact())
+        kaxis.append(ikpt)
+
+    eigList=np.array(eigList)
+    nbands=len(eigList[0])
+    plt.figure()
+    for ibands in range(nbands):
+        plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
+    plt.xlim(0,ikpt)
+    plt.xticks([])
+    plt.xlabel('K')
+    plt.ylabel('Energy')
+    plt.savefig(path+'SpinWaveBands.png')
+    plt.show()
+    plt.close()
