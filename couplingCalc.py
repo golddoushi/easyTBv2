@@ -87,6 +87,9 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
                 bond.sameLinkList=bondList[0]
                 if len(bondLength)>1: # there is other possible link
                     secondNNisOutOfConsideration=(bondLength[1]>bondLengthMax+param.SYMPREC)
+                    if ibond==0: 
+                        print('next linking overlat [%d %d %d] length: %.6f/%.6f'%(*bondList[1][0][1],bondLength[1],bondLengthMax))
+                        #print(bondList[1][0])
                     #print("Round bonds are longer than %.3f"%bondLength[1])
                     if secondNNisOutOfConsideration: # the other links are out of cutoff, this bond is well confined in SC
                         bondConfinedForEachType.append(bond)

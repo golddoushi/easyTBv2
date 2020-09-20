@@ -7,8 +7,8 @@ paramReader.readGlobalConst()
 import couplingCalc as cc
 import matplotlib.pyplot as plt
 
-cc.classifyBonds(mainDir='./mcalc/H-CrTe2/HF/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0,0],completelyConfine=True)
-cc.calcIsotropicJ(mainDir='./mcalc/H-CrTe2/HF/',fermi=-1.5053,eta=0.0001,emptySpace=5)
+cc.classifyBonds(mainDir='./mcalc/T-VTe2/HF/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0,0],completelyConfine=True)
+cc.calcIsotropicJ(mainDir='./mcalc/T-VTe2/HF/',fermi=0.2647,eta=0.0001,emptySpace=5)
 exit()
 
 pR.readPOS('./spg156FeTeIU0.0.vasp')

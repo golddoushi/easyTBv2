@@ -1209,10 +1209,16 @@ class Bond:
         yaxis=np.cross(zaxis,xaxis)
         yaxis_len=np.sqrt(np.dot(yaxis,yaxis))
         if yaxis_len<param.SYMPREC:
-            if np.dot(zaxis,zaxis)>param.SYMPREC: # throw warning for ZAXIS!=0
-                print("Warning: The bond direction (x) is parallel to zaxis, therefore, chose standard local frame")
-                print("         And note that the bond-symmetry analysis is nonsense under standard frame")
-                print("         To solve this issue, maybe chose another ZAXIS in GlobalConst")
+            #if np.dot(zaxis,zaxis)>param.SYMPREC: # throw warning for ZAXIS!=0
+            #    print(self.overLat)
+            #    print(self.sourceCoorCart,self.targetCoorCart)
+            #    print(xaxis)
+            #    print(zaxis)
+            #    print(yaxis)
+            #    exit()
+            #    print("Warning: The bond direction (x) is parallel to zaxis, therefore, chose standard local frame")
+            #    print("         And note that the bond-symmetry analysis is nonsense under standard frame")
+            #    print("         To solve this issue, maybe chose another ZAXIS in GlobalConst")
             xaxis=np.array([1,0,0])
             yaxis=np.array([0,1,0])
             zaxis=np.array([0,0,1])
