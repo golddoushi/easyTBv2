@@ -899,3 +899,310 @@ class Green:
         print(J*1000)
         #exit()
         return J
+
+    def calcAnisotropicJ(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1):
+        '''Linear response approximation
+           using Gaussian integration along semi-circle in upper complex plane
+        '''
+        assert len(sourceOrbList)==len(targetOrbList), 'Now, the coupling ions is assumed to be symmtric to each other'
+        S=len(sourceOrbList)/2.
+        norb=hr.norb
+        halfNOrb=int(norb/2)
+        onsite=np.array(hr.onsite)
+        deltaList=onsite[:halfNOrb]-onsite[halfNOrb:]
+        print('S=%.1f'%S)
+        print('Exchange splitting are:')
+        print(deltaList)
+        
+        # create scattering route
+        # create scattering route
+        scatterTheSameXDirectionList=[]
+        scatterTheOppoXDirectionList=[]
+        scatterTheSameYDirectionList=[]
+        scatterTheOppoYDirectionList=[]
+        for iorb in sourceOrbList:
+            scatterTheSameXDirectionList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb], deltaList[iorb]/2.])
+            scatterTheSameXDirectionList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb], deltaList[iorb]/2.])
+            scatterTheOppoXDirectionList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb], deltaList[iorb]/2.])
+            scatterTheOppoXDirectionList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb], deltaList[iorb]/2.])
+
+            scatterTheSameYDirectionList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],-1j*deltaList[iorb]/2.])
+            scatterTheSameYDirectionList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb], 1j*deltaList[iorb]/2.])
+            scatterTheOppoYDirectionList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],-1j*deltaList[iorb]/2.])
+            scatterTheOppoYDirectionList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb], 1j*deltaList[iorb]/2.])
+        
+        for iorb in targetOrbList:
+            scatterTheSameXDirectionList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],   deltaList[iorb]/2.])
+            scatterTheSameXDirectionList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],   deltaList[iorb]/2.])
+            scatterTheOppoXDirectionList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],-1*deltaList[iorb]/2.])
+            scatterTheOppoXDirectionList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],-1*deltaList[iorb]/2.])
+
+            scatterTheSameYDirectionList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],-1j*deltaList[iorb]/2.])
+            scatterTheSameYDirectionList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb], 1j*deltaList[iorb]/2.])
+            scatterTheOppoYDirectionList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb], 1j*deltaList[iorb]/2.])
+            scatterTheOppoYDirectionList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],-1j*deltaList[iorb]/2.])
+        
+        # analyze scattering list
+        # construct scattering matrix with all irrelevant zeros suppressed
+        relevantOrbList=[]
+        scSize=np.array([Lx,Ly,Lz])
+        def findOrbIndexInRecordList(orb):
+            for iexistedOrb, existedOrb in enumerate(relevantOrbList):
+                if (existedOrb[0]==orb[0]%scSize).all() and existedOrb[1]==orb[1]:
+                    return iexistedOrb
+            return -1
+        # build scattering basis
+        for scatter in scatterTheSameXDirectionList:
+            # standarize Bravais vectors
+            scatter[0][0]%=scSize
+            scatter[1][0]%=scSize
+            if findOrbIndexInRecordList(scatter[0])<0:
+                relevantOrbList.append(scatter[0])
+            if findOrbIndexInRecordList(scatter[1])<0:
+                relevantOrbList.append(scatter[1])
+        scatteringOrder=len(relevantOrbList)
+        print('find scattering region with %d-dimension, basis consist of'%scatteringOrder)
+        for basis in relevantOrbList:
+            print('orb%d at [%d %d %d]'%(basis[1],*basis[0]))
+        # build scattering matrix
+        scatteringSameXCenter=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+        for scatter in scatterTheSameXDirectionList:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringSameXCenter[sourceID,targetID]=scatter[2]
+
+        scatteringOppoXCenter=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+        for scatter in scatterTheOppoXDirectionList:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringOppoXCenter[sourceID,targetID]=scatter[2]
+
+        scatteringSameYCenter=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+        for scatter in scatterTheSameYDirectionList:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringSameYCenter[sourceID,targetID]=scatter[2]
+
+        scatteringOppoYCenter=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+        for scatter in scatterTheOppoYDirectionList:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringOppoYCenter[sourceID,targetID]=scatter[2]
+        #print('scattering matrix is:')
+        #print(scatteringCenter)
+        
+        norb=hr.norb
+        kmesh=pR.createKPOINTS(getKMesh=True,provideSize=[Lx,Ly,Lz])
+        totalWeight=len(kmesh)
+
+        time0=time.time()
+        HkList=[]
+        for kpt in kmesh:
+            _ham=Ham()
+            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
+            HkList.append(Hk)
+        print('Hk constructed in %.3fs'%(time.time()-time0))
+        r=(energyRange[1]-energyRange[0])/2
+        o=(energyRange[0]+energyRange[1])/2
+
+        #scatteringCenter=scatteringSameCenter
+        def getEOnCircle(theta):
+            z=r*np.exp(1j*theta)
+            E=z+o
+            g_internal=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+            g_external_contracted=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+            rou0=0.j
+            for kpt, _hk in zip(kmesh,HkList):
+                _gk=np.linalg.inv((E+eta*1j)*np.eye(norb)-_hk)
+                for irow in range(scatteringOrder):
+                    R_left, orbID_left=relevantOrbList[irow]
+                    for icol in range(scatteringOrder):
+                        R_right, orbID_right=relevantOrbList[icol]
+                        #print('row%d col%d --- scatterLeft (%d %d %d) orb%d scatterRight (%d %d %d) orb%d'%(irow,icol,*R_left,orbID_left,*R_right,orbID_right))
+                        # internal line
+                        g_internal[irow,icol]+=np.exp(-2j*np.pi*np.dot(kpt,R_left-R_right))*_gk[orbID_left,orbID_right]/totalWeight
+                        # contracted external line
+                        g_external_contracted[irow,icol]+=np.exp(2j*np.pi*np.dot(kpt,R_left-R_right))*np.dot(_gk[orbID_right,:],_gk[:,orbID_left])/totalWeight
+                
+                rou0+=sum(np.diagonal(_gk))
+
+            x_perturb_matrix_order_1=np.dot(g_external_contracted,scatteringSameXCenter)
+            x_perturb_oppo_matrix_order_1=np.dot(g_external_contracted,scatteringOppoXCenter)
+
+            y_perturb_matrix_order_1=np.dot(g_external_contracted,scatteringSameYCenter)
+            y_perturb_oppo_matrix_order_1=np.dot(g_external_contracted,scatteringOppoYCenter)
+
+            #x_rou_perturb_order_1=sum(np.diagonal(x_perturb_matrix_order_1))-sum(np.diagonal(x_perturb_oppo_matrix_order_1))
+            #y_rou_perturb_order_1=sum(np.diagonal(y_perturb_matrix_order_1))-sum(np.diagonal(y_perturb_oppo_matrix_order_1))
+
+            x_perturb_matrix_order_2=x_perturb_matrix_order_1.dot(g_internal).dot(scatteringSameXCenter)
+            x_perturb_oppo_matrix_order_2=x_perturb_oppo_matrix_order_1.dot(g_internal).dot(scatteringOppoXCenter)
+            
+            y_perturb_matrix_order_2=y_perturb_matrix_order_1.dot(g_internal).dot(scatteringSameYCenter)
+            y_perturb_oppo_matrix_order_2=y_perturb_oppo_matrix_order_1.dot(g_internal).dot(scatteringOppoYCenter)
+            
+            x_rou_perturb_order_2=sum(np.diagonal(x_perturb_matrix_order_2))-sum(np.diagonal(x_perturb_oppo_matrix_order_2))
+            y_rou_perturb_order_2=sum(np.diagonal(y_perturb_matrix_order_2))-sum(np.diagonal(y_perturb_oppo_matrix_order_2))
+
+            #dos_order_0=rou0/(-np.pi)
+            #dos_order_1=rou_perturb_order_1/(-np.pi) # DOS of super cell
+            dos_x_order_2=x_rou_perturb_order_2/(-np.pi)
+            dos_y_order_2=y_rou_perturb_order_2/(-np.pi)
+            x_totalEnergy2, y_totalEnergy2=E*dos_x_order_2, E*dos_y_order_2
+            return (np.array([x_totalEnergy2, y_totalEnergy2])*1j*z).imag
+        
+        time0=time.time()
+        E_diff, E_diff_err =integrate.quad_vec(getEOnCircle,a=np.pi,b=0.,epsabs=paramReader.EDIFF)
+        print(E_diff,E_diff_err)
+        #print("Energy difference obtained in %.3fs ===> E^0: %.6f E^1: %.6f E^2: %.6f +- %.6f %.6f %.6f"%(time.time()-time0,*E_diff,*E_diff_err))
+        exit()
+        #J=E_plus/2.#/(S**2)
+        #return J
+
+    def calcJFourState(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1):
+        '''Linear response approximation
+           using Gaussian integration along semi-circle in upper complex plane
+        '''
+        assert len(sourceOrbList)==len(targetOrbList), 'Now, the coupling ions is assumed to be symmtric to each other'
+        S=len(sourceOrbList)/2.
+        norb=hr.norb
+        halfNOrb=int(norb/2)
+        onsite=np.array(hr.onsite)
+        deltaList=onsite[:halfNOrb]-onsite[halfNOrb:]
+        print('S=%.1f'%S)
+        print('Exchange splitting are:')
+        print(deltaList)
+        
+        # create scattering route
+        # create scattering route
+        scatterDoubleList=[]
+        scatterSingle1List=[]
+        scatterSingle2List=[]
+        for iorb in sourceOrbList:
+            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],deltaList[iorb]*(np.cos(theta)-1)])
+            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],-deltaList[iorb]*(np.cos(theta)-1)])
+
+            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],deltaList[iorb]*(np.cos(theta)-1)])
+            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],-deltaList[iorb]*(np.cos(theta)-1)])
+
+            scatterSingle2List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],0])
+            scatterSingle2List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],0])
+            scatterSingle2List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])
+            scatterSingle2List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])
+        
+        for iorb in targetOrbList:
+            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb],deltaList[iorb]*(np.cos(theta)-1)])
+            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],-deltaList[iorb]*(np.cos(theta)-1)])
+
+            scatterSingle1List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],0])
+            scatterSingle1List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],0])
+            scatterSingle1List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
+            scatterSingle1List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
+
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.*np.sin(theta)])
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],deltaList[iorb]*(np.cos(theta)-1)])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],-deltaList[iorb]*(np.cos(theta)-1)])
+        
+        # analyze scattering list
+        # construct scattering matrix with all irrelevant zeros suppressed
+        relevantOrbList=[]
+        scSize=np.array([Lx,Ly,Lz])
+        def findOrbIndexInRecordList(orb):
+            for iexistedOrb, existedOrb in enumerate(relevantOrbList):
+                if (existedOrb[0]==orb[0]%scSize).all() and existedOrb[1]==orb[1]:
+                    return iexistedOrb
+            return -1
+        # build double scattering basis
+        for scatter in scatterDoubleList:
+            # standarize Bravais vectors
+            scatter[0][0]%=scSize
+            scatter[1][0]%=scSize
+            if findOrbIndexInRecordList(scatter[0])<0:
+                relevantOrbList.append(scatter[0])
+            if findOrbIndexInRecordList(scatter[1])<0:
+                relevantOrbList.append(scatter[1])
+        scatteringOrder=len(relevantOrbList)
+        print('find scattering region with %d-dimension, basis consist of'%scatteringOrder)
+        for basis in relevantOrbList:
+            print('orb%d at [%d %d %d]'%(basis[1],*basis[0]))
+        # build scattering matrix
+        scatteringDoubleCenter=np.zeros((scatteringOrder,scatteringOrder))
+        for scatter in scatterDoubleList:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringDoubleCenter[sourceID,targetID]=scatter[2]
+
+        scatteringSingle1Center=np.zeros((scatteringOrder,scatteringOrder))
+        for scatter in scatterSingle1List:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringSingle1Center[sourceID,targetID]=scatter[2]
+        
+        scatteringSingle2Center=np.zeros((scatteringOrder,scatteringOrder))
+        for scatter in scatterSingle2List:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringSingle2Center[sourceID,targetID]=scatter[2]
+        #print('scattering matrix is:')
+        #print(scatteringCenter)
+        
+        norb=hr.norb
+        kmesh=pR.createKPOINTS(getKMesh=True,provideSize=[Lx,Ly,Lz])
+        totalWeight=len(kmesh)
+
+        time0=time.time()
+        HkList=[]
+        for kpt in kmesh:
+            _ham=Ham()
+            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
+            HkList.append(Hk)
+        print('Hk constructed in %.3fs'%(time.time()-time0))
+        r=(energyRange[1]-energyRange[0])/2
+        o=(energyRange[0]+energyRange[1])/2
+
+        #scatteringCenter=scatteringSameCenter
+        def getEOnCircle(theta):
+            z=r*np.exp(1j*theta)
+            E=z+o
+            g_internal=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+            g_external_contracted=np.zeros((scatteringOrder,scatteringOrder),dtype=complex)
+            
+            for kpt, _hk in zip(kmesh,HkList):
+                _gk=np.linalg.inv((E+eta*1j)*np.eye(norb)-_hk)
+                for irow in range(scatteringOrder):
+                    R_left, orbID_left=relevantOrbList[irow]
+                    for icol in range(scatteringOrder):
+                        R_right, orbID_right=relevantOrbList[icol]
+                        #print('row%d col%d --- scatterLeft (%d %d %d) orb%d scatterRight (%d %d %d) orb%d'%(irow,icol,*R_left,orbID_left,*R_right,orbID_right))
+                        # internal line
+                        g_internal[irow,icol]+=np.exp(-2j*np.pi*np.dot(kpt,R_left-R_right))*_gk[orbID_left,orbID_right]/totalWeight
+                        # contracted external line
+                        g_external_contracted[irow,icol]+=np.exp(2j*np.pi*np.dot(kpt,R_left-R_right))*np.dot(_gk[orbID_right,:],_gk[:,orbID_left])/totalWeight
+                
+                #rou+=sum(np.diagonal(_gk))
+
+            # 2nd order perturbation
+            perturb_double_matrix=np.dot(g_external_contracted,scatteringDoubleCenter).dot(g_internal).dot(scatteringDoubleCenter)
+            perturb_single1_matrix=np.dot(g_external_contracted,scatteringSingle1Center).dot(g_internal).dot(scatteringSingle1Center)
+            perturb_single2_matrix=np.dot(g_external_contracted,scatteringSingle2Center).dot(g_internal).dot(scatteringSingle2Center)
+            # tracet to get rou
+            perturb_matrix_trace=sum(np.diagonal(perturb_double_matrix))-sum(np.diagonal(perturb_single1_matrix))-sum(np.diagonal(perturb_single2_matrix))
+            delta_rou=perturb_matrix_trace
+
+            dos=delta_rou/(-np.pi) # delta DOS of super cell
+            totalEnergy=E*dos
+            return (totalEnergy*1j*z).imag
+        
+        time0=time.time()
+        E_coupling, E_coupling_err =integrate.quad(getEOnCircle,a=np.pi,b=0.,epsabs=paramReader.EDIFF)
+        print("Coupling energy obtained in %.3fs ===> %.6f +- %.6f"%(time.time()-time0,E_coupling,E_coupling_err))
+        
+        J=E_coupling/(-2*(np.cos(theta)-1))
+        return J
