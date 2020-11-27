@@ -33,7 +33,7 @@ def readJ(mainDir, bondList):
                     bond.exchangeEnergy=float(J)
                 else:
                     print('File info: bond does not match ion%d-ion%d [%d %d %d] <-> ion%s-ion%s [%s %s %s]'%(
-                        bond.sourceOrb.id,bond.targetOrb.id,*bond.overLa,sourceID,targetID,Rx,Ry,Rz))
+                        bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,sourceID,targetID,Rx,Ry,Rz))
                     return False
         return True
     print('File info: J.txt does not exist')

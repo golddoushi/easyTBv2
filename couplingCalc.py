@@ -170,7 +170,7 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
     #if param.MAGTYPE=='ISING':
     #    calcIsotropicJ(mainDir,bondList=bondListWithClassification,supercellSize=[sizeL,sizeW,sizeH])
 
-def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
+def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=[], MAE=0):
     '''
     mainDir: the position of Hr file
     fermi: assumed Fermi level
@@ -188,7 +188,8 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
         for bondType in bondList:
             bondType[0].broadCastExchange(verbose=True)
         writeMCSolverIsingFile(mainDir)
-        calcSpinWaveSpectra(mainDir)
+        calcSpinWaveSpectra(mainDir,spinList,MAE)
+        calcSpinWaveDOS(mainDir,spinList,MAE)
         return
     
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
@@ -205,26 +206,32 @@ def calcIsotropicJ(mainDir,fermi=0,eta=0.01,emptySpace=5):
         
     # create Green's function
     gr=hamilton.Green()
-    kmesh=pR.createKPOINTS(provideSize=supercellSize,getKMesh=True)
+    kmesh=pR.createKPOINTS(provideSize=sc,getKMesh=True)
     emin,emax,fermi_adjusted=gr.calcFullDOS(hr,kmesh=kmesh,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True)
+    fermi_adjusted=fermi
     gr.calcFullBands(hr,fermi=fermi_adjusted,mainDir=mainDir,saveFig=True)
 
     for ibondType, bondType in enumerate(bondList):
         bond=bondType[0]
         print("Now evaluate the bondType%d orb%d-orb%d [%d %d %d]"%(ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat))
-        J=gr.calcJ(hr,sourceOrbList=bond.sourceOrb.wannIDList,
-                   targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
-                   eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
-                   Lx=supercellSize[0],Ly=supercellSize[1],Lz=supercellSize[2],
-                   linearPerturb=True)
+        #J=gr.calcJ(hr,sourceOrbList=bond.sourceOrb.wannIDList,
+        #           targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
+        #           eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
+        #           Lx=sc[0],Ly=sc[1],Lz=sc[2],
+        #           linearPerturb=True)
+        J=gr.calcJFourState_Numba(hr,sourceOrbList=bond.sourceOrb.wannIDList,
+                                  targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
+                                  theta=np.pi*0.01,eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
+                                  Lx=sc[0],Ly=sc[1],Lz=sc[2])
         bond.exchangeEnergy=J
         bond.broadCastExchange(type='Ising')
     
-    fileio.writeJ(mainDir, bondList, supercellSize)
+    fileio.writeJ(mainDir, bondList, sc)
     writeMCSolverIsingFile(mainDir)
-    calcSpinWaveSpectra(mainDir)
+    calcSpinWaveSpectra(mainDir,spinList,MAE)
+    calcSpinWaveDOS(mainDir,spinList,MAE)
     
-def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5):
+def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5, ini_S=[], MAE=0.1):
     '''
     mainDir: the position of Hr file
     fermi: assumed Fermi level
@@ -242,7 +249,8 @@ def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5):
         for bondType in bondList:
             bondType[0].broadCastExchange(verbose=True)
         writeMCSolverIsingFile(mainDir)
-        calcSpinWaveSpectra(mainDir)
+        calcSpinWaveSpectra(mainDir,ini_S,MAE)
+        
         return
     
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
@@ -274,7 +282,7 @@ def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5):
     
     fileio.writeJ(mainDir, bondList, supercellSize)
     writeMCSolverIsingFile(mainDir)
-    calcSpinWaveSpectra(mainDir)
+    calcSpinWaveSpectra(mainDir,ini_S,MAE)
 
 def __updateSource(source_list,ini_mag,ini_S,size=2):
     outSource=[]
@@ -335,7 +343,43 @@ def writeMCSolverIsingFile(path):
                 bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat
             ))
 
-def calcSpinWaveSpectra(path):
+def calcSpinWaveDOS(path,SList,MAE=0):
+    magOrbID=[iorb for iorb in range(len(SList)) if SList[iorb]>0.1]
+    avgMAE=MAE/len(magOrbID)
+
+    # set half Brillouin zone
+    kmesh=[]
+    dk=1./param.SWNKPT
+    for ikptx in range(param.SWNKPT):
+        for ikpty in range(int(param.SWNKPT/2)):
+            kmesh.append(np.array([ikptx*dk,ikpty*dk,0]))
+    
+    eigList=[]
+    for ikpt, kpt in enumerate(kmesh):
+        _ham=hamilton.Ham()
+        for bond in pR.bondList:
+            S=np.sqrt(SList[bond.sourceOrb.id]*SList[bond.targetOrb.id])
+            t=bond.exchangeEnergy/S
+            # exchange 
+            _ham.addHopping(bond.sourceOrb.id,bond.targetOrb.id,t,bond.overLat,kpt)
+            _ham.addHopping(bond.targetOrb.id,bond.sourceOrb.id,t,-bond.overLat,kpt)
+            # onsite
+            _ham.addHopping(bond.sourceOrb.id,bond.sourceOrb.id,-t,np.zeros(3),kpt)
+            _ham.addHopping(bond.targetOrb.id,bond.targetOrb.id,-t,np.zeros(3),kpt)
+        for iorb in magOrbID:
+            _ham.addHopping(iorb,iorb,avgMAE/SList[iorb],np.zeros(3),kpt)
+
+        eigList.append(_ham.sovle_exact())
+
+    eigList=np.array(eigList)
+    if(np.min(eigList)>0):
+        Sigma=0
+        for eig in eigList:
+            Sigma+=1./eig
+        Tc_=(S+1)*len(eigList)/3./Sigma
+        print('mean field estimation for Tc: %.3f Kelvin'%(Tc_*1000*11.58875))
+
+def calcSpinWaveSpectra(path,SList,MAE=0):
     kmesh=[]
     with open(path+'KPOINTS','r') as fin:
         data=fin.read().split('\n')
@@ -348,13 +392,17 @@ def calcSpinWaveSpectra(path):
     for ikpt, kpt in enumerate(kmesh):
         _ham=hamilton.Ham()
         for bond in pR.bondList:
-            t=bond.exchangeEnergy
+            S=np.sqrt(SList[bond.sourceOrb.id]*SList[bond.targetOrb.id])
+            t=bond.exchangeEnergy/S
             # exchange 
             _ham.addHopping(bond.sourceOrb.id,bond.targetOrb.id,t,bond.overLat,kpt)
             _ham.addHopping(bond.targetOrb.id,bond.sourceOrb.id,t,-bond.overLat,kpt)
             # onsite
             _ham.addHopping(bond.sourceOrb.id,bond.sourceOrb.id,-t,np.zeros(3),kpt)
             _ham.addHopping(bond.targetOrb.id,bond.targetOrb.id,-t,np.zeros(3),kpt)
+
+
+
         eigList.append(_ham.sovle_exact())
         kaxis.append(ikpt)
 
