@@ -19,6 +19,7 @@ import hrReader as reader
 import ham as hamilton
 import fileio
 import matplotlib.pyplot as plt
+from multiprocessing import Pool, freeze_support
 
 global bondList, supercellSize
 
@@ -206,20 +207,29 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=
         
     # create Green's function
     gr=hamilton.Green()
-    kmesh=pR.createKPOINTS(provideSize=sc,getKMesh=True)
+    kmesh=pR.createKPOINTS(provideSize=supercellSize,getKMesh=True)
     emin,emax,fermi_adjusted=gr.calcFullDOS(hr,kmesh=kmesh,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True)
     fermi_adjusted=fermi
     gr.calcFullBands(hr,fermi=fermi_adjusted,mainDir=mainDir,saveFig=True)
 
+    #def parallelHelper(bond):
+    #    print(bond.sourceOrb.wannIDList,bond.targetOrb.wannIDList,bond.overLat)
+    #    return bond, gr.calcJFourState_Numba(hr,sourceOrbList=bond.sourceOrb.wannIDList,
+    #                              targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
+    #                              theta=np.pi*0.01,eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
+    #                              Lx=sc[0],Ly=sc[1],Lz=sc[2])
+    #bondRepresentatives=[bondType[0] for bondType in bondList]
+    #pool=Pool(processes=param.NCORE)
+    #for result in pool.imap_unordered(parallelHelper,bondRepresentatives):
+    #    bond, J= result
+    #    bond.exchangeEnergy=J
+    #    bond.broadCastExchange(type='Ising')
+    #    print("Exchange coupling of the bondType%d orb%d-orb%d [%d %d %d] = %.6f"%(bond.bondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,J))
+    #pool.close()
     for ibondType, bondType in enumerate(bondList):
         bond=bondType[0]
         print("Now evaluate the bondType%d orb%d-orb%d [%d %d %d]"%(ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat))
-        #J=gr.calcJ(hr,sourceOrbList=bond.sourceOrb.wannIDList,
-        #           targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
-        #           eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
-        #           Lx=sc[0],Ly=sc[1],Lz=sc[2],
-        #           linearPerturb=True)
-        J=gr.calcJFourState_Numba(hr,sourceOrbList=bond.sourceOrb.wannIDList,
+        J=gr.calcJFourState_CDLL(hr,sourceOrbList=bond.sourceOrb.wannIDList,
                                   targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
                                   theta=np.pi*0.01,eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
                                   Lx=sc[0],Ly=sc[1],Lz=sc[2])
