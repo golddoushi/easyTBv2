@@ -1437,7 +1437,33 @@ class Green:
         J=E_coupling#/(-2*(np.cos(theta)-1))
         return J
 
-    def calcJFourState_CDLL(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1):
+    def getCTypeKMeshAndHk(self,hr,Lx=10,Ly=10,Lz=1):
+        time0=time.time()
+        print('generating kmesh, Hk...')
+        norb=hr.norb
+        kmesh=np.array(pR.createKPOINTS(getKMesh=True,provideSize=[Lx,Ly,Lz]))
+
+        c_kmesh=(c_double*(3*kmesh.shape[0]))()
+        c_Hk=(c_double*(kmesh.shape[0]*norb*norb*2))()
+        for ikpt, kpt in enumerate(kmesh):
+            # store kpts
+            for i in range(3):
+                c_kmesh[ikpt*3+i]=c_double(kpt[i])
+            
+            _ham=Ham()
+            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
+            # store Hk
+            for i in range(norb):
+                for j in range(norb):
+                    c_Hk[ikpt*norb*norb*2+i*norb*2+j*2]=c_double(Hk[i][j].real)
+                    c_Hk[ikpt*norb*norb*2+i*norb*2+j*2+1]=c_double(Hk[i][j].imag)
+            
+        #HkArray=np.array(HkList,dtype=np.complex128)
+        print('Hk constructed in %.3fs'%(time.time()-time0))
+        return kmesh.shape[0], c_kmesh, c_Hk
+        
+    
+    def calcJFourState_CDLL(self,hr,nkpt,c_kmesh,c_Hk,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1,nthreads=4):
         '''Linear response approximation
            using Gaussian integration along semi-circle in upper complex plane
         '''
@@ -1541,28 +1567,6 @@ class Green:
                 c_scatteringSingleCenter[i*scatteringOrder*2+j*2]=c_double(scatteringSingle1Center[i][j].real)
                 c_scatteringSingleCenter[i*scatteringOrder*2+j*2+1]=c_double(scatteringSingle1Center[i][j].imag)
         
-        norb=hr.norb
-        kmesh=np.array(pR.createKPOINTS(getKMesh=True,provideSize=[Lx,Ly,Lz]))
-        totalWeight=len(kmesh)
-
-        time0=time.time()
-        c_kmesh=(c_double*(3*kmesh.shape[0]))()
-        c_Hk=(c_double*(kmesh.shape[0]*norb*norb*2))()
-        for ikpt, kpt in enumerate(kmesh):
-            # store kpts
-            for i in range(3):
-                c_kmesh[ikpt*3+i]=c_double(kpt[i])
-            
-            _ham=Ham()
-            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
-            # store Hk
-            for i in range(norb):
-                for j in range(norb):
-                    c_Hk[ikpt*norb*norb*2+i*norb*2+j*2]=c_double(Hk[i][j].real)
-                    c_Hk[ikpt*norb*norb*2+i*norb*2+j*2+1]=c_double(Hk[i][j].imag)
-            
-        #HkArray=np.array(HkList,dtype=np.complex128)
-        print('Hk constructed in %.3fs'%(time.time()-time0))
         c_r=c_double((energyRange[1]-energyRange[0])/2)
         c_o=c_double((energyRange[0]+energyRange[1])/2)
 
@@ -1579,8 +1583,9 @@ class Green:
         cfunc.restype=py_object
         
         def getEOnCircle(theta):
-            return cfunc(c_double(theta), c_r, c_o, c_double(eta),
-                         c_int(kmesh.shape[0]), c_kmesh,
+            return cfunc(c_int(nthreads),
+                         c_double(theta), c_r, c_o, c_double(eta),
+                         c_int(nkpt), c_kmesh,
                          c_int(norb), c_Hk,
                          c_int(scatteringOrder),
                          c_relevantOrbR,c_relevantOrbIndex,
@@ -1591,9 +1596,10 @@ class Green:
         #print(a)
         #exit()
 
-        E_coupling, E_coupling_err =integrate.quad(getEOnCircle,a=np.pi,b=0.,#args=(HkArray,kmesh,relevantOrbRList,relevantOrbIDList,scD,scS),
-                                                                epsabs=paramReader.EDIFF)
-        print("Coupling energy obtained in %.3fs (with cdll) ===> %.6f +- %.6f"%(time.time()-time0,E_coupling,E_coupling_err))
+        print('prepared for integration for J calculation')
+        time0=time.time()
+        E_coupling, E_coupling_err =integrate.quad(getEOnCircle,a=np.pi,b=0.,epsabs=paramReader.EDIFF)
+        print("Coupling energy obtained in %.3fs (with cdll paralleled with %d threads) ===> %.6f +- %.6f"%(time.time()-time0,nthreads,E_coupling,E_coupling_err))
         
         J=E_coupling#/(-2*(np.cos(theta)-1))
         return J

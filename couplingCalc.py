@@ -212,27 +212,17 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=
     fermi_adjusted=fermi
     gr.calcFullBands(hr,fermi=fermi_adjusted,mainDir=mainDir,saveFig=True)
 
-    #def parallelHelper(bond):
-    #    print(bond.sourceOrb.wannIDList,bond.targetOrb.wannIDList,bond.overLat)
-    #    return bond, gr.calcJFourState_Numba(hr,sourceOrbList=bond.sourceOrb.wannIDList,
-    #                              targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
-    #                              theta=np.pi*0.01,eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
-    #                              Lx=sc[0],Ly=sc[1],Lz=sc[2])
-    #bondRepresentatives=[bondType[0] for bondType in bondList]
-    #pool=Pool(processes=param.NCORE)
-    #for result in pool.imap_unordered(parallelHelper,bondRepresentatives):
-    #    bond, J= result
-    #    bond.exchangeEnergy=J
-    #    bond.broadCastExchange(type='Ising')
-    #    print("Exchange coupling of the bondType%d orb%d-orb%d [%d %d %d] = %.6f"%(bond.bondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,J))
-    #pool.close()
+    # first obtain kmesh and Hk 
+    nkpt,c_kmesh,c_Hk=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2])
+    # now the c part, enjoy :-P
     for ibondType, bondType in enumerate(bondList):
         bond=bondType[0]
         print("Now evaluate the bondType%d orb%d-orb%d [%d %d %d]"%(ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat))
-        J=gr.calcJFourState_CDLL(hr,sourceOrbList=bond.sourceOrb.wannIDList,
+        J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh,c_Hk,sourceOrbList=bond.sourceOrb.wannIDList,
                                   targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
                                   theta=np.pi*0.01,eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
-                                  Lx=sc[0],Ly=sc[1],Lz=sc[2])
+                                  Lx=sc[0],Ly=sc[1],Lz=sc[2],
+                                  nthreads=param.NCORE)
         bond.exchangeEnergy=J
         bond.broadCastExchange(type='Ising')
     
