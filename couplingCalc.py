@@ -213,18 +213,19 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=
     gr.calcFullBands(hr,fermi=fermi_adjusted,mainDir=mainDir,saveFig=True)
 
     # first obtain kmesh and Hk 
-    nkpt,c_kmesh,c_Hk=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2])
+    nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2])
     # now the c part, enjoy :-P
     for ibondType, bondType in enumerate(bondList):
         bond=bondType[0]
         print("Now evaluate the bondType%d orb%d-orb%d [%d %d %d]"%(ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat))
-        J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh,c_Hk,sourceOrbList=bond.sourceOrb.wannIDList,
+        J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,sourceOrbList=bond.sourceOrb.wannIDList,
                                   targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
                                   theta=np.pi*0.01,eta=eta,energyRange=(emin-emptySpace,fermi_adjusted),
                                   Lx=sc[0],Ly=sc[1],Lz=sc[2],
                                   nthreads=param.NCORE)
         bond.exchangeEnergy=J
         bond.broadCastExchange(type='Ising')
+    gr.freeKMeshAndHk(c_kmesh_addr,c_Hk_addr)
     
     fileio.writeJ(mainDir, bondList, sc)
     writeMCSolverIsingFile(mainDir)
@@ -377,7 +378,7 @@ def calcSpinWaveDOS(path,SList,MAE=0):
         for eig in eigList:
             Sigma+=1./eig
         Tc_=(S+1)*len(eigList)/3./Sigma
-        print('mean field estimation for Tc: %.3f Kelvin'%(Tc_*1000*11.58875))
+        print('mean field estimation for Tc: %.3f Kelvin\n'%(Tc_*1000*11.58875))
 
 def calcSpinWaveSpectra(path,SList,MAE=0):
     kmesh=[]

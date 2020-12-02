@@ -11,7 +11,7 @@ import auxiliary
 from numba import jit, njit, prange
 import numba
 numba.config.NUMBA_DEFAULT_NUM_THREADS=4
-from ctypes import c_double, c_int, CDLL, py_object, c_double
+from ctypes import c_double, c_int, CDLL, py_object, c_double, c_longlong
 
 class Ham:
     def __init__(self):
@@ -1437,33 +1437,69 @@ class Green:
         J=E_coupling#/(-2*(np.cos(theta)-1))
         return J
 
-    def getCTypeKMeshAndHk(self,hr,Lx=10,Ly=10,Lz=1):
+    def getCTypeKMeshAndHk(self,hr,Lx=10,Ly=10,Lz=1,GammaMode=1):
         time0=time.time()
         print('generating kmesh, Hk...')
-        norb=hr.norb
-        kmesh=np.array(pR.createKPOINTS(getKMesh=True,provideSize=[Lx,Ly,Lz]))
-
-        c_kmesh=(c_double*(3*kmesh.shape[0]))()
-        c_Hk=(c_double*(kmesh.shape[0]*norb*norb*2))()
-        for ikpt, kpt in enumerate(kmesh):
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.getKMesh.restype=c_longlong
+        #norb=hr.norb
+        #kmesh=np.array(pR.createKPOINTS(getKMesh=True,provideSize=[Lx,Ly,Lz]))
+        nkpts=Lx*Ly*Lz
+        c_kmesh_address=hamDLL.getKMesh(c_int(GammaMode),c_int(Lx),c_int(Ly),c_int(Lz))#(c_double*(3*kmesh.shape[0]))()
+        print('in python, memory address of kmesh is %s'%hex(c_kmesh_address))
+        #c_Hk=(c_double*(kmesh.shape[0]*norb*norb*2))()
+        #Hk_ref=[]
+        #for ikpt, kpt in enumerate(kmesh):
             # store kpts
+        #    for i in range(3):
+        #        c_kmesh[ikpt*3+i]=c_double(kpt[i])
+            
+        #    _ham=Ham()
+        #    Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
+        #    Hk_ref.append(Hk)
+        #    # store Hk
+        #    for i in range(norb):
+        #        for j in range(norb):
+        #            c_Hk[ikpt*norb*norb*2+i*norb*2+j*2]=c_double(Hk[i][j].real)
+        #            c_Hk[ikpt*norb*norb*2+i*norb*2+j*2+1]=c_double(Hk[i][j].imag)
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
             for i in range(3):
-                c_kmesh[ikpt*3+i]=c_double(kpt[i])
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
             
-            _ham=Ham()
-            Hk=_ham.buildHkFromHr(hr,kpt,getHk=True)
-            # store Hk
-            for i in range(norb):
-                for j in range(norb):
-                    c_Hk[ikpt*norb*norb*2+i*norb*2+j*2]=c_double(Hk[i][j].real)
-                    c_Hk[ikpt*norb*norb*2+i*norb*2+j*2+1]=c_double(Hk[i][j].imag)
-            
+        hamDLL.getHk.restype=c_longlong
+        '''
+        ikpt_print=7
+        print('python Hk at %dth kpt'%ikpt_print)
+        for line in Hk_ref[ikpt_print]:
+            print(("(%.3f %.3f) "*len(line))%(tuple(np.array([[ele.real, ele.imag] for ele in line]).flatten())))
+        '''
+        c_Hk_address=hamDLL.getHk(c_int(nkpts),c_longlong(c_kmesh_address),
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        #c_int(ikpt_print)
+                        )
         #HkArray=np.array(HkList,dtype=np.complex128)
         print('Hk constructed in %.3fs'%(time.time()-time0))
-        return kmesh.shape[0], c_kmesh, c_Hk
-        
-    
-    def calcJFourState_CDLL(self,hr,nkpt,c_kmesh,c_Hk,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1,nthreads=4):
+        print('in python, memory address of Hk: %s'%hex(c_Hk_address))
+        #exit()
+        return nkpts, c_kmesh_address, c_Hk_address
+
+    def freeKMeshAndHk(self,c_kmesh_address,c_Hk_address):
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.cleanKMeshAndHk(c_longlong(c_kmesh_address),c_longlong(c_Hk_address))
+
+
+    def calcJFourState_CDLL(self,hr,nkpt,c_kmesh_address,c_Hk_address,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1,nthreads=4):
         '''Linear response approximation
            using Gaussian integration along semi-circle in upper complex plane
         '''
@@ -1582,11 +1618,14 @@ class Green:
         cfunc=BZIntegrationDLL.getEOnCircle
         cfunc.restype=py_object
         
+        #print(type(hex(c_Hk_address)))
+        #xit()
+        #print("check the memory address is %s"%(hex(c_Hk_address),c_Hk_address,c_longlong(c_Hk_address)))
         def getEOnCircle(theta):
             return cfunc(c_int(nthreads),
                          c_double(theta), c_r, c_o, c_double(eta),
-                         c_int(nkpt), c_kmesh,
-                         c_int(norb), c_Hk,
+                         c_int(nkpt), c_longlong(c_kmesh_address),
+                         c_int(norb), c_longlong(c_Hk_address),
                          c_int(scatteringOrder),
                          c_relevantOrbR,c_relevantOrbIndex,
                          c_scatteringDoubleCenter,

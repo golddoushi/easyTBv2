@@ -6,7 +6,7 @@ VERBOSE=F       # output detail log
 PBC=2
 ENMAX_aug=100
 METAGGA=F
-NCORE=4        # total cores in resource pool
+NCORE=8        # total cores in resource pool
 NODES=1         # total nodes in cluster resource pool
 PPN=24          # PPN=NCORE/NODES
 NPAR=1          #

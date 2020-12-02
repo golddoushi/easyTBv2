@@ -8,18 +8,19 @@ import couplingCalc as cc
 import matplotlib.pyplot as plt
 
 cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.05U3/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
-cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.05U3/',sc=[30,30,1],fermi=-0.0353,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.004)
+cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.05U3/',sc=[10,10,1],fermi=-0.0353,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.004)
 exit()
 
 pR.readPOS('./mcalc/FeTeI/a_0.05U3/POSCAR')
 hr=reader.Hr()
 hr.readDoubleFiles('./mcalc/FeTeI/a_0.05U3/wannier90.up_hr.dat','./mcalc/FeTeI/a_0.05U3/wannier90.dn_hr.dat')
 gr=hamilton.Green()
+Lx,Ly,Lz,GammaMode=100,100,1,1
 #J=gr.calcJFourState(hr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi/20,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=10,Ly=10,Lz=1)
-nkpt,c_kmesh,c_Hk=gr.getCTypeKMeshAndHk(hr,Lx=15,Ly=15,Lz=1)
-J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh,c_Hk,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=15,Ly=15,Lz=1,nthreads=8)
+nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=Lx,Ly=Ly,Lz=Lz,GammaMode=GammaMode)
+J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=Lx,Ly=Ly,Lz=Lz,nthreads=8)
 #J=gr.calcJFourState_Numba(hr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=10,Ly=10,Lz=1)
-print(J)
+#print(J)
 exit()
 
 pR.readPOS('./mcalc/graphene/POSCAR')
@@ -61,8 +62,8 @@ gr=hamilton.Green()
 #J=gr.calcJ(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],eta=0.0001,energyRange=(-15.0,0.0),Lx=7,Ly=7,Lz=1,globalCutOrder=8,diverseCutOrder=2,linearPerturb=True)
 #J=gr.calcJFourState(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-15.0,0.0),Lx=20,Ly=20,Lz=1)
 #J=gr.calcJFourState_Numba(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-15.0,0.0),Lx=20,Ly=20,Lz=1)
-nkpt,c_kmesh,c_Hk=gr.getCTypeKMeshAndHk(hr_g,Lx=10,Ly=10,Lz=1)
-J=gr.calcJFourState_CDLL(hr_g,nkpt,c_kmesh,c_Hk,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-15.0,0.0),Lx=10,Ly=10,Lz=1)
+nkpt,c_kmesh,c_Hk_addr=gr.getCTypeKMeshAndHk(hr_g,Lx=10,Ly=10,Lz=1)
+J=gr.calcJFourState_CDLL(hr_g,nkpt,c_kmesh,c_Hk_addr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-15.0,0.0),Lx=10,Ly=10,Lz=1)
 
 #J=gr.calcJExact(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],eta=0.0001,energyRange=(-5.0,0.7),Lx=10,Ly=1,Lz=1)
 #J=gr.calcAnisotropicJ(hr_g,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[5,6,7,8,9],targetR=[0,0,0],eta=0.0001,energyRange=(-12.0,-1.8),Lx=6,Ly=6,Lz=1)

@@ -36,13 +36,23 @@ lapack_complex_double * conventional_tensor_contraction(int lda, int nrhs, int l
 
 PyObject * getEOnCircle(int nthreads,
                         double theta, double r, double o, double eta,
-                        int nkpt, double kmesh[nkpt][3], 
-                        int norb, double HkList[nkpt][norb*norb*2],
+                        int nkpt, long long kmesh_address, 
+                        int norb, long long HkList_address,
                         int scatteringOrder, 
                         int relevantOrbR[scatteringOrder][3], int relevantOrbIndex[scatteringOrder],
                         double scatteringDoubleCenterOrigin[scatteringOrder*scatteringOrder*2],
                         double scatteringSingleCenterOrigin[scatteringOrder*scatteringOrder*2])
 {
+    //printf("enering BZIntegration.dll\n");
+    double * kmesh=(double*)kmesh_address;
+    lapack_complex_double * HkList=(lapack_complex_double *)HkList_address;
+    /*printf("In BZIntegration.dll, addr. of Hk is %p\n",HkList);
+    for(int i=0;i<norb;i++){
+        for(int j=0;j<norb;j++){
+            printf("(%.6f, %.6f) ",creal(*(HkList+i*norb+j)),cimag(*(HkList+i*norb+j)));
+        }
+        printf("\n");
+    }*/
     lapack_complex_double z=r*cexp(theta*_Complex_I);
     lapack_complex_double E=z+o;
 
@@ -80,10 +90,10 @@ PyObject * getEOnCircle(int nthreads,
             //printf("kpt%d thread id: %d\n",ikpt, omp_get_thread_num());
             int i,j,info;
             //printf("kpt%d\n",ikpt);
-            double *kpt=kmesh[ikpt];
+            //double *kpt=kmesh+ikpt*3;
             //printf("kpt (%.2f %.2f %.2f)\n",*kpt,*(kpt+1),*(kpt+2));
             //printf("Hk:\n");
-            double *hk=HkList[ikpt];
+            //complex double *hk=HkList[ikpt];
             /*for(i=0;i<norb;i++){
                 for(j=0;j<norb;j++) printf("(%.6f, %.6f) ",*(hk+i*norb*2+j*2),*(hk+i*norb*2+j*2+1));
                 printf("\n");
@@ -93,7 +103,7 @@ PyObject * getEOnCircle(int nthreads,
             lapack_complex_double coreMatrix[norb][norb];
             for(i=0;i<norb;i++){
                 for(j=0;j<norb;j++){
-                    coreMatrix[i][j]=-*(hk+i*norb*2+j*2)-*(hk+i*norb*2+j*2+1)*_Complex_I;
+                    coreMatrix[i][j]=-(*(HkList+ikpt*norb*norb+i*norb+j));//-*(hk+i*norb*2+j*2)-*(hk+i*norb*2+j*2+1)*_Complex_I;
                     gk[i][j]=0;
                     if(i==j){
                         coreMatrix[i][j]+=E+eta*_Complex_I;
@@ -127,7 +137,7 @@ PyObject * getEOnCircle(int nthreads,
                     int deltaR[3];
                     for(i=0;i<3;i++) deltaR[i]=relevantOrbR[irow][i]-relevantOrbR[icol][i];
                     double kDotDR=0;
-                    for(i=0;i<3;i++) kDotDR+=(deltaR[i]*(*(kpt+i)));
+                    for(i=0;i<3;i++) kDotDR+=(deltaR[i]*(*(kmesh+ikpt*3+i)));
                     double phase=TwoPI*kDotDR;
                     double realPhase=cos(phase);
                     double imagPhase=sin(phase);
