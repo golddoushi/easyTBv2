@@ -7,15 +7,15 @@ paramReader.readGlobalConst()
 import couplingCalc as cc
 import matplotlib.pyplot as plt
 
-cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.05U3/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
-cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.05U3/',sc=[10,10,1],fermi=-0.0353,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.004)
-exit()
+#cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.05U3/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
+#cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.05U3/',sc=[10,10,1],fermi=-0.0353,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.004)
+#exit()
 
 pR.readPOS('./mcalc/FeTeI/a_0.05U3/POSCAR')
 hr=reader.Hr()
 hr.readDoubleFiles('./mcalc/FeTeI/a_0.05U3/wannier90.up_hr.dat','./mcalc/FeTeI/a_0.05U3/wannier90.dn_hr.dat')
 gr=hamilton.Green()
-Lx,Ly,Lz,GammaMode=100,100,1,1
+Lx,Ly,Lz,GammaMode=10,10,1,1
 #J=gr.calcJFourState(hr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi/20,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=10,Ly=10,Lz=1)
 nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=Lx,Ly=Ly,Lz=Lz,GammaMode=GammaMode)
 J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=Lx,Ly=Ly,Lz=Lz,nthreads=8)
