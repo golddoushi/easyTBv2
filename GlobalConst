@@ -89,6 +89,7 @@ MAXINV=4
 MINCELL=1
 MAXCELL=4
 KDEN=80
+GAMMAMODE=1          # 0 for original Monhkorst-Pack sampling, otherwise Gamma mode sampling
 SYMEXPAND=T
 RSVSYM=2
 PGHOLD=0.5
