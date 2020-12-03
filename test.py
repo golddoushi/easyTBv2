@@ -1,3 +1,4 @@
+import sys
 import hrReader as reader
 import ham as hamilton
 import numpy as np
@@ -6,6 +7,23 @@ import paramReader
 paramReader.readGlobalConst()
 import couplingCalc as cc
 import matplotlib.pyplot as plt
+class Logger(object):
+    def __init__(self, filename="Default.log"):
+        self.terminal = sys.stdout
+        self.filename=filename
+        self.log = open(filename, 'w')
+ 
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.close()
+        self.log=open(self.filename,'a')
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log=open(self.filename,'w')
+        self.log.close()
+sys.stdout = Logger('log')
 
 #cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.05U3/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
 #cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.05U3/',sc=[10,10,1],fermi=-0.0353,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.004)

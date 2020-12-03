@@ -1238,6 +1238,7 @@ class Green:
         J=E_coupling/(-2*(np.cos(theta)-1))
         return J
     
+    # func series to calc J with CDLL
     def getCTypeKMeshAndHk(self,hr,Lx=10,Ly=10,Lz=1,GammaMode=1):
         time0=time.time()
         print('generating kmesh, Hk...')
@@ -1298,7 +1299,6 @@ class Green:
     def freeKMeshAndHk(self,c_kmesh_address,c_Hk_address):
         hamDLL=CDLL("./ham.dll")
         hamDLL.cleanKMeshAndHk(c_longlong(c_kmesh_address),c_longlong(c_Hk_address))
-
 
     def calcJFourState_CDLL(self,hr,nkpt,c_kmesh_address,c_Hk_address,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1,nthreads=4):
         '''Linear response approximation
