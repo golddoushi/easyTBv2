@@ -25,9 +25,9 @@ class Logger(object):
         self.log.close()
 sys.stdout = Logger('log')
 
-#cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.05U3/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
-#cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.05U3/',sc=[10,10,1],fermi=-0.0353,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.004)
-#exit()
+cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.05U3K80/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
+cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.05U3K80/',sc=[100,100,1],fermi=-0.07473002,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.0048385)
+exit()
 
 pR.readPOS('./mcalc/FeTeI/a_0.05U3/POSCAR')
 hr=reader.Hr()

@@ -207,13 +207,12 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=
         
     # create Green's function
     gr=hamilton.Green()
-    kmesh=pR.createKPOINTS(provideSize=supercellSize,getKMesh=True)
-    emin,emax,fermi_adjusted=gr.calcFullDOS(hr,kmesh=kmesh,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True)
-    fermi_adjusted=fermi
-    gr.calcFullBands(hr,fermi=fermi_adjusted,mainDir=mainDir,saveFig=True)
-
-    # first obtain kmesh and Hk 
-    nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2],GammaMode=1)
+    # obtain kmesh and Hk 
+    nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2],GammaMode=1,nthreads=param.NCORE)
+    emin,emax,fermi_adjusted=gr.calcFullDOS_CDLL(hr,c_Hk_addr,nkpt,hr.norb,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True,
+                                                nthreads=param.NCORE)
+    gr.calcFullBands_CDLL(hr,fermi=fermi,optimalFermi=fermi_adjusted,mainDir=mainDir,saveFig=True,nthreads=param.NCORE)
+    #fermi_adjusted=fermi
     # now the c part, enjoy :-P
     for ibondType, bondType in enumerate(bondList):
         bond=bondType[0]

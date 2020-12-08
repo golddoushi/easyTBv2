@@ -230,6 +230,33 @@ class Green:
         plt.show()
         plt.close()
         return Emin, Emax, fermi_adjusted
+    
+    def calcFullDOS_CDLL(self,hr,c_Hk_address,nkpt,norb,fermi=0,eta=0.01,NEDOS=1000,mainDir=None,saveFig=True,nthreads=1):
+        time0=time.time()
+        # show time for c
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcFullDOS.restype=py_object
+        result=hamDLL.calcFullDOS(c_longlong(c_Hk_address),nkpt,c_int(norb),c_int(NEDOS),c_double(eta),c_double(fermi),c_int(nthreads))
+        energyAXIS, dosAxis, optimal_fermi=result
+        Emin,Emax=energyAXIS[0],energyAXIS[NEDOS-1]
+        print("cdll calc in %.6fs Emin=%.6f, Emax=%.6f, optimal fermi=%.6f"%(time.time()-time0,Emin,Emax,optimal_fermi))
+        # graphical work
+        ymax=np.max(dosAxis)*1.05
+        plt.figure()
+        plt.plot(energyAXIS,dosAxis)
+        plt.plot([fermi,fermi],[0,ymax],'--',label=r'original')
+        plt.plot([optimal_fermi,optimal_fermi],[0,ymax],'--',label=r'optimal')
+        plt.ylim(0,ymax)
+        plt.yticks([])
+        plt.ylabel(r'DOS')
+        plt.xlabel(r'Energy')
+        plt.legend()
+        if saveFig:
+            assert mainDir!=None, 'We need path or directory to save the figure'
+            plt.savefig(mainDir+'DOS.png')
+        plt.show()
+        plt.close()
+        return Emin, Emax, optimal_fermi
 
     def calcFullBands(self,hr,fermi=0,mainDir=None,saveFig=True):
         eigList=[]
@@ -253,12 +280,84 @@ class Green:
             kaxis.append(ikpt)
         
         eigList=np.array(eigList)
-        print('Hk constructed in %.3fs'%(time.time()-time0))
+        print('Hk solved in %.3fs'%(time.time()-time0))
         nbands=len(eigList[0])
         plt.figure()
         for ibands in range(nbands):
             plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
         plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
+        plt.xlim(0,ikpt)
+        plt.ylim(fermi-3,fermi+2)
+        plt.xticks([])
+        plt.xlabel('K')
+        plt.ylabel('Energy')
+        if saveFig:
+            assert mainDir!=None, 'We need path or directory to save the figure'
+            plt.savefig(mainDir+'Bands.png')
+
+            with open(mainDir+'tbBands.txt','w') as fout:
+                fout.write('#k energy\n')
+                for ibands in range(nbands):
+                    for ikpt in range(nkpts):
+                        fout.write('%d %.6f\n'%(ikpt,eigList[ikpt,ibands]))
+                    fout.write('\n')
+        plt.show()
+        plt.close()
+
+    def calcFullBands_CDLL(self,hr,fermi=0,optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1):
+        # prepare input parameters for cdll
+        kaxis=[]
+        time0=time.time()
+        if mainDir!=None: # read in kpath
+            #kmesh=[]
+            with open(mainDir+'KPOINTS','r') as fin:
+                data=fin.read().split('\n')
+                nkpts=int(data[1])
+                c_kmesh=(c_double*(nkpts*3))()
+                for iline in range(3,3+nkpts):
+                    ikpt=iline-3
+                    kaxis.append(ikpt)
+                    k1,k2,k3,weight=data[iline].split()
+                    #kmesh.append(np.array([float(k1),float(k2),float(k3)]))
+                    c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(float(k1)),c_double(float(k2)),c_double(float(k3))
+        else:
+            kmesh=pR.autoGenerateKpath2D(onlyGetKPTList=True)
+            nkpts=len(kmesh)
+            c_kmesh=(c_double*(nkpts*3))()
+            for ikpt, kpt in enumerate(kmesh):
+                kaxis.append(ikpt)
+                k1,k2,k3=kpt
+                c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcFullBands.restype=py_object
+        eigList=hamDLL.calcFullBands(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads))
+
+        eigList=np.array(eigList)
+        print('Spectra solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        nbands=eigList.shape[1]
+        plt.figure()
+        for ibands in range(nbands):
+            plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
+        plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
+        if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
         plt.xlim(0,ikpt)
         plt.ylim(fermi-3,fermi+2)
         plt.xticks([])
@@ -1239,7 +1338,7 @@ class Green:
         return J
     
     # func series to calc J with CDLL
-    def getCTypeKMeshAndHk(self,hr,Lx=10,Ly=10,Lz=1,GammaMode=1):
+    def getCTypeKMeshAndHk(self,hr,Lx=10,Ly=10,Lz=1,GammaMode=1,nthreads=1):
         time0=time.time()
         print('generating kmesh, Hk...')
         hamDLL=CDLL("./ham.dll")
@@ -1288,10 +1387,11 @@ class Green:
         c_Hk_address=hamDLL.getHk(c_int(nkpts),c_longlong(c_kmesh_address),
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads)
                         #c_int(ikpt_print)
                         )
         #HkArray=np.array(HkList,dtype=np.complex128)
-        print('Hk constructed in %.3fs'%(time.time()-time0))
+        print('Hk constructed in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
         print('in python, memory address of Hk: %s'%hex(c_Hk_address))
         #exit()
         return nkpts, c_kmesh_address, c_Hk_address
