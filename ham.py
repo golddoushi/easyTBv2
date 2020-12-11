@@ -26,6 +26,9 @@ class Ham:
         return
 
     def buildHkFromHr(self,Hr,kpt,getHk=False):
+        self.sourceList=[]
+        self.targetList=[]
+        self.tList=[]
         for bondDigital in Hr.bondList:
             self.addHopping(bondDigital.source,bondDigital.target,bondDigital.t,overLat=bondDigital.overlat,kpt=kpt)
         if getHk:
