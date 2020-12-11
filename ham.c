@@ -229,13 +229,16 @@ PyObject * calcFullBands(int nkpt, double kmesh[nkpt][3],
                        int overLat[nhoppings][3], 
                        double hopping_real[nhoppings],
                        double hopping_imag[nhoppings],
-                       int nthreads){
+                       int _nthreads){
 
     PyObject * Spectra=PyTuple_New(nkpt);
+    //int nthreads;
+    //nthreads=_nthreads;
+    //if(nkpt<_nthreads*10)nthreads=1;
     // calculate matrix elements
-    #pragma omp parallel num_threads(nthreads)
+    //#pragma omp parallel num_threads(nthreads)
     {
-        #pragma omp for
+        //#pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             int kBaseIndex=ikpt*norbs*norbs;
             lapack_complex_double hk[norbs][norbs]; // init Hk

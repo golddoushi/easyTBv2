@@ -32,6 +32,49 @@ class Ham:
             return coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=complex).toarray()
         return
 
+    def build_Hk_And_DHk_FromHr(self,Hr,kpt):
+        sourceList=[];targetList=[]
+        t_Hk_List=[];t_DHk_Dk1_List=[];t_DHk_Dk2_List=[];t_DHk_Dk3_List=[]
+        for bondDigital in Hr.bondList:
+            sourceList.append(bondDigital.source)
+            targetList.append(bondDigital.target)
+            t_Hk=bondDigital.t*np.exp(-2j*np.pi*np.dot(bondDigital.overlat,kpt))
+            t_DHk_Dk1=t_Hk*(-2j*np.pi)*bondDigital.overlat[0]
+            t_DHk_Dk2=t_Hk*(-2j*np.pi)*bondDigital.overlat[1]
+            t_DHk_Dk3=t_Hk*(-2j*np.pi)*bondDigital.overlat[2]
+            t_Hk_List.append(t_Hk)
+            t_DHk_Dk1_List.append(t_DHk_Dk1)
+            t_DHk_Dk2_List.append(t_DHk_Dk2)
+            t_DHk_Dk3_List.append(t_DHk_Dk3)
+        
+        Hk=coo_matrix((t_Hk_List,(sourceList,targetList)),dtype=complex).toarray()
+        DHk_Dk1=coo_matrix((t_DHk_Dk1_List,(sourceList,targetList)),dtype=complex).toarray()
+        DHk_Dk2=coo_matrix((t_DHk_Dk2_List,(sourceList,targetList)),dtype=complex).toarray()
+        DHk_Dk3=coo_matrix((t_DHk_Dk3_List,(sourceList,targetList)),dtype=complex).toarray()
+        return Hk,DHk_Dk1,DHk_Dk2,DHk_Dk3
+    
+    def calcBerryCurvature(self,Hk,DHk_D1,DHk_D2,occupiedBandIndex=[0],unoccupiedBandIndex=[1]):
+        eig, vec=np.linalg.eigh(Hk,'U')
+        #print(eig)
+        sortIndex=auxiliary.quicksort(eig)
+        curvature=0
+        #print(Hk)
+        #print(DHk_D1)
+        #print(DHk_D2)
+        #print(eig,sortIndex)
+        # refer to notes Berry curvature method for more details
+        for iocc in occupiedBandIndex:
+            state_n=vec[:,sortIndex[iocc]]
+            energy_n=eig[iocc]
+            for iunocc in unoccupiedBandIndex:
+                state_m=vec[:,sortIndex[iunocc]]
+                energy_m=eig[iunocc]
+                d_energy=energy_m-energy_n
+                assert abs(d_energy)>1e-5, "cannot compute Berry curvature at degenerated point"
+                    
+                curvature+=-2*(state_n.dot(DHk_D1).dot(state_m)*state_m.dot(DHk_D2).dot(state_n)).imag/(d_energy*d_energy)
+        return curvature
+
     def buildSpinPolarizedHk(self,Hr_up,Hr_dn,kpt,getHk=False):
         assert Hr_up.norb==Hr_dn.norb, 'the file of spin up and down should involve the same quantity of orbitals'
         norb=Hr_up.norb
@@ -351,7 +394,7 @@ class Green:
                         c_int(nthreads))
 
         eigList=np.array(eigList)
-        print('Spectra solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
         nbands=eigList.shape[1]
         plt.figure()
         for ibands in range(nbands):
