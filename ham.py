@@ -422,6 +422,82 @@ class Green:
         plt.show()
         plt.close()
 
+    def calcFullBandsAndVecs_CDLL(self,hr,fermi=0,optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1):
+        # prepare input parameters for cdll
+        kaxis=[]
+        time0=time.time()
+        if mainDir!=None: # read in kpath
+            #kmesh=[]
+            with open(mainDir+'KPOINTS','r') as fin:
+                data=fin.read().split('\n')
+                nkpts=int(data[1])
+                c_kmesh=(c_double*(nkpts*3))()
+                for iline in range(3,3+nkpts):
+                    ikpt=iline-3
+                    kaxis.append(ikpt)
+                    k1,k2,k3,weight=data[iline].split()
+                    #kmesh.append(np.array([float(k1),float(k2),float(k3)]))
+                    c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(float(k1)),c_double(float(k2)),c_double(float(k3))
+        else:
+            kmesh=pR.autoGenerateKpath2D(onlyGetKPTList=True)
+            nkpts=len(kmesh)
+            c_kmesh=(c_double*(nkpts*3))()
+            for ikpt, kpt in enumerate(kmesh):
+                kaxis.append(ikpt)
+                k1,k2,k3=kpt
+                c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcFullBandsAndVecs.restype=py_object
+        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads))
+        #print(result.shape)
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i=result
+        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
+        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
+        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
+
+        print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
+        nbands=eigList.shape[1]
+        plt.figure()
+        for ibands in range(nbands):
+            plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
+        plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
+        if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
+        plt.xlim(0,ikpt)
+        plt.ylim(fermi-3,fermi+2)
+        plt.xticks([])
+        plt.xlabel('K')
+        plt.ylabel('Energy')
+        if saveFig:
+            assert mainDir!=None, 'We need path or directory to save the figure'
+            plt.savefig(mainDir+'Bands.png')
+
+            with open(mainDir+'tbBands.txt','w') as fout:
+                fout.write('#k energy\n')
+                for ibands in range(nbands):
+                    for ikpt in range(nkpts):
+                        fout.write('%d %.6f\n'%(ikpt,eigList[ikpt,ibands]))
+                    fout.write('\n')
+        plt.show()
+        plt.close()
+
     def testG(self,hr,orbList=[0],fermi=0,eta=0.1):
         norb=hr.norb
         HkList=[]

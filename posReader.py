@@ -1049,8 +1049,8 @@ def autoGenerateKpath2D(rpath=None,onlyGetKPTList=False):
     print('')
     print('auto-generate kpath for bandstructure of 2D system')
     print('gamma:',G)
-    print('edge :',K)
-    print('bond :',M)
+    print('edge:',K)
+    print('bond:',M)
     kpath=genKPath([G,K,M,G],[param.KINTERVAL,param.KINTERVAL,param.KINTERVAL])
     if onlyGetKPTList:
         return [np.array([kpt[0],kpt[1],0]) for kpt in kpath]
