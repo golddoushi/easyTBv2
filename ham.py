@@ -422,30 +422,16 @@ class Green:
         plt.show()
         plt.close()
 
-    def calcFullBandsAndVecs_CDLL(self,hr,fermi=0,optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1):
-        # prepare input parameters for cdll
-        kaxis=[]
+    def calcOpticalHoppingTensor_CDLL(self,hr,fermi=0,nk=100,ibandv=0,ibandc=1,nthreads=1):
         time0=time.time()
-        if mainDir!=None: # read in kpath
-            #kmesh=[]
-            with open(mainDir+'KPOINTS','r') as fin:
-                data=fin.read().split('\n')
-                nkpts=int(data[1])
-                c_kmesh=(c_double*(nkpts*3))()
-                for iline in range(3,3+nkpts):
-                    ikpt=iline-3
-                    kaxis.append(ikpt)
-                    k1,k2,k3,weight=data[iline].split()
-                    #kmesh.append(np.array([float(k1),float(k2),float(k3)]))
-                    c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(float(k1)),c_double(float(k2)),c_double(float(k3))
-        else:
-            kmesh=pR.autoGenerateKpath2D(onlyGetKPTList=True)
-            nkpts=len(kmesh)
-            c_kmesh=(c_double*(nkpts*3))()
-            for ikpt, kpt in enumerate(kmesh):
-                kaxis.append(ikpt)
-                k1,k2,k3=kpt
-                c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        # prepare input parameters for cdll
+        kaxis=np.linspace(0,1,nk,endpoint=False)
+        kmesh=np.array([[k1,k2,0] for k2 in kaxis for k1 in kaxis])
+        nkpts=len(kmesh)
+        c_kmesh=(c_double*(nkpts*3))()
+        for ikpt, kpt in enumerate(kmesh):
+            k1,k2,k3=kpt
+            c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
         
         nhoppings=len(hr.bondList)
         c_sourceID=(c_int*nhoppings)()
@@ -468,35 +454,41 @@ class Green:
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(nthreads))
         #print(result.shape)
-        _eigList,_vec_r,_vec_i,Hk_r,Hk_i=result
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
         eigList=np.array(_eigList).reshape(nkpts,hr.norb)
         vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
         Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk1=(np.array(Hk_dk1_r)+1j*np.array(Hk_dk1_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk2=(np.array(Hk_dk2_r)+1j*np.array(Hk_dk2_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk3=(np.array(Hk_dk3_r)+1j*np.array(Hk_dk3_i)).reshape(nkpts,hr.norb,hr.norb)
 
         print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
-        nbands=eigList.shape[1]
-        plt.figure()
-        for ibands in range(nbands):
-            plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
-        plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
-        if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
-        plt.xlim(0,ikpt)
-        plt.ylim(fermi-3,fermi+2)
-        plt.xticks([])
-        plt.xlabel('K')
-        plt.ylabel('Energy')
-        if saveFig:
-            assert mainDir!=None, 'We need path or directory to save the figure'
-            plt.savefig(mainDir+'Bands.png')
-
-            with open(mainDir+'tbBands.txt','w') as fout:
-                fout.write('#k energy\n')
-                for ibands in range(nbands):
-                    for ikpt in range(nkpts):
-                        fout.write('%d %.6f\n'%(ikpt,eigList[ikpt,ibands]))
-                    fout.write('\n')
-        plt.show()
-        plt.close()
+        
+        transFrame=pR.lat/np.pi/2
+        time0=time.time()
+        m,n=ibandv,ibandc
+        with open('./opticalOverlap.txt','w') as fout:
+            for ikpt, kpt in enumerate(kmesh):
+                Em, En=eigList[ikpt][m], eigList[ikpt][n]
+                vmn_k1=vec[ikpt][:,m].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,n])
+                vmn_k2=vec[ikpt][:,m].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,n])
+                vmn_k3=vec[ikpt][:,m].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,n])
+                vmn_x,vmn_y,vmn_z=np.dot(np.array([vmn_k1,vmn_k2,vmn_k3]),transFrame)
+                vmm_k1=vec[ikpt][:,m].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,m])
+                vmm_k2=vec[ikpt][:,m].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,m])
+                vmm_k3=vec[ikpt][:,m].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,m])
+                vmm_x,vmm_y,vmm_z=np.dot(np.array([vmm_k1,vmm_k2,vmm_k3]),transFrame)
+                vnn_k1=vec[ikpt][:,n].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,n])
+                vnn_k2=vec[ikpt][:,n].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,n])
+                vnn_k3=vec[ikpt][:,n].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,n])
+                vnn_x,vnn_y,vnn_z=np.dot(np.array([vnn_k1,vnn_k2,vnn_k3]),transFrame)
+                fout.write("%.3f %.3f %.3f %.6f %.3f %.6f %.3f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n"%(
+                    *kpt,Em,1.,En,0.,
+                    vmn_x.real,vmn_x.imag,vmn_y.real,vmn_y.imag,vmn_z.real,vmn_z.imag,
+                    vmm_x.real,vmm_x.imag,vmm_y.real,vmm_y.imag,vmm_z.real,vmm_z.imag,
+                    vnn_x.real,vnn_x.imag,vnn_y.real,vnn_y.imag,vnn_z.real,vnn_z.imag,))
+        #vmn=np.array(_vmn)
+        print('overlap solved in %.3fs'%(time.time()-time0))
 
     def testG(self,hr,orbList=[0],fermi=0,eta=0.1):
         norb=hr.norb
