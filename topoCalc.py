@@ -7,7 +7,6 @@ import auxiliary as aux
 paramReader.readGlobalConst()
 import matplotlib.pyplot as plt
 
-
 def calcWannierBands(mainDir,ikaxis_route=0,ikaxis_proj=1,nk_route=10,nk_proj=10,ioccupied_bands=[0]):
     def calcOverlap(eig_k1_list,eig_k2_list):
         # calc eigenstate overlapping between k1 and k2

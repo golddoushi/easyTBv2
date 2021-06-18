@@ -9,4 +9,4 @@ hr=reader.Hr()
 hr.readSingleTBFile('./mcalc/FeCl2/wannier90.dn_tb.dat')
 
 gr=Green()
-gr.calcOpticalHoppingTensor_CDLL(hr,fermi=-2.5,nk=100,ibandv=6,ibandc=7)
+gr.calcOpticalHoppingTensor_CDLL(hr,mainDir='./mcalc/FeCl2/',fermi=-2.5,nk=100,ibandv=6,ibandc=7)

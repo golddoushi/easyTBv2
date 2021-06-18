@@ -422,7 +422,7 @@ class Green:
         plt.show()
         plt.close()
 
-    def calcOpticalHoppingTensor_CDLL(self,hr,fermi=0,nk=100,ibandv=0,ibandc=1,nthreads=1):
+    def calcOpticalHoppingTensor_CDLL(self,hr,mainDir=None,fermi=0,nk=100,ibandv=0,ibandc=1,nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kaxis=np.linspace(0,1,nk,endpoint=False)
@@ -467,7 +467,8 @@ class Green:
         transFrame=pR.lat/np.pi/2
         time0=time.time()
         m,n=ibandv,ibandc
-        with open('./opticalOverlap.txt','w') as fout:
+        filePath=mainDir+'opticalOverlap.txt' if mainDir else './opticalOverlap.txt'
+        with open(filePath,'w') as fout:
             for ikpt, kpt in enumerate(kmesh):
                 Em, En=eigList[ikpt][m], eigList[ikpt][n]
                 vmn_k1=vec[ikpt][:,m].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,n])
@@ -488,7 +489,116 @@ class Green:
                     vmm_x.real,vmm_x.imag,vmm_y.real,vmm_y.imag,vmm_z.real,vmm_z.imag,
                     vnn_x.real,vnn_x.imag,vnn_y.real,vnn_y.imag,vnn_z.real,vnn_z.imag,))
         #vmn=np.array(_vmn)
-        print('overlap solved in %.3fs'%(time.time()-time0))
+        print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
+
+    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],nthreads=1):
+        time0=time.time()
+        # prepare input parameters for cdll
+        kxaxis=np.linspace(0,1,kmesh[0],endpoint=False)
+        kyaxis=np.linspace(0,1,kmesh[1],endpoint=False)
+        kzaxis=np.linspace(0,1,kmesh[2],endpoint=False)
+        kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
+        nkpts=len(kmesh)
+        c_kmesh=(c_double*(nkpts*3))()
+        for ikpt, kpt in enumerate(kmesh):
+            k1,k2,k3=kpt
+            c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcFullBandsAndVecs.restype=py_object
+        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads))
+        #print(result.shape)
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
+        
+        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
+        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
+        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk1=(np.array(Hk_dk1_r)+1j*np.array(Hk_dk1_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk2=(np.array(Hk_dk2_r)+1j*np.array(Hk_dk2_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk3=(np.array(Hk_dk3_r)+1j*np.array(Hk_dk3_i)).reshape(nkpts,hr.norb,hr.norb)
+
+        bandmin, bandmax=np.min(eigList), np.max(eigList)
+        print('Spectra solved in %.3fs (serial mode), band range: %.4f~%.4f'%(time.time()-time0,bandmin,bandmax))
+        
+        # construct Pauli matrix
+        sigma_x, sigma_y, sigma_z= np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex)
+        for iorb in range(hr.norb//2):
+            sigma_x[iorb,iorb+hr.norb//2],sigma_x[iorb+hr.norb//2,iorb]=1, 1
+            sigma_y[iorb,iorb+hr.norb//2],sigma_y[iorb+hr.norb//2,iorb]=-1j, 1j
+            sigma_z[iorb,iorb],sigma_z[iorb+hr.norb//2,iorb+hr.norb//2]=1, -1
+
+        # transform DHk_dk to xyz coordinates
+        transFrame=pR.lat
+        a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
+        V=np.linalg.det(transFrame[:2,:2])
+        #print(transFrame[:2,:2])
+        #print(V)
+        #DHk_dkx,DHk_dky,DHk_dkz=np.dot(np.array([DHk_dk1,DHk_dk2,DHk_dk3]),transFrame)
+        DHk_dkx=DHk_dk1#DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
+        DHk_dky=DHk_dk2#DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
+        #DHk_dkz=DHk_dk1*a1[2]+DHk_dk2*a2[2]+DHk_dk3*a3[2]
+
+        sigma_i=sigma_z
+        plt.figure()
+        for ifermi, fermi in enumerate(np.linspace(paramReader.FERMI-paramReader.DFERMI,
+                            paramReader.FERMI+paramReader.DFERMI,
+                            paramReader.NFERMI)): # loop over fermi energy
+            #print(ifermi)
+            c_xyz=0
+            for ikpt in range(nkpts): # loop over kpoints
+                for band_n in range(hr.norb): # loop over side band n
+                    En=eigList[ikpt,band_n]
+                    if En>fermi: continue
+                    vn=vec[ikpt][:,band_n]
+                    for band_m in range(hr.norb): # loop over intermedial band m
+                        Em=eigList[ikpt,band_m]
+                        if abs(Em-En)<1e-5: continue
+                        vm=vec[ikpt][:,band_m]
+                        vnm_x_z=vn.conjugate().dot(sigma_i).dot(DHk_dkx[ikpt]).dot(vm)+vn.conjugate().dot(DHk_dkx[ikpt]).dot(sigma_z).dot(vm)
+                        vmn_y=vm.conjugate().dot(DHk_dky[ikpt]).dot(vn)
+                        c_xyz+=((vnm_x_z*vmn_y).imag/(Em-En)**2)/2
+            c_xyz/=(nkpts*np.pi*2*V)
+            plt.scatter(fermi,c_xyz,c='black')
+        plt.xlabel(r'$E-E_f\ (eV)$')
+        plt.ylabel(r'$e^2/\hbar$')
+        plt.show()
+
+        return
+        '''
+        time0=time.time()
+        m,n=0,1
+        filePath=mainDir+'opticalOverlap.txt' if mainDir else './opticalOverlap.txt'
+        with open(filePath,'w') as fout:
+            for ikpt, kpt in enumerate(kmesh):
+                Em, En=eigList[ikpt][m], eigList[ikpt][n]
+                vmn_k1=vec[ikpt][:,m].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,n])
+                vmn_k2=vec[ikpt][:,m].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,n])
+                vmn_k3=vec[ikpt][:,m].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,n])
+                vmn_x,vmn_y,vmn_z=np.dot(np.array([vmn_k1,vmn_k2,vmn_k3]),transFrame)
+
+                fout.write("%.3f %.3f %.3f %.6f %.3f %.6f %.3f %.6f %.6f %.6f %.6f %.6f %.6f\n"%(
+                    *kpt,Em,1.,En,0.,
+                    vmn_x.real,vmn_x.imag,vmn_y.real,vmn_y.imag,vmn_z.real,vmn_z.imag,
+                    ))
+        #vmn=np.array(_vmn)
+        print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))'''
 
     def testG(self,hr,orbList=[0],fermi=0,eta=0.1):
         norb=hr.norb

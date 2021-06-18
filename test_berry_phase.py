@@ -7,7 +7,7 @@ paramReader.readGlobalConst()
 import matplotlib.pyplot as plt
 import topoCalc
 
-topoCalc.calcWannierBands('./mcalc/BN/',ikaxis_route=0,ikaxis_proj=1,nk_route=20,nk_proj=20,ioccupied_bands=[0,1])
+topoCalc.calcWannierBands('./mcalc/BN/',ikaxis_route=0,ikaxis_proj=1,nk_route=20,nk_proj=20,ioccupied_bands=[2,3])
 
 
 

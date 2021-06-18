@@ -19,6 +19,7 @@ global DOSCALC,PDOS,LBOUND,DOSKFACTOR,NBANDFACTOR,NEDOS,PERTURBANI
 global PBSMODE,AMIX0,AMIX_step,nAMIX,CHECKINTEMAG,SPINFOLD,MAGTYPE
 global ANIPOLAR,NTHETA,LOCALFRAMERANGE,EXHCALC,RWIGSOVERLAP,ZAXIS,LAMBDA0,DLAMBDA
 global HFSCREEN,RLXONLY,PHONON,PHONON_SC,MINFREQUENCY,IONRLX,FIXTOTMAG
+global FERMI,DFERMI,NFERMI
 
 global color_pool
 color_pool=['red','green','blue','yellow','orange','violet']
@@ -38,7 +39,7 @@ def readGlobalConst():
     global initMagEnhance,TOTMAGTOL,PBSMODE,AMIX0,AMIX_step,nAMIX,CHECKINTEMAG
     global ANIPOLAR,NTHETA,LOCALFRAMERANGE,BONDSEARCHRANGE,VERBOSE,MAGTYPE,EXHCALC
     global RWIGSOVERLAP,ZAXIS,LAMBDA0,DLAMBDA,HFSCREEN,RLXONLY,PHONON,PHONON_SC,MINFREQUENCY
-    global IONRLX,FIXTOTMAG,GAMMAMODE
+    global IONRLX,FIXTOTMAG,GAMMAMODE,FERMI,DFERMI,NFERMI
 
     # read global constants
     try:
@@ -175,6 +176,11 @@ def readGlobalConst():
     SPINFOLD=1
 
     EV2K=11588.75
+
+    FERMI=0
+    DFERMI=2
+    NFERMI=50
+
     for line in gConst:
         datapack=line.split('=')
         if len(datapack)<2:
@@ -433,6 +439,12 @@ def readGlobalConst():
             MAXMCSTEP=int(value)
         if(tag=='SPINFOLD'):
             SPINFOLD=int(value)
+        if(tag=='FERMI'):
+            FERMI=float(value)
+        if(tag=='DFERMI'):
+            DFERMI=float(value)
+        if(tag=='NFERMI'):
+            NFERMI=int(value)
         if(tag=='EV2K'):
             EV2K=float(value)
 
