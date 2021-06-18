@@ -464,34 +464,47 @@ class Green:
 
         print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
         
-        transFrame=pR.lat/np.pi/2
+        # transform DHk_dk to xyz coordinates
+        print("lattice:")
+        print("a1=(%9.6f %9.6f %9.6f)"%(*pR.lat[0],))
+        print("a2=(%9.6f %9.6f %9.6f)"%(*pR.lat[1],))
+        print("a3=(%9.6f %9.6f %9.6f)"%(*pR.lat[2],))
+
+        transFrame=pR.lat # trans matrix = Lattice matrix .dot. [k1_cart, k2_cart, k3_cart]
+                          # k1_cart is the column vector of first direction of kplane in cart. coor., etc.
+        a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
+        DHk_dkx=DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
+        DHk_dky=DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
+        DHk_dkz=DHk_dk1*a1[2]+DHk_dk2*a2[2]+DHk_dk3*a3[2]
+
         time0=time.time()
         m,n=ibandv,ibandc
         filePath=mainDir+'opticalOverlap.txt' if mainDir else './opticalOverlap.txt'
         with open(filePath,'w') as fout:
             for ikpt, kpt in enumerate(kmesh):
                 Em, En=eigList[ikpt][m], eigList[ikpt][n]
-                vmn_k1=vec[ikpt][:,m].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,n])
-                vmn_k2=vec[ikpt][:,m].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,n])
-                vmn_k3=vec[ikpt][:,m].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,n])
-                vmn_x,vmn_y,vmn_z=np.dot(np.array([vmn_k1,vmn_k2,vmn_k3]),transFrame)
-                vmm_k1=vec[ikpt][:,m].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,m])
-                vmm_k2=vec[ikpt][:,m].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,m])
-                vmm_k3=vec[ikpt][:,m].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,m])
-                vmm_x,vmm_y,vmm_z=np.dot(np.array([vmm_k1,vmm_k2,vmm_k3]),transFrame)
-                vnn_k1=vec[ikpt][:,n].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,n])
-                vnn_k2=vec[ikpt][:,n].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,n])
-                vnn_k3=vec[ikpt][:,n].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,n])
-                vnn_x,vnn_y,vnn_z=np.dot(np.array([vnn_k1,vnn_k2,vnn_k3]),transFrame)
+
+                vmn_x=vec[ikpt][:,m].conjugate().dot(DHk_dkx[ikpt]).dot(vec[ikpt][:,n])
+                vmn_y=vec[ikpt][:,m].conjugate().dot(DHk_dky[ikpt]).dot(vec[ikpt][:,n])
+                vmn_z=vec[ikpt][:,m].conjugate().dot(DHk_dkz[ikpt]).dot(vec[ikpt][:,n])
+
+                vmm_x=vec[ikpt][:,m].conjugate().dot(DHk_dkx[ikpt]).dot(vec[ikpt][:,m])
+                vmm_y=vec[ikpt][:,m].conjugate().dot(DHk_dky[ikpt]).dot(vec[ikpt][:,m])
+                vmm_z=vec[ikpt][:,m].conjugate().dot(DHk_dkz[ikpt]).dot(vec[ikpt][:,m])
+
+                vnn_x=vec[ikpt][:,n].conjugate().dot(DHk_dkx[ikpt]).dot(vec[ikpt][:,n])
+                vnn_y=vec[ikpt][:,n].conjugate().dot(DHk_dky[ikpt]).dot(vec[ikpt][:,n])
+                vnn_z=vec[ikpt][:,n].conjugate().dot(DHk_dkz[ikpt]).dot(vec[ikpt][:,n])
+
                 fout.write("%.3f %.3f %.3f %.6f %.3f %.6f %.3f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n"%(
                     *kpt,Em,1.,En,0.,
                     vmn_x.real,vmn_x.imag,vmn_y.real,vmn_y.imag,vmn_z.real,vmn_z.imag,
                     vmm_x.real,vmm_x.imag,vmm_y.real,vmm_y.imag,vmm_z.real,vmm_z.imag,
                     vnn_x.real,vnn_x.imag,vnn_y.real,vnn_y.imag,vnn_z.real,vnn_z.imag,))
-        #vmn=np.array(_vmn)
+                
         print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
 
-    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],nthreads=1):
+    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kmesh[0],endpoint=False)
@@ -545,17 +558,48 @@ class Green:
             sigma_z[iorb,iorb],sigma_z[iorb+hr.norb//2,iorb+hr.norb//2]=1, -1
 
         # transform DHk_dk to xyz coordinates
-        transFrame=pR.lat
+        print("lattice:")
+        print("a1=(%9.6f %9.6f %9.6f)"%(*pR.lat[0],))
+        print("a2=(%9.6f %9.6f %9.6f)"%(*pR.lat[1],))
+        print("a3=(%9.6f %9.6f %9.6f)"%(*pR.lat[2],))
+
+        kvec1=np.array(kplane[0]).dot(pR.lat)
+        kvec2=np.array(kplane[1]).dot(pR.lat)
+        kvec1/=np.sqrt(np.dot(kvec1,kvec1))
+        kvec2/=np.sqrt(np.dot(kvec2,kvec2))
+        if kvec1.dot(kvec2) > 1e-5: print("Warning: kplane was not expanded by orthorgonal vectors")
+        kvec3=np.zeros(3)
+        kvec3[0]=kvec1[1]*kvec2[2]-kvec1[2]*kvec2[1]
+        kvec3[1]=kvec1[2]*kvec2[0]-kvec1[0]*kvec2[2]
+        kvec3[2]=kvec1[0]*kvec2[1]-kvec1[1]*kvec2[0]
+        kvec3_len=np.sqrt(np.dot(kvec3,kvec3))
+        assert kvec3_len>1e-5, "Error, kplane was expanded by parallel vectros"
+        kvec3/=kvec3_len
+
+        print("kplane in cartesian coordinates:")
+        print("a1=(%9.6f %9.6f %9.6f)"%(*kvec1,))
+        print("a2=(%9.6f %9.6f %9.6f)"%(*kvec2,))
+        print("a3=(%9.6f %9.6f %9.6f)"%(*kvec3,))
+
+        transFrame=np.dot(pR.lat,np.array([kvec1,kvec2,kvec3]).transpose())
+
+        #reciFrame=np.linalg.inv(pR.lat)
+        #print("reciprocal lattice:")
+        #print("k1=(%9.6f %9.6f %9.6f)"%(*reciFrame[:,0],))
+        #print("k2=(%9.6f %9.6f %9.6f)"%(*reciFrame[:,1],))
+        #print("k3=(%9.6f %9.6f %9.6f)"%(*reciFrame[:,2],))
+        
         a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
-        V=np.linalg.det(transFrame[:2,:2])
+        S=np.linalg.det(transFrame[:2,:2])
         #print(transFrame[:2,:2])
         #print(V)
         #DHk_dkx,DHk_dky,DHk_dkz=np.dot(np.array([DHk_dk1,DHk_dk2,DHk_dk3]),transFrame)
-        DHk_dkx=DHk_dk1#DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
-        DHk_dky=DHk_dk2#DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
+        DHk_dkx=DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
+        DHk_dky=DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
         #DHk_dkz=DHk_dk1*a1[2]+DHk_dk2*a2[2]+DHk_dk3*a3[2]
 
-        sigma_i=sigma_z
+        kvecn=kvec3
+        sigma_i=kvecn[0]*sigma_x+kvecn[1]*sigma_y+kvecn[2]*sigma_z
         plt.figure()
         for ifermi, fermi in enumerate(np.linspace(paramReader.FERMI-paramReader.DFERMI,
                             paramReader.FERMI+paramReader.DFERMI,
@@ -563,6 +607,7 @@ class Green:
             #print(ifermi)
             c_xyz=0
             for ikpt in range(nkpts): # loop over kpoints
+                DHk_dkx_commute_sigma=sigma_i.dot(DHk_dkx[ikpt])+DHk_dkx[ikpt].dot(sigma_i)
                 for band_n in range(hr.norb): # loop over side band n
                     En=eigList[ikpt,band_n]
                     if En>fermi: continue
@@ -571,10 +616,10 @@ class Green:
                         Em=eigList[ikpt,band_m]
                         if abs(Em-En)<1e-5: continue
                         vm=vec[ikpt][:,band_m]
-                        vnm_x_z=vn.conjugate().dot(sigma_i).dot(DHk_dkx[ikpt]).dot(vm)+vn.conjugate().dot(DHk_dkx[ikpt]).dot(sigma_z).dot(vm)
+                        vnm_x_z=(vn.conjugate()).dot(DHk_dkx_commute_sigma).dot(vm)
                         vmn_y=vm.conjugate().dot(DHk_dky[ikpt]).dot(vn)
                         c_xyz+=((vnm_x_z*vmn_y).imag/(Em-En)**2)/2
-            c_xyz/=(nkpts*np.pi*2*V)
+            c_xyz/=(nkpts*2*np.pi*S)
             plt.scatter(fermi,c_xyz,c='black')
         plt.xlabel(r'$E-E_f\ (eV)$')
         plt.ylabel(r'$e^2/\hbar$')
