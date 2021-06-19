@@ -559,9 +559,9 @@ class Green:
 
         # transform DHk_dk to xyz coordinates
         print("lattice:")
-        print("a1=(%9.6f %9.6f %9.6f)"%(*pR.lat[0],))
-        print("a2=(%9.6f %9.6f %9.6f)"%(*pR.lat[1],))
-        print("a3=(%9.6f %9.6f %9.6f)"%(*pR.lat[2],))
+        print("a1=(%11.6f %11.6f %11.6f)"%(*pR.lat[0],))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*pR.lat[1],))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*pR.lat[2],))
 
         kvec1=np.array(kplane[0]).dot(pR.lat)
         kvec2=np.array(kplane[1]).dot(pR.lat)
@@ -577,9 +577,9 @@ class Green:
         kvec3/=kvec3_len
 
         print("kplane in cartesian coordinates:")
-        print("a1=(%9.6f %9.6f %9.6f)"%(*kvec1,))
-        print("a2=(%9.6f %9.6f %9.6f)"%(*kvec2,))
-        print("a3=(%9.6f %9.6f %9.6f)"%(*kvec3,))
+        print("a1=(%11.6f %11.6f %11.6f)"%(*kvec1,))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*kvec2,))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*kvec3,))
 
         transFrame=np.dot(pR.lat,np.array([kvec1,kvec2,kvec3]).transpose())
 
@@ -617,10 +617,11 @@ class Green:
                         if abs(Em-En)<1e-5: continue
                         vm=vec[ikpt][:,band_m]
                         vnm_x_z=(vn.conjugate()).dot(DHk_dkx_commute_sigma).dot(vm)
-                        vmn_y=vm.conjugate().dot(DHk_dky[ikpt]).dot(vn)
+                        vmn_y=(vm.conjugate()).dot(DHk_dky[ikpt]).dot(vn)
                         c_xyz+=((vnm_x_z*vmn_y).imag/(Em-En)**2)/2
             c_xyz/=(nkpts*2*np.pi*S)
             plt.scatter(fermi,c_xyz,c='black')
+        plt.plot([paramReader.FERMI-paramReader.DFERMI,paramReader.FERMI+paramReader.DFERMI],[0,0],'--',linewidth=3)
         plt.xlabel(r'$E-E_f\ (eV)$')
         plt.ylabel(r'$e^2/\hbar$')
         plt.show()
