@@ -223,42 +223,6 @@ PyObject * calcFullDOS(long long Hk_address, int nkpt, int norb, int NEDOS, doub
     return Data;
 }
 
-PyObject * calcFullBands(int nkpt, double kmesh[nkpt][3],
-                       int norbs, int nhoppings,
-                       int sourceID[nhoppings], int targetID[nhoppings], 
-                       int overLat[nhoppings][3], 
-                       double hopping_real[nhoppings],
-                       double hopping_imag[nhoppings],
-                       int _nthreads){
-
-    PyObject * Spectra=PyTuple_New(nkpt);
-    //int nthreads;
-    //nthreads=_nthreads;
-    //if(nkpt<_nthreads*10)nthreads=1;
-    // calculate matrix elements
-    //#pragma omp parallel num_threads(nthreads)
-    {
-        //#pragma omp for
-        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
-            int kBaseIndex=ikpt*norbs*norbs;
-            lapack_complex_double hk[norbs][norbs]; // init Hk
-            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)hk[i][j]=0;
-            double eigs[norbs]; // output eigenvalues of Hk
-            for(int ihopping=0;ihopping<nhoppings;ihopping++){
-                double phase=0;
-                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
-                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-            }
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'N','U',norbs,*hk,norbs,eigs);
-            PyObject * eig_k=PyTuple_New(norbs);
-            for(int iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(eig_k, iorb, PyFloat_FromDouble(eigs[iorb]));
-            PyTuple_SetItem(Spectra, ikpt, eig_k);
-        }
-    }
-    return Spectra;
-}
-
 PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
@@ -266,25 +230,26 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                        double hopping_real[nhoppings],
                        double hopping_imag[nhoppings],
                        int _nthreads){
-
-    PyObject * Spectra=PyTuple_New(nkpt*norbs);
-    PyObject * Hk_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk1_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk1_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk2_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk2_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk3_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk3_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Vector_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Vector_i=PyTuple_New(nkpt*norbs*norbs);
-    //int nthreads;
-    //nthreads=_nthreads;
-    //if(nkpt<_nthreads*10)nthreads=1;
+    double * Spectra_tmp=(double*)malloc(nkpt*norbs*sizeof(double));
+    double * Hk_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dk1_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dk1_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dk2_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dk2_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dk3_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dk3_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Vector_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Vector_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("use %d cores in ham.dll\n",nthreads);
     // calculate matrix elements
-    //#pragma omp parallel num_threads(nthreads)
+    int index;
+    #pragma omp parallel num_threads(nthreads)
     {
-        //#pragma omp for
+        #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //int kBaseIndex=ikpt*norbs*norbs;
             lapack_complex_double hk[norbs][norbs]; // init Hk
@@ -302,29 +267,74 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
             }
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
-                    PyTuple_SetItem(Hk_r, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(creal(hk[iorb][jorb])));
-                    PyTuple_SetItem(Hk_i, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(cimag(hk[iorb][jorb])));
-                    PyTuple_SetItem(Hk_dk1_r, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(creal(Dhk[iorb][jorb][0])));
-                    PyTuple_SetItem(Hk_dk1_i, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][0])));
-                    PyTuple_SetItem(Hk_dk2_r, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(creal(Dhk[iorb][jorb][1])));
-                    PyTuple_SetItem(Hk_dk2_i, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][1])));
-                    PyTuple_SetItem(Hk_dk3_r, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(creal(Dhk[iorb][jorb][2])));
-                    PyTuple_SetItem(Hk_dk3_i, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][2])));
+                    index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    //PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(creal(hk[iorb][jorb])));
+                    //PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(cimag(hk[iorb][jorb])));
+                    //PyTuple_SetItem(Hk_dk1_r, index, PyFloat_FromDouble(creal(Dhk[iorb][jorb][0])));
+                    //PyTuple_SetItem(Hk_dk1_i, index, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][0])));
+                    //PyTuple_SetItem(Hk_dk2_r, index, PyFloat_FromDouble(creal(Dhk[iorb][jorb][1])));
+                    //PyTuple_SetItem(Hk_dk2_i, index, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][1])));
+                    //PyTuple_SetItem(Hk_dk3_r, index, PyFloat_FromDouble(creal(Dhk[iorb][jorb][2])));
+                    //PyTuple_SetItem(Hk_dk3_i, index, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][2])));
                     //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
+                    Hk_r_tmp[index]=creal(hk[iorb][jorb]);
+                    Hk_i_tmp[index]=cimag(hk[iorb][jorb]);
+                    Hk_dk1_r_tmp[index]=creal(Dhk[iorb][jorb][0]);
+                    Hk_dk1_i_tmp[index]=cimag(Dhk[iorb][jorb][0]);
+                    Hk_dk2_r_tmp[index]=creal(Dhk[iorb][jorb][1]);
+                    Hk_dk2_i_tmp[index]=cimag(Dhk[iorb][jorb][1]);
+                    Hk_dk3_r_tmp[index]=creal(Dhk[iorb][jorb][2]);
+                    Hk_dk3_i_tmp[index]=cimag(Dhk[iorb][jorb][2]);
                 }
                 //if(ikpt==0)printf("\n");
             }
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
             //PyObject * eig_k=PyTuple_New(norbs);
-            for(int iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(eigs[iorb]));
+            for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
-                    PyTuple_SetItem(Vector_r, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(creal(hk[iorb][jorb])));
-                    PyTuple_SetItem(Vector_i, ikpt*norbs*norbs+iorb*norbs+jorb, PyFloat_FromDouble(cimag(hk[iorb][jorb])));
+                    index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    //PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(creal(hk[iorb][jorb])));
+                    //PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(cimag(hk[iorb][jorb])));
+                    Vector_r_tmp[index]=creal(hk[iorb][jorb]);
+                    Vector_i_tmp[index]=cimag(hk[iorb][jorb]);
                 }
             }
             //PyTuple_SetItem(Spectra, ikpt, eig_k);
+        }
+    }
+
+    PyObject * Spectra=PyTuple_New(nkpt*norbs);
+    PyObject * Hk_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dk1_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dk1_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dk2_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dk2_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dk3_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dk3_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Vector_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Vector_i=PyTuple_New(nkpt*norbs*norbs);
+
+    for(int ikpt=0;ikpt<nkpt;ikpt++){
+        for(int iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(Spectra_tmp[ikpt*norbs+iorb]));
+        for(int iorb=0;iorb<norbs;iorb++){
+            for(int jorb=0;jorb<norbs;jorb++){
+                index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(Hk_r_tmp[index]));
+                PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(Hk_i_tmp[index]));
+                PyTuple_SetItem(Hk_dk1_r, index, PyFloat_FromDouble(Hk_dk1_r_tmp[index]));
+                PyTuple_SetItem(Hk_dk1_i, index, PyFloat_FromDouble(Hk_dk1_i_tmp[index]));
+                PyTuple_SetItem(Hk_dk2_r, index, PyFloat_FromDouble(Hk_dk2_r_tmp[index]));
+                PyTuple_SetItem(Hk_dk2_i, index, PyFloat_FromDouble(Hk_dk2_i_tmp[index]));
+                PyTuple_SetItem(Hk_dk3_r, index, PyFloat_FromDouble(Hk_dk3_r_tmp[index]));
+                PyTuple_SetItem(Hk_dk3_i, index, PyFloat_FromDouble(Hk_dk3_i_tmp[index]));
+                PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(Vector_r_tmp[index]));
+                PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(Vector_i_tmp[index]));
+                //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
+            }
+            //if(ikpt==0)printf("\n");
         }
     }
     return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i);

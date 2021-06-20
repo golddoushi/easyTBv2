@@ -160,7 +160,258 @@ class Ham:
             coo=coo_matrix((self.tList,(self.sourceList,self.targetList)),dtype=float)
         self.csr=coo.tocsr() if parserMethod else coo.toarray()
 
+class Response:
+    def __init__(self) -> None:
+        pass
 
+    def calcBerryCurvBands_CDLL(self,hr,mainDir=None,fermi=0,saveFig=True,kplane=[[1,0,0],[0,1,0]],nthreads=1):
+        # prepare input parameters for cdll
+        kaxis=[]
+        time0=time.time()
+        if mainDir!=None: # read in kpath
+            #kmesh=[]
+            with open(mainDir+'KPOINTS','r') as fin:
+                data=fin.read().split('\n')
+                nkpts=int(data[1])
+                c_kmesh=(c_double*(nkpts*3))()
+                for iline in range(3,3+nkpts):
+                    ikpt=iline-3
+                    kaxis.append(ikpt)
+                    k1,k2,k3,weight=data[iline].split()
+                    #kmesh.append(np.array([float(k1),float(k2),float(k3)]))
+                    c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(float(k1)),c_double(float(k2)),c_double(float(k3))
+        else:
+            kmesh=pR.autoGenerateKpath2D(onlyGetKPTList=True)
+            nkpts=len(kmesh)
+            c_kmesh=(c_double*(nkpts*3))()
+            for ikpt, kpt in enumerate(kmesh):
+                kaxis.append(ikpt)
+                k1,k2,k3=kpt
+                c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcFullBandsAndVecs.restype=py_object
+        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads))
+        #print(result.shape)
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
+        
+        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
+        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
+        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk1=(np.array(Hk_dk1_r)+1j*np.array(Hk_dk1_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk2=(np.array(Hk_dk2_r)+1j*np.array(Hk_dk2_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk3=(np.array(Hk_dk3_r)+1j*np.array(Hk_dk3_i)).reshape(nkpts,hr.norb,hr.norb)
+
+        bandmin, bandmax=np.min(eigList), np.max(eigList)
+        print('Spectra solved in %.3fs with %d thread(s), band range: %.4f~%.4f'%(time.time()-time0,nthreads,bandmin,bandmax))
+        
+        # construct Pauli matrix
+        sigma_x, sigma_y, sigma_z= np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex)
+        for iorb in range(hr.norb//2):
+            sigma_x[iorb,iorb+hr.norb//2],sigma_x[iorb+hr.norb//2,iorb]=1, 1
+            sigma_y[iorb,iorb+hr.norb//2],sigma_y[iorb+hr.norb//2,iorb]=-1j, 1j
+            sigma_z[iorb,iorb],sigma_z[iorb+hr.norb//2,iorb+hr.norb//2]=1, -1
+
+        # transform DHk_dk to xyz coordinates
+        
+        kvec1=np.array(kplane[0])
+        kvec2=np.array(kplane[1])
+        kvec3=np.zeros(3)
+        kvec3[0]=kvec1[1]*kvec2[2]-kvec1[2]*kvec2[1]
+        kvec3[1]=kvec1[2]*kvec2[0]-kvec1[0]*kvec2[2]
+        kvec3[2]=kvec1[0]*kvec2[1]-kvec1[1]*kvec2[0]
+        kvec3_len=np.sqrt(np.dot(kvec3,kvec3))
+        assert kvec3_len>1e-5, "Error, kplane was expanded by parallel vectros"
+        kvec3/=kvec3_len
+
+        print("kplane in cartesian coordinates:")
+        print("a1=(%11.6f %11.6f %11.6f)"%(*kvec1,))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*kvec2,))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*kvec3,))
+
+        transFrame=np.dot(pR.lat,np.array([kvec1,kvec2,kvec3]).transpose())
+        
+        a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
+        S=np.linalg.det(transFrame[:2,:2])
+        
+        DHk_dkx=DHk_dk1#DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
+        DHk_dky=DHk_dk2#DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
+
+        kvecn=kvec3
+        sigma_i=kvecn[0]*sigma_x+kvecn[1]*sigma_y+kvecn[2]*sigma_z
+        berryCurv=[]
+        for ikpt in range(nkpts):
+            c_xyz=0
+            DHk_dkx_commute_sigma=sigma_i.dot(DHk_dkx[ikpt])+DHk_dkx[ikpt].dot(sigma_i)
+            for band_n in range(hr.norb): # loop over side band n
+                En=eigList[ikpt,band_n]
+                if En>fermi: continue
+                vn=vec[ikpt][:,band_n]
+                for band_m in range(hr.norb): # loop over intermedial band m
+                    Em=eigList[ikpt,band_m]
+                    if Em<=fermi: continue
+                    #if abs(Em-En)<1e-5: continue
+                    vm=vec[ikpt][:,band_m]
+                    vnm_x_z=(vn.conjugate()).dot(DHk_dkx_commute_sigma).dot(vm)
+                    vmn_y=(vm.conjugate()).dot(DHk_dky[ikpt]).dot(vn)
+                    c_xyz+=((vnm_x_z*vmn_y).imag/(Em-En)**2)/2
+            c_xyz/=(2*np.pi*S)
+            #plt.scatter(ikpt,c_xyz,c='black')
+            berryCurv.append(c_xyz)
+        #plt.plot([paramReader.FERMI-paramReader.DFERMI,paramReader.FERMI+paramReader.DFERMI],[0,0],'--',linewidth=3)
+        
+        plt.figure()
+        plt.plot([ikpt for ikpt in range(nkpts)],berryCurv)
+        plt.xlim(0,nkpts-1)
+        plt.xlabel(r'kpath')
+        plt.ylabel(r'$e^2/\hbar$')
+        plt.show()
+
+        return
+    
+    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
+        time0=time.time()
+        # prepare input parameters for cdll
+        kxaxis=np.linspace(0,1,kmesh[0],endpoint=False)
+        kyaxis=np.linspace(0,1,kmesh[1],endpoint=False)
+        kzaxis=np.linspace(0,1,kmesh[2],endpoint=False)
+        kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
+        nkpts=len(kmesh)
+        c_kmesh=(c_double*(nkpts*3))()
+        for ikpt, kpt in enumerate(kmesh):
+            k1,k2,k3=kpt
+            c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcFullBandsAndVecs.restype=py_object
+        
+        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads))
+        #print(result.shape)
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
+        
+        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
+        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
+        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk1=(np.array(Hk_dk1_r)+1j*np.array(Hk_dk1_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk2=(np.array(Hk_dk2_r)+1j*np.array(Hk_dk2_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dk3=(np.array(Hk_dk3_r)+1j*np.array(Hk_dk3_i)).reshape(nkpts,hr.norb,hr.norb)
+
+        bandmin, bandmax=np.min(eigList), np.max(eigList)
+        print('Spectra solved in %.3fs with %d thread(s), band range: %.4f~%.4f'%(time.time()-time0,nthreads,bandmin,bandmax))
+        
+        # construct Pauli matrix
+        sigma_x, sigma_y, sigma_z= np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex)
+        for iorb in range(hr.norb//2):
+            sigma_x[iorb,iorb+hr.norb//2],sigma_x[iorb+hr.norb//2,iorb]=1, 1
+            sigma_y[iorb,iorb+hr.norb//2],sigma_y[iorb+hr.norb//2,iorb]=-1j, 1j
+            sigma_z[iorb,iorb],sigma_z[iorb+hr.norb//2,iorb+hr.norb//2]=1, -1
+
+        # transform DHk_dk to xyz coordinates
+        print("lattice:")
+        print("a1=(%11.6f %11.6f %11.6f)"%(*pR.lat[0],))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*pR.lat[1],))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*pR.lat[2],))
+
+        kvec1=np.array(kplane[0])
+        kvec2=np.array(kplane[1])
+        kvec3=np.zeros(3)
+        kvec3[0]=kvec1[1]*kvec2[2]-kvec1[2]*kvec2[1]
+        kvec3[1]=kvec1[2]*kvec2[0]-kvec1[0]*kvec2[2]
+        kvec3[2]=kvec1[0]*kvec2[1]-kvec1[1]*kvec2[0]
+        kvec3_len=np.sqrt(np.dot(kvec3,kvec3))
+        assert kvec3_len>1e-5, "Error, kplane was expanded by parallel vectros"
+        kvec3/=kvec3_len
+
+        print("kplane in cartesian coordinates:")
+        print("a1=(%11.6f %11.6f %11.6f)"%(*kvec1,))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*kvec2,))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*kvec3,))
+
+        Vbz=np.linalg.det(np.linalg.inv(pR.lat))
+
+        transFrame=np.dot(pR.lat,np.array([kvec1,kvec2,kvec3]).transpose())
+        
+        a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
+        S=np.linalg.det(transFrame[:2,:2])
+        DHk_dkx=DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
+        DHk_dky=DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
+
+        kvecn=kvec3
+        sigma_i=kvecn[0]*sigma_x+kvecn[1]*sigma_y+kvecn[2]*sigma_z
+        fermiList=[]
+        condList=[]
+        for ifermi, fermi in enumerate(np.linspace(paramReader.FERMI-paramReader.DFERMI,
+                            paramReader.FERMI+paramReader.DFERMI,
+                            paramReader.NFERMI,endpoint=False)): # loop over fermi energy
+            #print(ifermi)
+            fermiList.append(fermi-paramReader.FERMI)
+            c_xyz=0
+            for ikpt in range(nkpts): # loop over kpoints
+                DHk_dkx_commute_sigma=sigma_i.dot(DHk_dkx[ikpt])+DHk_dkx[ikpt].dot(sigma_i)
+                for band_n in range(hr.norb): # loop over side band n
+                    En=eigList[ikpt,band_n]
+                    if En>fermi: continue
+                    vn=vec[ikpt][:,band_n]
+                    for band_m in range(hr.norb): # loop over intermedial band m
+                        Em=eigList[ikpt,band_m]
+                        if Em<=fermi: continue
+                        if abs(Em-En)<1e-2: continue
+                        vm=vec[ikpt][:,band_m]
+                        vnm_x_z=(vn.conjugate()).dot(DHk_dkx_commute_sigma).dot(vm)
+                        vmn_y=(vm.conjugate()).dot(DHk_dky[ikpt]).dot(vn)
+                        c_xyz+=((vnm_x_z*vmn_y).imag/(Em-En)**2)/2
+            c_xyz*=(1./nkpts/np.pi/2/S)#Vbz/nkpts/np.pi/2#*pR.lat[2,2]
+            condList.append(c_xyz)
+        
+        plt.figure()
+        plt.scatter(fermiList,condList,c='black')
+        plt.plot([-paramReader.DFERMI,paramReader.DFERMI],[0,0],'--',linewidth=3)
+        plt.xlabel(r'$E-E_f\ (eV)$')
+        plt.ylabel(r'$e^2/\hbar$')
+        plt.show()
+
+        filePath=mainDir+'spinHallCond.txt' if mainDir else './spinHallCond.txt'
+        with open(filePath,'w') as fout:
+            fout.write("#Fermi  SPC\n")
+            for fermi, cond in zip(fermiList, condList):
+                fout.write("%.6f %.6f \n"%(fermi,cond))
+
+        return
+    
 class Green:
 
     def __init__(self):
@@ -382,6 +633,7 @@ class Green:
         c_hopping_real=(c_double*nhoppings)()
         c_hopping_imag=(c_double*nhoppings)()
         for ibond, bond in enumerate(hr.bondList):
+            #print("%3d %3d %3d %3d %3d %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
             c_sourceID[ibond]=c_int(bond.source)
             c_targetID[ibond]=c_int(bond.target)
             for i in range(3):
@@ -390,22 +642,22 @@ class Green:
             c_hopping_imag[ibond]=c_double(bond.t.imag)
         
         hamDLL=CDLL("./ham.dll")
-        hamDLL.calcFullBands.restype=py_object
-        eigList=hamDLL.calcFullBands(c_int(nkpts),c_kmesh,
+        hamDLL.calcFullBandsAndVecs.restype=py_object
+        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(nthreads))
-
-        eigList=np.array(eigList)
-        print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
-        nbands=eigList.shape[1]
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
+        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
+        print('Spectra solved in %.3fs with %d threads band range: [%.6f,%.6f]'%(time.time()-time0,nthreads,np.max(eigList),np.min(eigList)))
+        #nbands=eigList.shape[1]
         plt.figure()
-        for ibands in range(nbands):
+        for ibands in range(hr.norb):
             plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
         plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
         if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
         plt.xlim(0,ikpt)
-        plt.ylim(fermi-3,fermi+2)
+        plt.ylim(fermi-paramReader.DFERMI,fermi+paramReader.DFERMI)
         plt.xticks([])
         plt.xlabel('K')
         plt.ylabel('Energy')
@@ -415,7 +667,7 @@ class Green:
 
             with open(mainDir+'tbBands.txt','w') as fout:
                 fout.write('#k energy\n')
-                for ibands in range(nbands):
+                for ibands in range(hr.norb):
                     for ikpt in range(nkpts):
                         fout.write('%d %.6f\n'%(ikpt,eigList[ikpt,ibands]))
                     fout.write('\n')
@@ -503,148 +755,6 @@ class Green:
                     vnn_x.real,vnn_x.imag,vnn_y.real,vnn_y.imag,vnn_z.real,vnn_z.imag,))
                 
         print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
-
-    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
-        time0=time.time()
-        # prepare input parameters for cdll
-        kxaxis=np.linspace(0,1,kmesh[0],endpoint=False)
-        kyaxis=np.linspace(0,1,kmesh[1],endpoint=False)
-        kzaxis=np.linspace(0,1,kmesh[2],endpoint=False)
-        kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
-        nkpts=len(kmesh)
-        c_kmesh=(c_double*(nkpts*3))()
-        for ikpt, kpt in enumerate(kmesh):
-            k1,k2,k3=kpt
-            c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
-        
-        nhoppings=len(hr.bondList)
-        c_sourceID=(c_int*nhoppings)()
-        c_targetID=(c_int*nhoppings)()
-        c_overLat=(c_int*(nhoppings*3))()
-        c_hopping_real=(c_double*nhoppings)()
-        c_hopping_imag=(c_double*nhoppings)()
-        for ibond, bond in enumerate(hr.bondList):
-            c_sourceID[ibond]=c_int(bond.source)
-            c_targetID[ibond]=c_int(bond.target)
-            for i in range(3):
-                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
-            c_hopping_real[ibond]=c_double(bond.t.real)
-            c_hopping_imag[ibond]=c_double(bond.t.imag)
-        
-        hamDLL=CDLL("./ham.dll")
-        hamDLL.calcFullBandsAndVecs.restype=py_object
-        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
-                        c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
-                        c_int(nthreads))
-        #print(result.shape)
-        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
-        
-        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
-        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
-        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dk1=(np.array(Hk_dk1_r)+1j*np.array(Hk_dk1_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dk2=(np.array(Hk_dk2_r)+1j*np.array(Hk_dk2_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dk3=(np.array(Hk_dk3_r)+1j*np.array(Hk_dk3_i)).reshape(nkpts,hr.norb,hr.norb)
-
-        bandmin, bandmax=np.min(eigList), np.max(eigList)
-        print('Spectra solved in %.3fs (serial mode), band range: %.4f~%.4f'%(time.time()-time0,bandmin,bandmax))
-        
-        # construct Pauli matrix
-        sigma_x, sigma_y, sigma_z= np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex), np.zeros((hr.norb,hr.norb),dtype=complex)
-        for iorb in range(hr.norb//2):
-            sigma_x[iorb,iorb+hr.norb//2],sigma_x[iorb+hr.norb//2,iorb]=1, 1
-            sigma_y[iorb,iorb+hr.norb//2],sigma_y[iorb+hr.norb//2,iorb]=-1j, 1j
-            sigma_z[iorb,iorb],sigma_z[iorb+hr.norb//2,iorb+hr.norb//2]=1, -1
-
-        # transform DHk_dk to xyz coordinates
-        print("lattice:")
-        print("a1=(%11.6f %11.6f %11.6f)"%(*pR.lat[0],))
-        print("a2=(%11.6f %11.6f %11.6f)"%(*pR.lat[1],))
-        print("a3=(%11.6f %11.6f %11.6f)"%(*pR.lat[2],))
-
-        kvec1=np.array(kplane[0]).dot(pR.lat)
-        kvec2=np.array(kplane[1]).dot(pR.lat)
-        kvec1/=np.sqrt(np.dot(kvec1,kvec1))
-        kvec2/=np.sqrt(np.dot(kvec2,kvec2))
-        if kvec1.dot(kvec2) > 1e-5: print("Warning: kplane was not expanded by orthorgonal vectors")
-        kvec3=np.zeros(3)
-        kvec3[0]=kvec1[1]*kvec2[2]-kvec1[2]*kvec2[1]
-        kvec3[1]=kvec1[2]*kvec2[0]-kvec1[0]*kvec2[2]
-        kvec3[2]=kvec1[0]*kvec2[1]-kvec1[1]*kvec2[0]
-        kvec3_len=np.sqrt(np.dot(kvec3,kvec3))
-        assert kvec3_len>1e-5, "Error, kplane was expanded by parallel vectros"
-        kvec3/=kvec3_len
-
-        print("kplane in cartesian coordinates:")
-        print("a1=(%11.6f %11.6f %11.6f)"%(*kvec1,))
-        print("a2=(%11.6f %11.6f %11.6f)"%(*kvec2,))
-        print("a3=(%11.6f %11.6f %11.6f)"%(*kvec3,))
-
-        transFrame=np.dot(pR.lat,np.array([kvec1,kvec2,kvec3]).transpose())
-
-        #reciFrame=np.linalg.inv(pR.lat)
-        #print("reciprocal lattice:")
-        #print("k1=(%9.6f %9.6f %9.6f)"%(*reciFrame[:,0],))
-        #print("k2=(%9.6f %9.6f %9.6f)"%(*reciFrame[:,1],))
-        #print("k3=(%9.6f %9.6f %9.6f)"%(*reciFrame[:,2],))
-        
-        a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
-        S=np.linalg.det(transFrame[:2,:2])
-        #print(transFrame[:2,:2])
-        #print(V)
-        #DHk_dkx,DHk_dky,DHk_dkz=np.dot(np.array([DHk_dk1,DHk_dk2,DHk_dk3]),transFrame)
-        DHk_dkx=DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
-        DHk_dky=DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
-        #DHk_dkz=DHk_dk1*a1[2]+DHk_dk2*a2[2]+DHk_dk3*a3[2]
-
-        kvecn=kvec3
-        sigma_i=kvecn[0]*sigma_x+kvecn[1]*sigma_y+kvecn[2]*sigma_z
-        plt.figure()
-        for ifermi, fermi in enumerate(np.linspace(paramReader.FERMI-paramReader.DFERMI,
-                            paramReader.FERMI+paramReader.DFERMI,
-                            paramReader.NFERMI)): # loop over fermi energy
-            #print(ifermi)
-            c_xyz=0
-            for ikpt in range(nkpts): # loop over kpoints
-                DHk_dkx_commute_sigma=sigma_i.dot(DHk_dkx[ikpt])+DHk_dkx[ikpt].dot(sigma_i)
-                for band_n in range(hr.norb): # loop over side band n
-                    En=eigList[ikpt,band_n]
-                    if En>fermi: continue
-                    vn=vec[ikpt][:,band_n]
-                    for band_m in range(hr.norb): # loop over intermedial band m
-                        Em=eigList[ikpt,band_m]
-                        if abs(Em-En)<1e-5: continue
-                        vm=vec[ikpt][:,band_m]
-                        vnm_x_z=(vn.conjugate()).dot(DHk_dkx_commute_sigma).dot(vm)
-                        vmn_y=(vm.conjugate()).dot(DHk_dky[ikpt]).dot(vn)
-                        c_xyz+=((vnm_x_z*vmn_y).imag/(Em-En)**2)/2
-            c_xyz/=(nkpts*2*np.pi*S)
-            plt.scatter(fermi,c_xyz,c='black')
-        plt.plot([paramReader.FERMI-paramReader.DFERMI,paramReader.FERMI+paramReader.DFERMI],[0,0],'--',linewidth=3)
-        plt.xlabel(r'$E-E_f\ (eV)$')
-        plt.ylabel(r'$e^2/\hbar$')
-        plt.show()
-
-        return
-        '''
-        time0=time.time()
-        m,n=0,1
-        filePath=mainDir+'opticalOverlap.txt' if mainDir else './opticalOverlap.txt'
-        with open(filePath,'w') as fout:
-            for ikpt, kpt in enumerate(kmesh):
-                Em, En=eigList[ikpt][m], eigList[ikpt][n]
-                vmn_k1=vec[ikpt][:,m].conjugate().dot(DHk_dk1[ikpt]).dot(vec[ikpt][:,n])
-                vmn_k2=vec[ikpt][:,m].conjugate().dot(DHk_dk2[ikpt]).dot(vec[ikpt][:,n])
-                vmn_k3=vec[ikpt][:,m].conjugate().dot(DHk_dk3[ikpt]).dot(vec[ikpt][:,n])
-                vmn_x,vmn_y,vmn_z=np.dot(np.array([vmn_k1,vmn_k2,vmn_k3]),transFrame)
-
-                fout.write("%.3f %.3f %.3f %.6f %.3f %.6f %.3f %.6f %.6f %.6f %.6f %.6f %.6f\n"%(
-                    *kpt,Em,1.,En,0.,
-                    vmn_x.real,vmn_x.imag,vmn_y.real,vmn_y.imag,vmn_z.real,vmn_z.imag,
-                    ))
-        #vmn=np.array(_vmn)
-        print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))'''
 
     def testG(self,hr,orbList=[0],fermi=0,eta=0.1):
         norb=hr.norb
@@ -1210,7 +1320,6 @@ class Green:
         print(J*1000)
         #exit()
         return J
-
 
     def calcJExactFourStateWithTheta(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi/2,eta=0.0001,energyRange=(-5.0,0),Lx=5,Ly=5,Lz=1):
         '''Linear response approximation

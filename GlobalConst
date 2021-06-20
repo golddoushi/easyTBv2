@@ -133,9 +133,9 @@ CVGRANGE=5
 MAXMCSTEP=128
 SPINFOLD=1    #multilply local_s & divide J to keep E and test classical limit
 
-FERMI=11.0     # set Fermi level
-DFERMI=8    # scanning energy region around Fermi energy
-NFERMI=50   # sampling points in scanning energy region
+FERMI=0     # set Fermi level
+DFERMI=4    # scanning energy region around Fermi energy
+NFERMI=20   # sampling points in scanning energy region
 
 EV2K=11588.75
 

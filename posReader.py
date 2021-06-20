@@ -13,7 +13,6 @@ import time
 import matplotlib.pyplot as plt
 import scipy.interpolate as itp
 import spglib as spg
-import subprocess
 
 global title   # title of POSCAR file
 global scale   # scale constant in POSCAR
@@ -26,7 +25,8 @@ global tot_ions# total num. of ions in structure
 global rwigs   # RWIGS of each elements
 global type
 type='D'
-global pos_ions
+global pos_ions # fractional coor. of ions
+global pos_orbs # fractional coor. of orbs (defined in POSCAR)
 global bondList
 global orbList
 global ncount
@@ -81,12 +81,13 @@ class Orb:
         return [iorb for iorb, orb in enumerate(self.sameTypeOrbList) if orb.id==orb_ref.id]
 
 def readPOS(path='./POSCAR',ini_mag=[],ini_S=[],wann_ID=[],rotations=[],translations=[]):
-    global title,scale,lat,ele_str,nions,tot_ions,type,pos_ions,orbList,bondList
+    global title,scale,lat,ele_str,nions,tot_ions,type,pos_ions,orbList,bondList,pos_orbs
     global ncount
     lat=[]
     ele_str=[]
     nions=[]
     pos_ions=[]
+    pos_orbs=[] # inital pos. of orbs
     orbList=[]
     bondList=[]
     f=open(path,'r')
@@ -104,9 +105,23 @@ def readPOS(path='./POSCAR',ini_mag=[],ini_S=[],wann_ID=[],rotations=[],translat
     nions=[int(l) for l in re.findall('[0-9]+',data[6])]
     tot_ions=np.sum(nions)
     type=re.findall('[A-Za-z]+',data[7])
+    norb_cnt=0
     for line in range(8,8+tot_ions):
-        [x,y,z]=[float(l) for l in re.findall('[0-9.-]+',data[line])]
+        pos_data=[l for l in re.findall('[0-9.-]+',data[line])]
+        x,y,z=float(pos_data[0]), float(pos_data[1]), float(pos_data[2])
         pos_ions.append(np.array([x,y,z]))
+        for iele in range(len(pos_data)):
+            if iele<=2: continue
+            norb_cnt+=1
+            #pos_orbs[int(pos_data[iele])]=np.array([x,y,z])
+    # record coordinates of orbitals
+    pos_orbs=[np.zeros(3) for i in range(norb_cnt)]
+    for line in range(8,8+tot_ions):
+        pos_data=[l for l in re.findall('[0-9.-]+',data[line])]
+        x,y,z=float(pos_data[0]), float(pos_data[1]), float(pos_data[2])
+        for iele in range(len(pos_data)):
+            if iele<=2: continue
+            pos_orbs[int(pos_data[iele])-1]=np.array([x,y,z])
     ncount=0
     __toHome()
     if len(ini_mag)>0:
