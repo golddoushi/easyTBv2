@@ -286,7 +286,7 @@ class Response:
 
         return
     
-    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
+    def calcSpinHallConductor_CDLL_pyAchive(self,hr,mainDir=None,kmesh=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kmesh[0],endpoint=False)
@@ -366,7 +366,7 @@ class Response:
         transFrame=np.dot(pR.lat,np.array([kvec1,kvec2,kvec3]).transpose())
         
         a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
-        S=np.linalg.det(transFrame[:2,:2])
+        #S=np.linalg.det(transFrame[:2,:2])
         DHk_dkx=DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0]
         DHk_dky=DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1]
 
@@ -378,23 +378,37 @@ class Response:
                             paramReader.FERMI+paramReader.DFERMI,
                             paramReader.NFERMI,endpoint=False)): # loop over fermi energy
             #print(ifermi)
+            #fermi=0
             fermiList.append(fermi-paramReader.FERMI)
             c_xyz=0
             for ikpt in range(nkpts): # loop over kpoints
                 DHk_dkx_commute_sigma=sigma_i.dot(DHk_dkx[ikpt])+DHk_dkx[ikpt].dot(sigma_i)
+                #print("kpt%d [%.1f %.1f %.1f]"%(ikpt,*kmesh[ikpt]))
+                #print("DHk/Dy:")
+                #print(DHk_dky[ikpt])
+                #print("S dot DHk/Dx:")
+                #print(DHk_dkx_commute_sigma)
                 for band_n in range(hr.norb): # loop over side band n
                     En=eigList[ikpt,band_n]
                     if En>fermi: continue
                     vn=vec[ikpt][:,band_n]
+                    #print("valence band %d, energy: %.3f, vec: "%(band_n,En),vn)
+                    VnDotDhDx=vn.conjugate().dot(DHk_dkx_commute_sigma)
+                    DhDyDotVn=DHk_dky[ikpt].dot(vn)
+                    #print("n dot SDh/Dx",VnDotDhDx)
+                    #print("Dh/Dy dot n",DhDyDotVn)
                     for band_m in range(hr.norb): # loop over intermedial band m
                         Em=eigList[ikpt,band_m]
                         if Em<=fermi: continue
                         if abs(Em-En)<1e-2: continue
                         vm=vec[ikpt][:,band_m]
-                        vnm_x_z=(vn.conjugate()).dot(DHk_dkx_commute_sigma).dot(vm)
-                        vmn_y=(vm.conjugate()).dot(DHk_dky[ikpt]).dot(vn)
+                        #print("conduct band %d, energy: %.3f, vec: "%(band_m,Em),vm)
+                        vnm_x_z=VnDotDhDx.dot(vm)#(vn.conjugate()).dot(DHk_dkx_commute_sigma).dot(vm)
+                        vmn_y=vm.conjugate().dot(DhDyDotVn)#(vm.conjugate()).dot(DHk_dky[ikpt]).dot(vn)
+                        #print(vnm_x_z,vmn_y)
                         c_xyz+=((vnm_x_z*vmn_y).imag/(Em-En)**2)/2
-            c_xyz*=(1./nkpts/np.pi/2/S)#Vbz/nkpts/np.pi/2#*pR.lat[2,2]
+            c_xyz*=(1./nkpts/np.pi/2)#/S)
+            #print(c_xyz)
             condList.append(c_xyz)
         
         plt.figure()
@@ -412,6 +426,112 @@ class Response:
 
         return
     
+    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
+        time0=time.time()
+        # prepare input parameters for cdll
+        kxaxis=np.linspace(0,1,kmesh[0],endpoint=False)
+        kyaxis=np.linspace(0,1,kmesh[1],endpoint=False)
+        kzaxis=np.linspace(0,1,kmesh[2],endpoint=False)
+        kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
+
+        # transform DHk_dk to xyz coordinates
+        print("lattice:")
+        print("a1=(%11.6f %11.6f %11.6f)"%(*pR.lat[0],))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*pR.lat[1],))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*pR.lat[2],))
+
+        kvec1=np.array(kplane[0])
+        kvec2=np.array(kplane[1])
+        kvec3=np.zeros(3)
+        kvec3[0]=kvec1[1]*kvec2[2]-kvec1[2]*kvec2[1]
+        kvec3[1]=kvec1[2]*kvec2[0]-kvec1[0]*kvec2[2]
+        kvec3[2]=kvec1[0]*kvec2[1]-kvec1[1]*kvec2[0]
+        kvec3_len=np.sqrt(np.dot(kvec3,kvec3))
+        assert kvec3_len>1e-5, "Error, kplane was expanded by parallel vectros"
+        kvec3/=kvec3_len
+
+        print("kplane in cartesian coordinates:")
+        print("a1=(%11.6f %11.6f %11.6f)"%(*kvec1,))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*kvec2,))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*kvec3,))
+
+        Vbz=np.linalg.det(np.linalg.inv(pR.lat))
+
+        transFrame=np.dot(pR.lat,np.array([kvec1,kvec2,kvec3]).transpose())
+        kvecn=kvec3
+        c_transFrame=(c_double*9)()
+        for i in range(3):
+            c_transFrame[i]=c_double(transFrame[0][i])
+            c_transFrame[i+3]=c_double(transFrame[1][i])
+            c_transFrame[i+6]=c_double(kvecn[i])
+
+        nkpts=len(kmesh)
+        c_kmesh=(c_double*(nkpts*3))()
+        for ikpt, kpt in enumerate(kmesh):
+            k1,k2,k3=kpt
+            c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        c_fermi_list=(c_double*paramReader.NFERMI)()
+        fermiList=[]
+        for ifermi, fermi in enumerate(np.linspace(paramReader.FERMI-paramReader.DFERMI,
+                                paramReader.FERMI+paramReader.DFERMI,
+                                paramReader.NFERMI,endpoint=False)):
+            fermiList.append(fermi-paramReader.FERMI)
+            c_fermi_list[ifermi]=c_double(fermi)
+
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcSpinHallCond.restype=py_object
+
+        degenerateThreshold=0.01
+        #for ifermi, fermi in enumerate(np.linspace(paramReader.FERMI-paramReader.DFERMI,
+        #                    paramReader.FERMI+paramReader.DFERMI,
+        #                    paramReader.NFERMI,endpoint=False)): # loop over fermi energy
+        #fermi=0
+        result=hamDLL.calcSpinHallCond(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(paramReader.NFERMI),
+                        c_fermi_list,
+                        c_transFrame,
+                        c_double(degenerateThreshold),
+                        c_int(nthreads))
+            
+        condList=[]
+        spinBerryCurv=np.array(result).reshape(paramReader.NFERMI,nkpts)
+        condList=[np.sum(spinBerryCurv_onFermi)/nkpts/np.pi/2 for spinBerryCurv_onFermi in spinBerryCurv]
+        #condList.append(c_xyz)
+        #print(c_xyz)
+        #exit()
+        print('Spin Berry curv. solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
+        
+        plt.figure()
+        plt.scatter(fermiList,condList,c='black')
+        plt.plot([-paramReader.DFERMI,paramReader.DFERMI],[0,0],'--',linewidth=3)
+        plt.xlabel(r'$E-E_f\ (eV)$')
+        plt.ylabel(r'$e^2/\hbar$')
+        plt.show()
+
+        filePath=mainDir+'spinHallCond.txt' if mainDir else './spinHallCond.txt'
+        with open(filePath,'w') as fout:
+            fout.write("#Fermi  SPC\n")
+            for fermi, cond in zip(fermiList, condList):
+                fout.write("%.6f %.6f \n"%(fermi,cond))
+
+        return
 class Green:
 
     def __init__(self):

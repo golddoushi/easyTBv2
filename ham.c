@@ -268,15 +268,6 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
                     index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    //PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(creal(hk[iorb][jorb])));
-                    //PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(cimag(hk[iorb][jorb])));
-                    //PyTuple_SetItem(Hk_dk1_r, index, PyFloat_FromDouble(creal(Dhk[iorb][jorb][0])));
-                    //PyTuple_SetItem(Hk_dk1_i, index, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][0])));
-                    //PyTuple_SetItem(Hk_dk2_r, index, PyFloat_FromDouble(creal(Dhk[iorb][jorb][1])));
-                    //PyTuple_SetItem(Hk_dk2_i, index, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][1])));
-                    //PyTuple_SetItem(Hk_dk3_r, index, PyFloat_FromDouble(creal(Dhk[iorb][jorb][2])));
-                    //PyTuple_SetItem(Hk_dk3_i, index, PyFloat_FromDouble(cimag(Dhk[iorb][jorb][2])));
-                    //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
                     Hk_r_tmp[index]=creal(hk[iorb][jorb]);
                     Hk_i_tmp[index]=cimag(hk[iorb][jorb]);
                     Hk_dk1_r_tmp[index]=creal(Dhk[iorb][jorb][0]);
@@ -286,22 +277,17 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                     Hk_dk3_r_tmp[index]=creal(Dhk[iorb][jorb][2]);
                     Hk_dk3_i_tmp[index]=cimag(Dhk[iorb][jorb][2]);
                 }
-                //if(ikpt==0)printf("\n");
             }
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-            //PyObject * eig_k=PyTuple_New(norbs);
             for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
                     index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    //PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(creal(hk[iorb][jorb])));
-                    //PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(cimag(hk[iorb][jorb])));
                     Vector_r_tmp[index]=creal(hk[iorb][jorb]);
                     Vector_i_tmp[index]=cimag(hk[iorb][jorb]);
                 }
             }
-            //PyTuple_SetItem(Spectra, ikpt, eig_k);
         }
     }
 
@@ -334,8 +320,164 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                 PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(Vector_i_tmp[index]));
                 //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
             }
-            //if(ikpt==0)printf("\n");
         }
     }
     return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i);
+}
+
+PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3],
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       int overLat[nhoppings][3], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings],
+                       int nfermi,
+                       double fermiList[nfermi],
+                       double transform[3][3], // first double rows define kx ky, last row defines spin direction
+                       double degenerateThreshold,
+                       int _nthreads){
+    double * spinBerryCurv_tmp=(double*)malloc(nfermi*nkpt*sizeof(double));
+    
+    // construct spin matrix
+    lapack_complex_double sigma[norbs][norbs];
+    for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)sigma[i][j]=0;
+    for(int i=0;i<norbs/2;i++){
+        // contribution from sigma^z
+        sigma[i][i]=transform[2][2];
+        sigma[i+norbs/2][i+norbs/2]=-transform[2][2];
+        // contribution from sigma^x
+        sigma[i][i+norbs/2]=transform[2][0];
+        sigma[i+norbs/2][i]=transform[2][0];
+        // contribution from sigma^y
+        sigma[i][i+norbs/2]=-transform[2][1]*_Complex_I;
+        sigma[i+norbs/2][i]=transform[2][1]*_Complex_I;
+    }
+    //printf("sigma matrix\n");
+    //for(int i=0;i<norbs;i++){
+    //    for(int j=0;j<norbs;j++)printf("(%.1f,%.1f) ",creal(sigma[i][j]),cimag(sigma[i][j]));
+    //    printf("\n");
+    //}
+    //printf("a1=(%.3f %.3f %.3f)\n",transform[0][0],transform[0][1],transform[0][2]);
+    //printf("a2=(%.3f %.3f %.3f)\n",transform[1][0],transform[1][1],transform[1][2]);
+    
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("use %d cores in ham.dll\n",nthreads);
+    // calculate matrix elements
+    int index;
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            //int kBaseIndex=ikpt*norbs*norbs;
+            lapack_complex_double hk[norbs][norbs]; // init Hk
+            lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
+            lapack_complex_double Dhk_xy[norbs][norbs][2]; // init DHk/Dkx,Dky
+            lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    hk[i][j]=0;
+                    Dhk[i][j][0]=0;
+                    Dhk[i][j][1]=0;
+                    Dhk[i][j][2]=0;
+                    Dhk_xy[i][j][0]=0;
+                    Dhk_xy[i][j][1]=0;
+                    SDhk_x[i][j]=0;
+                }
+            }
+            double eigs[norbs]; // output eigenvalues of Hk
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                double phase=0;
+                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
+                Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
+                Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
+            }
+            // construct DHk/Dx,Dy
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    for(int k=0;k<3;k++){
+                        Dhk_xy[i][j][0]+=transform[0][k]*Dhk[i][j][k];
+                        Dhk_xy[i][j][1]+=transform[1][k]*Dhk[i][j][k];
+                    }
+                }
+            }
+            // construct S \dot DHk/Dx
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    for(int k=0;k<norbs;k++){
+                        SDhk_x[i][j]+=sigma[i][k]*Dhk_xy[k][j][0];
+                        SDhk_x[i][j]+=Dhk_xy[i][k][0]*sigma[k][j];
+                    }
+                }
+            }
+            //printf("kpt%d, [%.1f %.1f %.1f] S Dhk/Dx matrix:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
+            //for(int i=0;i<norbs;i++){
+            //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(SDhk_x[i][j]),cimag(SDhk_x[i][j]));
+            //    printf("\n");
+            //}
+            //printf("Dhk/Dy matrix:\n");
+            //for(int i=0;i<norbs;i++){
+            //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(Dhk_xy[i][j][1]),cimag(Dhk_xy[i][j][1]));
+            //    printf("\n");
+            //}
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            // vec[i]=hk[:][i]
+            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+
+            for(int ifermi=0;ifermi<nfermi;ifermi++){
+            for(int nband=0;nband<norbs;nband++){
+                double En=eigs[nband];
+                if(En<=fermiList[ifermi]){
+                    //printf("valence bandn: %d energy: %.6f vec: ",nband,En);
+                    //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][nband]),cimag(hk[i][nband]));
+                    //printf("\n");
+                    lapack_complex_double vecnDotSDHkDx[norbs];
+                    for(int i=0;i<norbs;i++)vecnDotSDHkDx[i]=0;
+                    for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)vecnDotSDHkDx[i]+=conj(hk[j][nband])*SDhk_x[j][i];
+                    //printf("n dot SDHk/Dx: ");
+                    //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(vecnDotSDHkDx[i]),cimag(vecnDotSDHkDx[i]));
+                    //printf("\n");
+                    lapack_complex_double DHkDyDotVecn[norbs];
+                    for(int i=0;i<norbs;i++)DHkDyDotVecn[i]=0;
+                    for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)DHkDyDotVecn[i]+=Dhk_xy[i][j][1]*hk[j][nband];
+                    //printf("DHk/Dy dot n: ");
+                    //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(DHkDyDotVecn[i]),cimag(DHkDyDotVecn[i]));
+                    //printf("\n");
+
+                    for(int mband=0;mband<norbs;mband++){
+                        double Em=eigs[mband];
+                        double deltaE=Em-En;
+                        double deltaE_square_double=deltaE*deltaE*2;
+                        if(Em>fermiList[ifermi] & deltaE>degenerateThreshold){
+                            //printf("conduct bandm: %d energy: %.6f vec: ",mband,Em);
+                            //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][mband]),cimag(hk[i][mband]));
+                            //printf("\n");
+                            lapack_complex_double Amp1=0;
+                            lapack_complex_double Amp2=0;
+                            for(int i=0;i<norbs;i++){
+                                Amp1+=vecnDotSDHkDx[i]*hk[i][mband];
+                                Amp2+=conj(hk[i][mband])*DHkDyDotVecn[i];
+                            }
+                            //printf("amp1: %.3f %.3f; amp2: %.3f %.3f\n",creal(Amp1),cimag(Amp1),creal(Amp2),cimag(Amp2));
+                            spinBerryCurv_tmp[ifermi*nkpt+ikpt]+=cimag(Amp1*Amp2)/deltaE_square_double;
+                        }
+                    }
+                }
+            }
+            }
+        }
+    }
+
+    PyObject * spinBerryCurv=PyTuple_New(nfermi*nkpt);
+
+    for(int ifermi=0;ifermi<nfermi;ifermi++){
+        for(int ikpt=0;ikpt<nkpt;ikpt++){
+            PyTuple_SetItem(spinBerryCurv, ifermi*nkpt+ikpt, PyFloat_FromDouble(spinBerryCurv_tmp[ifermi*nkpt+ikpt]));
+        }
+    }
+    return Py_BuildValue("(O)",spinBerryCurv);
 }
