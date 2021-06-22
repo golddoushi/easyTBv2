@@ -325,7 +325,7 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
     return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i);
 }
 
-PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3],
+PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int nMaxRefine,
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
                        int overLat[nhoppings][3], 
@@ -337,7 +337,11 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3],
                        double degenerateThreshold,
                        int _nthreads){
     double * spinBerryCurv_tmp=(double*)malloc(nfermi*nkpt*sizeof(double));
-    
+    //
+    //double dk=0;
+    //for(int i=0;i<3;i++) if(fabs(kmesh[1][i]-kmesh[0][i])>dk)dk=kmesh[1][i]-kmesh[0][i];
+    //int nMaxRefine=4;
+
     // construct spin matrix
     lapack_complex_double sigma[norbs][norbs];
     for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)sigma[i][j]=0;
@@ -365,109 +369,152 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3],
     if(nkpt<_nthreads*10)nthreads=1;
     printf("use %d cores in ham.dll\n",nthreads);
     // calculate matrix elements
-    int index;
     #pragma omp parallel num_threads(nthreads)
     {
-        #pragma omp for
-        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
-            //int kBaseIndex=ikpt*norbs*norbs;
-            lapack_complex_double hk[norbs][norbs]; // init Hk
-            lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
-            lapack_complex_double Dhk_xy[norbs][norbs][2]; // init DHk/Dkx,Dky
-            lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    hk[i][j]=0;
-                    Dhk[i][j][0]=0;
-                    Dhk[i][j][1]=0;
-                    Dhk[i][j][2]=0;
-                    Dhk_xy[i][j][0]=0;
-                    Dhk_xy[i][j][1]=0;
-                    SDhk_x[i][j]=0;
-                }
-            }
-            double eigs[norbs]; // output eigenvalues of Hk
-            for(int ihopping=0;ihopping<nhoppings;ihopping++){
-                double phase=0;
-                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
-                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
-                Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
-                Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
-            }
-            // construct DHk/Dx,Dy
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    for(int k=0;k<3;k++){
-                        Dhk_xy[i][j][0]+=transform[0][k]*Dhk[i][j][k];
-                        Dhk_xy[i][j][1]+=transform[1][k]*Dhk[i][j][k];
-                    }
-                }
-            }
-            // construct S \dot DHk/Dx
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    for(int k=0;k<norbs;k++){
-                        SDhk_x[i][j]+=sigma[i][k]*Dhk_xy[k][j][0];
-                        SDhk_x[i][j]+=Dhk_xy[i][k][0]*sigma[k][j];
-                    }
-                }
-            }
-            //printf("kpt%d, [%.1f %.1f %.1f] S Dhk/Dx matrix:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
-            //for(int i=0;i<norbs;i++){
-            //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(SDhk_x[i][j]),cimag(SDhk_x[i][j]));
-            //    printf("\n");
-            //}
-            //printf("Dhk/Dy matrix:\n");
-            //for(int i=0;i<norbs;i++){
-            //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(Dhk_xy[i][j][1]),cimag(Dhk_xy[i][j][1]));
-            //    printf("\n");
-            //}
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
-            // vec[i]=hk[:][i]
-            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-
-            for(int ifermi=0;ifermi<nfermi;ifermi++){
-            for(int nband=0;nband<norbs;nband++){
-                double En=eigs[nband];
-                if(En<=fermiList[ifermi]){
-                    //printf("valence bandn: %d energy: %.6f vec: ",nband,En);
-                    //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][nband]),cimag(hk[i][nband]));
-                    //printf("\n");
-                    lapack_complex_double vecnDotSDHkDx[norbs];
-                    for(int i=0;i<norbs;i++)vecnDotSDHkDx[i]=0;
-                    for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)vecnDotSDHkDx[i]+=conj(hk[j][nband])*SDhk_x[j][i];
-                    //printf("n dot SDHk/Dx: ");
-                    //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(vecnDotSDHkDx[i]),cimag(vecnDotSDHkDx[i]));
-                    //printf("\n");
-                    lapack_complex_double DHkDyDotVecn[norbs];
-                    for(int i=0;i<norbs;i++)DHkDyDotVecn[i]=0;
-                    for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)DHkDyDotVecn[i]+=Dhk_xy[i][j][1]*hk[j][nband];
-                    //printf("DHk/Dy dot n: ");
-                    //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(DHkDyDotVecn[i]),cimag(DHkDyDotVecn[i]));
-                    //printf("\n");
-
-                    for(int mband=0;mband<norbs;mband++){
-                        double Em=eigs[mband];
-                        double deltaE=Em-En;
-                        double deltaE_square_double=deltaE*deltaE*2;
-                        if(Em>fermiList[ifermi] & deltaE>degenerateThreshold){
-                            //printf("conduct bandm: %d energy: %.6f vec: ",mband,Em);
-                            //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][mband]),cimag(hk[i][mband]));
-                            //printf("\n");
-                            lapack_complex_double Amp1=0;
-                            lapack_complex_double Amp2=0;
-                            for(int i=0;i<norbs;i++){
-                                Amp1+=vecnDotSDHkDx[i]*hk[i][mband];
-                                Amp2+=conj(hk[i][mband])*DHkDyDotVecn[i];
+        for(int ifermi=0;ifermi<nfermi;ifermi++){
+            #pragma omp for
+            for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+                double spinBerry=1000000.0;
+                for(int nrefine=1;nrefine<=nMaxRefine;nrefine++){// calc berry curv in sub kmesh
+                    // construct sub-mesh in refined grid
+                    int totalSubkpt;
+                    double subkmesh[nrefine*nrefine*nrefine][3];
+                    double ddk[3];// interval of refined grid
+                    for(int i=0;i<3;i++)ddk[i]=dk[i]/nrefine;
+                    double odk[3];// extra shift to locate refined grid around center
+                    for(int i=0;i<3;i++)odk[i]=ddk[i]*(nrefine-1)/2;
+                    if(dk[2]<0.6){ // dim==3
+                        totalSubkpt=nrefine*nrefine*nrefine;
+                        for(int i=0;i<nrefine;i++){
+                            for(int j=0;j<nrefine;j++){
+                                for(int k=0;k<nrefine;k++){
+                                    subkmesh[i*nrefine*nrefine+j*nrefine+k][0]=kmesh[ikpt][0]+i*ddk[0]-odk[0];
+                                    subkmesh[i*nrefine*nrefine+j*nrefine+k][1]=kmesh[ikpt][1]+j*ddk[1]-odk[1];
+                                    subkmesh[i*nrefine*nrefine+j*nrefine+k][2]=kmesh[ikpt][2]+k*ddk[2]-odk[2];
+                                }
                             }
-                            //printf("amp1: %.3f %.3f; amp2: %.3f %.3f\n",creal(Amp1),cimag(Amp1),creal(Amp2),cimag(Amp2));
-                            spinBerryCurv_tmp[ifermi*nkpt+ikpt]+=cimag(Amp1*Amp2)/deltaE_square_double;
+                        }
+                    }else{ //dim==2
+                        totalSubkpt=nrefine*nrefine;
+                        for(int i=0;i<nrefine;i++){
+                            for(int j=0;j<nrefine;j++){
+                                subkmesh[i*nrefine+j][0]=kmesh[ikpt][0]+i*ddk[0]-odk[0];
+                                subkmesh[i*nrefine+j][1]=kmesh[ikpt][1]+j*ddk[1]-odk[1];
+                                subkmesh[i*nrefine+j][2]=kmesh[ikpt][2];
+                            }
                         }
                     }
+                    double trial_spinBerry=0;
+                    for(int isubkpt=0;isubkpt<totalSubkpt;isubkpt++){
+                        lapack_complex_double hk[norbs][norbs]; // init Hk
+                        lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
+                        lapack_complex_double Dhk_xy[norbs][norbs][2]; // init DHk/Dkx,Dky
+                        lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
+                        for(int i=0;i<norbs;i++){
+                            for(int j=0;j<norbs;j++){
+                                hk[i][j]=0;
+                                Dhk[i][j][0]=0;
+                                Dhk[i][j][1]=0;
+                                Dhk[i][j][2]=0;
+                                Dhk_xy[i][j][0]=0;
+                                Dhk_xy[i][j][1]=0;
+                                SDhk_x[i][j]=0;
+                            }
+                        }
+                        double eigs[norbs]; // output eigenvalues of Hk
+                        for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                            double phase=0;
+                            for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*subkmesh[isubkpt][i];
+                            lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                            hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                            Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
+                            Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
+                            Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
+                        }
+                        // construct DHk/Dx,Dy
+                        for(int i=0;i<norbs;i++){
+                            for(int j=0;j<norbs;j++){
+                                for(int k=0;k<3;k++){
+                                    Dhk_xy[i][j][0]+=transform[0][k]*Dhk[i][j][k];
+                                    Dhk_xy[i][j][1]+=transform[1][k]*Dhk[i][j][k];
+                                }
+                            }
+                        }
+                        // construct S \dot DHk/Dx
+                        for(int i=0;i<norbs;i++){
+                            for(int j=0;j<norbs;j++){
+                                for(int k=0;k<norbs;k++){
+                                    SDhk_x[i][j]+=sigma[i][k]*Dhk_xy[k][j][0];
+                                    SDhk_x[i][j]+=Dhk_xy[i][k][0]*sigma[k][j];
+                                }
+                            }
+                        }
+                        //printf("kpt%d, [%.1f %.1f %.1f] S Dhk/Dx matrix:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
+                        //for(int i=0;i<norbs;i++){
+                        //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(SDhk_x[i][j]),cimag(SDhk_x[i][j]));
+                        //    printf("\n");
+                        //}
+                        //printf("Dhk/Dy matrix:\n");
+                        //for(int i=0;i<norbs;i++){
+                        //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(Dhk_xy[i][j][1]),cimag(Dhk_xy[i][j][1]));
+                        //    printf("\n");
+                        //}
+                        int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+                        // vec[i]=hk[:][i]
+                        if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+
+                        for(int nband=0;nband<norbs;nband++){
+                            double En=eigs[nband];
+                            if(En<=fermiList[ifermi]){
+                                //printf("valence bandn: %d energy: %.6f vec: ",nband,En);
+                                //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][nband]),cimag(hk[i][nband]));
+                                //printf("\n");
+                                lapack_complex_double vecnDotSDHkDx[norbs];
+                                for(int i=0;i<norbs;i++)vecnDotSDHkDx[i]=0;
+                                for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)vecnDotSDHkDx[i]+=conj(hk[j][nband])*SDhk_x[j][i];
+                                //printf("n dot SDHk/Dx: ");
+                                //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(vecnDotSDHkDx[i]),cimag(vecnDotSDHkDx[i]));
+                                //printf("\n");
+                                lapack_complex_double DHkDyDotVecn[norbs];
+                                for(int i=0;i<norbs;i++)DHkDyDotVecn[i]=0;
+                                for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)DHkDyDotVecn[i]+=Dhk_xy[i][j][1]*hk[j][nband];
+                                //printf("DHk/Dy dot n: ");
+                                //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(DHkDyDotVecn[i]),cimag(DHkDyDotVecn[i]));
+                                //printf("\n");
+
+                                for(int mband=0;mband<norbs;mband++){
+                                    double Em=eigs[mband];
+                                    double deltaE=Em-En;
+                                    double deltaE_square_double=deltaE*deltaE*2;
+                                    if(Em>fermiList[ifermi] & deltaE>degenerateThreshold){
+                                        //printf("conduct bandm: %d energy: %.6f vec: ",mband,Em);
+                                        //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][mband]),cimag(hk[i][mband]));
+                                        //printf("\n");
+                                        lapack_complex_double Amp1=0;
+                                        lapack_complex_double Amp2=0;
+                                        for(int i=0;i<norbs;i++){
+                                            Amp1+=vecnDotSDHkDx[i]*hk[i][mband];
+                                            Amp2+=conj(hk[i][mband])*DHkDyDotVecn[i];
+                                        }
+                                        //printf("amp1: %.3f %.3f; amp2: %.3f %.3f\n",creal(Amp1),cimag(Amp1),creal(Amp2),cimag(Amp2));
+                                        //spinBerryCurv_tmp[ifermi*nkpt+ikpt]+=cimag(Amp1*Amp2)/deltaE_square_double;
+                                        trial_spinBerry+=cimag(Amp1*Amp2)/deltaE_square_double;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    trial_spinBerry/=totalSubkpt;
+                    if(fabs(trial_spinBerry)<0.1 | fabs((trial_spinBerry-spinBerry)/spinBerry)<0.1){
+                        spinBerry=trial_spinBerry;
+                        break;
+                    }
+                    if(nrefine==nMaxRefine){
+                        printf("cvg. failed at fermi %.4f, ikpt %d, [%.4f %.4f %.4f], final ratio: %.6f/%.6f\n",fermiList[ifermi],ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],trial_spinBerry,spinBerry);
+                    }
+                    spinBerry=trial_spinBerry;
                 }
-            }
+                spinBerryCurv_tmp[ifermi*nkpt+ikpt]=spinBerry;
             }
         }
     }

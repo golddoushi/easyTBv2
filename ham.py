@@ -426,12 +426,12 @@ class Response:
 
         return
     
-    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kmesh=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
+    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],kplane=[[1,0,0],[0,1,0]],nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
-        kxaxis=np.linspace(0,1,kmesh[0],endpoint=False)
-        kyaxis=np.linspace(0,1,kmesh[1],endpoint=False)
-        kzaxis=np.linspace(0,1,kmesh[2],endpoint=False)
+        kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
+        kyaxis=np.linspace(0,1,kgrid[1],endpoint=False)
+        kzaxis=np.linspace(0,1,kgrid[2],endpoint=False)
         kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
 
         # transform DHk_dk to xyz coordinates
@@ -471,6 +471,11 @@ class Response:
             k1,k2,k3=kpt
             c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
         
+        c_dk=(c_double*3)()
+        for ik, nk in enumerate(kgrid):
+            c_dk[ik]=c_double(1/nk)
+        #exit()
+
         nhoppings=len(hr.bondList)
         c_sourceID=(c_int*nhoppings)()
         c_targetID=(c_int*nhoppings)()
@@ -497,11 +502,8 @@ class Response:
         hamDLL.calcSpinHallCond.restype=py_object
 
         degenerateThreshold=0.01
-        #for ifermi, fermi in enumerate(np.linspace(paramReader.FERMI-paramReader.DFERMI,
-        #                    paramReader.FERMI+paramReader.DFERMI,
-        #                    paramReader.NFERMI,endpoint=False)): # loop over fermi energy
-        #fermi=0
-        result=hamDLL.calcSpinHallCond(c_int(nkpts),c_kmesh,
+        nMaxRefine=8
+        result=hamDLL.calcSpinHallCond(c_int(nkpts),c_kmesh,c_dk,c_int(nMaxRefine),
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(paramReader.NFERMI),
@@ -513,9 +515,6 @@ class Response:
         condList=[]
         spinBerryCurv=np.array(result).reshape(paramReader.NFERMI,nkpts)
         condList=[np.sum(spinBerryCurv_onFermi)/nkpts/np.pi/2 for spinBerryCurv_onFermi in spinBerryCurv]
-        #condList.append(c_xyz)
-        #print(c_xyz)
-        #exit()
         print('Spin Berry curv. solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
         
         plt.figure()
