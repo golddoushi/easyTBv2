@@ -1,6 +1,7 @@
 import time
 import Lattice as lat
 import numpy as np
+from auxiliary import quicksort
 
 class Hr:
     def __init__(self):
@@ -274,32 +275,33 @@ class Hr:
         direction_list=[[0,0,0],[0,0,0]] # direction_list[idirection][ioverlat][trial_enhancement]
         direction_list[0][idirection]=1
         direction_list[1][idirection]=-1
+        direction_vec=np.array(direction_list)
         changed=True
         cnt=0
-        while(changed and cnt<self.norb): # greedy algo.
+        while(changed and cnt<self.norb*self.norb): # greedy algo.
             cnt+=1
+            #print("trial %d"%cnt)
             changed=False
             for iorb in range(self.norb):
-                optimal_shift=np.array([0,0,0])
-                old_overlat=0
-                for bond in self.bondList:
-                    if bond.source==iorb or bond.target==iorb:
-                        old_overlat+=abs(bond.overlat)
-                old_overlat_len=np.dot(old_overlat,old_overlat)
-
-                for trial_direction in direction_list:
-                    trial_overlat=0
+                shift_list=[np.zeros(3,dtype=int),direction_vec[0],direction_vec[1]]
+                summed_overlat=[]
+                #print('orb%d'%iorb)
+                for shift in shift_list:
+                    overlat=0
                     for bond in self.bondList:
                         if bond.source==bond.target: continue
                         if bond.source==iorb:
-                            trial_overlat+=abs(bond.overlat+np.array(trial_direction))
-                        elif  bond.target==iorb:
-                            trial_overlat+=abs(bond.overlat-np.array(trial_direction))
-                    trial_overlat_len=np.dot(trial_overlat,trial_overlat)
-                    if trial_overlat_len<old_overlat_len:
-                        old_overlat_len=trial_overlat_len
-                        optimal_shift=np.array(trial_direction)
-            
+                            overlat+=abs(bond.overlat+shift)
+                        if bond.target==iorb:
+                            overlat+=abs(bond.overlat-shift)
+                    #print("shift %d %d %d overlat %d %d %d"%(*shift,*overlat))
+                    summed_overlat.append(sum(overlat))
+                    
+                #print('summed overlat in three proposals: %d %d %d'%(*summed_overlat,))
+                orderIndex=quicksort(summed_overlat)
+                #print('sorted index: %d %d %d'%(*orderIndex,))
+                optimal_shift=shift_list[orderIndex[0]] if summed_overlat[0]<summed_overlat[1] else np.zeros(3,dtype=int)
+                
                 #print(iorb,optimal_shift)
                 if (optimal_shift!=0).any():
                     changed=True
