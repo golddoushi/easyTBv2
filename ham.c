@@ -335,7 +335,13 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                        double fermiList[nfermi],
                        double transform[3][3], // first double rows define kx ky, last row defines spin direction
                        double degenerateThreshold,
+                       double summedCvgCriteria,
                        int _nthreads){
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    fclose(fp);
+    
     double * spinBerryCurv_tmp=(double*)malloc(nfermi*nkpt*sizeof(double));
     
     double * kmesh_for_process=(double*)malloc(nMaxRefine*nMaxRefine*nMaxRefine*nkpt*3*sizeof(double));
@@ -344,6 +350,13 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
     double * berryCurvOnKmesh=(double*)malloc(nkpt*sizeof(double));
     double * berryCurvOnKmesh_trial=(double*)malloc(nkpt*sizeof(double));
     double * berryCurvOnRefinedKmesh=(double*)malloc(nMaxRefine*nMaxRefine*nMaxRefine*nkpt*sizeof(double));
+    
+    int dim=1; // dimension of Brilloinzone
+    if(dk[1]<0.6)dim=2;
+    if(dk[2]<0.6)dim=3;
+    int basic_factor=1; // basic multiply factor for grid refinement
+    for(int i=0;i<dim;i++)basic_factor*=2;
+    //printf("basic factor %d\n",basic_factor);
     //
     //double dk=0;
     //for(int i=0;i<3;i++) if(fabs(kmesh[1][i]-kmesh[0][i])>dk)dk=kmesh[1][i]-kmesh[0][i];
@@ -375,12 +388,16 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
     nthreads=_nthreads;
     if(nkpt<_nthreads*10)nthreads=1;
     printf("use %d cores in ham.dll\n",nthreads);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"use %d cores in ham.dll\n",nthreads);
+    fclose(fp);
     // calculate matrix elements
     //#pragma omp parallel num_threads(nthreads)
     {
         for(int ifermi=0;ifermi<nfermi;ifermi++){
             // init processing kmesh
             int nkptForProcess=nkpt;
+            int nkptGroups;
             for(int ikpt=0;ikpt<nkpt;ikpt++){
                 kmesh_for_process[ikpt*3+0]=kmesh[ikpt][0];
                 kmesh_for_process[ikpt*3+1]=kmesh[ikpt][1];
@@ -390,10 +407,62 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
             // init oritinal berry curv
             for(int ikpt=0;ikpt<nkpt;ikpt++)berryCurvOnKmesh[ikpt]=1000000.0; //init berryCurv
             int nrefine=1;
-            while (1==1){
+            int nStepRefine=0;
+            int ngrids;
+            while (0==0){
             //for(int nrefine=1;nrefine<=nMaxRefine;nrefine++){// loop over refinaries
+                // first confirm the individual kpt groups
+                int sizeOfGroups[nkpt];
+                nkptGroups=0;
+                int nContribute=0;
+                int ikpt_contribute_old=kpt_belongings[0];
+                int ikpt_contribute_now;
+                for(int ikpt=0;ikpt<nkptForProcess-1;ikpt++){
+                    ikpt_contribute_now=kpt_belongings[ikpt];
+                    if(ikpt_contribute_now==ikpt_contribute_old){
+                        nContribute+=1;
+                    }else{
+                        ikpt_contribute_old=ikpt_contribute_now;
+                        sizeOfGroups[nkptGroups]=nContribute;
+                        nkptGroups+=1;
+                        nContribute=1;
+                    }
+                }
+                ikpt_contribute_now=kpt_belongings[nkptForProcess-1];
+                //printf("last ikpt group index: %d, -- former index: %d\n",ikpt_contribute_now,ikpt_contribute_old);
+                if(ikpt_contribute_now==ikpt_contribute_old){
+                    sizeOfGroups[nkptGroups]=nContribute+1;
+                    nkptGroups+=1;
+                }else{
+                    sizeOfGroups[nkptGroups]=nContribute;
+                    nkptGroups+=1;
+                    sizeOfGroups[nkptGroups]=1;
+                    nkptGroups+=1;
+                }
+                //printf("found %d kpt groups\n",nkptGroups);
+
+                int basic_factor_power_n=1;
+                for(int i=0;i<nStepRefine;i++)basic_factor_power_n*=basic_factor;
+                ngrids=(basic_factor_power_n-1)/(basic_factor-1);
+                //
+                
+                // calc berry on (perharps) refined grids
                 for(int ikpt=0;ikpt<nkptForProcess;ikpt++)berryCurvOnRefinedKmesh[ikpt]=0.0; // init berryCurv
-                printf("calc on fermi: %.4f, with nkpt: %d\n",fermiList[ifermi],nkptForProcess);
+                if(nStepRefine>0){
+                    // quick check the size of refined grids
+                    for(int igroup=0;igroup<nkptGroups;igroup++){
+                        if(sizeOfGroups[igroup]!=basic_factor_power_n)printf("Error, size of refinements is not consistent with refinements steps\n");
+                    }
+                    printf("calc on fermi: %.4f, with %d kpt groups; refine step %d with %d more grids, %d kpts in total...",fermiList[ifermi],nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
+                    fp=fopen("./c_log","a");
+                    fprintf(fp,"calc on fermi: %.4f, with %d kpt groups; refine step %d with %d more grids, %d kpts in total...",fermiList[ifermi],nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
+                    fclose(fp);
+                }else{
+                    printf("****  initial calc on fermi: %.4f, with %d kpt groups... ",fermiList[ifermi],nkptGroups);
+                    fp=fopen("./c_log","a");
+                    fprintf(fp,"****  initial calc on fermi: %.4f, with %d kpt groups... ",fermiList[ifermi],nkptGroups);
+                    fclose(fp);
+                }
                 #pragma omp parallel num_threads(nthreads)
                 {
                     #pragma omp for
@@ -498,52 +567,31 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                         }
                     }
                 }
-                printf("calc on fermi: %.4f, with nkpt: %d, done!\n",fermiList[ifermi],nkptForProcess);
-                
-                nrefine+=1;
-                //accquire berry on original kmesh
-                // first confirm the individual kpt groups
-                int nkptGroups=0;
-                int sizeOfGroups[nkpt];
-                //for(int ikpt=0;ikpt<nkpt;ikpt++)sizeOfGroups[ikpt]=0;
-                int nContribute=0;
-                int ikpt_contribute_old=kpt_belongings[0];
-                int ikpt_contribute_now;
-                for(int ikpt=0;ikpt<nkptForProcess-1;ikpt++){
-                    ikpt_contribute_now=kpt_belongings[ikpt];
-                    if(ikpt_contribute_now==ikpt_contribute_old){
-                        nContribute+=1;
-                    }else{
-                        ikpt_contribute_old=ikpt_contribute_now;
-                        sizeOfGroups[nkptGroups]=nContribute;
-                        nkptGroups+=1;
-                        nContribute=1;
-                    }
-                }
-                ikpt_contribute_now=kpt_belongings[nkptForProcess-1];
-                //printf("last ikpt group index: %d, -- former index: %d\n",ikpt_contribute_now,ikpt_contribute_old);
-                if(ikpt_contribute_now==ikpt_contribute_old){
-                    sizeOfGroups[nkptGroups]=nContribute+1;
-                }else{
-                    sizeOfGroups[nkptGroups]=nContribute;
-                    nkptGroups+=1;
-                    sizeOfGroups[nkptGroups]=1;
-                    nkptGroups+=1;
-                }
-                //printf("found %d kpt groups\n",nkptGroups);
+                printf(" done\n");
+                fp=fopen("./c_log","a");
+                fprintf(fp," done\n");
+                fclose(fp);
+                double old_summed_berryCurv=0; // save the former berryCurv
+                for(int ikpt=0;ikpt<nkpt;ikpt++)old_summed_berryCurv+=berryCurvOnKmesh[ikpt];
+                old_summed_berryCurv/=(nkpt*TwoPI);
 
+                nStepRefine+=1;
+                nrefine*=2;
+                //accquire berry on original kmesh
                 for(int ikpt=0;ikpt<nkpt;ikpt++)berryCurvOnKmesh_trial[ikpt]=0.0; //init berryCurv
                 int nkptForNextProcess=0;
-                int ikpt=0;
+                int ikpt_in_refinedGrid=0;
                 for(int igroup=0;igroup<nkptGroups;igroup++){
-                    ikpt_contribute_now=kpt_belongings[ikpt];
+                    ikpt_contribute_now=kpt_belongings[ikpt_in_refinedGrid];
                     for(int ikpt_ingroup=0;ikpt_ingroup<sizeOfGroups[igroup];ikpt_ingroup++){
-                        berryCurvOnKmesh_trial[ikpt_contribute_now]+=berryCurvOnRefinedKmesh[ikpt];
-                        //printf("kpt%d group, kpt%d in refined mesh\n",ikpt_contribute_now,ikpt);
-                        //printf("      contributing berry curv of %.6f\n",berryCurvOnRefinedKmesh[ikpt]);
-                        ikpt+=1;
+                        berryCurvOnKmesh_trial[ikpt_contribute_now]+=berryCurvOnRefinedKmesh[ikpt_in_refinedGrid];
+                        //printf("kpt%d group, kpt%d in refined mesh\n",ikpt_contribute_now,ikpt_in_refinedGrid);
+                        //printf("      contributing berry curv of %.6f\n",berryCurvOnRefinedKmesh[ikpt_in_refinedGrid]);
+                        ikpt_in_refinedGrid+=1;
                     }
-                    berryCurvOnKmesh_trial[ikpt_contribute_now]/=sizeOfGroups[igroup];
+                    if(nStepRefine>1){
+                        berryCurvOnKmesh_trial[ikpt_contribute_now]=(berryCurvOnKmesh[ikpt_contribute_now]*ngrids+berryCurvOnKmesh_trial[ikpt_contribute_now])/(ngrids+sizeOfGroups[igroup]);///=sizeOfGroups[igroup];
+                    }
                     //printf("kpt%d group finished, with %d grids, berry curv: %.3f\n",ikpt_contribute_now,sizeOfGroups[igroup],berryCurvOnKmesh_trial[ikpt_contribute_now]);
                     // compare the result and check if we need to refine grid more
                     if(fabs(berryCurvOnKmesh_trial[ikpt_contribute_now])<0.1 | fabs((berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now])<0.1){
@@ -552,15 +600,20 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                         //printf("kpt%d group converged\n",ikpt_contribute_now);
                     }else{
                         // update
-                        //printf("kpt%d group did not converge, ratio: %.3f/%.3f\n",ikpt_contribute_now,berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now]);
+                        //if(nrefine>2){
+                            //printf("-->  kpt%d group did not converge, new: %.3f old: %.3f, dev. ratio: %.3f)\n",ikpt_contribute_now,berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now],(berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now]);
+                            //fp=fopen("./c_log","a");
+                            //fprintf(fp,"-->  kpt%d group did not converge, new: %.3f old: %.3f, dev. ratio: %.3f)\n",ikpt_contribute_now,berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now],(berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now]);
+                            //fclose(fp);
+                        //}
                         if(nrefine<=nMaxRefine){
                            // create/add refined kmesh
                             double ddk[3];// interval of refined grid
                             for(int i=0;i<3;i++)ddk[i]=dk[i]/nrefine;
                             double odk[3];// extra shift to locate refined grid around center
                             for(int i=0;i<3;i++)odk[i]=ddk[i]*(nrefine-1)/2;
-                            //printf("create refined grids for kpt%d group centered in %.3f %.3f %.3f\n",ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2]);
-                            if(dk[2]<0.6){ // dim==3
+                            //if(nrefine>1)printf("create refined grids for kpt%d group centered in %.3f %.3f %.3f\n",ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2]);
+                            if(dim==3){ // dim==3
                                 for(int i=0;i<nrefine;i++){
                                     for(int j=0;j<nrefine;j++){
                                         for(int k=0;k<nrefine;k++){
@@ -573,7 +626,7 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                                         }
                                     }
                                 }
-                            }else{ //dim==2
+                            }else if(dim==2){
                                 for(int i=0;i<nrefine;i++){
                                     for(int j=0;j<nrefine;j++){
                                         kmesh_for_process[nkptForNextProcess*3+0]=kmesh[ikpt_contribute_now][0]+i*ddk[0]-odk[0];
@@ -584,15 +637,32 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                                         nkptForNextProcess+=1;
                                     }
                                 }
+                            }else{
+                                printf("Error, 1-dimensional BZ is still in development\n");
+                                exit(1);
                             }
-                        }else{
-                            printf("cvg. failed at fermi %.4f, ikpt %d, [%.4f %.4f %.4f], final ratio: %.6f/%.6f\n",fermiList[ifermi],ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2],berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now]);
+                        }else if(nrefine>2){
+                            printf("-->  cvg. failed at fermi %.4f, ikpt %d, [%.4f %.4f %.4f], final ratio: %.6f/%.6f\n",fermiList[ifermi],ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2],berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now]);
+                            fp=fopen("./c_log","a");
+                            fprintf(fp,"-->  cvg. failed at fermi %.4f, ikpt %d, [%.4f %.4f %.4f], final ratio: %.6f/%.6f\n",fermiList[ifermi],ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2],berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now]);
+                            fclose(fp);
                         }
                         berryCurvOnKmesh[ikpt_contribute_now]=berryCurvOnKmesh_trial[ikpt_contribute_now];
                     }
                 }// analysis on data on refined kmesh fininished
                 
-                if(nkptForNextProcess==0 | nrefine>nMaxRefine){ // stop the loop due to either convergence or max refinement reached
+                double new_summed_berryCurv=0; // save the former berryCurv
+                for(int ikpt=0;ikpt<nkpt;ikpt++)new_summed_berryCurv+=berryCurvOnKmesh[ikpt];
+                new_summed_berryCurv/=(nkpt*TwoPI);
+                double d_summed_berryCurv=fabs(new_summed_berryCurv-old_summed_berryCurv);
+                if(nStepRefine>1){
+                    printf("<Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
+                    fp=fopen("./c_log","a");
+                    fprintf(fp,"<Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
+                    fclose(fp);
+                }
+
+                if(nkptForNextProcess==0 | nrefine>nMaxRefine | d_summed_berryCurv<summedCvgCriteria){ // stop the loop due to either convergence or max refinement reached
                     for(int ikpt=0;ikpt<nkpt;ikpt++){
                         spinBerryCurv_tmp[ifermi*nkpt+ikpt]=berryCurvOnKmesh[ikpt];
                         //printf("finnal result in kpt%d: %.3f\n",ikpt,spinBerryCurv_tmp[ifermi*nkpt+ikpt]);
