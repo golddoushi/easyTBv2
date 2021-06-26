@@ -26,21 +26,25 @@ class Hr:
                 if recordedWaveVectors>=totWaveVectors:break
             
             self.bondList=[]
+            nTotal,nSkip=0,0
             while(True):
                 lineinfo=data[iline].split()
                 if len(lineinfo)==7:
                     R1, R2, R3, sourceID, targetID, t_real, t_imag = int(lineinfo[0]),int(lineinfo[1]),int(lineinfo[2]),int(lineinfo[3])-1,int(lineinfo[4])-1,float(lineinfo[5]),float(lineinfo[6])
                     t=t_real if ignoreImagPart else t_real + 1j*t_imag
+                    nTotal+=1
                     if abs(t)>cutoff:
                         self.bondList.append(lat.BondDigital(sourceID,targetID,[R1,R2,R3],t))
                         if R1==0 and R2 ==0 and R3==0 and sourceID==targetID:
                             self.onsite[sourceID]=t_real
                             assert t_imag<1e-4, 'found complex onsite energy on orb%d'%sourceID
+                    else:
+                        nSkip+=1
                 iline+=1
                 if iline>=len(data):break
             #print(self.bondList)
             #exit()
-            print('file %s has been successfully read in %.3fms'%(filepath,1000*(time.time()-time0)))
+            print('file %s has been successfully read in %.3fms, %d/%d skipped'%(filepath,1000*(time.time()-time0),nSkip,nTotal))
 
     def readSingleTBFile(self,filepath,ignoreImagPart=False):
         time0=time.time()
@@ -127,21 +131,25 @@ class Hr:
                 if recordedWaveVectors>=totWaveVectors:break
             
             self.bondList=[]
+            nTotal,nSkip=0,0
             while(True):
                 lineinfo=data[iline].split()
                 if len(lineinfo)==7:
                     R1, R2, R3, sourceID, targetID, t_real, t_imag = int(lineinfo[0]),int(lineinfo[1]),int(lineinfo[2]),int(lineinfo[3])-1,int(lineinfo[4])-1,float(lineinfo[5]),float(lineinfo[6])
                     t=t_real if ignoreImagPart else t_real + 1j*t_imag
+                    nTotal+=1
                     if abs(t)>cutoff:
                         self.bondList.append(lat.BondDigital(sourceID,targetID,[R1,R2,R3],t))
                         if R1==0 and R2 ==0 and R3==0 and sourceID==targetID:
                             self.onsite[sourceID]=t_real
                             assert t_imag<1e-4, 'found complex onsite energy on orb%d'%sourceID
+                    else:
+                        nSkip+=1
                 iline+=1
                 if iline>=len(data):break
             #print(self.bondList)
             #exit()
-            print('file %s (spin-up) has been successfully read in %.3fms'%(filepath1,1000*(time.time()-time0)))
+            print('file %s (spin-up) has been successfully read in %.3fms, %d/%d skipped'%(filepath1,1000*(time.time()-time0),nSkip,nTotal))
 
         with open(filepath2,'r') as fin:
             data=fin.read().split('\n')
