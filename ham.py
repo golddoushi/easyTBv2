@@ -426,7 +426,7 @@ class Response:
 
         return
     
-    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],kplane=[[1,0,0],[0,1,0]],nMaxRefine=8,summedCvgCriteria=0.1,nthreads=1):
+    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],kplane=[[1,0,0],[0,1,0]],nMaxRefine=8,summedCvgCriteria=0.1,tau=0.05,nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
@@ -501,14 +501,14 @@ class Response:
         hamDLL=CDLL("./ham.dll")
         hamDLL.calcSpinHallCond.restype=py_object
 
-        degenerateThreshold=0.01
+        #tau=0.05
         result=hamDLL.calcSpinHallCond(c_int(nkpts),c_kmesh,c_dk,c_int(nMaxRefine),
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(paramReader.NFERMI),
                         c_fermi_list,
                         c_transFrame,
-                        c_double(degenerateThreshold),
+                        c_double(tau),
                         c_double(summedCvgCriteria),
                         c_int(nthreads))
             

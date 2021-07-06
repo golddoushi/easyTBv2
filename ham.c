@@ -325,6 +325,39 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
     return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i);
 }
 
+int * bubleSort_ABS(int len, double *data){
+    int*idList=(int*)malloc(len*sizeof(int));
+    for(int i=0;i<len;i++)idList[i]=i;
+    //printf("init id: ");
+    //for(int i=0;i<len;i++)printf("%d ",idList[i]);
+    //printf("\n");
+    int goON=1;
+    int checkID,checkNextID;
+    while(goON==1){
+        goON=0;
+        for(int i=0;i<len-1;i++){
+            checkID=idList[i];
+            checkNextID=idList[i+1];
+            //printf("check %d and %d, %f<>%f\n",checkID,checkNextID,fabs(data[checkID]),fabs(data[checkNextID]));
+            if(fabs(data[checkID])<fabs(data[checkNextID])){
+                idList[i]=checkNextID;
+                idList[i+1]=checkID;
+                //printf("%d %d exchange to %d %d\n",checkID,checkNextID,idList[i],idList[i+1]);
+                goON=1;
+            }
+        }
+    }
+    return idList;
+}
+
+/*int main(void){
+    double data[]={1.0,3.0,2.0,7.0,-2.0,9.0};
+    int*idList=bubleSort_ABS(6,data);
+    for(int i=0;i<6;i++)printf("%d ",idList[i]);
+    printf("\n");
+    return 0;
+}*/
+
 PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int nMaxRefine,
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
@@ -334,7 +367,7 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                        int nfermi,
                        double fermiList[nfermi],
                        double transform[3][3], // first double rows define kx ky, last row defines spin direction
-                       double degenerateThreshold,
+                       double tau,
                        double summedCvgCriteria,
                        int _nthreads){
     FILE*fp;
@@ -376,13 +409,6 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
         sigma[i][i+norbs/2]=-transform[2][1]*_Complex_I;
         sigma[i+norbs/2][i]=transform[2][1]*_Complex_I;
     }
-    //printf("sigma matrix\n");
-    //for(int i=0;i<norbs;i++){
-    //    for(int j=0;j<norbs;j++)printf("(%.1f,%.1f) ",creal(sigma[i][j]),cimag(sigma[i][j]));
-    //    printf("\n");
-    //}
-    //printf("a1=(%.3f %.3f %.3f)\n",transform[0][0],transform[0][1],transform[0][2]);
-    //printf("a2=(%.3f %.3f %.3f)\n",transform[1][0],transform[1][1],transform[1][2]);
     
     int nthreads;
     nthreads=_nthreads;
@@ -404,11 +430,15 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                 kmesh_for_process[ikpt*3+2]=kmesh[ikpt][2];
                 kpt_belongings[ikpt]=ikpt;
             }
-            // init oritinal berry curv
-            for(int ikpt=0;ikpt<nkpt;ikpt++)berryCurvOnKmesh[ikpt]=1000000.0; //init berryCurv
+            // init original berry curv
+            for(int ikpt=0;ikpt<nkpt;ikpt++)berryCurvOnKmesh[ikpt]=0.0; //init berryCurv
             int nrefine=1;
             int nStepRefine=0;
             int ngrids;
+            // init original contribution
+            int nDomination=0;
+            int dominateKList[nkpt];
+            for(int ikpt=0;ikpt<nkpt;ikpt++)dominateKList[ikpt]=0;
             while (0==0){
             //for(int nrefine=1;nrefine<=nMaxRefine;nrefine++){// loop over refinaries
                 // first confirm the individual kpt groups
@@ -547,8 +577,8 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                                 for(int mband=0;mband<norbs;mband++){
                                     double Em=eigs[mband];
                                     double deltaE=Em-En;
-                                    double deltaE_square_double=deltaE*deltaE*2;
-                                    if(Em>fermiList[ifermi] & deltaE>degenerateThreshold){
+                                    double deltaE_square_double=deltaE/(2*(deltaE*deltaE+tau*tau));
+                                    if(Em>fermiList[ifermi]){
                                         //printf("conduct bandm: %d energy: %.6f vec: ",mband,Em);
                                         //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][mband]),cimag(hk[i][mband]));
                                         //printf("\n");
@@ -560,7 +590,7 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                                         }
                                         //printf("amp1: %.3f %.3f; amp2: %.3f %.3f\n",creal(Amp1),cimag(Amp1),creal(Amp2),cimag(Amp2));
                                         //spinBerryCurv_tmp[ifermi*nkpt+ikpt]+=cimag(Amp1*Amp2)/deltaE_square_double;
-                                        berryCurvOnRefinedKmesh[ikpt]+=cimag(Amp1*Amp2)/deltaE_square_double;
+                                        berryCurvOnRefinedKmesh[ikpt]-=cimag(Amp1*Amp2)*deltaE_square_double;
                                     }
                                 }
                             }
@@ -574,6 +604,38 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                 double old_summed_berryCurv=0; // save the former berryCurv
                 for(int ikpt=0;ikpt<nkpt;ikpt++)old_summed_berryCurv+=berryCurvOnKmesh[ikpt];
                 old_summed_berryCurv/=(nkpt*TwoPI);
+
+                if(nStepRefine==1){// here we check which kpts contribute mostly
+                    //printf("start sorting...");
+                    int*kIDList=bubleSort_ABS(nkpt,berryCurvOnKmesh);
+                    double abs_sum_berryCurv=0;
+                    for(int ikpt=0;ikpt<nkpt;ikpt++)abs_sum_berryCurv+=fabs(berryCurvOnKmesh[ikpt]);
+                    //printf("done, %.6f\n",abs_sum_berryCurv);
+                    
+                    double cumulated_abs_berryCurv=0;
+                    for(int ikpt=0;ikpt<nkpt;ikpt++){
+                        cumulated_abs_berryCurv+=fabs(berryCurvOnKmesh[kIDList[ikpt]]);
+                        //printf("id %d -> %d\n",ikpt,kIDList[ikpt]);
+                        if(cumulated_abs_berryCurv<0.9*abs_sum_berryCurv){
+                            dominateKList[kIDList[ikpt]]=1;
+                            nDomination+=1;
+                        }
+                    }
+                    if(nDomination>0){
+                        printf("initial calc get |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
+                        fp=fopen("./c_log","a");
+                        fprintf(fp,"initial calc get |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
+                        fclose(fp);
+                    }else{
+                        printf("zero |Curv|\n");
+                        fp=fopen("./c_log","a");
+                        fprintf(fp,"zero |Curv|\n");
+                        fclose(fp);
+                    }
+                    //for(int ikpt=0;ikpt<nkpt;ikpt++){
+                    //    printf("kpt%d, contribution: %.6f, domination: %d\n",ikpt,berryCurvOnRefinedKmesh[ikpt],dominateKList[ikpt]);
+                    //}
+                }
 
                 nStepRefine+=1;
                 nrefine*=2;
@@ -589,23 +651,17 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                         //printf("      contributing berry curv of %.6f\n",berryCurvOnRefinedKmesh[ikpt_in_refinedGrid]);
                         ikpt_in_refinedGrid+=1;
                     }
-                    if(nStepRefine>1){
+                    if(nStepRefine>1){ // calc avg. value in densed grids for non-initial steps
                         berryCurvOnKmesh_trial[ikpt_contribute_now]=(berryCurvOnKmesh[ikpt_contribute_now]*ngrids+berryCurvOnKmesh_trial[ikpt_contribute_now])/(ngrids+sizeOfGroups[igroup]);///=sizeOfGroups[igroup];
                     }
                     //printf("kpt%d group finished, with %d grids, berry curv: %.3f\n",ikpt_contribute_now,sizeOfGroups[igroup],berryCurvOnKmesh_trial[ikpt_contribute_now]);
                     // compare the result and check if we need to refine grid more
-                    if(fabs(berryCurvOnKmesh_trial[ikpt_contribute_now])<0.1 | fabs((berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now])<0.1){
+                    if(nStepRefine>1 & (dominateKList[ikpt_contribute_now]==0 | fabs((berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now])<0.1)){
                         // update
                         berryCurvOnKmesh[ikpt_contribute_now]=berryCurvOnKmesh_trial[ikpt_contribute_now];
                         //printf("kpt%d group converged\n",ikpt_contribute_now);
                     }else{
                         // update
-                        //if(nrefine>2){
-                            //printf("-->  kpt%d group did not converge, new: %.3f old: %.3f, dev. ratio: %.3f)\n",ikpt_contribute_now,berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now],(berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now]);
-                            //fp=fopen("./c_log","a");
-                            //fprintf(fp,"-->  kpt%d group did not converge, new: %.3f old: %.3f, dev. ratio: %.3f)\n",ikpt_contribute_now,berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now],(berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now]);
-                            //fclose(fp);
-                        //}
                         if(nrefine<=nMaxRefine){
                            // create/add refined kmesh
                             double ddk[3];// interval of refined grid
@@ -662,7 +718,7 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                     fclose(fp);
                 }
 
-                if(nkptForNextProcess==0 | nrefine>nMaxRefine | d_summed_berryCurv<summedCvgCriteria){ // stop the loop due to either convergence or max refinement reached
+                if(nStepRefine>1 & (nkptForNextProcess==0 | nrefine>nMaxRefine | d_summed_berryCurv<summedCvgCriteria)){ // stop the loop due to either convergence or max refinement reached
                     for(int ikpt=0;ikpt<nkpt;ikpt++){
                         spinBerryCurv_tmp[ifermi*nkpt+ikpt]=berryCurvOnKmesh[ikpt];
                         //printf("finnal result in kpt%d: %.3f\n",ikpt,spinBerryCurv_tmp[ifermi*nkpt+ikpt]);
