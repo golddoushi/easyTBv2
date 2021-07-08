@@ -426,7 +426,7 @@ class Response:
 
         return
     
-    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],kplane=[[1,0,0],[0,1,0]],nMaxRefine=8,summedCvgCriteria=0.1,tau=0.05,nthreads=1):
+    def calcSpinHallConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],kplane=[[1,0,0],[0,1,0]],nMaxRefine=8,summedCvgCriteria=0.1,tau=0.01,nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)

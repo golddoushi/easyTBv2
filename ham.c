@@ -577,7 +577,8 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                                 for(int mband=0;mband<norbs;mband++){
                                     double Em=eigs[mband];
                                     double deltaE=Em-En;
-                                    double deltaE_square_double=deltaE/(2*(deltaE*deltaE+tau*tau));
+                                    double deltaE2=deltaE*deltaE;
+                                    double deltaE_square_double=deltaE2/(2*(deltaE2+tau*tau)*(deltaE2+tau*tau));
                                     if(Em>fermiList[ifermi]){
                                         //printf("conduct bandm: %d energy: %.6f vec: ",mband,Em);
                                         //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][mband]),cimag(hk[i][mband]));
