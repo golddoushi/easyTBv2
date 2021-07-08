@@ -623,9 +623,9 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                         }
                     }
                     if(nDomination>0){
-                        printf("initial calc get |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
+                        printf("initial calc get Curv=%.6f, |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
                         fp=fopen("./c_log","a");
-                        fprintf(fp,"initial calc get |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
+                        fprintf(fp,"initial calc get Curv=%.6f |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
                         fclose(fp);
                     }else{
                         printf("zero |Curv|\n");
