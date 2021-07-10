@@ -483,9 +483,9 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                     for(int igroup=0;igroup<nkptGroups;igroup++){
                         if(sizeOfGroups[igroup]!=basic_factor_power_n)printf("Error, size of refinements is not consistent with refinements steps\n");
                     }
-                    printf("calc on fermi: %.4f, with %d kpt groups; refine step %d with %d more grids, %d kpts in total...",fermiList[ifermi],nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
+                    printf("Iter: %d; on %d kpt groups; refine step %d with %d more grids, %d kpts in total...",nStepRefine,nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
                     fp=fopen("./c_log","a");
-                    fprintf(fp,"calc on fermi: %.4f, with %d kpt groups; refine step %d with %d more grids, %d kpts in total...",fermiList[ifermi],nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
+                    fprintf(fp,"Iter: %d; on %d kpt groups; refine step %d with %d more grids, %d kpts in total...",nStepRefine,nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
                     fclose(fp);
                 }else{
                     printf("****  initial calc on fermi: %.4f, with %d kpt groups... ",fermiList[ifermi],nkptGroups);
@@ -623,14 +623,14 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                         }
                     }
                     if(nDomination>0){
-                        printf("initial calc get Curv=%.6f, |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
+                        printf("initial calc get <Curv>=%.6f, SUM_|Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv/TwoPI,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]])/TwoPI);
                         fp=fopen("./c_log","a");
-                        fprintf(fp,"initial calc get Curv=%.6f |Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]]));
+                        fprintf(fp,"initial calc get <Curv>=%.6f SUM_|Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv/TwoPI,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]])/TwoPI);
                         fclose(fp);
                     }else{
-                        printf("zero |Curv|\n");
+                        printf("zero SUM_|Curv|\n");
                         fp=fopen("./c_log","a");
-                        fprintf(fp,"zero |Curv|\n");
+                        fprintf(fp,"zero SUM_|Curv|\n");
                         fclose(fp);
                     }
                     //for(int ikpt=0;ikpt<nkpt;ikpt++){
@@ -713,9 +713,9 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                 new_summed_berryCurv/=(nkpt*TwoPI);
                 double d_summed_berryCurv=fabs(new_summed_berryCurv-old_summed_berryCurv);
                 if(nStepRefine>1){
-                    printf("<Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
+                    printf("--> <Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
                     fp=fopen("./c_log","a");
-                    fprintf(fp,"<Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
+                    fprintf(fp,"--> <Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
                     fclose(fp);
                 }
 
