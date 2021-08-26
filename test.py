@@ -43,14 +43,14 @@ J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,sourceOrbList=[0,1,2,3,4
 exit()
 '''
 
-pR.readPOS('./mcalc/spinchain/POSCAR')
+pR.readPOS('./mcalc/graphene/POSCAR')
 hr_g=reader.Hr()
-hr_g.readDoubleFiles('./mcalc/spinchain/hr.up.dat','./mcalc/spinchain/hr.dn.dat')
+hr_g.readDoubleFiles('./mcalc/graphene/hr.up.dat','./mcalc/graphene/hr.dn.dat')
 #hr_g.readSingleFile('./mcalc/CrI3/soc/nscf_mz/wannier90_hr.dat',ignoreImagPart=False)
 gr=hamilton.Green()
-gr.calcFullBands(hr_g,fermi=0.75,mainDir='./mcalc/spinchain/',saveFig=True)
-gr.calcBands(hr_g,orbList=[0,1,2,3],spin_polarized=True,fermi=0.75,eta=0.05,mainDir='./mcalc/spinchain/',resolution=100)
-exit()
+#gr.calcFullBands(hr_g,fermi=0.75,mainDir='./mcalc/spinchain/',saveFig=True)
+gr.calcBands(hr_g,orbList=[0,1,2,3],spin_polarized=True,fermi=0.0,eta=0.05,mainDir='./mcalc/graphene/',resolution=100)
+#exit()
 #L=20
 #kmesh=[np.array([k1,0,0]) for k1 in np.linspace(0,1,L,endpoint=False)]
 #gr.calcFullDOS(hr_g,fermi=0.7,eta=0.0001,NEDOS=1000,kmesh=kmesh,mainDir='./mcalc/spinchain/')
