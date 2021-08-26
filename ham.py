@@ -544,7 +544,7 @@ class Green:
             orbUpList=orbList[:len(orbList)//2]
             orbDnList=orbList[len(orbList)//2:]
         HkList=[]
-        
+
         time0=time.time()
         if mainDir!=None: # read in kpath
             kmesh=[]
@@ -564,21 +564,8 @@ class Green:
             HkList.append(Hk)
             
         print('Hk constructed in %.3fs'%(time.time()-time0))
-        energyAXIS=np.linspace(fermi-2,fermi+2,resolution)
-        '''
-        if spin_polarized:
-            DOS=[]
-            for z in energyAXIS:
-                _dos_k=[]
-                for _hk in HkList:
-                    gk=np.linalg.inv((z+eta*1j)*np.eye(norb)-_hk)
-                    _dos_k.append(sum(np.diagonal(gk)[orbList]).imag/(-np.pi))
-                DOS.append(_dos_k)
-            plt.figure()
-            plt.imshow(DOS,extent=(-5,5,-5,5),origin='lower')
-            plt.show()
-            return
-        '''
+        energyAXIS=np.linspace(fermi-3,fermi+3,resolution)
+        
         DOS=[]
         for z in energyAXIS:
             _dos_k=[]

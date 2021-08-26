@@ -25,10 +25,11 @@ class Logger(object):
         self.log.close()
 sys.stdout = Logger('log')
 
-cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.00U3K80/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
-cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.00U3K80/',sc=[100,100,1],fermi=-0.72909361,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.0007215)
-exit()
+#cc.classifyBonds(mainDir='./mcalc/FeTeI/a_0.00U3K80/', source_list=[0], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
+#cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.00U3K80/',sc=[100,100,1],fermi=-0.72909361,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.0007215)
+#exit()
 
+'''
 pR.readPOS('./mcalc/FeTeI/a_0.05U3/POSCAR')
 hr=reader.Hr()
 hr.readDoubleFiles('./mcalc/FeTeI/a_0.05U3/wannier90.up_hr.dat','./mcalc/FeTeI/a_0.05U3/wannier90.dn_hr.dat')
@@ -40,13 +41,16 @@ J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,sourceOrbList=[0,1,2,3,4
 #J=gr.calcJFourState_Numba(hr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=10,Ly=10,Lz=1)
 #print(J)
 exit()
+'''
 
-pR.readPOS('./mcalc/graphene/POSCAR')
+pR.readPOS('./mcalc/spinchain/POSCAR')
 hr_g=reader.Hr()
-hr_g.readDoubleFiles('./mcalc/graphene/hr.up.dat','./mcalc/graphene/hr.dn.dat')
+hr_g.readDoubleFiles('./mcalc/spinchain/hr.up.dat','./mcalc/spinchain/hr.dn.dat')
 #hr_g.readSingleFile('./mcalc/CrI3/soc/nscf_mz/wannier90_hr.dat',ignoreImagPart=False)
 gr=hamilton.Green()
-#gr.calcBands(hr_g,orbList=[],spin_polarized=True,fermi=0.0,eta=0.05,mainDir='./mcalc/spinchain/',resolution=100)
+gr.calcFullBands(hr_g,fermi=0.75,mainDir='./mcalc/spinchain/',saveFig=True)
+gr.calcBands(hr_g,orbList=[0,1,2,3],spin_polarized=True,fermi=0.75,eta=0.05,mainDir='./mcalc/spinchain/',resolution=100)
+exit()
 #L=20
 #kmesh=[np.array([k1,0,0]) for k1 in np.linspace(0,1,L,endpoint=False)]
 #gr.calcFullDOS(hr_g,fermi=0.7,eta=0.0001,NEDOS=1000,kmesh=kmesh,mainDir='./mcalc/spinchain/')
