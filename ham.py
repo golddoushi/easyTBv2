@@ -1819,7 +1819,7 @@ class Green:
         E_coupling, E_coupling_err =integrate.quad(getEOnCircle,a=np.pi,b=0.,epsabs=paramReader.EDIFF)
         print("Coupling energy obtained in %.3fs ===> %.6f +- %.6f"%(time.time()-time0,E_coupling,E_coupling_err))
         
-        J=E_coupling/(-2*(np.cos(theta)-1))
+        J=E_coupling/(2*(1-np.cos(theta)))
         return J
     
     # func series to calc J with CDLL
