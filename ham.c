@@ -251,14 +251,22 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
     {
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //int kBaseIndex=ikpt*norbs*norbs;
             lapack_complex_double hk[norbs][norbs]; // init Hk
             lapack_complex_double Dhk[norbs][norbs][3]; // init DHk
             for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++){hk[i][j]=0;for(int k=0;k<3;k++)Dhk[i][j][k]=0;}
             double eigs[norbs]; // output eigenvalues of Hk
+            //printf("hoppings\n");
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 double phase=0;
                 for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                //printf("bond%d [",ihopping);
+                //for (int i=0;i<3;i++) printf("%d ",overLat[ihopping][i]);
+                //printf("] %d ~ %d",sourceID[ihopping],targetID[ihopping]);
+                //double phase_tmp=0;
+                //for (int i=0;i<3;i++) phase_tmp+=overLat[ihopping][i]*kmesh[ikpt][i];
+                //printf(" phase: %.4f 2pi t: %.4f %.4f\n",phase_tmp,hopping_real[ihopping],hopping_imag[ihopping]);
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
                 hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
                 Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
@@ -278,8 +286,40 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                     Hk_dk3_i_tmp[index]=cimag(Dhk[iorb][jorb][2]);
                 }
             }
+            /*
+            //printf("%.4f %.4f\n",creal(hk[0][1]*hk[1][0]),3+2*cos(TwoPI*kmesh[ikpt][0])+2*cos(TwoPI*kmesh[ikpt][1])+2*cos(TwoPI*(kmesh[ikpt][0]+kmesh[ikpt][1])));
+            // t*(1 + exp(-i 2pi k1) + exp(-i 2pi k2) )
+            lapack_complex_double hk_ele_trial=-1*(1+cexp(-TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][1]));
+            printf("trial elements: %.4f %.4f\n",creal(hk_ele_trial),cimag(hk_ele_trial));
+            // t*(1 + exp( i 2pi k1) + exp( i 2pi k2) )
+            lapack_complex_double hk_ele_trial_conj=-1*(1+cexp(TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(TwoPI*_Complex_I*kmesh[ikpt][1]));
+            lapack_complex_double hk_ele_trial_square=hk_ele_trial*conj(hk_ele_trial);
+            lapack_complex_double hk_ele_trial_square2=hk_ele_trial*hk_ele_trial_conj;
+            lapack_complex_double hk_ele_trial_square3=(1+cexp(-TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][1]))*(1+cexp(TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(TwoPI*_Complex_I*kmesh[ikpt][1]));
+            hk_ele_trial_square3=3+cexp(TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(TwoPI*_Complex_I*kmesh[ikpt][1])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][1])+cexp(TwoPI*_Complex_I*(kmesh[ikpt][0]-kmesh[ikpt][1]))+cexp(-TwoPI*_Complex_I*(kmesh[ikpt][0]-kmesh[ikpt][1]));
+            //t^2*(3 + 2cos k1 + 2cos k2 + 2cos(k1-k2))
+            hk_ele_trial_square3=3+2*cos(TwoPI*kmesh[ikpt][0])+2*cos(TwoPI*kmesh[ikpt][1])+2*cos(TwoPI*(kmesh[ikpt][0]-kmesh[ikpt][1]));
+            
+            printf("|f(k)|^2: %.4f %.4f, %.4f %.4f, %.4f %.4f\n",creal(hk_ele_trial_square),cimag(hk_ele_trial_square),creal(hk_ele_trial_square2),cimag(hk_ele_trial_square2),creal(hk_ele_trial_square3),cimag(hk_ele_trial_square3));
+            */
+            //printf("Hk:\n");
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    //printf("(%.4f %.4f) ",creal(hk[iorb][jorb]),cimag(hk[iorb][jorb]));
+                    /*
+                    Hk_dk1_r_tmp[index]=creal(Dhk[iorb][jorb][0]);
+                    Hk_dk1_i_tmp[index]=cimag(Dhk[iorb][jorb][0]);
+                    Hk_dk2_r_tmp[index]=creal(Dhk[iorb][jorb][1]);
+                    Hk_dk2_i_tmp[index]=cimag(Dhk[iorb][jorb][1]);
+                    Hk_dk3_r_tmp[index]=creal(Dhk[iorb][jorb][2]);
+                    Hk_dk3_i_tmp[index]=cimag(Dhk[iorb][jorb][2]);
+                    */
+                }
+                //printf("\n");
+            }
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+            //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
             for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
@@ -743,7 +783,7 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
     return Py_BuildValue("(O)",spinBerryCurv);
 }
 
-PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3], int nMaxRefine,
+PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
                        int overLat[nhoppings][3], 
@@ -751,48 +791,24 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                        double hopping_imag[nhoppings],
                        int nphoton,
                        double omegaList[nphoton],
-                       double transform[3][3], // first double rows define kx ky, last row defines spin direction
+                       double fermi,
+                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
+                       double orbCorr[norbs][3], // fractional corrdinates of orbs
                        double tau,
-                       double summedCvgCriteria,
+                       double erange[2],
                        int _nthreads){
+    printf("now in cdll\n");
     FILE*fp;
     fp=fopen("./c_log","w");
     fprintf(fp,"#Log file of ham.dll\n");
+    // verification
+    fprintf(fp,"nkpt: %d, dk: %.2f %.2f %.2f, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,dk[0],dk[1],dk[2],norbs,nhoppings,nphoton,erange[0],erange[1]);
+    fprintf(fp,"memory estimation: %.4f MB\n",nphoton*nkpt/1024*8*sizeof(lapack_complex_double)*2/1024);
     fclose(fp);
-    
-    double * spinBerryCurv_tmp=(double*)malloc(nphoton*nkpt*sizeof(double));
-    
-    double * kmesh_for_process=(double*)malloc(nMaxRefine*nMaxRefine*nMaxRefine*nkpt*3*sizeof(double));
-    int * kpt_belongings=(int*)malloc(nMaxRefine*nMaxRefine*nMaxRefine*nkpt*sizeof(int));
-    int * kpt_belongings_nextProcess=(int*)malloc(nMaxRefine*nMaxRefine*nMaxRefine*nkpt*sizeof(int));
-    double * berryCurvOnKmesh=(double*)malloc(nkpt*sizeof(double));
-    double * berryCurvOnKmesh_trial=(double*)malloc(nkpt*sizeof(double));
-    double * berryCurvOnRefinedKmesh=(double*)malloc(nMaxRefine*nMaxRefine*nMaxRefine*nkpt*sizeof(double));
-    
-    int dim=1; // dimension of Brilloinzone
-    if(dk[1]<0.6)dim=2;
-    if(dk[2]<0.6)dim=3;
-    int basic_factor=1; // basic multiply factor for grid refinement
-    for(int i=0;i<dim;i++)basic_factor*=2;
-    //printf("basic factor %d\n",basic_factor);
 
-    // construct spin matrix
-    lapack_complex_double sigma[norbs][norbs];
-    for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)sigma[i][j]=0;
-    for(int i=0;i<norbs/2;i++){
-        // contribution from sigma^z
-        sigma[i][i]=transform[2][2];
-        sigma[i+norbs/2][i+norbs/2]=-transform[2][2];
-        // contribution from sigma^x
-        sigma[i][i+norbs/2]=transform[2][0];
-        sigma[i+norbs/2][i]=transform[2][0];
-        // contribution from sigma^y
-        sigma[i][i+norbs/2]=-transform[2][1]*_Complex_I;
-        sigma[i+norbs/2][i]=transform[2][1]*_Complex_I;
-    }
-    // reset spin matrix to identity matrix, since we are calc charge current
-    for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)sigma[i][j]=0;
-    for(int i=0;i<norbs;i++)sigma[i][i]=1;
+    lapack_complex_double itau=tau*_Complex_I;
+    lapack_complex_double * conductance_on_kmesh_on_omega=(lapack_complex_double*)malloc(nphoton*nkpt*8*sizeof(lapack_complex_double));
+    for(int i=0;i<nphoton*nkpt*8;i++)conductance_on_kmesh_on_omega[i]=0;
 
     int nthreads;
     nthreads=_nthreads;
@@ -801,325 +817,185 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
     fp=fopen("./c_log","a");
     fprintf(fp,"use %d cores in ham.dll\n",nthreads);
     fclose(fp);
-    // calculate matrix elements
-    for(int ifermi=0;ifermi<nphoton;ifermi++){
-        // init processing kmesh
-        int nkptForProcess=nkpt;
-        int nkptGroups;
-        for(int ikpt=0;ikpt<nkpt;ikpt++){
-            kmesh_for_process[ikpt*3+0]=kmesh[ikpt][0];
-            kmesh_for_process[ikpt*3+1]=kmesh[ikpt][1];
-            kmesh_for_process[ikpt*3+2]=kmesh[ikpt][2];
-            kpt_belongings[ikpt]=ikpt;
-        }
-        // init original berry curv
-        for(int ikpt=0;ikpt<nkpt;ikpt++)berryCurvOnKmesh[ikpt]=0.0; //init berryCurv
-        int nrefine=1;
-        int nStepRefine=0;
-        int ngrids;
-        // init original contribution
-        int nDomination=0;
-        int dominateKList[nkpt];
-        for(int ikpt=0;ikpt<nkpt;ikpt++)dominateKList[ikpt]=0;
-        while (0==0){
-            // first confirm the individual kpt groups
-            int sizeOfGroups[nkpt];
-            nkptGroups=0;
-            int nContribute=0;
-            int ikpt_contribute_old=kpt_belongings[0];
-            int ikpt_contribute_now;
-            for(int ikpt=0;ikpt<nkptForProcess-1;ikpt++){
-                ikpt_contribute_now=kpt_belongings[ikpt];
-                if(ikpt_contribute_now==ikpt_contribute_old){
-                    nContribute+=1;
-                }else{
-                    ikpt_contribute_old=ikpt_contribute_now;
-                    sizeOfGroups[nkptGroups]=nContribute;
-                    nkptGroups+=1;
-                    nContribute=1;
-                }
-            }
-            ikpt_contribute_now=kpt_belongings[nkptForProcess-1];
-            //printf("last ikpt group index: %d, -- former index: %d\n",ikpt_contribute_now,ikpt_contribute_old);
-            if(ikpt_contribute_now==ikpt_contribute_old){
-                sizeOfGroups[nkptGroups]=nContribute+1;
-                nkptGroups+=1;
-            }else{
-                sizeOfGroups[nkptGroups]=nContribute;
-                nkptGroups+=1;
-                sizeOfGroups[nkptGroups]=1;
-                nkptGroups+=1;
-            }
-            //printf("found %d kpt groups\n",nkptGroups);
 
-            int basic_factor_power_n=1;
-            for(int i=0;i<nStepRefine;i++)basic_factor_power_n*=basic_factor;
-            ngrids=(basic_factor_power_n-1)/(basic_factor-1);
-            //
-                
-            // calc berry on (perharps) refined grids
-            for(int ikpt=0;ikpt<nkptForProcess;ikpt++)berryCurvOnRefinedKmesh[ikpt]=0.0; // init berryCurv
-            if(nStepRefine>0){
-                // quick check the size of refined grids
-                for(int igroup=0;igroup<nkptGroups;igroup++){
-                    if(sizeOfGroups[igroup]!=basic_factor_power_n)printf("Error, size of refinements is not consistent with refinements steps\n");
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            int writing_k_index=ikpt*nphoton*8;
+            lapack_complex_double hk[norbs][norbs]; // init Hk
+            lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
+            lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
+            //lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    hk[i][j]=0;
+                    Dhk[i][j][0]=0;
+                    Dhk[i][j][1]=0;
+                    Dhk[i][j][2]=0;
+                    DhkDkxy[i][j][0]=0;
+                    DhkDkxy[i][j][1]=0;
+                    //SDhk_x[i][j]=0;
                 }
-                printf("Iter: %d; on %d kpt groups; refine step %d with %d more grids, %d kpts in total...",nStepRefine,nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
-                fp=fopen("./c_log","a");
-                fprintf(fp,"Iter: %d; on %d kpt groups; refine step %d with %d more grids, %d kpts in total...",nStepRefine,nkptGroups,nStepRefine,basic_factor_power_n,nkptForProcess);
-                fclose(fp);
-            }else{
-                printf("****  initial calc on fermi: %.4f, with %d kpt groups... ",omegaList[ifermi],nkptGroups);
-                fp=fopen("./c_log","a");
-                fprintf(fp,"****  initial calc on fermi: %.4f, with %d kpt groups... ",omegaList[ifermi],nkptGroups);
-                fclose(fp);
             }
-            #pragma omp parallel num_threads(nthreads)
-            {
-                #pragma omp for
-                for(int ikpt=0;ikpt<nkptForProcess;ikpt++){// loop over kmesh
-                    lapack_complex_double hk[norbs][norbs]; // init Hk
-                    lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
-                    lapack_complex_double Dhk_xy[norbs][norbs][2]; // init DHk/Dkx,Dky
-                    lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
+            double eigs[norbs]; // output eigenvalues of Hk
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                double phase=0;
+                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
+                Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
+                Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
+            }
+            // unitary transform into real space partial
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    for(int k=0;k<3;k++){
+                        DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
+                        DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
+                    }
+                    //DhkDkxy[i][j][0]=Dhk[i][j][0];
+                    //DhkDkxy[i][j][1]=Dhk[i][j][1];
+                }
+            }
+            /*if(ikpt==3){
+                printf("Hk:\n");
+                for(int i=0;i<norbs;i++){
+                    for(int j=0;j<norbs;j++)printf("(%.3f %.3f)",creal(hk[i][j]),cimag(hk[i][j]));
+                    printf("\n");
+                }
+            }*/
+
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            // vec[i]=hk[:][i]
+            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+            /*if(ikpt==3){
+                printf("E5: %.6f\n",eigs[5]);
+                //for(int j=0;j<norbs;j++)printf("(%.3f %.3f)",creal(hk[j][5]),cimag(hk[j][5]));
+                //printf("\n");
+
+                printf("E27: %.6f\n",eigs[27]);
+                //for(int j=0;j<norbs;j++)printf("(%.3f %.3f)",creal(hk[j][27]),cimag(hk[j][27]));
+                //printf("\n");
+
+                lapack_complex_double overlap=0.0;
+                for(int j=0;j<norbs;j++)overlap+=conj(hk[j][5])*hk[j][27];
+                printf("<5|27>: %.6f,%.6f\n",creal(overlap),cimag(overlap));
+            }*/
+            for(int bandl=0;bandl<norbs;bandl++){ // loop over band_l
+                double El=eigs[bandl];
+                if(El<erange[0] | El>erange[1]) continue;
+                int fl=0;
+                if(El<=fermi)fl=1;
+                for(int bandn=0;bandn<norbs;bandn++){ // loop over band_m
+                    double En=eigs[bandn];
+                    if(En<erange[0] | En>erange[1]) continue;
+                    int fn=0;
+                    if(En<=fermi)fn=1;
+                    int fln=fl-fn;
+                    if (fln==0) continue;
+
+                    // calc overlap
+                    lapack_complex_double px_nl=0;
+                    lapack_complex_double py_nl=0;
+                    lapack_complex_double pz_nl=0;
                     for(int i=0;i<norbs;i++){
                         for(int j=0;j<norbs;j++){
-                            hk[i][j]=0;
-                            Dhk[i][j][0]=0;
-                            Dhk[i][j][1]=0;
-                            Dhk[i][j][2]=0;
-                            Dhk_xy[i][j][0]=0;
-                            Dhk_xy[i][j][1]=0;
-                            SDhk_x[i][j]=0;
+                            px_nl+=conj(hk[j][bandn])*DhkDkxy[j][i][0]*hk[i][bandl];
+                            py_nl+=conj(hk[j][bandn])*DhkDkxy[j][i][1]*hk[i][bandl];
+                            //pz_lm+=conj(hk[j][bandl])*Dhk[j][i][2]*hk[i][bandm];
                         }
                     }
-                    double eigs[norbs]; // output eigenvalues of Hk
-                    for(int ihopping=0;ihopping<nhoppings;ihopping++){
-                        double phase=0;
-                        //for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*subkmesh[isubkpt][i];
-                        for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh_for_process[ikpt*3+i];
-                        lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
-                        hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                        Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
-                        Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
-                        Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
-                    }
-                    // construct DHk/Dx,Dy
-                    for(int i=0;i<norbs;i++){
-                        for(int j=0;j<norbs;j++){
-                            for(int k=0;k<3;k++){
-                                Dhk_xy[i][j][0]+=transform[0][k]*Dhk[i][j][k];
-                                Dhk_xy[i][j][1]+=transform[1][k]*Dhk[i][j][k];
+                    for(int bandm=0;bandm<norbs;bandm++){ // loop over band_n
+                        //if(bandn!=bandl)continue; // switch for bandn
+                        double Em=eigs[bandm];
+                        if(Em<erange[0] | Em>erange[1]) continue;
+                        // calc overlap
+                        lapack_complex_double px_lm=0;
+                        lapack_complex_double py_lm=0;
+                        //lapack_complex_double pz_mn=0;
+                        lapack_complex_double px_mn=0;
+                        lapack_complex_double py_mn=0;
+                        //lapack_complex_double pz_nl=0;
+                        for(int i=0;i<norbs;i++){
+                            for(int j=0;j<norbs;j++){
+                                px_lm+=conj(hk[j][bandl])*DhkDkxy[j][i][0]*hk[i][bandm];
+                                py_lm+=conj(hk[j][bandl])*DhkDkxy[j][i][1]*hk[i][bandm];
+                                //pz_mn+=conj(hk[j][bandm])*Dhk[j][i][2]*hk[i][bandn];
+                                px_mn+=conj(hk[j][bandm])*DhkDkxy[j][i][0]*hk[i][bandn];
+                                py_mn+=conj(hk[j][bandm])*DhkDkxy[j][i][1]*hk[i][bandn];
+                                //pz_nl+=conj(hk[j][bandn])*Dhk[j][i][2]*hk[i][bandl];
                             }
                         }
-                    }
-                    // construct S \dot DHk/Dx
-                    for(int i=0;i<norbs;i++){
-                        for(int j=0;j<norbs;j++){
-                            for(int k=0;k<norbs;k++){
-                                SDhk_x[i][j]+=sigma[i][k]*Dhk_xy[k][j][0];
-                                SDhk_x[i][j]+=Dhk_xy[i][k][0]*sigma[k][j];
-                            }
+
+                        for(int iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
+                            int writing_ph_index=writing_k_index+iphoton*8;
+                            double omega=omegaList[iphoton];
+                            
+                            lapack_complex_double factor_global=0;
+                            //if(fabs(En-El)>1e-6)
+                            factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                            //printf("ikpt: %d, omega: %.4f, El:%.4f Em:%.4f flm:%d dE: %.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,flm,El-Em,creal(factor_global),cimag(factor_global));
+                            //printf("   l,m,n: %d %d %d -- px_lm: %.4f, %.4f px_mn: %.4f, %.4f px_nl: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn),creal(px_nl),cimag(px_nl));
+                            conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global;
+                            conductance_on_kmesh_on_omega[writing_ph_index+1]+=px_nl*px_lm*py_mn*factor_global;
+                            conductance_on_kmesh_on_omega[writing_ph_index+2]+=py_nl*py_lm*px_mn*factor_global;
+                            conductance_on_kmesh_on_omega[writing_ph_index+3]+=py_nl*py_lm*py_mn*factor_global;
+                            conductance_on_kmesh_on_omega[writing_ph_index+4]+=px_nl*py_lm*px_mn*factor_global;
+                            conductance_on_kmesh_on_omega[writing_ph_index+5]+=px_nl*py_lm*py_mn*factor_global;
+                            conductance_on_kmesh_on_omega[writing_ph_index+6]+=py_nl*px_lm*px_mn*factor_global;
+                            conductance_on_kmesh_on_omega[writing_ph_index+7]+=py_nl*px_lm*py_mn*factor_global;
+                            
+                            /*
+                            omega=omega;
+                            lapack_complex_double factor_global1=flm/(omega*omega)*(1/(El-Em)/(El-En+omega+itau)+1/(El-Em)/(El-En-omega+itau));
+                            lapack_complex_double factor_global2=flm/(omega*omega)*(-1/(En-El+omega+itau)/(El-Em+omega+itau)-1/(En-El-omega+itau)/(El-Em-omega+itau));
+                            conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global1+conj(px_nl*px_lm*px_mn)*factor_global2;
+                            conductance_on_kmesh_on_omega[writing_ph_index+1]+=py_nl*px_lm*px_mn*factor_global1+conj(py_nl*px_lm*px_mn)*factor_global2;
+                            conductance_on_kmesh_on_omega[writing_ph_index+2]+=px_nl*py_lm*py_mn*factor_global1+conj(px_nl*py_lm*py_mn)*factor_global2;
+                            conductance_on_kmesh_on_omega[writing_ph_index+3]+=py_nl*py_lm*py_mn*factor_global1+conj(py_nl*py_lm*py_mn)*factor_global2;
+                            conductance_on_kmesh_on_omega[writing_ph_index+4]+=px_nl*px_lm*py_mn*factor_global1+conj(px_nl*px_lm*py_mn)*factor_global2;
+                            conductance_on_kmesh_on_omega[writing_ph_index+5]+=py_nl*px_lm*py_mn*factor_global1+conj(py_nl*px_lm*py_mn)*factor_global2;
+                            conductance_on_kmesh_on_omega[writing_ph_index+6]+=px_nl*py_lm*px_mn*factor_global1+conj(px_nl*py_lm*px_mn)*factor_global2;
+                            conductance_on_kmesh_on_omega[writing_ph_index+7]+=py_nl*py_lm*px_mn*factor_global1+conj(py_nl*py_lm*px_mn)*factor_global2;
+                            */
                         }
-                    }
-                    //printf("kpt%d, [%.1f %.1f %.1f] S Dhk/Dx matrix:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
-                    //for(int i=0;i<norbs;i++){
-                    //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(SDhk_x[i][j]),cimag(SDhk_x[i][j]));
-                    //    printf("\n");
-                    //}
-                    //printf("Dhk/Dy matrix:\n");
-                    //for(int i=0;i<norbs;i++){
-                    //    for(int j=0;j<norbs;j++)printf("(%.3f,%.3f) ",creal(Dhk_xy[i][j][1]),cimag(Dhk_xy[i][j][1]));
-                    //    printf("\n");
-                    //}
-                    int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
-                    // vec[i]=hk[:][i]
-                    if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-
-                    for(int nband=0;nband<norbs;nband++){
-                        double En=eigs[nband];
-                        if(En<=omegaList[ifermi]){
-                            //printf("valence bandn: %d energy: %.6f vec: ",nband,En);
-                            //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][nband]),cimag(hk[i][nband]));
-                            //printf("\n");
-                            lapack_complex_double vecnDotSDHkDx[norbs];
-                            for(int i=0;i<norbs;i++)vecnDotSDHkDx[i]=0;
-                            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)vecnDotSDHkDx[i]+=conj(hk[j][nband])*SDhk_x[j][i];
-                            //printf("n dot SDHk/Dx: ");
-                            //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(vecnDotSDHkDx[i]),cimag(vecnDotSDHkDx[i]));
-                            //printf("\n");
-                            lapack_complex_double DHkDyDotVecn[norbs];
-                            for(int i=0;i<norbs;i++)DHkDyDotVecn[i]=0;
-                            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)DHkDyDotVecn[i]+=Dhk_xy[i][j][1]*hk[j][nband];
-                            //printf("DHk/Dy dot n: ");
-                            //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(DHkDyDotVecn[i]),cimag(DHkDyDotVecn[i]));
-                            //printf("\n");
-
-                            for(int mband=0;mband<norbs;mband++){
-                                double Em=eigs[mband];
-                                double deltaE=Em-En;
-                                double deltaE2=deltaE*deltaE;
-                                double deltaE_square_double=deltaE2/(2*(deltaE2+tau*tau)*(deltaE2+tau*tau));
-                                if(Em>omegaList[ifermi]){
-                                    //printf("conduct bandm: %d energy: %.6f vec: ",mband,Em);
-                                    //for(int i=0;i<norbs;i++)printf("(%.3f,%.3f) ",creal(hk[i][mband]),cimag(hk[i][mband]));
-                                    //printf("\n");
-                                    lapack_complex_double Amp1=0;
-                                    lapack_complex_double Amp2=0;
-                                    for(int i=0;i<norbs;i++){
-                                        Amp1+=vecnDotSDHkDx[i]*hk[i][mband];
-                                        Amp2+=conj(hk[i][mband])*DHkDyDotVecn[i];
-                                    }
-                                    //printf("amp1: %.3f %.3f; amp2: %.3f %.3f\n",creal(Amp1),cimag(Amp1),creal(Amp2),cimag(Amp2));
-                                    //spinBerryCurv_tmp[ifermi*nkpt+ikpt]+=cimag(Amp1*Amp2)/deltaE_square_double;
-                                    berryCurvOnRefinedKmesh[ikpt]-=cimag(Amp1*Amp2)*deltaE_square_double;
-                                }
-                            }
-                        }
-                    }
+                    } 
                 }
-            }
-            printf(" done\n");
-            fp=fopen("./c_log","a");
-            fprintf(fp," done\n");
-            fclose(fp);
-            double old_summed_berryCurv=0; // save the former berryCurv
-            for(int ikpt=0;ikpt<nkpt;ikpt++)old_summed_berryCurv+=berryCurvOnKmesh[ikpt];
-            old_summed_berryCurv/=(nkpt*TwoPI);
-
-            if(nStepRefine==1){// here we check which kpts contribute mostly
-                //printf("start sorting...");
-                int*kIDList=bubleSort_ABS(nkpt,berryCurvOnKmesh);
-                double abs_sum_berryCurv=0;
-                for(int ikpt=0;ikpt<nkpt;ikpt++)abs_sum_berryCurv+=fabs(berryCurvOnKmesh[ikpt]);
-                //printf("done, %.6f\n",abs_sum_berryCurv);
-                    
-                double cumulated_abs_berryCurv=0;
-                for(int ikpt=0;ikpt<nkpt;ikpt++){
-                    cumulated_abs_berryCurv+=fabs(berryCurvOnKmesh[kIDList[ikpt]]);
-                    //printf("id %d -> %d\n",ikpt,kIDList[ikpt]);
-                    if(cumulated_abs_berryCurv<0.9*abs_sum_berryCurv){
-                        dominateKList[kIDList[ikpt]]=1;
-                        nDomination+=1;
-                    }
-                }
-                if(nDomination>0){
-                    printf("initial calc get <Curv>=%.6f, SUM_|Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv/TwoPI,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]])/TwoPI);
-                    fp=fopen("./c_log","a");
-                    fprintf(fp,"initial calc get <Curv>=%.6f SUM_|Curv|=%.6E, 90 percent contributed by %d/%d kpts, cutoff |Curv|=%.6f\n",old_summed_berryCurv,abs_sum_berryCurv/TwoPI,nDomination,nkpt,fabs(berryCurvOnRefinedKmesh[kIDList[nDomination-1]])/TwoPI);
-                    fclose(fp);
-                }else{
-                    printf("zero SUM_|Curv|\n");
-                    fp=fopen("./c_log","a");
-                    fprintf(fp,"zero SUM_|Curv|\n");
-                    fclose(fp);
-                }
-                //for(int ikpt=0;ikpt<nkpt;ikpt++){
-                //    printf("kpt%d, contribution: %.6f, domination: %d\n",ikpt,berryCurvOnRefinedKmesh[ikpt],dominateKList[ikpt]);
-                //}
-            }
-
-            nStepRefine+=1;
-            nrefine*=2;
-            //accquire berry on original kmesh
-            for(int ikpt=0;ikpt<nkpt;ikpt++)berryCurvOnKmesh_trial[ikpt]=0.0; //init berryCurv
-            int nkptForNextProcess=0;
-            int ikpt_in_refinedGrid=0;
-            for(int igroup=0;igroup<nkptGroups;igroup++){
-                ikpt_contribute_now=kpt_belongings[ikpt_in_refinedGrid];
-                for(int ikpt_ingroup=0;ikpt_ingroup<sizeOfGroups[igroup];ikpt_ingroup++){
-                    berryCurvOnKmesh_trial[ikpt_contribute_now]+=berryCurvOnRefinedKmesh[ikpt_in_refinedGrid];
-                    //printf("kpt%d group, kpt%d in refined mesh\n",ikpt_contribute_now,ikpt_in_refinedGrid);
-                    //printf("      contributing berry curv of %.6f\n",berryCurvOnRefinedKmesh[ikpt_in_refinedGrid]);
-                    ikpt_in_refinedGrid+=1;
-                }
-                if(nStepRefine>1){ // calc avg. value in densed grids for non-initial steps
-                    berryCurvOnKmesh_trial[ikpt_contribute_now]=(berryCurvOnKmesh[ikpt_contribute_now]*ngrids+berryCurvOnKmesh_trial[ikpt_contribute_now])/(ngrids+sizeOfGroups[igroup]);///=sizeOfGroups[igroup];
-                }
-                //printf("kpt%d group finished, with %d grids, berry curv: %.3f\n",ikpt_contribute_now,sizeOfGroups[igroup],berryCurvOnKmesh_trial[ikpt_contribute_now]);
-                // compare the result and check if we need to refine grid more
-                if(nStepRefine>1 & (dominateKList[ikpt_contribute_now]==0 | fabs((berryCurvOnKmesh_trial[ikpt_contribute_now]-berryCurvOnKmesh[ikpt_contribute_now])/berryCurvOnKmesh[ikpt_contribute_now])<0.1)){
-                    // update
-                    berryCurvOnKmesh[ikpt_contribute_now]=berryCurvOnKmesh_trial[ikpt_contribute_now];
-                    //printf("kpt%d group converged\n",ikpt_contribute_now);
-                }else{
-                    // update
-                    if(nrefine<=nMaxRefine){
-                       // create/add refined kmesh
-                        double ddk[3];// interval of refined grid
-                        for(int i=0;i<3;i++)ddk[i]=dk[i]/nrefine;
-                        double odk[3];// extra shift to locate refined grid around center
-                        for(int i=0;i<3;i++)odk[i]=ddk[i]*(nrefine-1)/2;
-                        //if(nrefine>1)printf("create refined grids for kpt%d group centered in %.3f %.3f %.3f\n",ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2]);
-                        if(dim==3){ // dim==3
-                            for(int i=0;i<nrefine;i++){
-                                for(int j=0;j<nrefine;j++){
-                                    for(int k=0;k<nrefine;k++){
-                                        kmesh_for_process[nkptForNextProcess*3+0]=kmesh[ikpt_contribute_now][0]+i*ddk[0]-odk[0];
-                                        kmesh_for_process[nkptForNextProcess*3+1]=kmesh[ikpt_contribute_now][1]+j*ddk[1]-odk[1];
-                                        kmesh_for_process[nkptForNextProcess*3+2]=kmesh[ikpt_contribute_now][2]+k*ddk[2]-odk[2];
-                                        //printf("    include kpt%d, %.3f %.3f %.3f\n",nkptForNextProcess,kmesh_for_process[nkptForNextProcess*3+0],kmesh_for_process[nkptForNextProcess*3+1],kmesh_for_process[nkptForNextProcess*3+2]);
-                                        kpt_belongings_nextProcess[nkptForNextProcess]=ikpt_contribute_now;
-                                        nkptForNextProcess+=1;
-                                    }
-                                }
-                            }
-                        }else if(dim==2){
-                            for(int i=0;i<nrefine;i++){
-                                for(int j=0;j<nrefine;j++){
-                                    kmesh_for_process[nkptForNextProcess*3+0]=kmesh[ikpt_contribute_now][0]+i*ddk[0]-odk[0];
-                                    kmesh_for_process[nkptForNextProcess*3+1]=kmesh[ikpt_contribute_now][1]+j*ddk[1]-odk[1];
-                                    kmesh_for_process[nkptForNextProcess*3+2]=kmesh[ikpt_contribute_now][2];//+k*ddk[2]-odk[2];
-                                    //printf("    include kpt%d, %.3f %.3f %.3f\n",nkptForNextProcess,kmesh_for_process[nkptForNextProcess*3+0],kmesh_for_process[nkptForNextProcess*3+1],kmesh_for_process[nkptForNextProcess*3+2]);
-                                    kpt_belongings_nextProcess[nkptForNextProcess]=ikpt_contribute_now;
-                                    nkptForNextProcess+=1;
-                                }
-                            }
-                        }else{
-                            printf("Error, 1-dimensional BZ is still in development\n");
-                            exit(1);
-                        }
-                    }else if(nrefine>2){
-                        printf("-->  cvg. failed at fermi %.4f, ikpt %d, [%.4f %.4f %.4f], final ratio: %.6f/%.6f\n",omegaList[ifermi],ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2],berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now]);
-                        fp=fopen("./c_log","a");
-                        fprintf(fp,"-->  cvg. failed at fermi %.4f, ikpt %d, [%.4f %.4f %.4f], final ratio: %.6f/%.6f\n",omegaList[ifermi],ikpt_contribute_now,kmesh[ikpt_contribute_now][0],kmesh[ikpt_contribute_now][1],kmesh[ikpt_contribute_now][2],berryCurvOnKmesh_trial[ikpt_contribute_now],berryCurvOnKmesh[ikpt_contribute_now]);
-                        fclose(fp);
-                    }
-                    berryCurvOnKmesh[ikpt_contribute_now]=berryCurvOnKmesh_trial[ikpt_contribute_now];
-                }
-            }// analysis on data on refined kmesh fininished
-                
-            double new_summed_berryCurv=0; // save the former berryCurv
-            for(int ikpt=0;ikpt<nkpt;ikpt++)new_summed_berryCurv+=berryCurvOnKmesh[ikpt];
-            new_summed_berryCurv/=(nkpt*TwoPI);
-            double d_summed_berryCurv=fabs(new_summed_berryCurv-old_summed_berryCurv);
-            if(nStepRefine>1){
-                printf("--> <Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
-                fp=fopen("./c_log","a");
-                fprintf(fp,"--> <Curv>: %.6f on %d grids, and %.6f on %d grids, diff: %.4f\n",new_summed_berryCurv,ngrids+basic_factor_power_n,old_summed_berryCurv,ngrids,d_summed_berryCurv);
-                fclose(fp);
-            }
-
-            if(nStepRefine>1 & (nkptForNextProcess==0 | nrefine>nMaxRefine | d_summed_berryCurv<summedCvgCriteria)){ // stop the loop due to either convergence or max refinement reached
-                for(int ikpt=0;ikpt<nkpt;ikpt++){
-                    spinBerryCurv_tmp[ifermi*nkpt+ikpt]=berryCurvOnKmesh[ikpt];
-                    //printf("finnal result in kpt%d: %.3f\n",ikpt,spinBerryCurv_tmp[ifermi*nkpt+ikpt]);
-                }
-                break;
-            }else{ // do another try
-                nkptForProcess=nkptForNextProcess;
-                for(int ikpt=0;ikpt<nkptForProcess;ikpt++)kpt_belongings[ikpt]=kpt_belongings_nextProcess[ikpt];
             }
         }
     }
+    printf(" done\n");
+    fp=fopen("./c_log","a");
+    fprintf(fp," done\n");
+    fclose(fp);
     
 
-    PyObject * spinBerryCurv=PyTuple_New(nphoton*nkpt);
+    PyObject * conductance_real=PyTuple_New(nphoton*nkpt*8);
+    PyObject * conductance_imag=PyTuple_New(nphoton*nkpt*8);
 
-    for(int ifermi=0;ifermi<nphoton;ifermi++){
+    for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
-            PyTuple_SetItem(spinBerryCurv, ifermi*nkpt+ikpt, PyFloat_FromDouble(spinBerryCurv_tmp[ifermi*nkpt+ikpt]));
+            PyTuple_SetItem(conductance_real, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
+            PyTuple_SetItem(conductance_real, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
+            PyTuple_SetItem(conductance_real, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
+            PyTuple_SetItem(conductance_real, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
+            PyTuple_SetItem(conductance_real, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
+            PyTuple_SetItem(conductance_real, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
+            PyTuple_SetItem(conductance_real, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
+            PyTuple_SetItem(conductance_real, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
+
+            PyTuple_SetItem(conductance_imag, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
+            PyTuple_SetItem(conductance_imag, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
+            PyTuple_SetItem(conductance_imag, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
+            PyTuple_SetItem(conductance_imag, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
+            PyTuple_SetItem(conductance_imag, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
+            PyTuple_SetItem(conductance_imag, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
+            PyTuple_SetItem(conductance_imag, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
+            PyTuple_SetItem(conductance_imag, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
         }
     }
-    return Py_BuildValue("(O)",spinBerryCurv);
+    free(conductance_on_kmesh_on_omega);
+    return Py_BuildValue("(OO)",conductance_real,conductance_imag);
 }
