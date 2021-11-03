@@ -666,7 +666,7 @@ class Response:
         plt.show()
         return
 
-    def calcOpticalHoppingTensor_CDLL(self,hr,mainDir=None,fermi=0,nk=100,ibandv=0,ibandc=1,nthreads=1):
+    def calcOpticalHoppingTensor_CDLL(self,hr,mainDir=None,fermi=0,nk=100,orbCorrList=[],ibandv=0,ibandc=1,nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kaxis=np.linspace(0,1,nk,endpoint=False)
@@ -690,21 +690,34 @@ class Response:
                 c_overLat[ibond*3+i]=c_int(bond.overlat[i])
             c_hopping_real[ibond]=c_double(bond.t.real)
             c_hopping_imag[ibond]=c_double(bond.t.imag)
+
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
+
+        assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        c_orbCorrList=(c_double*(3*hr.norb))()
+        for i in range(hr.norb):
+            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
+            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
+            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
         
         hamDLL=CDLL("./ham.dll")
-        hamDLL.calcFullBandsAndVecs.restype=py_object
-        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
+        hamDLL.calcBandsVecsVelocityOps.restype=py_object
+        result=hamDLL.calcBandsVecsVelocityOps(c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,c_lat,c_orbCorrList,
                         c_int(nthreads))
         #print(result.shape)
-        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i=result
         eigList=np.array(_eigList).reshape(nkpts,hr.norb)
         vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
         Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dk1=(np.array(Hk_dk1_r)+1j*np.array(Hk_dk1_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dk2=(np.array(Hk_dk2_r)+1j*np.array(Hk_dk2_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dk3=(np.array(Hk_dk3_r)+1j*np.array(Hk_dk3_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dAx=(np.array(Hk_dAx_r)+1j*np.array(Hk_dAx_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dAy=(np.array(Hk_dAy_r)+1j*np.array(Hk_dAy_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dAz=(np.array(Hk_dAz_r)+1j*np.array(Hk_dAz_i)).reshape(nkpts,hr.norb,hr.norb)
 
         print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
         
@@ -719,14 +732,6 @@ class Response:
         print("g2=(%9.6f %9.6f %9.6f)"%(*reciLat[:,1],))
         print("g3=(%9.6f %9.6f %9.6f)"%(*reciLat[:,2],))
         print("unit of velocity matrix: (h_bar^-1 eV A.)")
-        transFrame=pR.lat # trans matrix = Lattice matrix .dot. [k1_cart, k2_cart, k3_cart]
-                          # k1_cart is the column vector of first direction of kplane in cart. coor., etc.
-        a1, a2, a3=transFrame[0], transFrame[1], transFrame[2]
-        DHk_dkx=(DHk_dk1*a1[0]+DHk_dk2*a2[0]+DHk_dk3*a3[0])/np.pi/2
-        DHk_dky=(DHk_dk1*a1[1]+DHk_dk2*a2[1]+DHk_dk3*a3[1])/np.pi/2
-        DHk_dkz=(DHk_dk1*a1[2]+DHk_dk2*a2[2]+DHk_dk3*a3[2])/np.pi/2
-        #DHk_dkx=DHk_dk1
-        #DHk_dky=DHk_dk2
 
         time0=time.time()
         m,n=ibandv,ibandc
@@ -735,17 +740,17 @@ class Response:
             for ikpt, kpt in enumerate(kmesh):
                 Em, En=eigList[ikpt][m], eigList[ikpt][n]
 
-                vmn_x=vec[ikpt][:,m].conjugate().dot(DHk_dkx[ikpt]).dot(vec[ikpt][:,n])
-                vmn_y=vec[ikpt][:,m].conjugate().dot(DHk_dky[ikpt]).dot(vec[ikpt][:,n])
-                vmn_z=vec[ikpt][:,m].conjugate().dot(DHk_dkz[ikpt]).dot(vec[ikpt][:,n])
+                vmn_x=vec[ikpt][:,m].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,n])
+                vmn_y=vec[ikpt][:,m].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,n])
+                vmn_z=vec[ikpt][:,m].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,n])
 
-                vmm_x=vec[ikpt][:,m].conjugate().dot(DHk_dkx[ikpt]).dot(vec[ikpt][:,m])
-                vmm_y=vec[ikpt][:,m].conjugate().dot(DHk_dky[ikpt]).dot(vec[ikpt][:,m])
-                vmm_z=vec[ikpt][:,m].conjugate().dot(DHk_dkz[ikpt]).dot(vec[ikpt][:,m])
+                vmm_x=vec[ikpt][:,m].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,m])
+                vmm_y=vec[ikpt][:,m].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,m])
+                vmm_z=vec[ikpt][:,m].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,m])
 
-                vnn_x=vec[ikpt][:,n].conjugate().dot(DHk_dkx[ikpt]).dot(vec[ikpt][:,n])
-                vnn_y=vec[ikpt][:,n].conjugate().dot(DHk_dky[ikpt]).dot(vec[ikpt][:,n])
-                vnn_z=vec[ikpt][:,n].conjugate().dot(DHk_dkz[ikpt]).dot(vec[ikpt][:,n])
+                vnn_x=vec[ikpt][:,n].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,n])
+                vnn_y=vec[ikpt][:,n].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,n])
+                vnn_z=vec[ikpt][:,n].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,n])
 
                 fout.write("%.3f %.3f %.3f %.6f %.3f %.6f %.3f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n"%(
                     *kpt,Em,1.,En,0.,

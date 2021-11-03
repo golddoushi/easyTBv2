@@ -2,11 +2,36 @@ import paramReader
 paramReader.readGlobalConst()
 import posReader as pR
 import hrReader as reader
-from ham import Green
+from ham import Response
+import numpy as np
 
 pR.readPOS('./mcalc/FeCl2/POSCAR')
 hr=reader.Hr()
-hr.readSingleTBFile('./mcalc/FeCl2/wannier90.dn_tb.dat')
+hr.readSingleFile('./mcalc/FeCl2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.01)
 
-gr=Green()
-gr.calcOpticalHoppingTensor_CDLL(hr,mainDir='./mcalc/FeCl2/',fermi=-2.5,nk=100,ibandv=6,ibandc=7)
+res=Response()
+orbCorrList=np.array([
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.666666687,         0.333333343,         0.000000000 ],
+[ 0.666666687,         0.333333343,         0.000000000 ],
+[ 0.666666687,         0.333333343,         0.000000000 ],
+[ 0.666666687,         0.333333343,         0.168218240 ],
+[ 0.666666687,         0.333333343,         0.168218240 ],
+[ 0.666666687,         0.333333343,         0.168218240 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.000000000,         0.000000000,         0.084109120 ],
+[ 0.666666687,         0.333333343,         0.000000000 ],
+[ 0.666666687,         0.333333343,         0.000000000 ],
+[ 0.666666687,         0.333333343,         0.000000000 ],
+[ 0.666666687,         0.333333343,         0.168218240 ],
+[ 0.666666687,         0.333333343,         0.168218240 ],
+[ 0.666666687,         0.333333343,         0.168218240 ],
+])
+res.calcOpticalHoppingTensor_CDLL(hr,mainDir='./mcalc/FeCl2/',fermi=-2.1,nk=100,orbCorrList=orbCorrList,ibandv=17,ibandc=18,nthreads=4)

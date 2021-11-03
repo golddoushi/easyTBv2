@@ -365,6 +365,128 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
     return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i);
 }
 
+PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       int overLat[nhoppings][3], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings],
+                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
+                       double orbCorr[norbs][3], // fractional corrdinates of orbs
+                       int _nthreads){
+    double * Spectra_tmp=(double*)malloc(nkpt*norbs*sizeof(double));
+    double * Hk_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAx_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAx_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAy_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAy_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAz_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAz_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Vector_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Vector_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("use %d cores in ham.dll\n",nthreads);
+    // calculate matrix elements
+    int index;
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            lapack_complex_double hk[norbs][norbs]; // init Hk
+            lapack_complex_double Vk[norbs][norbs][3]; // init DHkDk_1,2,3
+            lapack_complex_double Vxyz[norbs][norbs][3]; // init DHkDk_1,2,3
+            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++){
+                hk[i][j]=0;
+                for(int k=0;k<3;k++){
+                    Vk[i][j][k]=0;
+                    Vxyz[i][j][k]=0;
+                }
+            }
+            double eigs[norbs]; // output eigenvalues of Hk
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                double phase=0;
+                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                Vk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
+                Vk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
+                Vk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
+            }
+            // unitary transform into real space partial
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    for(int k=0;k<3;k++){
+                        Vxyz[i][j][0]+=Vk[i][j][k]*lattice[k][0];
+                        Vxyz[i][j][1]+=Vk[i][j][k]*lattice[k][1];
+                        Vxyz[i][j][2]+=Vk[i][j][k]*lattice[k][2];
+                    }
+                }
+            }
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    Hk_r_tmp[index]=creal(hk[iorb][jorb]);
+                    Hk_i_tmp[index]=cimag(hk[iorb][jorb]);
+                    Hk_dAx_r_tmp[index]=creal(Vxyz[iorb][jorb][0]);
+                    Hk_dAx_i_tmp[index]=cimag(Vxyz[iorb][jorb][0]);
+                    Hk_dAy_r_tmp[index]=creal(Vxyz[iorb][jorb][1]);
+                    Hk_dAy_i_tmp[index]=cimag(Vxyz[iorb][jorb][1]);
+                    Hk_dAz_r_tmp[index]=creal(Vxyz[iorb][jorb][2]);
+                    Hk_dAz_i_tmp[index]=cimag(Vxyz[iorb][jorb][2]);
+                }
+            }
+            
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+            //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
+            for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    Vector_r_tmp[index]=creal(hk[iorb][jorb]);
+                    Vector_i_tmp[index]=cimag(hk[iorb][jorb]);
+                }
+            }
+        }
+    }
+
+    PyObject * Spectra=PyTuple_New(nkpt*norbs);
+    PyObject * Hk_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAx_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAx_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAy_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAy_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAz_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAz_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Vector_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Vector_i=PyTuple_New(nkpt*norbs*norbs);
+
+    for(int ikpt=0;ikpt<nkpt;ikpt++){
+        for(int iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(Spectra_tmp[ikpt*norbs+iorb]));
+        for(int iorb=0;iorb<norbs;iorb++){
+            for(int jorb=0;jorb<norbs;jorb++){
+                index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(Hk_r_tmp[index]));
+                PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(Hk_i_tmp[index]));
+                PyTuple_SetItem(Hk_dAx_r, index, PyFloat_FromDouble(Hk_dAx_r_tmp[index]));
+                PyTuple_SetItem(Hk_dAx_i, index, PyFloat_FromDouble(Hk_dAx_i_tmp[index]));
+                PyTuple_SetItem(Hk_dAy_r, index, PyFloat_FromDouble(Hk_dAy_r_tmp[index]));
+                PyTuple_SetItem(Hk_dAy_i, index, PyFloat_FromDouble(Hk_dAy_i_tmp[index]));
+                PyTuple_SetItem(Hk_dAz_r, index, PyFloat_FromDouble(Hk_dAz_r_tmp[index]));
+                PyTuple_SetItem(Hk_dAz_i, index, PyFloat_FromDouble(Hk_dAz_i_tmp[index]));
+                PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(Vector_r_tmp[index]));
+                PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(Vector_i_tmp[index]));
+                //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
+            }
+        }
+    }
+    return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i);
+}
+
 int * bubleSort_ABS(int len, double *data){
     int*idList=(int*)malloc(len*sizeof(int));
     for(int i=0;i<len;i++)idList[i]=i;
@@ -389,14 +511,6 @@ int * bubleSort_ABS(int len, double *data){
     }
     return idList;
 }
-
-/*int main(void){
-    double data[]={1.0,3.0,2.0,7.0,-2.0,9.0};
-    int*idList=bubleSort_ABS(6,data);
-    for(int i=0;i<6;i++)printf("%d ",idList[i]);
-    printf("\n");
-    return 0;
-}*/
 
 PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int nMaxRefine,
                        int norbs, int nhoppings,
@@ -855,34 +969,13 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                         DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
                         DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
                     }
-                    //DhkDkxy[i][j][0]=Dhk[i][j][0];
-                    //DhkDkxy[i][j][1]=Dhk[i][j][1];
                 }
             }
-            /*if(ikpt==3){
-                printf("Hk:\n");
-                for(int i=0;i<norbs;i++){
-                    for(int j=0;j<norbs;j++)printf("(%.3f %.3f)",creal(hk[i][j]),cimag(hk[i][j]));
-                    printf("\n");
-                }
-            }*/
 
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             // vec[i]=hk[:][i]
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-            /*if(ikpt==3){
-                printf("E5: %.6f\n",eigs[5]);
-                //for(int j=0;j<norbs;j++)printf("(%.3f %.3f)",creal(hk[j][5]),cimag(hk[j][5]));
-                //printf("\n");
 
-                printf("E27: %.6f\n",eigs[27]);
-                //for(int j=0;j<norbs;j++)printf("(%.3f %.3f)",creal(hk[j][27]),cimag(hk[j][27]));
-                //printf("\n");
-
-                lapack_complex_double overlap=0.0;
-                for(int j=0;j<norbs;j++)overlap+=conj(hk[j][5])*hk[j][27];
-                printf("<5|27>: %.6f,%.6f\n",creal(overlap),cimag(overlap));
-            }*/
             for(int bandl=0;bandl<norbs;bandl++){ // loop over band_l
                 double El=eigs[bandl];
                 if(El<erange[0] | El>erange[1]) continue;
