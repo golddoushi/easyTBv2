@@ -390,7 +390,6 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
     if(nkpt<_nthreads*10)nthreads=1;
     printf("use %d cores in ham.dll\n",nthreads);
     // calculate matrix elements
-    int index;
     #pragma omp parallel num_threads(nthreads)
     {
         #pragma omp for
@@ -427,7 +426,7 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
             }
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
-                    index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    int index=ikpt*norbs*norbs+iorb*norbs+jorb;
                     Hk_r_tmp[index]=creal(hk[iorb][jorb]);
                     Hk_i_tmp[index]=cimag(hk[iorb][jorb]);
                     Hk_dAx_r_tmp[index]=creal(Vxyz[iorb][jorb][0]);
@@ -445,7 +444,7 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
             for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
-                    index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    int index=ikpt*norbs*norbs+iorb*norbs+jorb;
                     Vector_r_tmp[index]=creal(hk[iorb][jorb]);
                     Vector_i_tmp[index]=cimag(hk[iorb][jorb]);
                 }
@@ -469,7 +468,7 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
         for(int iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(Spectra_tmp[ikpt*norbs+iorb]));
         for(int iorb=0;iorb<norbs;iorb++){
             for(int jorb=0;jorb<norbs;jorb++){
-                index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                int index=ikpt*norbs*norbs+iorb*norbs+jorb;
                 PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(Hk_r_tmp[index]));
                 PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(Hk_i_tmp[index]));
                 PyTuple_SetItem(Hk_dAx_r, index, PyFloat_FromDouble(Hk_dAx_r_tmp[index]));

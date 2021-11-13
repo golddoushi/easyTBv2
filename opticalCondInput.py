@@ -5,33 +5,13 @@ import hrReader as reader
 from ham import Response
 import numpy as np
 
-pR.readPOS('./mcalc/FeCl2/POSCAR')
+pR.readPOS('./mcalc/BN/POSCAR')
 hr=reader.Hr()
-hr.readSingleFile('./mcalc/FeCl2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.01)
+hr.readSingleFile('./mcalc/BN/hr_biorbitals.dat',ignoreImagPart=False,cutoff=-0.01)
 
 res=Response()
-orbCorrList=np.array([
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.666666687,         0.333333343,         0.000000000 ],
-[ 0.666666687,         0.333333343,         0.000000000 ],
-[ 0.666666687,         0.333333343,         0.000000000 ],
-[ 0.666666687,         0.333333343,         0.168218240 ],
-[ 0.666666687,         0.333333343,         0.168218240 ],
-[ 0.666666687,         0.333333343,         0.168218240 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.000000000,         0.000000000,         0.084109120 ],
-[ 0.666666687,         0.333333343,         0.000000000 ],
-[ 0.666666687,         0.333333343,         0.000000000 ],
-[ 0.666666687,         0.333333343,         0.000000000 ],
-[ 0.666666687,         0.333333343,         0.168218240 ],
-[ 0.666666687,         0.333333343,         0.168218240 ],
-[ 0.666666687,         0.333333343,         0.168218240 ],
+orbCoorList=np.array([
+[2/3,1/3,0],
+[0,0,0]
 ])
-res.calcOpticalHoppingTensor_CDLL(hr,mainDir='./mcalc/FeCl2/',fermi=-2.1,nk=100,orbCorrList=orbCorrList,ibandv=17,ibandc=18,nthreads=4)
+res.calcOpticalHoppingTensor_CDLL(hr,mainDir='./mcalc/BN/',fermi=0,nk=50,orbCorrList=orbCoorList,ibandv=0,ibandc=1,nthreads=4)
