@@ -50,6 +50,47 @@ class Hr:
             #exit()
             print('file %s has been successfully read in %.3fms, %d/%d skipped'%(filepath,1000*(time.time()-time0),nSkip,nTotal))
 
+    def readSingleRFile(self,filepath,ignoreImagPart=True,cutoff=-1,format="VASP"):
+        time0=time.time()
+        with open(filepath,'r') as fin:
+            data=fin.read().split('\n')
+            print('reading file %s, title line:%s'%(filepath,data[0]))
+            assert self.norb==int(data[1]), "pls. read hr.dat first, or the r.dat is inconsistent with hr.dat, norb: %d (hr.dat), %d (r.dat)"%(self.norb,int(data[1]))
+            if format=="QE": assert self.norb%2==0, "format is set to QE, means we are doing soc case, but norb is odd"
+
+            iline=2
+            self.rList=[]
+            nTotal,nSkip=0,0
+            while(True):
+                lineinfo=data[iline].split()
+                if len(lineinfo)==11:
+                    R1, R2, R3, sourceID, targetID, x_real, x_imag, y_real, y_imag, z_real, z_imag = int(lineinfo[0]),int(lineinfo[1]),int(lineinfo[2]),int(lineinfo[3])-1,int(lineinfo[4])-1,float(lineinfo[5]),float(lineinfo[6]),float(lineinfo[7]),float(lineinfo[8]),float(lineinfo[9]),float(lineinfo[10])
+                    x=x_real
+                    y=y_real
+                    z=z_real
+                    if not ignoreImagPart:
+                        x+=1j*x_imag
+                        y+=1j*y_imag
+                        z+=1j*z_imag
+                    if format=="QE":
+                        sourceID=(sourceID%2)*(self.norb//2)+sourceID//2
+                        targetID=(targetID%2)*(self.norb//2)+targetID//2
+                    if R1==0 and R2 ==0 and R3==0 and sourceID==targetID:
+                        self.rList.append(np.array([x,y,z]))
+                    #r=np.array([x,y,z])
+                    #if (abs(x)+abs(y)+abs(z))>cutoff:
+                    #    self.bondList.append(lat.BondDigital(sourceID,targetID,[R1,R2,R3],t))
+                    #    if R1==0 and R2 ==0 and R3==0 and sourceID==targetID:
+                    #        self.onsite[sourceID]=t_real
+                    #        assert t_imag<1e-4, 'found complex onsite energy on orb%d'%sourceID
+                    #else:
+                    #    nSkip+=1
+                iline+=1
+                if iline>=len(data):break
+            #print(self.bondList)
+            #exit()
+            print('file %s has been successfully read in %.3fms, %d/%d skipped'%(filepath,1000*(time.time()-time0),nSkip,nTotal))
+        
     def readSingleTBFile(self,filepath,ignoreImagPart=False,format="VASP"):
         time0=time.time()
         with open(filepath,'r') as fin:
