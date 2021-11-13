@@ -407,7 +407,7 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
             double eigs[norbs]; // output eigenvalues of Hk
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 double phase=0;
-                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                for (int i=0;i<3;i++) phase+=(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i])*kmesh[ikpt][i];
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
                 hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
                 Vk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
@@ -954,7 +954,7 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
             double eigs[norbs]; // output eigenvalues of Hk
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 double phase=0;
-                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                for (int i=0;i<3;i++) phase+=(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i])*kmesh[ikpt][i];
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
                 hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
                 Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
@@ -1038,20 +1038,6 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                             conductance_on_kmesh_on_omega[writing_ph_index+5]+=px_nl*py_lm*py_mn*factor_global;
                             conductance_on_kmesh_on_omega[writing_ph_index+6]+=py_nl*px_lm*px_mn*factor_global;
                             conductance_on_kmesh_on_omega[writing_ph_index+7]+=py_nl*px_lm*py_mn*factor_global;
-                            
-                            /*
-                            omega=omega;
-                            lapack_complex_double factor_global1=flm/(omega*omega)*(1/(El-Em)/(El-En+omega+itau)+1/(El-Em)/(El-En-omega+itau));
-                            lapack_complex_double factor_global2=flm/(omega*omega)*(-1/(En-El+omega+itau)/(El-Em+omega+itau)-1/(En-El-omega+itau)/(El-Em-omega+itau));
-                            conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global1+conj(px_nl*px_lm*px_mn)*factor_global2;
-                            conductance_on_kmesh_on_omega[writing_ph_index+1]+=py_nl*px_lm*px_mn*factor_global1+conj(py_nl*px_lm*px_mn)*factor_global2;
-                            conductance_on_kmesh_on_omega[writing_ph_index+2]+=px_nl*py_lm*py_mn*factor_global1+conj(px_nl*py_lm*py_mn)*factor_global2;
-                            conductance_on_kmesh_on_omega[writing_ph_index+3]+=py_nl*py_lm*py_mn*factor_global1+conj(py_nl*py_lm*py_mn)*factor_global2;
-                            conductance_on_kmesh_on_omega[writing_ph_index+4]+=px_nl*px_lm*py_mn*factor_global1+conj(px_nl*px_lm*py_mn)*factor_global2;
-                            conductance_on_kmesh_on_omega[writing_ph_index+5]+=py_nl*px_lm*py_mn*factor_global1+conj(py_nl*px_lm*py_mn)*factor_global2;
-                            conductance_on_kmesh_on_omega[writing_ph_index+6]+=px_nl*py_lm*px_mn*factor_global1+conj(px_nl*py_lm*px_mn)*factor_global2;
-                            conductance_on_kmesh_on_omega[writing_ph_index+7]+=py_nl*py_lm*px_mn*factor_global1+conj(py_nl*py_lm*px_mn)*factor_global2;
-                            */
                         }
                     } 
                 }
