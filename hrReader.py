@@ -513,9 +513,10 @@ class Hr:
         localRotate[8:11,8:11]=pSiteSymOpList[0]
         #print("onsite rotation:")
         #print(np.diag(localRotate))
-        localRotate_dag=localRotate.T
+        #localRotate_dag=localRotate.T
         localRotate2=np.dot(localRotate,localRotate)
-        localRotate2_dag=localRotate2.T
+        #localRotate2_dag=localRotate2.T
+        orbSymOpList=[localRotate,localRotate2]
         #exit()
         '''
         # check the whether operations are right
@@ -554,9 +555,11 @@ class Hr:
         #self.onsite=[]
         #print(self.dRList)
         O1, O2= symOpList
-        for idR0, dR0 in enumerate(self.dRList):
+        orbOp1, orbOp2= orbSymOpList
+        for dR0 in self.dRList:
             if dR0[0]>self.Rx_max or dR0[0]<self.Rx_min or dR0[1]>self.Ry_max or dR0[1]<self.Ry_min or dR0[2]>self.Rz_max or dR0[2]<self.Rz_min: continue
             bond0=self.bondInVecForm[dR0[0],dR0[1],dR0[2]]
+            bond_sym=bond0
             bond1,bond2=np.zeros((self.norb,self.norb),dtype=complex),np.zeros((self.norb,self.norb),dtype=complex)
             #print(dR0)
             for sourceID in range(self.norb):
@@ -586,7 +589,9 @@ class Hr:
                     else:
                         bond2[sourceID][targetID]=self.bondInVecForm[dR2[0],dR2[1],dR2[2],sourceID,targetID]
 
-            bond_sym=(bond0+localRotate_dag.dot(bond1).dot(localRotate)+localRotate2_dag.dot(bond2).dot(localRotate2))/3
+            bond_sym+=(orbOp1.T).dot(bond1).dot(orbOp1)
+            bond_sym+=(orbOp2.T).dot(bond2).dot(orbOp2)
+            bond_sym/=(len(symOpList)+1)
             for sourceID in range(self.norb):
                 for targetID in range(self.norb):
                     self.bondList.append(lat.BondDigital(sourceID,targetID,dR0,bond_sym[sourceID,targetID]))
