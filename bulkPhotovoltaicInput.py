@@ -6,20 +6,18 @@ from ham import Green, Response
 import numpy as np
 import matplotlib.pyplot as plt
 
-pR.readPOS('./mcalc/MoTe2/POSCAR')
+pR.readPOS('./mcalc/FeCl2/POSCAR')
 hr=reader.Hr()
-hr.readSingleFile('./mcalc/MoTe2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.01)#,format="QE")
-#hr.readSingleRFile('./mcalc/MoTe2/wannier90_r.dat',ignoreImagPart=True,cutoff=-0.01)#,format="QE")
+hr.readSingleFile('./mcalc/FeCl2/wannier90.dn_hr.dat',ignoreImagPart=False,cutoff=0.01)#,format="QE")
+hr.readSingleRFile('./mcalc/FeCl2/wannier90.dn_r.dat',ignoreImagPart=True,cutoff=-0.01)#,format="QE")
 
 res=Response()
 orbCoorList=np.array([
-[ 1/3,2/3,0 ],
-[ 1/3,2/3,0 ],
-[ 1/3,2/3,0 ],
-[ 1/3,2/3,0 ],
-[ 1/3,2/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
+[ 0/3,0/3,0 ],
+[ 0/3,0/3,0 ],
+[ 0/3,0/3,0 ],
+[ 0/3,0/3,0 ],
+[ 0/3,0/3,0 ],
 [ 2/3,1/3,0 ],
 [ 2/3,1/3,0 ],
 [ 2/3,1/3,0 ],
@@ -27,7 +25,15 @@ orbCoorList=np.array([
 [ 2/3,1/3,0 ],
 [ 2/3,1/3,0 ],
 ])
+hr.symmerizeBonds(orbCoorList=orbCoorList)
+#print(hr.onsite)
+#exit()
 #orbCoorList=np.array(hr.rList).dot(np.linalg.inv(pR.lat))
 #for orb in orbCoorList:
 #    print(orb)
-res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/MoTe2/',orbCorrList=orbCoorList,kgrid=[200,200,1],omegaList=np.linspace(0.5,3,20),tau=0.01,erange=[-80,80],nthreads=4)
+#exit()
+#exit()
+#orbCoorList=np.array(hr.rList).dot(np.linalg.inv(pR.lat))
+#for orb in orbCoorList:
+#    print(orb)
+res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/FeCl2/',orbCorrList=orbCoorList,kgrid=[100,100,1],omegaList=np.linspace(0.5,1.2,20),tau=0.01,erange=[-80,80],nthreads=4)

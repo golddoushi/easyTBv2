@@ -1028,8 +1028,10 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                             lapack_complex_double factor_global=0;
                             //if(fabs(En-El)>1e-6)
                             factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
-                            //printf("ikpt: %d, omega: %.4f, El:%.4f Em:%.4f flm:%d dE: %.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,flm,El-Em,creal(factor_global),cimag(factor_global));
-                            //printf("   l,m,n: %d %d %d -- px_lm: %.4f, %.4f px_mn: %.4f, %.4f px_nl: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn),creal(px_nl),cimag(px_nl));
+                            //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
+                            //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
+                            //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
+                            //printf("                   xxx: %.4f, %.4f yyx: %.4f, %.4f\n",creal(px_nl*px_lm*px_mn),cimag(px_nl*px_lm*px_mn),creal(py_nl*py_lm*px_mn),cimag(py_nl*py_lm*px_mn));
                             conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global;
                             conductance_on_kmesh_on_omega[writing_ph_index+1]+=px_nl*px_lm*py_mn*factor_global;
                             conductance_on_kmesh_on_omega[writing_ph_index+2]+=py_nl*py_lm*px_mn*factor_global;
