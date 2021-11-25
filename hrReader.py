@@ -43,8 +43,7 @@ class Hr:
                         sourceID=(sourceID%2)*(self.norb//2)+sourceID//2
                         targetID=(targetID%2)*(self.norb//2)+targetID//2
                     nTotal+=1
-                    if sourceID==targetID and sourceID==0:
-                        self.dRList.append(np.array([R1,R2,R3]))
+                    if sourceID==targetID and sourceID==0: self.dRList.append(np.array([R1,R2,R3]))
                     if abs(t)>cutoff:
                         self.bondList.append(lat.BondDigital(sourceID,targetID,[R1,R2,R3],t))
                         RxList.append(R1)
@@ -419,7 +418,7 @@ class Hr:
         print('dropping bonds:',ndropping)
         return ndropping
 
-    def symmerizeBonds(self,orbCoorList,atomicOrbIndexList):
+    def symmerizeBonds(self,atomicOrbIndexList):
         def getSymOpsAndSymSiteMap():
             # constructe all sym. ops and fetch ion mapping under sym. ops
             symRotateList=[]
@@ -565,78 +564,120 @@ class Hr:
         symRotateList, symTranslateList, symSiteMapList= getSymOpsAndSymSiteMap()
         atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,lmax=lmax)
         # construct local sym. Op. for each sym. op.
-        localSymOpList=[]
-        for isymOp, symSiteMap in enumerate(symSiteMapList):
-            localSymOp=np.zeros((self.norb,self.norb),dtype=complex)
-            for iSite0, iSite1 in enumerate(symSiteMap):
-                atom0=atomicOrbIndexList[iSite0]
-                atom1=atomicOrbIndexList[iSite1]
-                assert len(atom0)==len(atom1), 'Symmetric sites %d, %d have different lmax %d, %d'%(iSite0,iSite1,len(atom0),len(atom1))
-                for iL in range(len(atom0)):
-                    if len(atom0[iL])==0: continue
-                    atomicWaveSymOp=atomicWaveSymOpList[isymOp][iL]
-                    atom0OrbIndex, atom1OrbIndex= atom0[iL], atom1[iL]
-                    assert atomicWaveSymOp.shape[0]==len(atom0OrbIndex), 'diminsion of wave sym. op. %d, inconsist with atom %d l(%s)=%d'%(atomicWaveSymOp.shape[0],iSite0,orbName[iL],len(atom0[iL]))
-                    for iorb0Index, orb0Index in enumerate(atom0OrbIndex):
-                        for iorb1Index, orb1Index in enumerate(atom1OrbIndex):
-                            localSymOp[orb0Index,orb1Index]=atomicWaveSymOp[iorb0Index,iorb1Index]
+        localSymOpList=[] # localSymOpList[isymOp][iatom] give sym. op. in atomic subspace
+        for isymOp in range(len(symRotateList)):
+            localSymOp=[]
+            for atom in atomicOrbIndexList:
+                atom_size=sum([len(L) for L in atom])
+                atomSymOp=np.zeros((atom_size,atom_size),dtype=complex)
+                cnt=0
+                for iL, L in enumerate(atom):
+                    if len(L)==0: continue
+                    atomSymOp[cnt:(cnt+len(L)),cnt:(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]
+                    cnt+=len(L)
+                localSymOp.append(atomSymOp)
             localSymOpList.append(localSymOp)
-        #exit()
-        
-        # check the whether operations are right
         '''
-        i,j=0,6
+        # check the whether operations are right
+        i,j=0,1
+        orbAtomI=[]
+        for L in atomicOrbIndexList[i]:
+            for iorb in L: orbAtomI.append(iorb)
+        orbAtomJ=[]
+        for L in atomicOrbIndexList[j]:
+            for iorb in L: orbAtomJ.append(iorb)
+        print(orbAtomI)
+        print(orbAtomJ)
+        bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
         dR=[0,0,0]
-        sourceCoor0=orbCoorList[i]
-        targetCoor0=orbCoorList[j]+np.array(dR)
-        bond=self.bondInVecForm[dR[0],dR[1],dR[2]]
-        print('bond1 orb%d-orb%d [%d %d %d]'%(i,j,*dR),bond[i,j])
+        sourceCoor0=pR.pos_ions[i]
+        targetCoor0=pR.pos_ions[j]+np.array(dR)
+        for iorbAtomI, orbAtomIIndex in enumerate(orbAtomI):
+            for iorbAtomJ, orbAtomJIndex in enumerate(orbAtomJ):
+                bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
+        #bond_atom_i_j=
+        print('bond1 atom%d-atom%d [%d %d %d]'%(i,j,*dR))
+        print(bond)
+        #exit()
+        for rotate, translate, localSymOp, siteMap in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList):
+            i_trans=siteMap[i]
+            j_trans=siteMap[j]
+            orbAtomI=[]
+            for L in atomicOrbIndexList[i_trans]:
+                for iorb in L: orbAtomI.append(iorb)
+            orbAtomJ=[]
+            for L in atomicOrbIndexList[j_trans]:
+                for iorb in L: orbAtomJ.append(iorb)
+            print('source orb',orbAtomI)
+            print('target orb',orbAtomJ)
 
-        for rotate, translate, localSymOp in zip(symRotateList,symTranslateList,localSymOpList):
             sourceCoor1=sourceCoor0.dot(rotate)+translate
             targetCoor1=targetCoor0.dot(rotate)+translate
-            dR=(targetCoor1-orbCoorList[j])-(sourceCoor1-orbCoorList[i])
+            dR=(targetCoor1-targetCoor1%1)-(sourceCoor1-sourceCoor1%1)
+            print('bond2 atom%d-atom%d'%(i_trans,j_trans),dR)
             dR=np.array([int(np.around(x)) for x in dR])
-            bond=(localSymOp.conjugate().T).dot(self.bondInVecForm[dR[0],dR[1],dR[2]]).dot(localSymOp)
-            print('bond2 orb%d-orb%d [%d %d %d]'%(i,j,*dR),bond[i,j])
+
+            bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+            for iorbAtomI, orbAtomIIndex in enumerate(orbAtomI):
+                for iorbAtomJ, orbAtomJIndex in enumerate(orbAtomJ):
+                    bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
+            bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
+            print(bond)
         exit()
         '''
+        
         # flush bondList
+        time0=time.time()
+        nDropedBond=0
         self.bondList=[]
         for dR0 in self.dRList:
-            if dR0[0]>self.Rx_max or dR0[0]<self.Rx_min or dR0[1]>self.Ry_max or dR0[1]<self.Ry_min or dR0[2]>self.Rz_max or dR0[2]<self.Rz_min: continue
-            #bond0=self.bondInVecForm[dR0[0],dR0[1],dR0[2]]
-            bond_sym=0#bond0
-            for rotate, translate, localSymOp in zip(symRotateList,symTranslateList,localSymOpList):
-                bond1=np.zeros((self.norb,self.norb),dtype=complex)
-                #outOfReach=False
-                for sourceID in range(self.norb):
-                    sourceCoor0=orbCoorList[sourceID]
-                    sourceCoor1=sourceCoor0.dot(rotate)+translate
-                    for targetID in range(self.norb):
-                        targetCoor0=orbCoorList[targetID]+dR0
-                        targetCoor1=targetCoor0.dot(rotate)+translate
-
-                        dR1=(targetCoor1-orbCoorList[targetID])-(sourceCoor1-orbCoorList[sourceID])
-                        #print(sourceID,targetID,dR1_tmp)
-                        dR1=np.array([int(np.around(x)) for x in dR1])
-                        #print(dR1)
-                        if dR1[0]>self.Rx_max or dR1[0]<self.Rx_min or dR1[1]>self.Ry_max or dR1[1]<self.Ry_min or dR1[2]>self.Rz_max or dR1[2]<self.Rz_min:
-                        #    outOfReach=True
-                            pass
-                        else:
-                            bond1[sourceID][targetID]=self.bondInVecForm[dR1[0],dR1[1],dR1[2],sourceID,targetID]
-                #if outOfReach:
-                #    bond_sym=bond_sym*0
-                #    break
-                bond_sym=bond_sym+(localSymOp.T.conjugate()).dot(bond1).dot(localSymOp)
-            
-            bond_sym/=len(symRotateList)
-            for sourceID in range(self.norb):
-                for targetID in range(self.norb):
-                    self.bondList.append(lat.BondDigital(sourceID,targetID,dR0,bond_sym[sourceID,targetID]))
-            
-            if dR0.dot(dR0)==0:
-                self.onsite=np.diag(bond_sym)
-
-        #exit()
+            if dR0[0]>self.Rx_max or dR0[0]<self.Rx_min or dR0[1]>self.Ry_max or dR0[1]<self.Ry_min or dR0[2]>self.Rz_max or dR0[2]<self.Rz_min:continue
+            #print('original dR:',dR0)
+            for iatom_source, atom_source in enumerate(atomicOrbIndexList):
+                source_coor=pR.pos_ions[iatom_source]
+                for iatom_target, atom_target in enumerate(atomicOrbIndexList):
+                    target_coor=pR.pos_ions[iatom_target]+dR0
+                    bond_sym=0
+                    outOfReach=False
+                    for rotate, translate, localSymOp, siteMap in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList):
+                        source_coor_trans=source_coor.dot(rotate)+translate
+                        target_coor_trans=target_coor.dot(rotate)+translate
+                        dR=(target_coor_trans-target_coor_trans%1)-(source_coor_trans-source_coor_trans%1)
+                        dR=np.array([int(np.around(x)) for x in dR])
+                        #print('symmetry dR:',dR)
+                        if dR[0]>self.Rx_max or dR[0]<self.Rx_min or dR[1]>self.Ry_max or dR[1]<self.Ry_min or dR[2]>self.Rz_max or dR[2]<self.Rz_min:
+                            nDropedBond+=1
+                            outOfReach=True
+                            break
+                        #print('pass')
+                        iatom_source_trans=siteMap[iatom_source]
+                        iatom_target_trans=siteMap[iatom_target]
+                        orbAtomI=[]
+                        for L in atomicOrbIndexList[iatom_source_trans]:
+                            for iorb in L: orbAtomI.append(iorb)
+                        orbAtomJ=[]
+                        for L in atomicOrbIndexList[iatom_target_trans]:
+                            for iorb in L: orbAtomJ.append(iorb)
+                        
+                        bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+                        for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomI):
+                            for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomJ):
+                                bond[iLocalOrbI,iLocalOrbJ]=self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        bond_sym=bond_sym+(localSymOp[iatom_source_trans].conjugate().T).dot(bond).dot(localSymOp[iatom_target_trans])
+                    
+                    if outOfReach: continue
+                    bond_sym=bond_sym/len(symRotateList)
+                    #print(bond_sym)
+                    
+                    orbAtomSource=[]
+                    for L in atom_source:
+                        for iorb in L: orbAtomSource.append(iorb)
+                    orbAtomTarget=[]
+                    for L in atom_target:
+                        for iorb in L: orbAtomTarget.append(iorb)
+                    for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomSource):
+                        for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomTarget):
+                            self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR0,bond_sym[iLocalOrbI,iLocalOrbJ]))
+        print("re-construct bonds in %.3fs, %d bonds droped"%(time.time()-time0,nDropedBond))
+           
+        
