@@ -14,20 +14,20 @@ orbCoorList=np.array([
 [ 0/3,0/3,0 ],
 [ 0/3,0/3,0 ],
 [ 0/3,0/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
+[ 2/3,1/3,0.1 ],
+[ 2/3,1/3,0.1 ],
+[ 2/3,1/3,0.1 ],
+[ 2/3,1/3,-0.1 ],
+[ 2/3,1/3,-0.1 ],
+[ 2/3,1/3,-0.1 ],
 ])
-O1=np.array([ # rotate by 2pi/3
-                    [ 0, 1, 0],
-                    [-1,-1, 0],
-                    [ 0, 0, 1],
-                    ])
-O2=np.dot(O1,O1) # rotate by 4pi/3
-hr.symmerizeBonds(orbCoorList=orbCoorList,symOpList=[O1,O2])
+# data structure atomicOrbIndexList[atom index][l][orb index]
+atomicOrbIndexList=[[[],[],[0,1,2,3,4]],
+                    [[],[5,6,7]],
+                    [[],[8,9,10]]
+                   ]
+
+hr.symmerizeBonds(orbCoorList=orbCoorList,atomicOrbIndexList=atomicOrbIndexList)
 #print(hr.onsite)
 #exit()
 gr=Green()

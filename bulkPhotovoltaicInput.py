@@ -18,22 +18,18 @@ orbCoorList=np.array([
 [ 0/3,0/3,0 ],
 [ 0/3,0/3,0 ],
 [ 0/3,0/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
-[ 2/3,1/3,0 ],
+[ 2/3,1/3,0.1 ],
+[ 2/3,1/3,0.1 ],
+[ 2/3,1/3,0.1 ],
+[ 2/3,1/3,-0.1 ],
+[ 2/3,1/3,-0.1 ],
+[ 2/3,1/3,-0.1 ],
 ])
-hr.symmerizeBonds(orbCoorList=orbCoorList)
-#print(hr.onsite)
-#exit()
-#orbCoorList=np.array(hr.rList).dot(np.linalg.inv(pR.lat))
-#for orb in orbCoorList:
-#    print(orb)
-#exit()
-#exit()
-#orbCoorList=np.array(hr.rList).dot(np.linalg.inv(pR.lat))
-#for orb in orbCoorList:
-#    print(orb)
+# data structure atomicOrbIndexList[atom index][l][orb index]
+atomicOrbIndexList=[[[],[],[0,1,2,3,4]],
+                    [[],[5,6,7]],
+                    [[],[8,9,10]]
+                   ]
+
+hr.symmerizeBonds(orbCoorList=orbCoorList,atomicOrbIndexList=atomicOrbIndexList)
 res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/FeCl2/',orbCorrList=orbCoorList,kgrid=[100,100,1],omegaList=np.linspace(0.5,1.2,20),tau=0.01,erange=[-80,80],nthreads=4)

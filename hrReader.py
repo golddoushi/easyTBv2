@@ -419,9 +419,39 @@ class Hr:
         print('dropping bonds:',ndropping)
         return ndropping
 
-    def symmerizeBonds(self,orbCoorList,symOpList):
-        # then, symmetrize all these under rotation of 2pi/3 and 4pi/3
-        def generateSiteSymOp(ngrid=64,L=80):
+    def symmerizeBonds(self,orbCoorList,atomicOrbIndexList):
+        def getSymOpsAndSymSiteMap():
+            # constructe all sym. ops and fetch ion mapping under sym. ops
+            symRotateList=[]
+            symTranslateList=[]
+            symIonMap=[]
+            rotation, translation= pR.getWholeSymmetryOperator()
+            print('Lattice symmetry group order: %d'%rotation.shape[0])
+            for rotate, translate in zip(rotation,translation):
+                #print(rotate,translate)
+                symRotateList.append(rotate.T)
+                symTranslateList.append(translate)
+                subMap=[]
+                for iion, ion_coor in enumerate(pR.pos_ions):
+                    ion_coor_trans=ion_coor.dot(rotate.T)+translate
+                    #print(ion_coor_trans)
+                    for iion_origin, ion_coor_origin in enumerate(pR.pos_ions):
+                        d_coor=(ion_coor_trans-ion_coor_origin)%1
+                        d_coor_len=sum(abs(d_coor))
+                        if d_coor_len<paramReader.SYMPREC or abs(1-d_coor_len)<paramReader.SYMPREC or abs(2-d_coor_len)<paramReader.SYMPREC or abs(3-d_coor_len)<paramReader.SYMPREC:
+                            #print('%d -> %d'%(iion,iion_origin))
+                            subMap.append(iion_origin)
+                if len(subMap)!=sum(pR.nions):
+                    print("Error, cannot find symmetric ion for symmetry op:")
+                    print(rotate)
+                    print(translate)
+                    exit()
+                symIonMap.append(subMap)
+            return symRotateList, symTranslateList, symIonMap
+        
+        def generateAtomicWFCSymOp(symRotateList,lmax=2,ngrid=64,L=80):
+            # calc. how the atomic wavefunctions rotate under sym. ops
+            assert lmax<=3, 'cannot build symmetry Ops for atomic wave with l>3'
             time0=time.time()
             mylib=CDLL("./cubicHarmonics.dll")
             generateCubicOrbital=mylib.generateCubicOrbital
@@ -438,32 +468,40 @@ class Hr:
                         original_frame[icnt]=c_double(0)
                     icnt+=1
 
+            print("assumed p-orbtal order: pz, px, py")
             px_std=generateCubicOrbital(c_int(2), c_int(1), b'x', c_int(ngrid), c_double(L), original_frame)
             py_std=generateCubicOrbital(c_int(2), c_int(1), b'y', c_int(ngrid), c_double(L), original_frame)
             pz_std=generateCubicOrbital(c_int(2), c_int(1), b'z', c_int(ngrid), c_double(L), original_frame)
             ao_p_basis_std=np.array([pz_std,px_std,py_std])
 
-            dxy_std=generateCubicOrbital(c_int(3), c_int(2), b'xy', c_int(ngrid), c_double(L), original_frame)
-            dyz_std=generateCubicOrbital(c_int(3), c_int(2), b'yz', c_int(ngrid), c_double(L), original_frame)
-            dxz_std=generateCubicOrbital(c_int(3), c_int(2), b'xz', c_int(ngrid), c_double(L), original_frame)
-            dx2_std=generateCubicOrbital(c_int(3), c_int(2), b'x2', c_int(ngrid), c_double(L), original_frame)
-            dz2_std=generateCubicOrbital(c_int(3), c_int(2), b'z2', c_int(ngrid), c_double(L), original_frame)
-            ao_d_basis_std=np.array([dz2_std,dxz_std,dyz_std,dx2_std,dxy_std])
-            #if self.orb_f:
-            #    fz3_std=generateCubicOrbital(c_int(4), c_int(3), b'z3', c_int(ngrid), c_double(80), original_frame)
-            #    fxz2_std=generateCubicOrbital(c_int(4), c_int(3), b'xz2', c_int(ngrid), c_double(80), original_frame)
-            #    fyz2_std=generateCubicOrbital(c_int(4), c_int(3), b'yz2', c_int(ngrid), c_double(80), original_frame)
-            #    fxyz_std=generateCubicOrbital(c_int(4), c_int(3), b'xyz', c_int(ngrid), c_double(80), original_frame)
-            #    fz_x2_y2_std=generateCubicOrbital(c_int(4), c_int(3), b'z(x2-y2)', c_int(ngrid), c_double(80), original_frame)
-            #    fx_x2_3y2_std=generateCubicOrbital(c_int(4), c_int(3), b'x(x2-3y2)', c_int(ngrid), c_double(80), original_frame)
-            #    fy_3x2_y2_std=generateCubicOrbital(c_int(4), c_int(3), b'y(3x2-y2)', c_int(ngrid), c_double(80), original_frame)
-            #    ao_f_basis_std=np.array([fz3_std,fxz2_std,fyz2_std,fz_x2_y2_std,fxyz_std,fx_x2_3y2_std,fy_3x2_y2_std])
+            if lmax>1:
+                print("assumed d-orbtal order: dz, dxz, dyz, dx2, dxy")
+                dxy_std=generateCubicOrbital(c_int(3), c_int(2), b'xy', c_int(ngrid), c_double(L), original_frame)
+                dyz_std=generateCubicOrbital(c_int(3), c_int(2), b'yz', c_int(ngrid), c_double(L), original_frame)
+                dxz_std=generateCubicOrbital(c_int(3), c_int(2), b'xz', c_int(ngrid), c_double(L), original_frame)
+                dx2_std=generateCubicOrbital(c_int(3), c_int(2), b'x2', c_int(ngrid), c_double(L), original_frame)
+                dz2_std=generateCubicOrbital(c_int(3), c_int(2), b'z2', c_int(ngrid), c_double(L), original_frame)
+                ao_d_basis_std=np.array([dz2_std,dxz_std,dyz_std,dx2_std,dxy_std])
+            if lmax==3:
+                print("assumed f-orbtal order: fz3, fxz2, fyz2, fz(x2-3y2), fxyz, fx(x2-3y2), fy(3x2-y2")
+                fz3_std=generateCubicOrbital(c_int(4), c_int(3), b'z3', c_int(ngrid), c_double(L), original_frame)
+                fxz2_std=generateCubicOrbital(c_int(4), c_int(3), b'xz2', c_int(ngrid), c_double(L), original_frame)
+                fyz2_std=generateCubicOrbital(c_int(4), c_int(3), b'yz2', c_int(ngrid), c_double(L), original_frame)
+                fxyz_std=generateCubicOrbital(c_int(4), c_int(3), b'xyz', c_int(ngrid), c_double(L), original_frame)
+                fz_x2_y2_std=generateCubicOrbital(c_int(4), c_int(3), b'z(x2-y2)', c_int(ngrid), c_double(L), original_frame)
+                fx_x2_3y2_std=generateCubicOrbital(c_int(4), c_int(3), b'x(x2-3y2)', c_int(ngrid), c_double(L), original_frame)
+                fy_3x2_y2_std=generateCubicOrbital(c_int(4), c_int(3), b'y(3x2-y2)', c_int(ngrid), c_double(L), original_frame)
+                ao_f_basis_std=np.array([fz3_std,fxz2_std,fyz2_std,fz_x2_y2_std,fxyz_std,fx_x2_3y2_std,fy_3x2_y2_std])
 
             # generate transformed orbs and calc site-sym. Ops
-            pSiteSymOpList=[]
-            dSiteSymOpList=[]
+            orbSymOpList=[]
+            #sOrbSymOpList=[]
+            #pOrbSymOpList=[]
+            #if lmax>1: dOrbSymOpList=[]
+            #if lmax==3: fOrbSymOpList=[]
             time0=time.time()
-            for Op in symOpList:
+            for Op in symRotateList:
+                orbSymOp=[np.array([1+0j])] # initial with s orb sym. op.
                 transformed_frame=(c_double*9)()
                 icnt=0
                 invLocal=np.linalg.inv(pR.lat).dot(Op).dot(pR.lat)
@@ -474,124 +512,126 @@ class Hr:
                 px_trans=generateCubicOrbital(c_int(2), c_int(1), b'x', c_int(ngrid), c_double(L), transformed_frame)
                 py_trans=generateCubicOrbital(c_int(2), c_int(1), b'y', c_int(ngrid), c_double(L), transformed_frame)
                 pz_trans=generateCubicOrbital(c_int(2), c_int(1), b'z', c_int(ngrid), c_double(L), transformed_frame)
-
-                dxy_trans=generateCubicOrbital(c_int(3), c_int(2), b'xy', c_int(ngrid), c_double(L), transformed_frame)
-                dyz_trans=generateCubicOrbital(c_int(3), c_int(2), b'yz', c_int(ngrid), c_double(L), transformed_frame)
-                dxz_trans=generateCubicOrbital(c_int(3), c_int(2), b'xz', c_int(ngrid), c_double(L), transformed_frame)
-                dx2_trans=generateCubicOrbital(c_int(3), c_int(2), b'x2', c_int(ngrid), c_double(L), transformed_frame)
-                dz2_trans=generateCubicOrbital(c_int(3), c_int(2), b'z2', c_int(ngrid), c_double(L), transformed_frame)
-                ao_d_basis_trans=np.array([dz2_trans,dxz_trans,dyz_trans,dx2_trans,dxy_trans])
                 ao_p_basis_trans=np.array([pz_trans,px_trans,py_trans])
-                #if self.orb_f:
-                #    fz3_trans=generateCubicOrbital(c_int(4), c_int(3), b'z3', c_int(ngrid), c_double(80), transformed_frame)
-                #    fxz2_trans=generateCubicOrbital(c_int(4), c_int(3), b'xz2', c_int(ngrid), c_double(80), transformed_frame)
-                #    fyz2_trans=generateCubicOrbital(c_int(4), c_int(3), b'yz2', c_int(ngrid), c_double(80), transformed_frame)
-                #    fxyz_trans=generateCubicOrbital(c_int(4), c_int(3), b'xyz', c_int(ngrid), c_double(80), transformed_frame)
-                #    fz_x2_y2_trans=generateCubicOrbital(c_int(4), c_int(3), b'z(x2-y2)', c_int(ngrid), c_double(80), transformed_frame)
-                #    fx_x2_3y2_trans=generateCubicOrbital(c_int(4), c_int(3), b'x(x2-3y2)', c_int(ngrid), c_double(80), transformed_frame)
-                #    fy_3x2_y2_trans=generateCubicOrbital(c_int(4), c_int(3), b'y(3x2-y2)', c_int(ngrid), c_double(80), transformed_frame)
-                #    ao_f_basis_trans=np.array([fz3_trans,fxz2_trans,fyz2_trans,fz_x2_y2_trans,fxyz_trans,fx_x2_3y2_trans,fy_3x2_y2_trans])
 
-                pSiteSymOp=np.dot(ao_p_basis_trans,ao_p_basis_std.T)
-                dSiteSymOp=np.dot(ao_d_basis_trans,ao_d_basis_std.T)
-                pSiteSymOpList.append(pSiteSymOp)
-                dSiteSymOpList.append(dSiteSymOp)
-                #print("rotation matrix constructed in %.3f s"%(time.time()-time0))
-                #print("check orthorgonality: std basis")
-                #print(np.diag(np.dot(ao_d_basis_std,ao_d_basis_std.T)))
-                #print(np.diag(np.dot(ao_p_basis_std,ao_p_basis_std.T)))
-                #print("rotated basis:")
-                #print(np.diag(np.dot(ao_d_basis_trans,ao_d_basis_trans.T)))
-                #print(np.diag(np.dot(ao_p_basis_trans,ao_p_basis_trans.T)))
+                if lmax>1:
+                    dxy_trans=generateCubicOrbital(c_int(3), c_int(2), b'xy', c_int(ngrid), c_double(L), transformed_frame)
+                    dyz_trans=generateCubicOrbital(c_int(3), c_int(2), b'yz', c_int(ngrid), c_double(L), transformed_frame)
+                    dxz_trans=generateCubicOrbital(c_int(3), c_int(2), b'xz', c_int(ngrid), c_double(L), transformed_frame)
+                    dx2_trans=generateCubicOrbital(c_int(3), c_int(2), b'x2', c_int(ngrid), c_double(L), transformed_frame)
+                    dz2_trans=generateCubicOrbital(c_int(3), c_int(2), b'z2', c_int(ngrid), c_double(L), transformed_frame)
+                    ao_d_basis_trans=np.array([dz2_trans,dxz_trans,dyz_trans,dx2_trans,dxy_trans])
+                
+                if lmax==3:
+                    fz3_trans=generateCubicOrbital(c_int(4), c_int(3), b'z3', c_int(ngrid), c_double(L), transformed_frame)
+                    fxz2_trans=generateCubicOrbital(c_int(4), c_int(3), b'xz2', c_int(ngrid), c_double(L), transformed_frame)
+                    fyz2_trans=generateCubicOrbital(c_int(4), c_int(3), b'yz2', c_int(ngrid), c_double(L), transformed_frame)
+                    fxyz_trans=generateCubicOrbital(c_int(4), c_int(3), b'xyz', c_int(ngrid), c_double(L), transformed_frame)
+                    fz_x2_y2_trans=generateCubicOrbital(c_int(4), c_int(3), b'z(x2-y2)', c_int(ngrid), c_double(L), transformed_frame)
+                    fx_x2_3y2_trans=generateCubicOrbital(c_int(4), c_int(3), b'x(x2-3y2)', c_int(ngrid), c_double(L), transformed_frame)
+                    fy_3x2_y2_trans=generateCubicOrbital(c_int(4), c_int(3), b'y(3x2-y2)', c_int(ngrid), c_double(L), transformed_frame)
+                    ao_f_basis_trans=np.array([fz3_trans,fxz2_trans,fyz2_trans,fz_x2_y2_trans,fxyz_trans,fx_x2_3y2_trans,fy_3x2_y2_trans])
+
+                pOrbSymOp=np.dot(ao_p_basis_trans,ao_p_basis_std.T)
+                orbSymOp.append(pOrbSymOp)
+                #pOrbSymOpList.append(pSiteSymOp)
+                #if lmax<=1: return pOrbSymOpList
+                if lmax>1:
+                    dOrbSymOp=np.dot(ao_d_basis_trans,ao_d_basis_std.T)
+                    orbSymOp.append(dOrbSymOp)
+                    #dOrbSymOpList.append(dSiteSymOp)
+                #if lmax<=2: return pOrbSymOpList, dOrbSymOpList
+                if lmax==3:
+                    fOrbSymOp=np.dot(ao_f_basis_trans,ao_f_basis_std.T)
+                    orbSymOp.append(fOrbSymOp)
+                    #fOrbSymOpList.append(fSiteSymOp)
+                orbSymOpList.append(orbSymOp)
             print("site-rotation matrix constructed in %.3f s"%(time.time()-time0))
-            return pSiteSymOpList, dSiteSymOpList
+            return orbSymOpList
+            #if lmax<=1: return [pOrbSymOpList]
+            #if lmax<=2: return [pOrbSymOpList, dOrbSymOpList]
+            #if lmax<=3: return [pOrbSymOpList, dOrbSymOpList, fOrbSymOpList]
+            #raise("lmax>3")
         
-        pSiteSymOpList, dSiteSymOpList= generateSiteSymOp()
-        localRotate=np.zeros((self.norb,self.norb))
-        localRotate[:5,:5]=dSiteSymOpList[0]
-        localRotate[5:8,5:8]=pSiteSymOpList[0]
-        localRotate[8:11,8:11]=pSiteSymOpList[0]
-        #print("onsite rotation:")
-        #print(np.diag(localRotate))
-        #localRotate_dag=localRotate.T
-        localRotate2=np.dot(localRotate,localRotate)
-        #localRotate2_dag=localRotate2.T
-        orbSymOpList=[localRotate,localRotate2]
+        # check the projections
+        orbName=['s','p','d','f']
+        lmax=0
+        for iatom, atom in enumerate(atomicOrbIndexList):
+            print('atom %d, lmax=%d'%(iatom,len(atom)-1))
+            lmax=max([lmax,len(atom)-1])
+            for iorbL, orbL in enumerate(atom):
+                print('%s orb:'%orbName[iorbL],orbL)
+        # obtain sym. Ops. of atomic wavefunctions
+        symRotateList, symTranslateList, symSiteMapList= getSymOpsAndSymSiteMap()
+        atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,lmax=lmax)
+        # construct local sym. Op. for each sym. op.
+        localSymOpList=[]
+        for isymOp, symSiteMap in enumerate(symSiteMapList):
+            localSymOp=np.zeros((self.norb,self.norb),dtype=complex)
+            for iSite0, iSite1 in enumerate(symSiteMap):
+                atom0=atomicOrbIndexList[iSite0]
+                atom1=atomicOrbIndexList[iSite1]
+                assert len(atom0)==len(atom1), 'Symmetric sites %d, %d have different lmax %d, %d'%(iSite0,iSite1,len(atom0),len(atom1))
+                for iL in range(len(atom0)):
+                    if len(atom0[iL])==0: continue
+                    atomicWaveSymOp=atomicWaveSymOpList[isymOp][iL]
+                    atom0OrbIndex, atom1OrbIndex= atom0[iL], atom1[iL]
+                    assert atomicWaveSymOp.shape[0]==len(atom0OrbIndex), 'diminsion of wave sym. op. %d, inconsist with atom %d l(%s)=%d'%(atomicWaveSymOp.shape[0],iSite0,orbName[iL],len(atom0[iL]))
+                    for iorb0Index, orb0Index in enumerate(atom0OrbIndex):
+                        for iorb1Index, orb1Index in enumerate(atom1OrbIndex):
+                            localSymOp[orb0Index,orb1Index]=atomicWaveSymOp[iorb0Index,iorb1Index]
+            localSymOpList.append(localSymOp)
         #exit()
-        '''
+        
         # check the whether operations are right
-        i,j=3,6
-        dR=[1,0,0]
+        '''
+        i,j=0,6
+        dR=[0,0,0]
         sourceCoor0=orbCoorList[i]
         targetCoor0=orbCoorList[j]+np.array(dR)
         bond=self.bondInVecForm[dR[0],dR[1],dR[2]]
-        theta1=np.log(bond[i,j]/abs(bond[i,j])).imag/np.pi
         print('bond1 orb%d-orb%d [%d %d %d]'%(i,j,*dR),bond[i,j])
-        #print(sourceCoor0,targetCoor0)
 
-        sourceCoor1=sourceCoor0.dot(O1)
-        targetCoor1=targetCoor0.dot(O1)
-        dR=(targetCoor1-orbCoorList[j])-(sourceCoor1-orbCoorList[i])
-        dR=np.array([int(np.around(x)) for x in dR])
-        bond=localRotate.dot(self.bondInVecForm[dR[0],dR[1],dR[2]]).dot(localRotate_dag)
-        theta2=np.log(bond[i,j]/abs(bond[i,j])).imag/np.pi
-        print('bond2 orb%d-orb%d [%d %d %d]'%(i,j,*dR),bond[i,j])
-        #print(sourceCoor1,sourceCoor0,targetCoor1,targetCoor0)
-
-        sourceCoor2=sourceCoor0.dot(O2)
-        targetCoor2=targetCoor0.dot(O2)
-        dR=(targetCoor2-orbCoorList[j])-(sourceCoor2-orbCoorList[i])
-        dR=np.array([int(np.around(x)) for x in dR])
-        bond=localRotate2.dot(self.bondInVecForm[dR[0],dR[1],dR[2]]).dot(localRotate2_dag)
-        theta3=np.log(bond[i,j]/abs(bond[i,j])).imag/np.pi
-        print('bond3 orb%d-orb%d [%d %d %d]'%(i,j,*dR),bond[i,j])
-
-        print('delta phase1',theta2-theta1)
-        print('delta phase2',theta3-theta2)
-        print('delta phase3',theta1-theta3)
+        for rotate, translate, localSymOp in zip(symRotateList,symTranslateList,localSymOpList):
+            sourceCoor1=sourceCoor0.dot(rotate)+translate
+            targetCoor1=targetCoor0.dot(rotate)+translate
+            dR=(targetCoor1-orbCoorList[j])-(sourceCoor1-orbCoorList[i])
+            dR=np.array([int(np.around(x)) for x in dR])
+            bond=(localSymOp.conjugate().T).dot(self.bondInVecForm[dR[0],dR[1],dR[2]]).dot(localSymOp)
+            print('bond2 orb%d-orb%d [%d %d %d]'%(i,j,*dR),bond[i,j])
         exit()
         '''
+        # flush bondList
         self.bondList=[]
-        #self.onsite=[]
-        #print(self.dRList)
-        O1, O2= symOpList
-        orbOp1, orbOp2= orbSymOpList
         for dR0 in self.dRList:
             if dR0[0]>self.Rx_max or dR0[0]<self.Rx_min or dR0[1]>self.Ry_max or dR0[1]<self.Ry_min or dR0[2]>self.Rz_max or dR0[2]<self.Rz_min: continue
-            bond0=self.bondInVecForm[dR0[0],dR0[1],dR0[2]]
-            bond_sym=bond0
-            bond1,bond2=np.zeros((self.norb,self.norb),dtype=complex),np.zeros((self.norb,self.norb),dtype=complex)
-            #print(dR0)
-            for sourceID in range(self.norb):
-                sourceCoor0=orbCoorList[sourceID]
-                sourceCoor1=sourceCoor0.dot(O1)
-                sourceCoor2=sourceCoor0.dot(O2)
-                for targetID in range(self.norb):
-                    targetCoor0=orbCoorList[targetID]+dR0
-                    targetCoor1=targetCoor0.dot(O1)
-                    targetCoor2=targetCoor0.dot(O2)
+            #bond0=self.bondInVecForm[dR0[0],dR0[1],dR0[2]]
+            bond_sym=0#bond0
+            for rotate, translate, localSymOp in zip(symRotateList,symTranslateList,localSymOpList):
+                bond1=np.zeros((self.norb,self.norb),dtype=complex)
+                #outOfReach=False
+                for sourceID in range(self.norb):
+                    sourceCoor0=orbCoorList[sourceID]
+                    sourceCoor1=sourceCoor0.dot(rotate)+translate
+                    for targetID in range(self.norb):
+                        targetCoor0=orbCoorList[targetID]+dR0
+                        targetCoor1=targetCoor0.dot(rotate)+translate
 
-                    dR1=(targetCoor1-orbCoorList[targetID])-(sourceCoor1-orbCoorList[sourceID])
-                    #print(sourceID,targetID,dR1_tmp)
-                    dR1=np.array([int(np.around(x)) for x in dR1])
-                    #print(dR1)
-                    if dR1[0]>self.Rx_max or dR1[0]<self.Rx_min or dR1[1]>self.Ry_max or dR1[1]<self.Ry_min or dR1[2]>self.Rz_max or dR1[2]<self.Rz_min:
-                        bond1[sourceID][targetID]=0
-                    else:
-                        bond1[sourceID][targetID]=self.bondInVecForm[dR1[0],dR1[1],dR1[2],sourceID,targetID]
-                    
-                    dR2=(targetCoor2-orbCoorList[targetID])-(sourceCoor2-orbCoorList[sourceID])
-                    #print(sourceID,targetID,dR2_tmp)
-                    dR2=np.array([int(np.around(x)) for x in dR2])
-                    #print(dR2)
-                    if dR2[0]>self.Rx_max or dR2[0]<self.Rx_min or dR2[1]>self.Ry_max or dR2[1]<self.Ry_min or dR2[2]>self.Rz_max or dR2[2]<self.Rz_min:
-                        bond2[sourceID][targetID]=0
-                    else:
-                        bond2[sourceID][targetID]=self.bondInVecForm[dR2[0],dR2[1],dR2[2],sourceID,targetID]
-
-            bond_sym+=(orbOp1.T).dot(bond1).dot(orbOp1)
-            bond_sym+=(orbOp2.T).dot(bond2).dot(orbOp2)
-            bond_sym/=(len(symOpList)+1)
+                        dR1=(targetCoor1-orbCoorList[targetID])-(sourceCoor1-orbCoorList[sourceID])
+                        #print(sourceID,targetID,dR1_tmp)
+                        dR1=np.array([int(np.around(x)) for x in dR1])
+                        #print(dR1)
+                        if dR1[0]>self.Rx_max or dR1[0]<self.Rx_min or dR1[1]>self.Ry_max or dR1[1]<self.Ry_min or dR1[2]>self.Rz_max or dR1[2]<self.Rz_min:
+                        #    outOfReach=True
+                            pass
+                        else:
+                            bond1[sourceID][targetID]=self.bondInVecForm[dR1[0],dR1[1],dR1[2],sourceID,targetID]
+                #if outOfReach:
+                #    bond_sym=bond_sym*0
+                #    break
+                bond_sym=bond_sym+(localSymOp.T.conjugate()).dot(bond1).dot(localSymOp)
+            
+            bond_sym/=len(symRotateList)
             for sourceID in range(self.norb):
                 for targetID in range(self.norb):
                     self.bondList.append(lat.BondDigital(sourceID,targetID,dR0,bond_sym[sourceID,targetID]))
