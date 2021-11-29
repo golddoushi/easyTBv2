@@ -3,7 +3,6 @@ import time
 import Lattice as lat
 import numpy as np
 from math import acos, cos, asin, sin, sqrt
-from ctypes import c_double, c_int, CDLL, py_object
 from auxiliary import quicksort
 import paramReader
 import posReader as pR
