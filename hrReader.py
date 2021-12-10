@@ -6,6 +6,7 @@ from math import acos, cos, asin, sin, sqrt
 from auxiliary import quicksort
 import paramReader
 import posReader as pR
+import doublePointGroupReader as dPG
 
 class Hr:
     def __init__(self):
@@ -418,13 +419,29 @@ class Hr:
         print('dropping bonds:',ndropping)
         return ndropping
 
-    def symmerizeBonds(self,atomicOrbIndexList,spinor=False,symOpSelection=[]):
-        def getSymOpsAndSymSiteMap():
+    def symmerizeBonds(self,atomicOrbIndexList,spinor=False,pgFilePath='',symOpSelection=[],atomicMagMomList=[]):
+        def generateSpinWFCSymOp(symRotateList,pgFilePath):
+            dpgData=dPG.readInDoublePointGroupInfo(pgFilePath)
+            spinRotateList=[]
+            for rotate_std in symRotateList:
+                print('space rotation (in col. vec. form)')
+                print(rotate_std.T)
+                print('corresponded spin rotation:')
+                for dpg_operator in dpgData['operators']:
+                    diff_rotate=rotate_std.T-dpg_operator.rotation_r
+                    if sum(sum(abs(diff_rotate)))<paramReader.SYMPREC:
+                        print(dpg_operator.rotation_s)
+                        spinRotateList.append(dpg_operator.rotation_s)
+                        break
+            return spinRotateList
+        
+        def getSymOpsAndSymSiteMap(atomicMagMomList=[],pgFilePath=''):
             # constructe all sym. ops and fetch ion mapping under sym. ops
             symRotateList=[]
             symTranslateList=[]
             symIonMap=[]
-            rotation, translation= pR.getWholeSymmetryOperator()
+            sym= pR.getWholeSymmetryOperator(getSymObj=True)
+            rotation, translation= sym['rotations'], sym['translations']
             print('Lattice symmetry group order: %d'%rotation.shape[0])
             for rotate, translate in zip(rotation,translation):
                 #print(rotate,translate)
@@ -446,7 +463,57 @@ class Hr:
                     print(translate)
                     exit()
                 symIonMap.append(subMap)
-            return symRotateList, symTranslateList, symIonMap
+            
+            spinRotateList=[]
+            # check if system involves nonzero local mag. mom.
+            sx=np.array([[0,1],[1,0]],dtype=complex)
+            sy=np.array([[0,-1j],[1j,0]],dtype=complex)
+            sz=np.array([[1,0],[0,-1]],dtype=complex)
+            magmom_list=[]
+            for m in atomicMagMomList:
+                m_su2=np.array(m,dtype=complex)
+                mx=m_su2.conjugate().dot(sx).dot(m_su2)
+                my=m_su2.conjugate().dot(sy).dot(m_su2)
+                mz=m_su2.conjugate().dot(sz).dot(m_su2)
+                magmom_list.append(np.array([mx,my,mz]).real)
+            tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list])
+            if tot_abs_mag>paramReader.SYMPREC: # find proper sub-group consist with magnetism (but without time-reversal operator)
+                assert pgFilePath!='', "System involves nonzero local mag.mom. double point group file should be given"
+                spinRotateList=generateSpinWFCSymOp(symRotateList,pgFilePath)
+                new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList= [], [], [], []
+                for isym in range(len(symIonMap)):
+                    rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
+                    magmom_rotated_list=[]
+                    for m in atomicMagMomList:
+                        m_su2=rotate_s.dot(np.array(m,dtype=complex))
+                        mx=m_su2.conjugate().dot(sx).dot(m_su2)
+                        my=m_su2.conjugate().dot(sy).dot(m_su2)
+                        mz=m_su2.conjugate().dot(sz).dot(m_su2)
+                        magmom_rotated_list.append(np.array([mx,my,mz]).real)
+                    #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
+                    diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(pR.nions))]
+                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
+                        print('crystal sym. op. preserved:')
+                        print(rotate_r.T)
+                        print(translate)
+                        print(rotate_s)
+                        print('magmom:')
+                        print(magmom_rotated_list[0])
+                        new_symRotateList.append(rotate_r)
+                        new_symTranslateList.append(translate)
+                        new_symIonMap.append(ionMap)
+                        new_spinRotateList.append(rotate_s)
+                    else:
+                        print('crystal sym. op. broken due to magnetism')
+                        print(rotate_r.T)
+                        print(translate)
+                        print(rotate_s)
+                        print('magmom:')
+                        print(magmom_list[0])
+                        print('to:')
+                        print(magmom_rotated_list[0])
+                symRotateList, symTranslateList, symIonMap, spinRotateList=new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList
+            return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList}
         
         def generateAtomicWFCSymOp(symRotateList):
             '''generate transformation matrix of cubic harmonics for each sym. Op
@@ -471,7 +538,6 @@ class Hr:
                    order: dz2, dxz, dyz, dx2-y2, dxy
                 '''
                 x,y,z=vec
-                #return np.array([(3*z*z-1)/(2*np.sqrt(3)),x*z,y*z,(x*x-y*y)/2,x*y])
                 return np.array([
                     sqrt(5/16)*(3*z*z-1),
                     sqrt(15/4)*x*z,
@@ -484,7 +550,6 @@ class Hr:
                    order: fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
                 '''
                 x,y,z=vec
-                #return np.array([z*(5*z*z-3)/(2*np.sqrt(15)),x*(5*z*z-1)/2/np.sqrt(10),y*(5*z*z-1)/np.sqrt(10),z*(x*x-y*y)/2,x*y*z,x*(x*x-3*y*y)/2/np.sqrt(6),y*(3*x*x-y*y)/2/np.sqrt(6)])
                 return np.array([
                     sqrt(7)   *(5*z**3-3*z),
                     sqrt(21/2)*(5*z**2-1)*x,
@@ -503,15 +568,10 @@ class Hr:
             theta1=acos(np.sqrt(1/3))
             theta2=np.pi-theta1
             dn1=defineVecByAngles(0,0)
-            #print(dOrb(dn1))
             dn2=defineVecByAngles(theta1,0)
-            #print(dOrb(dn2))
             dn3=defineVecByAngles(theta1,np.pi/2)
-            #print(dOrb(dn3))
             dn4=defineVecByAngles(theta2,np.pi*0/6)
-            #print(dOrb(dn4))
             dn5=defineVecByAngles(theta2,np.pi*(0/6+1/4))
-            #print(dOrb(dn5))
             dNBasis=[dn1,dn2,dn3,dn4,dn5]
             dList=np.array([dOrb(n_vec) for n_vec in dNBasis])
             print('determinal of d-orb basis:',np.linalg.det(dList))
@@ -521,19 +581,12 @@ class Hr:
             theta1=acos(np.sqrt(3/5))
             theta2=np.pi-theta1
             fn1=defineVecByAngles(0,0)
-            #print(fOrb(fn1))
             fn2=defineVecByAngles(theta1,0)
-            #print(fOrb(fn2))
             fn3=defineVecByAngles(theta1,np.pi/2)
-            #print(fOrb(fn3))
             fn4=defineVecByAngles(theta2,0)
-            #print(fOrb(fn4))
             fn5=defineVecByAngles(theta2,np.pi/4)
-            #print(fOrb(fn5))
             fn6=defineVecByAngles(np.pi/2,0)
-            #print(fOrb(fn6))
             fn7=defineVecByAngles(np.pi/2,np.pi/6)
-            #print(fOrb(fn7))
             fNBasis=[fn1,fn2,fn3,fn4,fn5,fn6,fn7]
             fList=np.array([fOrb(n_vec) for n_vec in fNBasis])
             print('determinal of f-orb basis',np.linalg.det(fList))
@@ -558,9 +611,9 @@ class Hr:
                     np.dot(ao_d_basis_trans,ao_d_basis_std.T),
                     np.dot(ao_f_basis_trans,ao_f_basis_std.T)
                     ])
-            #exit()
             return atomicWaveSymOpList
         
+
         # check the projections
         orbName=['s','p','d','f']
         lmax=0
@@ -570,18 +623,19 @@ class Hr:
             for iorbL, orbL in enumerate(atom):
                 print('%s orb:'%orbName[iorbL],orbL)
         # obtain sym. Ops. of atomic wavefunctions
-        symRotateList, symTranslateList, symSiteMapList= getSymOpsAndSymSiteMap()
-        for isym in range(len(symRotateList)):
-            print("Symmetric operation %d:"%isym)
-            print(symRotateList[isym])
-            print(symTranslateList[isym])
-            print(symSiteMapList[isym])
+        sym= getSymOpsAndSymSiteMap(atomicMagMomList=atomicMagMomList,pgFilePath=pgFilePath)
+        symRotateList, symTranslateList, symSiteMapList, symSpinRotateList=sym['rotations'], sym['translations'], sym['atom map'], sym['spin rotations']
         if len(symOpSelection)>0:
             symRotateList=[symRotateList[isym] for isym in symOpSelection]
             symTranslateList=[symTranslateList[isym] for isym in symOpSelection]
             symSiteMapList=[symSiteMapList[isym] for isym in symOpSelection]
+            symSpinRotateList=[symSpinRotateList[isym] for isym in symOpSelection]
+        #print(symRotateList[0])
+        #exit()
         atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList)
         
+        #if spinor:
+        #    spinWaveSymOpList=generateSpinWFCSymOp(symRotateList,pgFilePath)
         # construct local sym. Op. for each sym. op.
         localSymOpList=[] # localSymOpList[isymOp][iatom] give sym. op. in atomic subspace
         for isymOp in range(len(symRotateList)):
@@ -593,17 +647,21 @@ class Hr:
                 for iL, L in enumerate(atom):
                     if len(L)==0: continue
                     if spinor:
-                        atomSymOp[cnt:(cnt+len(L)//2),cnt:(cnt+len(L)//2)]=atomicWaveSymOpList[isymOp][iL]
-                        cnt+=len(L)//2
-                        atomSymOp[cnt:(cnt+len(L)//2),cnt:(cnt+len(L)//2)]=atomicWaveSymOpList[isymOp][iL]
-                        cnt+=len(L)//2
+                        spinRatate=symSpinRotateList[isymOp]
+                        atomSymOp[cnt:(cnt+len(L)//2),         cnt:(cnt+len(L)//2)         ]=atomicWaveSymOpList[isymOp][iL]*spinRatate[0,0]
+                        atomSymOp[cnt:(cnt+len(L)//2),         (cnt+len(L)//2):(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]*spinRatate[0,1]
+                        atomSymOp[(cnt+len(L)//2):(cnt+len(L)),cnt:(cnt+len(L)//2)         ]=atomicWaveSymOpList[isymOp][iL]*spinRatate[1,0]
+                        atomSymOp[(cnt+len(L)//2):(cnt+len(L)),(cnt+len(L)//2):(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]*spinRatate[1,1]
+                        cnt+=len(L)
                     else:
                         atomSymOp[cnt:(cnt+len(L)),cnt:(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]
                         cnt+=len(L)
                 localSymOp.append(atomSymOp)
             localSymOpList.append(localSymOp)
+        
         '''
         # check the whether operations are right
+        np.set_printoptions(precision=2)
         i,j=0,1
         orbAtomI=[]
         for L in atomicOrbIndexList[i]:
@@ -633,6 +691,10 @@ class Hr:
             orbAtomJ=[]
             for L in atomicOrbIndexList[j_trans]:
                 for iorb in L: orbAtomJ.append(iorb)
+            print('rotation:')
+            print(rotate.T)
+            #print(localSymOp[i_trans])
+            #print(localSymOp[j_trans])
             print('source orb',orbAtomI)
             print('target orb',orbAtomJ)
 
@@ -646,7 +708,7 @@ class Hr:
             for iorbAtomI, orbAtomIIndex in enumerate(orbAtomI):
                 for iorbAtomJ, orbAtomJIndex in enumerate(orbAtomJ):
                     bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
-            bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
+            #bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
             print(bond)
         exit()
         '''
