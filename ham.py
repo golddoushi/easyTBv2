@@ -533,7 +533,7 @@ class Response:
 
         return
 
-    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],orbCorrList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],nthreads=1):
+    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
@@ -555,7 +555,12 @@ class Response:
             c_lat[i+3]=c_double(pR.lat[1][i])
             c_lat[i+6]=c_double(pR.lat[2][i])
 
-        assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+            for L in atom:
+                for iorb in L: orbCorrList[iorb]=pos
+        #assert sum(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
         c_orbCorrList=(c_double*(3*hr.norb))()
         for i in range(hr.norb):
             c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
@@ -666,7 +671,7 @@ class Response:
         plt.show()
         return
 
-    def calcOpticalHoppingTensor_CDLL(self,hr,mainDir=None,fermi=0,nk=100,orbCorrList=[],ibandv=0,ibandc=1,nthreads=1):
+    def calcOpticalHoppingTensor_CDLL(self,hr,mainDir=None,fermi=0,nk=100,atomicOrbIndexList=[],ibandv=0,ibandc=1,nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kaxis=np.linspace(0,1,nk,endpoint=False)
@@ -697,7 +702,12 @@ class Response:
             c_lat[i+3]=c_double(pR.lat[1][i])
             c_lat[i+6]=c_double(pR.lat[2][i])
 
-        assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+            for L in atom:
+                for iorb in L: orbCorrList[iorb]=pos
+        #assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
         c_orbCorrList=(c_double*(3*hr.norb))()
         for i in range(hr.norb):
             c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
