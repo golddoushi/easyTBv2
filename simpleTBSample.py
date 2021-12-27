@@ -7,8 +7,8 @@ from ham import Green
 
 pR.readPOS('./mcalc/FeCl2/POSCAR')
 hr=reader.Hr()
-#hr.readSingleFile('./mcalc/FeCl2/wannier90.dn_hr.dat',ignoreImagPart=False,cutoff=0.01)
-hr.readSingleFile('./mcalc/FeCl2/wannier90_hr.dat',ignoreImagPart=False,cutoff=0.01)
+#hr.readSingleFile('./mcalc/FeCl2/wannier90.dn_hr.dat',ignoreImagPart=True,cutoff=-0.01)
+hr.readSingleFile('./mcalc/FeCl2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.01)
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
 atomicOrbIndexList=[[[],[],[0,1,2,3,4,11,12,13,14,15]],
                     [[],[5,6,7,16,17,18]],
@@ -26,4 +26,4 @@ hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
 #print(hr.onsite)
 #exit()
 gr=Green()
-gr.calcFullBands_CDLL(hr,fermi=-2.2,mainDir='./mcalc/FeCl2/',saveFig=True)
+gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/FeCl2/',saveFig=True,redBands=[17,18])

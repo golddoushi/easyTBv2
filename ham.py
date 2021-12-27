@@ -770,6 +770,120 @@ class Response:
                 
         print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
 
+    def calcOpticalHoppingTensor_Py(self,hr,mainDir=None,fermi=0,nk=100,atomicOrbIndexList=[],ibandv=0,ibandc=1,nthreads=1):
+        time0=time.time()
+        # prepare input parameters for cdll
+        #kaxis=np.linspace(0,1,nk,endpoint=False)
+        #kmesh=np.array([[k1,k2,0] for k2 in kaxis for k1 in kaxis])
+        k1=np.array([1/3,1/3,0])*0.5
+        Rk=np.array([
+            [ 0, 1, 0],
+            [-1,-1, 0],
+            [ 0, 0, 1]
+        ])
+        #kmesh=[k1,Rk.dot(k1),Rk.dot(Rk).dot(k1)]
+        #k2=Rk.dot(k1)
+        #k3=Rk.dot(Rk).dot(k1)
+        #print(k1,k2,k3)
+        k2=k1+np.array([0,-1,0])
+        k3=k1+np.array([-1,0,0])
+        print(k1,k2,k3)
+        #exit()
+        kmesh=[k1,k2,k3]
+        nkpts=len(kmesh)
+        c_kmesh=(c_double*(nkpts*3))()
+        for ikpt, kpt in enumerate(kmesh):
+            k1,k2,k3=kpt
+            c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
+
+        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+            for L in atom:
+                for iorb in L: orbCorrList[iorb]=pos
+        #assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        c_orbCorrList=(c_double*(3*hr.norb))()
+        for i in range(hr.norb):
+            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
+            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
+            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcBandsVecsVelocityOps.restype=py_object
+        result=hamDLL.calcBandsVecsVelocityOps(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,c_lat,c_orbCorrList,
+                        c_int(nthreads))
+        #print(result.shape)
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i=result
+        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
+        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
+        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dAx=(np.array(Hk_dAx_r)+1j*np.array(Hk_dAx_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dAy=(np.array(Hk_dAy_r)+1j*np.array(Hk_dAy_i)).reshape(nkpts,hr.norb,hr.norb)
+        DHk_dAz=(np.array(Hk_dAz_r)+1j*np.array(Hk_dAz_i)).reshape(nkpts,hr.norb,hr.norb)
+
+        print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
+        
+        # transform DHk_dk to xyz coordinates
+        print("lattice:")
+        print("a1=(%9.6f %9.6f %9.6f)"%(*pR.lat[0],))
+        print("a2=(%9.6f %9.6f %9.6f)"%(*pR.lat[1],))
+        print("a3=(%9.6f %9.6f %9.6f)"%(*pR.lat[2],))
+        reciLat=np.linalg.inv(pR.lat)
+        print("reciprocal lattice:")
+        print("g1=(%9.6f %9.6f %9.6f)"%(*reciLat[:,0],))
+        print("g2=(%9.6f %9.6f %9.6f)"%(*reciLat[:,1],))
+        print("g3=(%9.6f %9.6f %9.6f)"%(*reciLat[:,2],))
+        print("unit of velocity matrix: (h_bar^-1 eV A.)")
+
+        time0=time.time()
+        m,n=ibandv,ibandc
+        filePath=mainDir+'opticalOverlap.txt' if mainDir else './opticalOverlap.txt'
+        with open(filePath,'w') as fout:
+            for ikpt, kpt in enumerate(kmesh):
+                Em, En=eigList[ikpt][m], eigList[ikpt][n]
+
+                vmn_x=vec[ikpt][:,m].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,n])
+                vmn_y=vec[ikpt][:,m].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,n])
+                vmn_z=vec[ikpt][:,m].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,n])
+
+                vmm_x=vec[ikpt][:,m].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,m])
+                vmm_y=vec[ikpt][:,m].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,m])
+                vmm_z=vec[ikpt][:,m].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,m])
+
+                vnn_x=vec[ikpt][:,n].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,n])
+                vnn_y=vec[ikpt][:,n].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,n])
+                vnn_z=vec[ikpt][:,n].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,n])
+
+                print("E %.6f E %.6f vx_mn %.6f %.6f vy_mn %.6f %.6f vx_m %.6f %.6f vy_m %.6f %.6f vx_n %.6f %.6f vy_n %.6f %.6f"%(
+                    Em,En,
+                    vmn_x.real,vmn_x.imag,vmn_y.real,vmn_y.imag,
+                    vmm_x.real,vmm_x.imag,vmm_y.real,vmm_y.imag,
+                    vnn_x.real,vnn_x.imag,vnn_y.real,vnn_y.imag))
+                
+        print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
+
 class Green:
 
     def __init__(self):
@@ -946,7 +1060,7 @@ class Green:
         plt.show()
         plt.close()
 
-    def calcFullBands_CDLL(self,hr,fermi=0,optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1):
+    def calcFullBands_CDLL(self,hr,fermi=0,optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1,redBands=[]):
         # prepare input parameters for cdll
         kaxis=[]
         time0=time.time()
@@ -999,6 +1113,8 @@ class Green:
         plt.figure()
         for ibands in range(hr.norb):
             plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
+        for ibands in redBands:
+            plt.plot(kaxis,eigList[:,ibands],'-',c='red')
         plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
         if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
         plt.xlim(0,ikpt)

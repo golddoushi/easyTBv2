@@ -408,6 +408,7 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 double phase=0;
                 for (int i=0;i<3;i++) phase+=(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i])*kmesh[ikpt][i];
+                //for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
                 hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
                 Vk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
