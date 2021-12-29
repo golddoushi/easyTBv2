@@ -786,7 +786,8 @@ class Hr:
             t_ud=self.bondInVecForm[R1,R2,R3,s,t+halfOrb]
             t_du=self.bondInVecForm[R1,R2,R3,s+halfOrb,t]
             #bond_conjugate_t=self.bondInVecForm[-bond.overlat[0],-bond.overlat[1],-bond.overlat[2],bond.target,bond.source]
-            t0,tz,tx,tiy=(t_uu.imag+t_dd.imag)/2,(t_uu.imag-t_dd.imag)/2,(t_du.imag+t_ud.imag)/2,(t_du.imag-t_ud.imag)/2
+            #t0,tz,tx,tiy=(t_uu.imag+t_dd.imag)/2,(t_uu.imag-t_dd.imag)/2,(t_du.imag+t_ud.imag)/2,(t_du.imag-t_ud.imag)/2
+            tz,ty,tx=(t_uu.imag-t_dd.imag)/2,(t_du.real-t_ud.real)/2,(t_ud.imag+t_du.imag)/2
             '''
             if abs(tz)+abs(tx)+abs(ty)>paramReader.SYMPREC:
                 print(R1,R2,R3,s,t)
@@ -795,10 +796,10 @@ class Hr:
                 print('%.3E,%.3E %.3E,%.3E %.3E,%.3E %.3E,%.3E '%(
                     t0.real,t0.imag,tz.real,tz.imag,tx.real,tx.imag,ty.real,ty.imag,))
             '''
-            t_uu=t_uu.real+1j*(t0+tz)*socFactor
-            t_dd=t_dd.real+1j*(t0-tz)*socFactor
-            t_du=t_du.real+1j*(tx+tiy)*socFactor
-            t_ud=t_ud.real+1j*(tx-tiy)*socFactor
+            t_uu=t_uu.real+1j*tz*socFactor
+            t_dd=t_dd.real-1j*tz*socFactor
+            t_du=(1j*tx+ty)*socFactor
+            t_ud=(1j*tx-ty)*socFactor
             
             bondList_updated.append(lat.BondDigital(s,t,bond.overlat,t_uu))
             bondList_updated.append(lat.BondDigital(s+halfOrb,t+halfOrb,bond.overlat,t_dd))
