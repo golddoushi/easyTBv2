@@ -10,6 +10,7 @@ pR.readPOS('./mcalc/FeCl2/POSCAR')
 hr=reader.Hr()
 #hr.readSingleFile('./mcalc/FeCl2/wannier90.dn_hr.dat',ignoreImagPart=True,cutoff=-0.01)#,format="QE")
 hr.readSingleFile('./mcalc/FeCl2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.01)
+#hr.readSingleFile('./mcalc/MoTe2/wannier90_hr.dat',ignoreImagPart=False,cutoff=0.01,format="QE")
 
 res=Response()
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
@@ -24,6 +25,7 @@ atomicMagMomList=[[0,1], # in z direction
                  ]
 
 hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-                  spinor=True,pgFilePath='./DPGREP/27.txt',atomicMagMomList=atomicMagMomList)
+                  spinor=True,atomicMagMomList=atomicMagMomList)
+hr.adjustSOCStrength(socFactor=0.1)
 #exit()
 res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[100,100,1],omegaList=np.linspace(0.5,1.2,20),tau=0.01,erange=[-80,80],nthreads=4)
