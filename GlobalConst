@@ -3,7 +3,7 @@ OVERIDE=1
 PBSMODE=0       # 0: SMP mode; 1: cluster mode
 VERBOSE=F       # output detail log
 
-PBC=2
+PBC=1           # dimension of system
 ENMAX_aug=100
 METAGGA=F
 NCORE=8        # total cores in resource pool
@@ -134,7 +134,7 @@ MAXMCSTEP=128
 SPINFOLD=1    #multilply local_s & divide J to keep E and test classical limit
 
 FERMI=-2.1     # set Fermi level
-DFERMI=2    # scanning energy region around Fermi energy
+DFERMI=2.0    # scanning energy region around Fermi energy
 NFERMI=20   # sampling points in scanning energy region
 
 EV2K=11588.75

@@ -26,6 +26,6 @@ atomicMagMomList=[[0,1], # in z direction
 
 hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
                   spinor=True,atomicMagMomList=atomicMagMomList)
-hr.adjustSOCStrength(socFactor=0.1)
+hr.adjustSOCStrength(socFactor=1.0)
 #exit()
 res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[100,100,1],omegaList=np.linspace(0.5,1.2,20),tau=0.01,erange=[-80,80],nthreads=4)

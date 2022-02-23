@@ -640,7 +640,10 @@ class Response:
                             sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
                             sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
                             sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag))
-                #return
+                for iomega, omega in enumerate(omegaList):
+                    with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
+                        for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
+                            fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
 
         condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
         condcxxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxy])
@@ -770,32 +773,19 @@ class Response:
                 
         print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
 
-    def calcOpticalHoppingTensor_Py(self,hr,mainDir=None,fermi=0,nk=100,atomicOrbIndexList=[],ibandv=0,ibandc=1,nthreads=1):
+    def calcTransverseFieldResponse_CDLL(self,hr,mainDir=None,fermi=0,Lx=10,Ly=10,Lz=1,omegaAxis=[0],eta=0.001,nthreads=1):
+        halfOrb=hr.norb//2
+        assert halfOrb*2==hr.norb, 'num. orbs is odd, magnetic field response cannot be implemented'
         time0=time.time()
         # prepare input parameters for cdll
         #kaxis=np.linspace(0,1,nk,endpoint=False)
-        #kmesh=np.array([[k1,k2,0] for k2 in kaxis for k1 in kaxis])
-        k1=np.array([1/3,1/3,0])*0.5
-        Rk=np.array([
-            [ 0, 1, 0],
-            [-1,-1, 0],
-            [ 0, 0, 1]
-        ])
-        #kmesh=[k1,Rk.dot(k1),Rk.dot(Rk).dot(k1)]
-        #k2=Rk.dot(k1)
-        #k3=Rk.dot(Rk).dot(k1)
-        #print(k1,k2,k3)
-        k2=k1+np.array([0,-1,0])
-        k3=k1+np.array([-1,0,0])
-        print(k1,k2,k3)
-        #exit()
-        kmesh=[k1,k2,k3]
+        kmesh=np.array([[k1,k2,k3] for k3 in np.linspace(0,1,Lz,endpoint=False) for k2 in np.linspace(0,1,Ly,endpoint=False) for k1 in np.linspace(0,1,Lx,endpoint=False)])
         nkpts=len(kmesh)
         c_kmesh=(c_double*(nkpts*3))()
         for ikpt, kpt in enumerate(kmesh):
             k1,k2,k3=kpt
             c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
-        
+        #exit()
         nhoppings=len(hr.bondList)
         c_sourceID=(c_int*nhoppings)()
         c_targetID=(c_int*nhoppings)()
@@ -809,80 +799,62 @@ class Response:
                 c_overLat[ibond*3+i]=c_int(bond.overlat[i])
             c_hopping_real[ibond]=c_double(bond.t.real)
             c_hopping_imag[ibond]=c_double(bond.t.imag)
-
-        c_lat=(c_double*9)()
-        for i in range(3):
-            c_lat[i]=c_double(pR.lat[0][i])
-            c_lat[i+3]=c_double(pR.lat[1][i])
-            c_lat[i+6]=c_double(pR.lat[2][i])
-
-        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
-        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
-        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
-            for L in atom:
-                for iorb in L: orbCorrList[iorb]=pos
-        #assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
-        c_orbCorrList=(c_double*(3*hr.norb))()
-        for i in range(hr.norb):
-            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
-            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
-            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
         
         hamDLL=CDLL("./ham.dll")
-        hamDLL.calcBandsVecsVelocityOps.restype=py_object
-        result=hamDLL.calcBandsVecsVelocityOps(c_int(nkpts),c_kmesh,
+        hamDLL.calcFullBandsAndVecs.restype=py_object
+        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,c_lat,c_orbCorrList,
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(nthreads))
         #print(result.shape)
-        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i=result
-        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
-        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(nkpts,hr.norb,hr.norb)
-        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dAx=(np.array(Hk_dAx_r)+1j*np.array(Hk_dAx_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dAy=(np.array(Hk_dAy_r)+1j*np.array(Hk_dAy_i)).reshape(nkpts,hr.norb,hr.norb)
-        DHk_dAz=(np.array(Hk_dAz_r)+1j*np.array(Hk_dAz_i)).reshape(nkpts,hr.norb,hr.norb)
-
-        print('Spectra solved in %.3fs (serial mode)'%(time.time()-time0))
+        _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
         
-        # transform DHk_dk to xyz coordinates
-        print("lattice:")
-        print("a1=(%9.6f %9.6f %9.6f)"%(*pR.lat[0],))
-        print("a2=(%9.6f %9.6f %9.6f)"%(*pR.lat[1],))
-        print("a3=(%9.6f %9.6f %9.6f)"%(*pR.lat[2],))
-        reciLat=np.linalg.inv(pR.lat)
-        print("reciprocal lattice:")
-        print("g1=(%9.6f %9.6f %9.6f)"%(*reciLat[:,0],))
-        print("g2=(%9.6f %9.6f %9.6f)"%(*reciLat[:,1],))
-        print("g3=(%9.6f %9.6f %9.6f)"%(*reciLat[:,2],))
-        print("unit of velocity matrix: (h_bar^-1 eV A.)")
+        eigList=np.array(_eigList).reshape(Lx,Ly,Lz,hr.norb)
+        vec=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape(Lx,Ly,Lz,hr.norb,hr.norb)
+        Hk=(np.array(Hk_r)+1j*np.array(Hk_i)).reshape(Lx,Ly,Lz,hr.norb,hr.norb)
+        #DHk_dk1=(np.array(Hk_dk1_r)+1j*np.array(Hk_dk1_i)).reshape(nkpts,hr.norb,hr.norb)
+        #DHk_dk2=(np.array(Hk_dk2_r)+1j*np.array(Hk_dk2_i)).reshape(nkpts,hr.norb,hr.norb)
+        #DHk_dk3=(np.array(Hk_dk3_r)+1j*np.array(Hk_dk3_i)).reshape(nkpts,hr.norb,hr.norb)
 
+        bandmin, bandmax=np.min(eigList), np.max(eigList)
+        print('Spectra solved in %.3fs with %d thread(s), band range: %.4f~%.4f'%(time.time()-time0,nthreads,bandmin,bandmax))
         time0=time.time()
-        m,n=ibandv,ibandc
-        filePath=mainDir+'opticalOverlap.txt' if mainDir else './opticalOverlap.txt'
-        with open(filePath,'w') as fout:
-            for ikpt, kpt in enumerate(kmesh):
-                Em, En=eigList[ikpt][m], eigList[ikpt][n]
+        # structure chi_data[iorb][iomega][iqx][iqy][iqz]: gives transverse field response factor
+        chi_data=np.zeros((halfOrb,len(omegaAxis),Lx,Ly,Lz),dtype=complex)
+        for iorb in range(halfOrb):
+            for k1x in range(Lx):
+                for k1y in range(Ly):
+                    for k1z in range(Lz):
+                        for n in range(hr.norb):
+                            En_d=eigList[k1x,k1y,k1z,n]
+                            S_n_d=vec[k1x,k1y,k1z]
+                            S_dagger_n_d=S_n_d.conjugate().T
+                            factor_d=S_dagger_n_d[iorb,n]*S_n_d[n,iorb]
+                            fn_d=1 if En_d<=fermi else 0
+                            for qx in range(Lx):
+                                for qy in range(Ly):
+                                    for qz in range(Lz):
+                                        k2x,k2y,k2z=(k1x+qx)%Lx,(k1y+qy)%Ly,(k1z+qz)%Lz
+                                        for m in range(hr.norb):
+                                            Em_u=eigList[k2x,k2y,k2z,m]
+                                            fm_u=1 if Em_u<=fermi else 0
+                                            df=fn_d-fm_u
+                                            if df==0: continue
+                                            S_m_u=vec[k2x,k2y,k2z]
+                                            S_dagger_m_u=S_m_u.conjugate().T
+                                            factor_u=S_dagger_m_u[iorb+halfOrb,m]*S_m_u[m,iorb+halfOrb]
+                                            #print(S_m_u)
+                                            #print(factor_u,factor_d,)
+                                            factor_combine=factor_u*factor_d
+                                            if abs(factor_combine)<paramReader.SYMPREC: continue
+                                            for iomega, omega in enumerate(omegaAxis):
+                                                kernal=df/(omega+1j*eta-(Em_u-En_d))
+                                                chi_data[iorb,iomega,qx,qy,qz]+=factor_d*factor_u*kernal
+        print("Response solved in %.3fs"%(time.time()-time0))
+        return chi_data
 
-                vmn_x=vec[ikpt][:,m].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,n])
-                vmn_y=vec[ikpt][:,m].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,n])
-                vmn_z=vec[ikpt][:,m].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,n])
 
-                vmm_x=vec[ikpt][:,m].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,m])
-                vmm_y=vec[ikpt][:,m].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,m])
-                vmm_z=vec[ikpt][:,m].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,m])
 
-                vnn_x=vec[ikpt][:,n].conjugate().dot(DHk_dAx[ikpt]).dot(vec[ikpt][:,n])
-                vnn_y=vec[ikpt][:,n].conjugate().dot(DHk_dAy[ikpt]).dot(vec[ikpt][:,n])
-                vnn_z=vec[ikpt][:,n].conjugate().dot(DHk_dAz[ikpt]).dot(vec[ikpt][:,n])
-
-                print("E %.6f E %.6f vx_mn %.6f %.6f vy_mn %.6f %.6f vx_m %.6f %.6f vy_m %.6f %.6f vx_n %.6f %.6f vy_n %.6f %.6f"%(
-                    Em,En,
-                    vmn_x.real,vmn_x.imag,vmn_y.real,vmn_y.imag,
-                    vmm_x.real,vmm_x.imag,vmm_y.real,vmm_y.imag,
-                    vnn_x.real,vnn_x.imag,vnn_y.real,vnn_y.imag))
-                
-        print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
 
 class Green:
 
