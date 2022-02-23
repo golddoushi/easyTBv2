@@ -14,7 +14,8 @@ hr=reader.Hr()
 #hr.readSingleFile('./mcalc/FeCl2/wannier90_hr.dat',ignoreImagPart=False,cutoff=0.01)
 #hr.readSingleFile('./mcalc/MoTe2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1,format="QE")
 #hr.readSingleFile('./mcalc/MoTe2CrI3/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1,format="QE")
-hr.readDoubleFiles('./mcalc/Cr2P2Se6/wannier90.up_hr.dat','./mcalc/Cr2P2Se6/wannier90.dn_hr.dat',cutoff=-0.1)
+hr.readDoubleFiles('./mcalc/Cr2P2Se6/wannier90.up_hr.dat','./mcalc/Cr2P2Se6/wannier90.dn_hr.dat',cutoff=0.01)
+#hr.readSingleFile('./mcalc/Cr2P2Se6/wannier90.up_hr.dat',cutoff=-0.01)
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
 #atomicOrbIndexList=[[[],[],[0,1,2,3,4,11,12,13,14,15]],
 #                    [[],[5,6,7,16,17,18]],
@@ -58,10 +59,10 @@ atomicOrbIndexList=[[[],[],[0,1,2,3,4,34,35,36,37,38]],
                    ]
 
 # data structure atomicMagMomList[atom index]: give the SU(2) rep. of magnetic moments
-atomicMagMomList=[[0,0], # in z direction
-                  [0,0], # 0 mag.mom.
-                  [0,0]  # 0 mag.mom.
-                 ]
+#atomicMagMomList=[[0,0], # in z direction
+#                  [0,0], # 0 mag.mom.
+#                  [0,0]  # 0 mag.mom.
+#                 ]
 #atomicMagMomList=[[1,1], # in z direction
 #                  [1,1], # in z direction
 #                  [0,0], # 0 mag.mom.
@@ -83,9 +84,20 @@ atomicMagMomList=[[0,0], # in z direction
 #                  [0,0], # 0 mag.mom.
 #                  [0,0], # 0 mag.mom.
 #                 ]
+atomicMagMomList=[[1,0], # in z direction
+                  [1,0], # in z direction
+                  [0,0], # 0 mag.mom.
+                  [0,0], # 0 mag.mom.
+                  [0,0], # 0 mag.mom.
+                  [0,0], # 0 mag.mom.
+                  [0,0], # 0 mag.mom.
+                  [0,0], # 0 mag.mom.
+                  [0,0], # 0 mag.mom.
+                  [0,0]  # 0 mag.mom.
+                 ]
 
-#hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-#                  spinor=True,atomicMagMomList=atomicMagMomList)
+hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
+                  spinor=False,atomicMagMomList=atomicMagMomList)
 #exit()
 #hr.adjustSOCStrength(socFactor=0.0)
 #hr.adjustInterLayerInteraction(
