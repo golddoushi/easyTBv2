@@ -119,6 +119,8 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
                     for(int ibandm=0;ibandm<nbands;ibandm++){
                         Em=eigs[ispin][ikpt][ibandm];
                         if(Em<erange[0] | Em>erange[1]) continue;
+                        //if(ibandm==ibandn) continue;
+                        //if(ibandl==ibandm) continue;
                         vx_lm=velocity_matrix[         ispin*spin_base+ikpt*kpt_base+ibandl*bnd_base+ibandm];
                         vy_lm=velocity_matrix[dir_base+ispin*spin_base+ikpt*kpt_base+ibandl*bnd_base+ibandm];
                         vx_mn=velocity_matrix[         ispin*spin_base+ikpt*kpt_base+ibandm*bnd_base+ibandn];

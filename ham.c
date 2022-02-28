@@ -411,9 +411,9 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
                 //for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
                 hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                Vk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
-                Vk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
-                Vk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
+                Vk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
+                Vk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
+                Vk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
             }
             // unitary transform into real space partial
             for(int i=0;i<norbs;i++){
@@ -954,14 +954,36 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
             }
             double eigs[norbs]; // output eigenvalues of Hk
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
-                double phase=0;
-                for (int i=0;i<3;i++) phase+=(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i])*kmesh[ikpt][i];
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                /*
+                lapack_complex_double hopping_R[3];
+                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+
+                lapack_complex_double phase=0;
+                for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
                 hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
-                Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
-                Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
+
+                lapack_complex_double hopping_R_c[3];
+                for(int i=0;i<3;i++)hopping_R_c[i]=0;
+                for(int i=0;i<3;i++)for(int j=0;j<3;j++)hopping_R_c[i]+=hopping_R[j]*lattice[j][i];
+
+                for(int i=0;i<3;i++) DhkDkxy[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
+                */
+                lapack_complex_double hopping_R[3];
+                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                
+                lapack_complex_double phase=0;
+                for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
+                
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
+                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                //Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
+                //Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
+                //Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
+                for(int i=0;i<3;i++)Dhk[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R[i];
+                
             }
+            
             // unitary transform into real space partial
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
@@ -971,7 +993,7 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                     }
                 }
             }
-
+            
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             // vec[i]=hk[:][i]
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
@@ -1028,7 +1050,7 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                             
                             lapack_complex_double factor_global=0;
                             //if(fabs(En-El)>1e-6)
-                            factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                            factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega+itau));
                             //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
                             //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
                             //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
@@ -1048,7 +1070,254 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
         }
     }
     printf(" done\n");
+    printf("clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
     fp=fopen("./c_log","a");
+    fprintf(fp,"clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    fprintf(fp," done\n");
+    fclose(fp);
+    
+
+    PyObject * conductance_real=PyTuple_New(nphoton*nkpt*8);
+    PyObject * conductance_imag=PyTuple_New(nphoton*nkpt*8);
+
+    for(int iphoton=0;iphoton<nphoton;iphoton++){
+        for(int ikpt=0;ikpt<nkpt;ikpt++){
+            PyTuple_SetItem(conductance_real, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
+            PyTuple_SetItem(conductance_real, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
+            PyTuple_SetItem(conductance_real, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
+            PyTuple_SetItem(conductance_real, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
+            PyTuple_SetItem(conductance_real, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
+            PyTuple_SetItem(conductance_real, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
+            PyTuple_SetItem(conductance_real, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
+            PyTuple_SetItem(conductance_real, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
+
+            PyTuple_SetItem(conductance_imag, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
+            PyTuple_SetItem(conductance_imag, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
+            PyTuple_SetItem(conductance_imag, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
+            PyTuple_SetItem(conductance_imag, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
+            PyTuple_SetItem(conductance_imag, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
+            PyTuple_SetItem(conductance_imag, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
+            PyTuple_SetItem(conductance_imag, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
+            PyTuple_SetItem(conductance_imag, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
+        }
+    }
+    free(conductance_on_kmesh_on_omega);
+    return Py_BuildValue("(OO)",conductance_real,conductance_imag);
+}
+
+PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       int overLat[nhoppings][3], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings],
+                       int nphoton,
+                       double omegaList[nphoton],
+                       double fermi,
+                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
+                       double orbCorr[norbs][3], // fractional corrdinates of orbs
+                       double tau,
+                       double erange[2],
+                       int _nthreads){
+    printf("now in cdll\n");
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    // verification
+    fprintf(fp,"nkpt: %d, dk: %.2f %.2f %.2f, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,dk[0],dk[1],dk[2],norbs,nhoppings,nphoton,erange[0],erange[1]);
+    fprintf(fp,"memory estimation: %.4f MB\n",nphoton*nkpt/1024*8*sizeof(lapack_complex_double)*2/1024);
+    fclose(fp);
+
+    lapack_complex_double itau=tau*_Complex_I;
+    lapack_complex_double * conductance_on_kmesh_on_omega=(lapack_complex_double*)malloc(nphoton*nkpt*8*sizeof(lapack_complex_double));
+    for(int i=0;i<nphoton*nkpt*8;i++)conductance_on_kmesh_on_omega[i]=0;
+
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("use %d cores in ham.dll\n",nthreads);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"use %d cores in ham.dll\n",nthreads);
+    fclose(fp);
+
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            int writing_k_index=ikpt*nphoton*8;
+            lapack_complex_double hk[norbs][norbs]; // init Hk
+            lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
+            lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
+            lapack_complex_double Dhk1k2[norbs][norbs][3][3]; // init DHk/Dk1,Dk2
+            lapack_complex_double DhkDk1xyDk2xy[norbs][norbs][2][2]; // init DHk/Dkx,Dky
+            //lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    hk[i][j]=0;
+                    for(int u=0;u<3;u++)Dhk[i][j][u]=0;
+                    for(int u=0;u<2;u++)DhkDkxy[i][j][u]=0;
+                    for(int u=0;u<3;u++)for(int v=0;v<3;v++)Dhk1k2[i][j][u][v]=0;
+                    for(int u=0;u<2;u++)for(int v=0;v<2;v++)DhkDk1xyDk2xy[i][j][u][v]=0;
+                }
+            }
+            double eigs[norbs]; // output eigenvalues of Hk
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                lapack_complex_double hopping_R[3];
+                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+
+                lapack_complex_double phase=0;
+                for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
+                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                
+                lapack_complex_double hopping_R_c[3];
+                for(int i=0;i<3;i++)hopping_R_c[i]=0;
+                for(int i=0;i<3;i++)for(int j=0;j<3;j++)hopping_R_c[i]+=hopping_R[j]*lattice[j][i];
+
+                //for(int i=0;i<3;i++) Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*hopping_R[i];
+                //for(int i=0;i<3;i++)for(int j=0;j<3;j++)Dhk1k2[sourceID[ihopping]][targetID[ihopping]][i][j]+=tk*hopping_R[i]*hopping_R[j];
+                for(int i=0;i<2;i++) DhkDkxy[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
+                for(int i=0;i<2;i++)for(int j=0;j<2;j++)DhkDk1xyDk2xy[sourceID[ihopping]][targetID[ihopping]][i][j]+=tk*hopping_R_c[i]*hopping_R_c[j];
+            }
+            // unitary transform into real space partial, note each lattice[k] represent one crystal vector with three xyz components
+            /*
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    for(int k=0;k<3;k++){
+                        DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
+                        DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
+                        for(int p=0;p<3;p++){
+                            DhkDk1xyDk2xy[i][j][0][0]+=Dhk1k2[i][j][k][p]*lattice[k][0]*lattice[k][0];
+                            DhkDk1xyDk2xy[i][j][0][1]+=Dhk1k2[i][j][k][p]*lattice[k][0]*lattice[k][1];
+                            DhkDk1xyDk2xy[i][j][1][0]+=Dhk1k2[i][j][k][p]*lattice[k][1]*lattice[k][0];
+                            DhkDk1xyDk2xy[i][j][1][1]+=Dhk1k2[i][j][k][p]*lattice[k][1]*lattice[k][1];
+                        }
+                    }
+                }
+            }*/
+
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            // vec[i]=hk[:][i]
+            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+
+            for(int bandl=0;bandl<norbs;bandl++){ // loop over band_l
+                double El=eigs[bandl];
+                if(El<erange[0] | El>erange[1]) continue;
+                int fl=0;
+                if(El<=fermi)fl=1;
+                for(int bandn=0;bandn<norbs;bandn++){ // loop over band_m
+                    double En=eigs[bandn];
+                    if(En<erange[0] | En>erange[1]) continue;
+                    int fn=0;
+                    if(En<=fermi)fn=1;
+                    int fln=fl-fn;
+                    if (fln==0) continue;
+                    double Enl=En-El;
+                    double Eln=-Enl;
+                    // calc overlap
+                    lapack_complex_double vx_nl=0;
+                    lapack_complex_double vy_nl=0;
+                    lapack_complex_double vx_nn=0;
+                    lapack_complex_double vy_nn=0;
+                    lapack_complex_double vx_ll=0;
+                    lapack_complex_double vy_ll=0;
+                    for(int i=0;i<norbs;i++){
+                        for(int j=0;j<norbs;j++){
+                            vx_nl+=conj(hk[j][bandn])*DhkDkxy[j][i][0]*hk[i][bandl];
+                            vy_nl+=conj(hk[j][bandn])*DhkDkxy[j][i][1]*hk[i][bandl];
+                            //pz_lm+=conj(hk[j][bandl])*Dhk[j][i][2]*hk[i][bandm];
+                            vx_nn+=conj(hk[j][bandn])*DhkDkxy[j][i][0]*hk[i][bandn];
+                            vy_nn+=conj(hk[j][bandn])*DhkDkxy[j][i][1]*hk[i][bandn];
+                            vx_ll+=conj(hk[j][bandl])*DhkDkxy[j][i][0]*hk[i][bandl];
+                            vy_ll+=conj(hk[j][bandl])*DhkDkxy[j][i][1]*hk[i][bandl];
+                        }
+                    }
+                    lapack_complex_double vx_ln=conj(vx_nl);
+                    lapack_complex_double vy_ln=conj(vy_nl);
+
+                    lapack_complex_double rx_nl=-_Complex_I*vx_nl/Enl;
+                    lapack_complex_double ry_nl=-_Complex_I*vy_nl/Enl;
+
+                    lapack_complex_double wxx_ln=0;
+                    lapack_complex_double wxy_ln=0;
+                    lapack_complex_double wyx_ln=0;
+                    lapack_complex_double wyy_ln=0;
+                    for(int i=0;i<norbs;i++){
+                        for(int j=0;j<norbs;j++){
+                            wxx_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][0][0]*hk[i][bandn];
+                            wxy_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][0][1]*hk[i][bandn];
+                            wyx_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][1][0]*hk[i][bandn];
+                            wyy_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][1][1]*hk[i][bandn];
+                        }
+                    }
+                    //wxx_ln=0;wxy_ln=0;wyx_ln=0;wyy_ln=0;
+
+                    lapack_complex_double SIGMA_xx_ln=0;
+                    lapack_complex_double SIGMA_xy_ln=0;
+                    lapack_complex_double SIGMA_yx_ln=0;
+                    lapack_complex_double SIGMA_yy_ln=0;
+                    for(int bandm=0;bandm<norbs;bandm++){
+                        if(bandm==bandn|bandm==bandl)continue;
+                        double Em=eigs[bandm];
+                        lapack_complex_double vx_lm=0;
+                        lapack_complex_double vy_lm=0;
+                        lapack_complex_double vx_mn=0;
+                        lapack_complex_double vy_mn=0;
+                        for(int i=0;i<norbs;i++){
+                            for(int j=0;j<norbs;j++){
+                                vx_lm+=conj(hk[j][bandl])*DhkDkxy[j][i][0]*hk[i][bandm];
+                                vy_lm+=conj(hk[j][bandl])*DhkDkxy[j][i][1]*hk[i][bandm];
+                                vx_mn+=conj(hk[j][bandm])*DhkDkxy[j][i][0]*hk[i][bandn];
+                                vy_mn+=conj(hk[j][bandm])*DhkDkxy[j][i][1]*hk[i][bandn];
+                            
+                            }
+                        }
+                        double Elm=El-Em;
+                        double Emn=Em-En;
+                        SIGMA_xx_ln+=vx_lm*vx_mn*(1/Emn-1/Elm);
+                        SIGMA_xy_ln+=vx_lm*vy_mn/Emn-vy_lm*vx_mn/Elm;
+                        SIGMA_yx_ln+=vy_lm*vx_mn/Emn-vx_lm*vy_mn/Elm;
+                        SIGMA_yy_ln+=vy_lm*vy_mn*(1/Emn-1/Elm);
+
+                    }
+                    lapack_complex_double rxx_ln=_Complex_I/Eln*(
+                        (vx_ln*(vx_ll-vx_nn)+vx_ln*(vx_ll-vx_nn))/Eln-wxx_ln+SIGMA_xx_ln);
+                    lapack_complex_double rxy_ln=_Complex_I/Eln*(
+                        (vx_ln*(vy_ll-vy_nn)+vy_ln*(vx_ll-vx_nn))/Eln-wxy_ln+SIGMA_xy_ln);
+                    lapack_complex_double ryx_ln=_Complex_I/Eln*(
+                        (vy_ln*(vx_ll-vx_nn)+vx_ln*(vy_ll-vy_nn))/Eln-wyx_ln+SIGMA_yx_ln);
+                    lapack_complex_double ryy_ln=_Complex_I/Eln*(
+                        (vy_ln*(vy_ll-vy_nn)+vy_ln*(vy_ll-vy_nn))/Eln-wyy_ln+SIGMA_yy_ln);
+
+                    for(int iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
+                        int writing_ph_index=writing_k_index+iphoton*8;
+                        double omega=omegaList[iphoton];
+                            
+                        lapack_complex_double factor_global=0;
+                        //if(fabs(En-El)>1e-6)
+                        factor_global=-_Complex_I*fln*cimag(1/(Enl-omega-itau)+1/(Enl+omega-itau))/4;
+                        //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
+                        //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
+                        //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
+                        //printf("                   xxx: %.4f, %.4f yyx: %.4f, %.4f\n",creal(px_nl*px_lm*px_mn),cimag(px_nl*px_lm*px_mn),creal(py_nl*py_lm*px_mn),cimag(py_nl*py_lm*px_mn));
+                        conductance_on_kmesh_on_omega[writing_ph_index  ]+=(rx_nl*rxx_ln+rx_nl*rxx_ln)*factor_global; //x_xx
+                        conductance_on_kmesh_on_omega[writing_ph_index+1]+=(rx_nl*rxy_ln+rx_nl*rxy_ln)*factor_global; //y_xx
+                        conductance_on_kmesh_on_omega[writing_ph_index+2]+=(ry_nl*ryx_ln+ry_nl*ryx_ln)*factor_global; //x_yy
+                        conductance_on_kmesh_on_omega[writing_ph_index+3]+=(ry_nl*ryy_ln+ry_nl*ryy_ln)*factor_global; //y_yy
+                        conductance_on_kmesh_on_omega[writing_ph_index+4]+=(rx_nl*ryx_ln+ry_nl*rxx_ln)*factor_global; //x_xy
+                        conductance_on_kmesh_on_omega[writing_ph_index+5]+=(rx_nl*ryy_ln+ry_nl*rxy_ln)*factor_global; //y_xy
+                        conductance_on_kmesh_on_omega[writing_ph_index+6]+=(ry_nl*rxx_ln+rx_nl*ryx_ln)*factor_global; //x_yx
+                        conductance_on_kmesh_on_omega[writing_ph_index+7]+=(ry_nl*rxy_ln+rx_nl*ryy_ln)*factor_global; //y_yx
+                    }
+                    
+                }
+            }
+        }
+    }
+    printf(" done\n");
+    printf("clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    fp=fopen("./c_log","a");
+    fprintf(fp,"clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
     fprintf(fp," done\n");
     fclose(fp);
     

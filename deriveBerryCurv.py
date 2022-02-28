@@ -122,6 +122,18 @@ class VASPProcessor:
         self.velocities=(np.array(velocity_real)+1j*np.array(velocity_imag)).reshape((3,self.nspin,self.nkpt,self.nbnd,self.nbnd))
         print('velocity established in %.3fs'%(time.time()-time0))
 
+    def calcCircularPolarization(self,iv,ic):
+        time0=time.time()
+        px=np.zeros((self.nspin,self.nkpt),dtype=complex)
+        py=np.zeros((self.nspin,self.nkpt),dtype=complex)
+        for ikpt in range(self.nkpt):
+            for ispin in range(self.nspin):
+                assert self.occupations[ispin][ikpt][iv]>=0.8,'occupation of band%d is %d<0.8'%(iv,self.occupations[ispin][ikpt][iv])
+                assert self.occupations[ispin][ikpt][ic]<=0.8,'occupation of band%d is %d>0.2'%(ic,self.occupations[ispin][ikpt][ic])
+                px[ispin,ikpt]=self.velocities[0,ispin,ikpt,iv,ic]
+                py[ispin,ikpt]=self.velocities[1,ispin,ikpt,iv,ic]
+        print('Circular polarization calculated in %.3fs'%(time.time()-time0))
+        return px,py
     def calcBerryCurv(self):
         time0=time.time()
         curv_x=np.zeros(self.nkpt,dtype=complex)
@@ -303,17 +315,21 @@ def drawPatternOnHexagonalBZ(rpath,kx_grid,ky_grid,data_grid,reciLat):
 
 pR.readPOS('./mcalc/BN/POSCAR')
 reciLat=np.linalg.inv(pR.lat)*np.pi*2
-kmesh=[50,50,1]
+kmesh=[100,100,1]
 
 vaspPro=VASPProcessor('./mcalc/BN')
 vaspPro.readEIGENVAL()
 #rotations,translations=pR.getWholeSymmetryOperator()
 #vaspPro.getFullKPT(kmesh,rotations)
 vaspPro.readVelocity()
-
-omegaList=np.linspace(4.0,8.0,4,endpoint=True)
-cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx=vaspPro.calcBPVC(EphotonList=omegaList)
+#for ikpt in range(vaspPro.nkpt):
+#    print(vaspPro.velocities[0,0,ikpt,3,3].real)
 #exit()
+omegaList=np.linspace(10.0,17.0,21,endpoint=True)
+cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx=vaspPro.calcBPVC(
+    EphotonList=omegaList,itau=0.1)
+#exit()
+
 condcxxxList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cx_xx])
 condcxxyList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cy_xx])
 condcyyxList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cx_yy])
@@ -340,9 +356,11 @@ plt.show()
 exit()
 
 #curv_x_flat,curv_y_flat,curv_z_flat=vaspPro.calcBerryCurv()
-
+px,py=vaspPro.calcCircularPolarization(3,4)
+pr,pl=px+1j*py,px-1j*py
+curv_z_flat=(abs(pr)**2-abs(pl)**2)/(abs(pr)**2+abs(pl)**2)
 #curv_z_flat=np.array([v[4,4] for v in vaspPro.velocities[1][0]]).real
-curv_z_flat=np.array([eigk[4]-eigk[3] for eigk in vaspPro.eigs[0]])
+#curv_z_flat=cy_xx[0].imag#np.array([eigk[4]-eigk[3] for eigk in vaspPro.eigs[0]])
 print(np.min(curv_z_flat))
 kx_grid, ky_grid, curv_z= makeGrid(kmesh,reciLat,curv_z_flat)
 drawPatternOnHexagonalBZ('./mcalc/BN/',kx_grid,ky_grid,curv_z,reciLat)
