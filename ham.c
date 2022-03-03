@@ -490,13 +490,17 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
 PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
-                       int overLat[nhoppings][3], 
+                       int overLat[nhoppings][3],
                        double hopping_real[nhoppings],
                        double hopping_imag[nhoppings],
+                       double orbCorr[norbs][3],
                        int _nthreads){
     double * eigs=(double*)malloc(nkpt*norbs*sizeof(double));
     lapack_complex_double * vecs=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    printf("estimated memory: %d MB\n",(nkpt*norbs*(sizeof(double)+norbs*sizeof(lapack_complex_double)))/1024/1024);
+    lapack_complex_double * DHkDk1=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * DHkDk2=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * DHkDk3=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    printf("estimated memory: %d MB\n",(nkpt*norbs*(sizeof(double)+3*norbs*sizeof(lapack_complex_double)))/1024/1024);
     int nthreads;
     nthreads=_nthreads;
     if(nkpt<_nthreads*10)nthreads=1;
@@ -508,24 +512,48 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
             //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //int kBaseIndex=ikpt*norbs*norbs;
             lapack_complex_double _hk[norbs][norbs]; // init Hk
-            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)_hk[i][j]=0;
+            lapack_complex_double _dhkdk123[3][norbs][norbs];
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    _hk[i][j]=0;
+                    for(int k=0;k<3;k++)_dhkdk123[k][i][j]=0;
+                }
+            }
             double _eigs[norbs]; // output eigenvalues of Hk
             //printf("hoppings\n");
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
-                double phase=0;
-                for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                lapack_complex_double hopping_R[3];
+                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                
+                lapack_complex_double phase=0;
+                for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
+                
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
                 _hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                for(int i=0;i<3;i++)_dhkdk123[i][sourceID[ihopping]][targetID[ihopping]]+=tk*hopping_R[i];
             }
-            
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*_hk,norbs,_eigs);
+            //printf("kpt%d %.3f %.3f %.3f hamk:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
+            //for(int i=0;i<norbs;i++){
+            //    for(int j=0;j<norbs;j++)printf("%f %f,",creal(_hk[i][j]),cimag(_hk[i][j]));
+            //    printf("\n");
+            //}
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','U',norbs,*_hk,norbs,_eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-            //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],_eigs[0],_eigs[1],_eigs[2]);
+            //printf("eigs:");
+            //for(int i=0;i<norbs;i++)printf(" %.4f",_eigs[i]);
+            //printf(" vec:\n");
+            //for(int i=0;i<norbs;i++){
+            //    for(int j=0;j<norbs;j++)printf("%f %f,",creal(_hk[i][j]),cimag(_hk[i][j]));
+            //    printf("\n");
+            //}
             for(int iorb=0;iorb<norbs;iorb++) eigs[ikpt*norbs+iorb]=_eigs[iorb];
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
                     int index=ikpt*norbs*norbs+iorb*norbs+jorb;
                     vecs[index]=_hk[iorb][jorb];
+                    DHkDk1[index]=_dhkdk123[0][iorb][jorb];
+                    DHkDk2[index]=_dhkdk123[1][iorb][jorb];
+                    DHkDk3[index]=_dhkdk123[2][iorb][jorb];
                 }
             }
         }
@@ -533,15 +561,19 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
     
     long long eigs_addr=(long long)eigs;
     long long vecs_addr=(long long)vecs;
+    long long DHkDk1_addr=(long long)DHkDk1;
+    long long DHkDk2_addr=(long long)DHkDk2;
+    long long DHkDk3_addr=(long long)DHkDk3;
     printf("in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(lapack_complex_double *));
     printf("pls. see if they are identical. Otherwise the calc. results with cdll are seriously wrong!\n");
     printf("in ham.dll the addr. of eigs and vecs are %p, %p\n",eigs_addr,vecs_addr);
-    return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
+    printf("DHkDk123: %p, %p, %p\n",DHkDk1_addr,DHkDk2_addr,DHkDk3_addr);
+    return Py_BuildValue("(LLLLL)",eigs_addr,vecs_addr,DHkDk1_addr,DHkDk2_addr,DHkDk3_addr);
 }
 
 PyObject* derivateOnKMesh_double(long long data_addr, int dataDim, int kmesh[3], double lat[3][3], int nthreads){
     double*gridData=(double*)data_addr;
-    printf("ham.dll is to derivate the data @ %p\n",gridData);
+    printf("ham.dll is to derivate the double type data @ %p\n",gridData);
 
     int nkpt=kmesh[0]*kmesh[1]*kmesh[2];
     printf("on kmesh %dx%dx%d, assuming the k3 runs fastest, then k2, then k1\n",kmesh[0],kmesh[1],kmesh[2]);
@@ -594,6 +626,184 @@ PyObject* derivateOnKMesh_double(long long data_addr, int dataDim, int kmesh[3],
     long long dData_dky_addr=(long long)dData_dky;
     long long dData_dkz_addr=(long long)dData_dkz;
     if(sizeof(long long)!=sizeof(double*)){
+        printf("Error: in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(double *));
+        printf("they are different!\n");
+        exit(1);
+    }
+    printf("in ham.dll the addr. of derivates are %p, %p, %p\n",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
+    return Py_BuildValue("(LLL)",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
+}
+
+PyObject* derivateOnKMesh_complex(long long data_addr, int dataDim, int kmesh[3], double lat[3][3], int nthreads){
+    lapack_complex_double*gridData=(lapack_complex_double*)data_addr;
+    printf("ham.dll is to derivate the complex type data @ %p\n",gridData);
+
+    int nkpt=kmesh[0]*kmesh[1]*kmesh[2];
+    printf("on kmesh %dx%dx%d, assuming the k3 runs fastest, then k2, then k1\n",kmesh[0],kmesh[1],kmesh[2]);
+
+    double dk[3];for(int i=0;i<3;i++)dk[i]=1/(double)kmesh[i];
+    //printf("dk %f %f %f\n",dk[0],dk[1],dk[2]);
+
+    lapack_complex_double*dData_dkx=(lapack_complex_double*)malloc((nkpt*dataDim)*sizeof(lapack_complex_double));
+    lapack_complex_double*dData_dky=(lapack_complex_double*)malloc((nkpt*dataDim)*sizeof(lapack_complex_double));
+    lapack_complex_double*dData_dkz=(lapack_complex_double*)malloc((nkpt*dataDim)*sizeof(lapack_complex_double));
+
+    int sizeK2=kmesh[2];
+    int sizeK1=kmesh[2]*kmesh[1];
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            int ik1=ikpt/sizeK1;
+            int ik2=(ikpt-ik1*sizeK1)/sizeK2;
+            int ik3=ikpt-ik1*sizeK1-ik2*sizeK2;
+
+            int index_base=ikpt*dataDim;
+            int index_dq1=((ik1+1)%kmesh[0]*sizeK1+ik2*sizeK2+ik3)%nkpt*dataDim;
+            int index_dq2=(ik1*sizeK1+(ik2+1)%kmesh[1]*sizeK2+ik3)%nkpt*dataDim;
+            int index_dq3=(ik1*sizeK1+ik2*sizeK2+(ik3+1)%kmesh[2])%nkpt*dataDim;
+            //printf("k0: %d, k+dk1: %d, k+dk2: %d, k+dk3: %d\n",ikpt,index_dq1/dataDim,index_dq2/dataDim,index_dq3/dataDim);
+            lapack_complex_double data_dk123[3][dataDim];
+            //printf("%f\n",gridData[index_base]);
+            //printf("ikpt %d ik1 %d ik2 %d\n",ikpt,ik1,ik2);
+            for(int idata=0;idata<dataDim;idata++){
+                data_dk123[0][idata]=(gridData[index_dq1+idata]-gridData[index_base+idata])/dk[0];
+                data_dk123[1][idata]=(gridData[index_dq2+idata]-gridData[index_base+idata])/dk[1];
+                data_dk123[2][idata]=(gridData[index_dq3+idata]-gridData[index_base+idata])/dk[2];
+            }
+            //for(int i=0;i<2;i++){
+            //    for(int j=0;j<2;j++)printf("%f %f,",creal(data_dk123[0][i*2+j]),cimag(data_dk123[0][i*2+j]));
+            //    printf("\n");
+            //}
+            
+            // change into derivates to kx,y,z
+            lapack_complex_double data_dkxyz[3][dataDim];
+            for(int i=0;i<3;i++)for(int idata=0;idata<dataDim;idata++)data_dkxyz[i][idata]=0;
+            for(int idata=0;idata<dataDim;idata++){
+                for(int i=0;i<3;i++)for(int j=0;j<3;j++)data_dkxyz[i][idata]+=data_dk123[j][idata]*lat[j][i];
+            }
+            //printf("%f\n",data_dkxyz[0][0]);
+            for(int idata=0;idata<dataDim;idata++){
+                dData_dkx[index_base+idata]=data_dkxyz[0][idata];
+                dData_dky[index_base+idata]=data_dkxyz[1][idata];
+                dData_dkz[index_base+idata]=data_dkxyz[2][idata];
+            }
+        }
+    }
+    long long dData_dkx_addr=(long long)dData_dkx;
+    long long dData_dky_addr=(long long)dData_dky;
+    long long dData_dkz_addr=(long long)dData_dkz;
+    if(sizeof(long long)!=sizeof(lapack_complex_double*)){
+        printf("Error: in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(lapack_complex_double *));
+        printf("they are different!\n");
+        exit(1);
+    }
+    printf("in ham.dll the addr. of derivates are %p, %p, %p\n",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
+    return Py_BuildValue("(LLL)",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
+}
+
+PyObject* derivateOnKMesh_eigenvector(long long data_addr, int norb, int kmesh[3], double lat[3][3], int nthreads){
+    lapack_complex_double*gridData=(lapack_complex_double*)data_addr;
+    printf("ham.dll is to derivate the eigenvectors @ %p, phases are corrected automatically\n",gridData);
+    printf("Note that BZ boundary wrapping should be neglected due to the disturbulences of orb phases\n");
+
+    int nkpt=kmesh[0]*kmesh[1]*kmesh[2];
+    printf("on kmesh %dx%dx%d, assuming the k3 runs fastest, then k2, then k1\n",kmesh[0],kmesh[1],kmesh[2]);
+
+    double dk[3];for(int i=0;i<3;i++)dk[i]=1/(double)kmesh[i];
+    //printf("dk %f %f %f\n",dk[0],dk[1],dk[2]);
+    int norb2=norb*norb;
+    lapack_complex_double*dData_dkx=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
+    lapack_complex_double*dData_dky=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
+    lapack_complex_double*dData_dkz=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
+
+    int sizeK2=kmesh[2];
+    int sizeK1=kmesh[1]*kmesh[2];
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            int ik1=ikpt/sizeK1;
+            int ik2=(ikpt-ik1*sizeK1)/sizeK2;
+            int ik3=ikpt-ik1*sizeK1-ik2*sizeK2;
+
+            int index_base=ikpt*norb2;
+            int index_dq1=((ik1+1)%kmesh[0]*sizeK1+ik2*sizeK2+ik3)*norb2;
+            int index_dq2=(ik1*sizeK1+(ik2+1)%kmesh[1]*sizeK2+ik3)*norb2;
+            int index_dq3=(ik1*sizeK1+ik2*sizeK2+(ik3+1)%kmesh[2])*norb2;
+            //printf("k0: %d, k+dk1: %d, k+dk2: %d, k+dk3: %d\n",ikpt,index_dq1/norb2,index_dq2/norb2,index_dq3/norb2);
+            lapack_complex_double vec_0[norb][norb];
+            lapack_complex_double vec_1[norb][norb];
+            lapack_complex_double vec_2[norb][norb];
+            lapack_complex_double vec_3[norb][norb];
+            //printf("vec:\n");
+            for(int i=0;i<norb;i++){
+                for(int j=0;j<norb;j++){
+                    vec_0[i][j]=gridData[index_base+i*norb+j];
+                    vec_1[i][j]=gridData[index_dq1+i*norb+j];
+                    vec_2[i][j]=gridData[index_dq2+i*norb+j];
+                    vec_3[i][j]=gridData[index_dq3+i*norb+j];
+                    //printf("%f %f,",creal(vec_0[i][j]),cimag(vec_0[i][j]));
+                }
+                //printf("\n");
+            }
+            lapack_complex_double diag_phase[3];
+            for(int ivec=0;ivec<norb;ivec++){
+                diag_phase[0]=0;
+                diag_phase[1]=0;
+                diag_phase[2]=0;
+                for(int icontract=0;icontract<norb;icontract++){
+                    diag_phase[0]+=conj(vec_0[icontract][ivec])*vec_1[icontract][ivec];
+                    diag_phase[1]+=conj(vec_0[icontract][ivec])*vec_2[icontract][ivec];
+                    diag_phase[2]+=conj(vec_0[icontract][ivec])*vec_3[icontract][ivec];
+                }
+                //printf("band %d diag phase1: %f %f, abs: %f\n",ivec,creal(diag_phase[0]),cimag(diag_phase[0]),cabs(diag_phase[0]));
+                //printf("band %d diag phase2: %f %f, abs: %f\n",ivec,creal(diag_phase[1]),cimag(diag_phase[1]),cabs(diag_phase[1]));
+                diag_phase[0]/=cabs(diag_phase[0]);
+                diag_phase[1]/=cabs(diag_phase[1]);
+                diag_phase[2]/=cabs(diag_phase[2]);
+                for(int i=0;i<norb;i++){
+                    vec_1[i][ivec]/=diag_phase[0];
+                    vec_2[i][ivec]/=diag_phase[1];
+                    vec_3[i][ivec]/=diag_phase[2];
+                }
+            }
+
+            lapack_complex_double data_dk123[3][norb2];
+            //printf("%f\n",gridData[index_base]);
+            //printf("ikpt %d ik1 %d ik2 %d\n",ikpt,ik1,ik2);
+            //int idata=0;
+            for(int i=0;i<norb;i++){
+                for(int j=0;j<norb;j++){
+                    data_dk123[0][i*norb+j]=(vec_1[i][j]-vec_0[i][j])/dk[0];
+                    data_dk123[1][i*norb+j]=(vec_2[i][j]-vec_0[i][j])/dk[1];
+                    data_dk123[2][i*norb+j]=(vec_3[i][j]-vec_0[i][j])/dk[2];
+                    //idata+=1;
+                }
+            }
+            //for(int i=0;i<2;i++){
+            //    for(int j=0;j<2;j++)printf("%f %f,",creal(data_dk123[0][i*2+j]),cimag(data_dk123[0][i*2+j]));
+            //    printf("\n");
+            //}
+            
+            // change into derivates to kx,y,z
+            lapack_complex_double data_dkxyz[3][norb2];
+            for(int i=0;i<3;i++)for(int idata=0;idata<norb2;idata++)data_dkxyz[i][idata]=0;
+            for(int idata=0;idata<norb2;idata++){
+                for(int i=0;i<3;i++)for(int j=0;j<3;j++)data_dkxyz[i][idata]+=data_dk123[j][idata]*lat[j][i];
+            }
+            //printf("%f\n",data_dkxyz[0][0]);
+            for(int idata=0;idata<norb2;idata++){
+                dData_dkx[index_base+idata]=data_dkxyz[0][idata];
+                dData_dky[index_base+idata]=data_dkxyz[1][idata];
+                dData_dkz[index_base+idata]=data_dkxyz[2][idata];
+            }
+        }
+    }
+    long long dData_dkx_addr=(long long)dData_dkx;
+    long long dData_dky_addr=(long long)dData_dky;
+    long long dData_dkz_addr=(long long)dData_dkz;
+    if(sizeof(long long)!=sizeof(lapack_complex_double*)){
         printf("Error: in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(lapack_complex_double *));
         printf("they are different!\n");
         exit(1);
@@ -604,10 +814,10 @@ PyObject* derivateOnKMesh_double(long long data_addr, int dataDim, int kmesh[3],
 
 PyObject* readOutGridDataOnKMesh_double(long long data_addr, int dataDim, int kmesh[3]){
     double*gridData=(double*)data_addr;
-    printf("ham.dll is to derivate the data @ %p\n",gridData);
+    printf("ham.dll is to read out the double type data @ %p\n",gridData);
 
     int nkpt=kmesh[0]*kmesh[1]*kmesh[2];
-    printf("read out data on kmesh, dim: %dx%dx%d x%d, data dim run fastest, then ik3, ik2, ik1\n",kmesh[0],kmesh[1],kmesh[2],dataDim);
+    printf("kmesh, dim: %dx%dx%d x%d, data dim run fastest, then ik3, ik2, ik1\n",kmesh[0],kmesh[1],kmesh[2],dataDim);
 
     PyObject * outData=PyTuple_New(nkpt*dataDim);
     for(int ikpt=0;ikpt<nkpt;ikpt++)
@@ -615,6 +825,24 @@ PyObject* readOutGridDataOnKMesh_double(long long data_addr, int dataDim, int km
     PyTuple_SET_ITEM(outData,ikpt*dataDim+idata,PyFloat_FromDouble(gridData[ikpt*dataDim+idata]));
     
     return Py_BuildValue("O",outData);
+}
+
+PyObject* readOutGridDataOnKMesh_complex(long long data_addr, int dataDim, int kmesh[3]){
+    lapack_complex_double*gridData=(lapack_complex_double*)data_addr;
+    printf("ham.dll is to read out the complex type data @ %p\n",gridData);
+
+    int nkpt=kmesh[0]*kmesh[1]*kmesh[2];
+    printf("kmesh, dim: %dx%dx%d x%d, data dim run fastest, then ik3, ik2, ik1\n",kmesh[0],kmesh[1],kmesh[2],dataDim);
+
+    PyObject * outData_real=PyTuple_New(nkpt*dataDim);
+    PyObject * outData_imag=PyTuple_New(nkpt*dataDim);
+    for(int ikpt=0;ikpt<nkpt;ikpt++){
+        for(int idata=0;idata<dataDim;idata++){
+            PyTuple_SET_ITEM(outData_real,ikpt*dataDim+idata,PyFloat_FromDouble(creal(gridData[ikpt*dataDim+idata])));
+            PyTuple_SET_ITEM(outData_imag,ikpt*dataDim+idata,PyFloat_FromDouble(cimag(gridData[ikpt*dataDim+idata])));
+        }
+    }
+    return Py_BuildValue("(OO)",outData_real,outData_imag);
 }
 
 int * bubleSort_ABS(int len, double *data){

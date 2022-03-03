@@ -1138,16 +1138,16 @@ class Response:
     '''
     PEAD region
     '''
-    def calcEigsAndVecsInMemory_CDLL(self,hr,kmesh=[50,50,1],nthreads=1):
+    def calcEigsAndVecsInMemory_CDLL(self,hr,atomicOrbIndexList:list,kmesh=[50,50,1],nthreads=1):
         # prepare input parameters for cdll
         time0=time.time()
         nkpts=kmesh[0]*kmesh[1]*kmesh[2]
         c_kmesh=(c_double*(nkpts*3))()
         ikpt=0
         # k3 run fastest
-        for k1 in np.linspace(0,1,kmesh[0],endpoint=False):
-            for k2 in np.linspace(0,1,kmesh[1],endpoint=False):
-                for k3 in np.linspace(0,1,kmesh[2],endpoint=False):
+        for k1 in np.linspace(0,1,kmesh[0],endpoint=True):
+            for k2 in np.linspace(0,1,kmesh[1],endpoint=True):
+                for k3 in np.linspace(0,1,kmesh[2],endpoint=True):
                     c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
                     ikpt+=1
                     #print(k1,k2,k3)
@@ -1167,17 +1167,30 @@ class Response:
             c_hopping_real[ibond]=c_double(bond.t.real)
             c_hopping_imag[ibond]=c_double(bond.t.imag)
         
+        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+            for L in atom:
+                for iorb in L: orbCorrList[iorb]=pos
+        #assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        c_orbCorrList=(c_double*(3*hr.norb))()
+        for i in range(hr.norb):
+            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
+            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
+            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
+        
         hamDLL=CDLL("./ham.dll")
         hamDLL.calcFullBandsAndVecsInMemory.restype=py_object
-        eigs_addr,vecs_addr=hamDLL.calcFullBandsAndVecsInMemory(c_int(nkpts),c_kmesh,
+        eigs_addr,vecs_addr,DHkDk1_addr,DHkDk2_addr,DHkDk3_addr=hamDLL.calcFullBandsAndVecsInMemory(c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_orbCorrList,
                         c_int(nthreads))
         print('Ham solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         print('pls. check the address of vecs and eigs',hex(eigs_addr),hex(vecs_addr))
-        return eigs_addr,vecs_addr
+        return eigs_addr,vecs_addr,DHkDk1_addr,DHkDk2_addr,DHkDk3_addr
     
-    def derivateQuantitiesOnKGrid_CDLL(self,data_addr:int,data_dim:int,kmesh:list,nthreads=1):
+    def derivateQuantitiesOnKGrid_CDLL(self,data_addr:int,data_dim:int,kmesh:list,data_type='double',nthreads=1):
         time0=time.time()
         c_kmesh=(3*c_int)()
         c_kmesh[0],c_kmesh[1],c_kmesh[2]=c_int(kmesh[0]),c_int(kmesh[1]),c_int(kmesh[2])
@@ -1187,23 +1200,47 @@ class Response:
             c_lat[i+3]=c_double(pR.lat[1][i])
             c_lat[i+6]=c_double(pR.lat[2][i])
         hamDLL=CDLL("./ham.dll")
-        hamDLL.derivateOnKMesh_double.restype=py_object
-        dData_dkx_addr,dData_dky_addr,dData_dkz_addr=hamDLL.derivateOnKMesh_double(c_longlong(data_addr),c_int(data_dim),
+        if data_type=='double':
+            c_func=hamDLL.derivateOnKMesh_double
+        elif data_type=='complex':
+            c_func=hamDLL.derivateOnKMesh_complex
+        elif data_type=='eigenvector':
+            print("pls. note that in eigenvector datatype, input param. data_dim is the number of bands")
+            c_func=hamDLL.derivateOnKMesh_eigenvector
+        else:
+            print('Error: data_type should either double or complex')
+            exit()
+        c_func.restype=py_object
+        dData_dkx_addr,dData_dky_addr,dData_dkz_addr=c_func(c_longlong(data_addr),c_int(data_dim),
                         c_kmesh,c_lat,c_int(nthreads))
         print('Derivates solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         print('pls. check the address of vecs and eigs',hex(dData_dkx_addr),hex(dData_dky_addr),hex(dData_dkz_addr))
         return dData_dkx_addr,dData_dky_addr,dData_dkz_addr
     
-    def redOutQuantitiesOnKGrid(self,data_addr:int,data_dim:int,kmesh:list):
+    def redOutQuantitiesOnKGrid(self,data_addr:int,data_dim:int,kmesh:list,data_type='double'):
         c_kmesh=(3*c_int)()
         c_kmesh[0],c_kmesh[1],c_kmesh[2]=c_int(kmesh[0]),c_int(kmesh[1]),c_int(kmesh[2])
         hamDLL=CDLL("./ham.dll")
-        hamDLL.readOutGridDataOnKMesh_double.restype=py_object
-        result=hamDLL.readOutGridDataOnKMesh_double(c_longlong(data_addr),c_int(data_dim),
+        if data_type=='double':
+            c_func=hamDLL.readOutGridDataOnKMesh_double
+        elif data_type=='complex':
+            c_func=hamDLL.readOutGridDataOnKMesh_complex
+        else:
+            print('Error: data_type should either double or complex')
+            exit()
+        c_func.restype=py_object
+        result=c_func(c_longlong(data_addr),c_int(data_dim),
                         c_kmesh)
+        # reconstruct the complex type
+        if data_type=='complex':
+            outData=np.array(result[0])+1j*np.array(result[1])
+        elif data_type=='double':
+            outData=np.array(result)
+        
+        # check the dimension
         if data_dim==1:
-            return np.array(result)#.reshape((kmesh[0],kmesh[1],kmesh[2]))
-        return np.array(result).reshape((kmesh[0]*kmesh[1]*kmesh[2],data_dim))
+            return outData
+        return outData.reshape((kmesh[0]*kmesh[1]*kmesh[2],data_dim))
 
 class Green:
 
