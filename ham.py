@@ -1135,6 +1135,75 @@ class Response:
         print("Response solved in %.3fs"%(time.time()-time0))
         return chi_data
 
+    '''
+    PEAD region
+    '''
+    def calcEigsAndVecsInMemory_CDLL(self,hr,kmesh=[50,50,1],nthreads=1):
+        # prepare input parameters for cdll
+        time0=time.time()
+        nkpts=kmesh[0]*kmesh[1]*kmesh[2]
+        c_kmesh=(c_double*(nkpts*3))()
+        ikpt=0
+        # k3 run fastest
+        for k1 in np.linspace(0,1,kmesh[0],endpoint=False):
+            for k2 in np.linspace(0,1,kmesh[1],endpoint=False):
+                for k3 in np.linspace(0,1,kmesh[2],endpoint=False):
+                    c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+                    ikpt+=1
+                    #print(k1,k2,k3)
+
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            #print("%3d %3d %3d %3d %3d %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcFullBandsAndVecsInMemory.restype=py_object
+        eigs_addr,vecs_addr=hamDLL.calcFullBandsAndVecsInMemory(c_int(nkpts),c_kmesh,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads))
+        print('Ham solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
+        print('pls. check the address of vecs and eigs',hex(eigs_addr),hex(vecs_addr))
+        return eigs_addr,vecs_addr
+    
+    def derivateQuantitiesOnKGrid_CDLL(self,data_addr:int,data_dim:int,kmesh:list,nthreads=1):
+        time0=time.time()
+        c_kmesh=(3*c_int)()
+        c_kmesh[0],c_kmesh[1],c_kmesh[2]=c_int(kmesh[0]),c_int(kmesh[1]),c_int(kmesh[2])
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.derivateOnKMesh_double.restype=py_object
+        dData_dkx_addr,dData_dky_addr,dData_dkz_addr=hamDLL.derivateOnKMesh_double(c_longlong(data_addr),c_int(data_dim),
+                        c_kmesh,c_lat,c_int(nthreads))
+        print('Derivates solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
+        print('pls. check the address of vecs and eigs',hex(dData_dkx_addr),hex(dData_dky_addr),hex(dData_dkz_addr))
+        return dData_dkx_addr,dData_dky_addr,dData_dkz_addr
+    
+    def redOutQuantitiesOnKGrid(self,data_addr:int,data_dim:int,kmesh:list):
+        c_kmesh=(3*c_int)()
+        c_kmesh[0],c_kmesh[1],c_kmesh[2]=c_int(kmesh[0]),c_int(kmesh[1]),c_int(kmesh[2])
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.readOutGridDataOnKMesh_double.restype=py_object
+        result=hamDLL.readOutGridDataOnKMesh_double(c_longlong(data_addr),c_int(data_dim),
+                        c_kmesh)
+        if data_dim==1:
+            return np.array(result)#.reshape((kmesh[0],kmesh[1],kmesh[2]))
+        return np.array(result).reshape((kmesh[0]*kmesh[1]*kmesh[2],data_dim))
 
 class Green:
 

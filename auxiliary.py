@@ -1,6 +1,7 @@
 '''
 Created on 2019 7 6
-
+Main purpose: redefine the system-operations, such as cp, mkdir, etc.,
+              so that I can get more D.O.F, i.e., error wrapping, reporting, debugging
 @author: Andrew
 '''
 import numpy as np
