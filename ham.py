@@ -1204,9 +1204,6 @@ class Response:
             c_func=hamDLL.derivateOnKMesh_double
         elif data_type=='complex':
             c_func=hamDLL.derivateOnKMesh_complex
-        elif data_type=='eigenvector':
-            print("pls. note that in eigenvector datatype, input param. data_dim is the number of bands")
-            c_func=hamDLL.derivateOnKMesh_eigenvector
         else:
             print('Error: data_type should either double or complex')
             exit()
@@ -1216,6 +1213,25 @@ class Response:
         print('Derivates solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         print('pls. check the address of vecs and eigs',hex(dData_dkx_addr),hex(dData_dky_addr),hex(dData_dkz_addr))
         return dData_dkx_addr,dData_dky_addr,dData_dkz_addr
+    
+    def derivateEigvectorsOnKGrid_CDLL(self,vec_addr:int,DHkDk1_addr:int,DHkDk2_addr:int,DHkDk3_addr:int,eigs_addr:int,norb:int,kmesh:list,nthreads=1):
+        time0=time.time()
+        c_kmesh=(3*c_int)()
+        c_kmesh[0],c_kmesh[1],c_kmesh[2]=c_int(kmesh[0]),c_int(kmesh[1]),c_int(kmesh[2])
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
+        hamDLL=CDLL("./ham.dll")
+        c_func=hamDLL.derivateOnKMesh_eigenvector
+        c_func.restype=py_object
+        dv_dkx_addr,dv_dky_addr,dv_dkz_addr=c_func(c_longlong(vec_addr),
+                        c_longlong(DHkDk1_addr),c_longlong(DHkDk2_addr),c_longlong(DHkDk3_addr),c_longlong(eigs_addr),
+                        c_int(norb),c_kmesh,c_lat,c_int(nthreads))
+        print('Derivates solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
+        print('pls. check the address',hex(dv_dkx_addr),hex(dv_dky_addr),hex(dv_dkz_addr))
+        return dv_dkx_addr,dv_dky_addr,dv_dkz_addr
     
     def redOutQuantitiesOnKGrid(self,data_addr:int,data_dim:int,kmesh:list,data_type='double'):
         c_kmesh=(3*c_int)()

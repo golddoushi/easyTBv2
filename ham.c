@@ -702,9 +702,14 @@ PyObject* derivateOnKMesh_complex(long long data_addr, int dataDim, int kmesh[3]
     return Py_BuildValue("(LLL)",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
 }
 
-PyObject* derivateOnKMesh_eigenvector(long long data_addr, int norb, int kmesh[3], double lat[3][3], int nthreads){
-    lapack_complex_double*gridData=(lapack_complex_double*)data_addr;
-    printf("ham.dll is to derivate the eigenvectors @ %p, phases are corrected automatically\n",gridData);
+PyObject* derivateOnKMesh_eigenvector(long long vec_addr, long long DHkDk1_addr, long long DHkDk2_addr, long long DHkDk3_addr, long long eigs_addr, int norb, int kmesh[3], double lat[3][3], int nthreads){
+    lapack_complex_double*vecs=(lapack_complex_double*)vec_addr;
+    lapack_complex_double*eigs=(lapack_complex_double*)eigs_addr;
+    lapack_complex_double*DHkDk1=(lapack_complex_double*)DHkDk1_addr;
+    lapack_complex_double*DHkDk2=(lapack_complex_double*)DHkDk2_addr;
+    lapack_complex_double*DHkDk3=(lapack_complex_double*)DHkDk3_addr;
+
+    printf("ham.dll is to derivate the eigenvectors @ %p, phases are corrected automatically\n",vecs);
     printf("Note that BZ boundary wrapping should be neglected due to the disturbulences of orb phases\n");
 
     int nkpt=kmesh[0]*kmesh[1]*kmesh[2];
@@ -713,9 +718,9 @@ PyObject* derivateOnKMesh_eigenvector(long long data_addr, int norb, int kmesh[3
     double dk[3];for(int i=0;i<3;i++)dk[i]=1/(double)kmesh[i];
     //printf("dk %f %f %f\n",dk[0],dk[1],dk[2]);
     int norb2=norb*norb;
-    lapack_complex_double*dData_dkx=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
-    lapack_complex_double*dData_dky=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
-    lapack_complex_double*dData_dkz=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
+    lapack_complex_double*dvec_dkx=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
+    lapack_complex_double*dvec_dky=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
+    lapack_complex_double*dvec_dkz=(lapack_complex_double*)malloc((nkpt*norb2)*sizeof(lapack_complex_double));
 
     int sizeK2=kmesh[2];
     int sizeK1=kmesh[1]*kmesh[2];
@@ -731,7 +736,7 @@ PyObject* derivateOnKMesh_eigenvector(long long data_addr, int norb, int kmesh[3
             int index_dq1=((ik1+1)%kmesh[0]*sizeK1+ik2*sizeK2+ik3)*norb2;
             int index_dq2=(ik1*sizeK1+(ik2+1)%kmesh[1]*sizeK2+ik3)*norb2;
             int index_dq3=(ik1*sizeK1+ik2*sizeK2+(ik3+1)%kmesh[2])*norb2;
-            //printf("k0: %d, k+dk1: %d, k+dk2: %d, k+dk3: %d\n",ikpt,index_dq1/norb2,index_dq2/norb2,index_dq3/norb2);
+            printf("k0: %d, k+dk1: %d, k+dk2: %d, k+dk3: %d\n",ikpt,index_dq1/norb2,index_dq2/norb2,index_dq3/norb2);
             lapack_complex_double vec_0[norb][norb];
             lapack_complex_double vec_1[norb][norb];
             lapack_complex_double vec_2[norb][norb];
@@ -739,45 +744,98 @@ PyObject* derivateOnKMesh_eigenvector(long long data_addr, int norb, int kmesh[3
             //printf("vec:\n");
             for(int i=0;i<norb;i++){
                 for(int j=0;j<norb;j++){
-                    vec_0[i][j]=gridData[index_base+i*norb+j];
-                    vec_1[i][j]=gridData[index_dq1+i*norb+j];
-                    vec_2[i][j]=gridData[index_dq2+i*norb+j];
-                    vec_3[i][j]=gridData[index_dq3+i*norb+j];
+                    vec_0[i][j]=vecs[index_base+i*norb+j];
+                    vec_1[i][j]=vecs[index_dq1+i*norb+j];
+                    vec_2[i][j]=vecs[index_dq2+i*norb+j];
+                    vec_3[i][j]=vecs[index_dq3+i*norb+j];
                     //printf("%f %f,",creal(vec_0[i][j]),cimag(vec_0[i][j]));
                 }
                 //printf("\n");
             }
-            lapack_complex_double diag_phase[3];
-            for(int ivec=0;ivec<norb;ivec++){
-                diag_phase[0]=0;
-                diag_phase[1]=0;
-                diag_phase[2]=0;
-                for(int icontract=0;icontract<norb;icontract++){
-                    diag_phase[0]+=conj(vec_0[icontract][ivec])*vec_1[icontract][ivec];
-                    diag_phase[1]+=conj(vec_0[icontract][ivec])*vec_2[icontract][ivec];
-                    diag_phase[2]+=conj(vec_0[icontract][ivec])*vec_3[icontract][ivec];
-                }
-                //printf("band %d diag phase1: %f %f, abs: %f\n",ivec,creal(diag_phase[0]),cimag(diag_phase[0]),cabs(diag_phase[0]));
-                //printf("band %d diag phase2: %f %f, abs: %f\n",ivec,creal(diag_phase[1]),cimag(diag_phase[1]),cabs(diag_phase[1]));
-                diag_phase[0]/=cabs(diag_phase[0]);
-                diag_phase[1]/=cabs(diag_phase[1]);
-                diag_phase[2]/=cabs(diag_phase[2]);
-                for(int i=0;i<norb;i++){
-                    vec_1[i][ivec]/=diag_phase[0];
-                    vec_2[i][ivec]/=diag_phase[1];
-                    vec_3[i][ivec]/=diag_phase[2];
+            // calculate numerical overlaps
+            lapack_complex_double overlap_numeric[3][norb][norb];
+            for(int i=0;i<norb;i++){
+                for(int j=0;j<norb;j++){
+                    overlap_numeric[0][i][j]=0;
+                    overlap_numeric[1][i][j]=0;
+                    overlap_numeric[2][i][j]=0;
                 }
             }
-
-            lapack_complex_double data_dk123[3][norb2];
-            //printf("%f\n",gridData[index_base]);
+            for(int ivec=0;ivec<norb;ivec++){
+                for(int jvec=0;jvec<norb;jvec++){
+                    for(int icontract=0;icontract<norb;icontract++){
+                        overlap_numeric[0][ivec][jvec]+=conj(vec_0[icontract][ivec])*vec_1[icontract][jvec];
+                        overlap_numeric[1][ivec][jvec]+=conj(vec_0[icontract][ivec])*vec_2[icontract][jvec];
+                        overlap_numeric[2][ivec][jvec]+=conj(vec_0[icontract][ivec])*vec_3[icontract][jvec];
+                    }
+                }
+            }
+            for(int idir=0;idir<3;idir++){
+                printf("numeric overlap dir=%d\n",idir);
+                for(int ivec=0;ivec<norb;ivec++){
+                    for(int jvec=0;jvec<norb;jvec++)printf("%9.6f+%9.6fj ",creal(overlap_numeric[idir][ivec][jvec]),cimag(overlap_numeric[idir][ivec][jvec]));
+                    printf("\n");
+                }
+            }
+            // calc analytic overlaps
+            lapack_complex_double _dhkdk123[3][norb][norb];
+            for(int i=0;i<norb;i++){
+                for(int j=0;j<norb;j++){
+                    _dhkdk123[0][i][j]=DHkDk1[index_base+i*norb+j];
+                    _dhkdk123[1][i][j]=DHkDk2[index_base+i*norb+j];
+                    _dhkdk123[2][i][j]=DHkDk3[index_base+i*norb+j];
+                }
+            }
+            
+            lapack_complex_double overlap_analytic[3][norb][norb];
+            for(int i=0;i<norb;i++){
+                for(int j=0;j<norb;j++){
+                    overlap_analytic[0][i][j]=0;
+                    overlap_analytic[1][i][j]=0;
+                    overlap_analytic[2][i][j]=0;
+                }
+            }
+            for(int ivec=0;ivec<norb;ivec++){
+                for(int jvec=0;jvec<norb;jvec++){
+                    for(int icontract=0;icontract<norb;icontract++){
+                        for(int jcontract=0;jcontract<norb;jcontract++){
+                            overlap_analytic[0][ivec][jvec]+=conj(vec_0[icontract][ivec])*_dhkdk123[0][icontract][jcontract]*vec_0[jcontract][jvec];
+                            overlap_analytic[1][ivec][jvec]+=conj(vec_0[icontract][ivec])*_dhkdk123[1][icontract][jcontract]*vec_0[jcontract][jvec];
+                            overlap_analytic[2][ivec][jvec]+=conj(vec_0[icontract][ivec])*_dhkdk123[2][icontract][jcontract]*vec_0[jcontract][jvec];
+                        }
+                    }
+                }
+            }
+            for(int idir=0;idir<3;idir++){
+                printf("analytic overlap dir=%d\n",idir);
+                for(int ivec=0;ivec<norb;ivec++){
+                    for(int jvec=0;jvec<norb;jvec++)printf("%9.6f+%9.6fj ",creal(overlap_analytic[idir][ivec][jvec]),cimag(overlap_analytic[idir][ivec][jvec]));
+                    printf("\n");
+                }
+            }
+            // fix the phases
+            for(int ivec=0;ivec<norb;ivec++){
+                //printf("band %d diag phase1: %f %f, abs: %f\n",ivec,creal(overlap_numeric[0]),cimag(overlap_numeric[0]),cabs(overlap_numeric[0]));
+                //printf("band %d diag phase2: %f %f, abs: %f\n",ivec,creal(overlap_numeric[1]),cimag(overlap_numeric[1]),cabs(overlap_numeric[1]));
+                overlap_numeric[0][ivec][ivec]/=cabs(overlap_numeric[0][ivec][ivec]);
+                overlap_numeric[1][ivec][ivec]/=cabs(overlap_numeric[1][ivec][ivec]);
+                overlap_numeric[2][ivec][ivec]/=cabs(overlap_numeric[2][ivec][ivec]);
+                for(int i=0;i<norb;i++){
+                    vec_1[i][ivec]/=overlap_numeric[0][ivec][ivec];
+                    vec_2[i][ivec]/=overlap_numeric[1][ivec][ivec];
+                    vec_3[i][ivec]/=overlap_numeric[2][ivec][ivec];
+                }
+            }
+            
+            lapack_complex_double dv_dk123[3][norb2];
+            //printf("%f\n",vecs[index_base]);
             //printf("ikpt %d ik1 %d ik2 %d\n",ikpt,ik1,ik2);
             //int idata=0;
             for(int i=0;i<norb;i++){
                 for(int j=0;j<norb;j++){
-                    data_dk123[0][i*norb+j]=(vec_1[i][j]-vec_0[i][j])/dk[0];
-                    data_dk123[1][i*norb+j]=(vec_2[i][j]-vec_0[i][j])/dk[1];
-                    data_dk123[2][i*norb+j]=(vec_3[i][j]-vec_0[i][j])/dk[2];
+                    dv_dk123[0][i*norb+j]=(vec_1[i][j]-vec_0[i][j])/dk[0];
+                    dv_dk123[1][i*norb+j]=(vec_2[i][j]-vec_0[i][j])/dk[1];
+                    dv_dk123[2][i*norb+j]=(vec_3[i][j]-vec_0[i][j])/dk[2];
                     //idata+=1;
                 }
             }
@@ -787,29 +845,29 @@ PyObject* derivateOnKMesh_eigenvector(long long data_addr, int norb, int kmesh[3
             //}
             
             // change into derivates to kx,y,z
-            lapack_complex_double data_dkxyz[3][norb2];
-            for(int i=0;i<3;i++)for(int idata=0;idata<norb2;idata++)data_dkxyz[i][idata]=0;
+            lapack_complex_double dv_dkxyz[3][norb2];
+            for(int i=0;i<3;i++)for(int idata=0;idata<norb2;idata++)dv_dkxyz[i][idata]=0;
             for(int idata=0;idata<norb2;idata++){
-                for(int i=0;i<3;i++)for(int j=0;j<3;j++)data_dkxyz[i][idata]+=data_dk123[j][idata]*lat[j][i];
+                for(int i=0;i<3;i++)for(int j=0;j<3;j++)dv_dkxyz[i][idata]+=dv_dk123[j][idata]*lat[j][i];
             }
             //printf("%f\n",data_dkxyz[0][0]);
             for(int idata=0;idata<norb2;idata++){
-                dData_dkx[index_base+idata]=data_dkxyz[0][idata];
-                dData_dky[index_base+idata]=data_dkxyz[1][idata];
-                dData_dkz[index_base+idata]=data_dkxyz[2][idata];
+                dvec_dkx[index_base+idata]=dv_dkxyz[0][idata];
+                dvec_dky[index_base+idata]=dv_dkxyz[1][idata];
+                dvec_dkz[index_base+idata]=dv_dkxyz[2][idata];
             }
         }
     }
-    long long dData_dkx_addr=(long long)dData_dkx;
-    long long dData_dky_addr=(long long)dData_dky;
-    long long dData_dkz_addr=(long long)dData_dkz;
+    long long dvec_dkx_addr=(long long)dvec_dkx;
+    long long dvec_dky_addr=(long long)dvec_dky;
+    long long dvec_dkz_addr=(long long)dvec_dkz;
     if(sizeof(long long)!=sizeof(lapack_complex_double*)){
         printf("Error: in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(lapack_complex_double *));
         printf("they are different!\n");
         exit(1);
     }
-    printf("in ham.dll the addr. of derivates are %p, %p, %p\n",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
-    return Py_BuildValue("(LLL)",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
+    printf("in ham.dll the addr. of derivates are %p, %p, %p\n",dvec_dkx_addr,dvec_dky_addr,dvec_dkz_addr);
+    return Py_BuildValue("(LLL)",dvec_dkx_addr,dvec_dky_addr,dvec_dkz_addr);
 }
 
 PyObject* readOutGridDataOnKMesh_double(long long data_addr, int dataDim, int kmesh[3]){
