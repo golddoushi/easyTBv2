@@ -702,9 +702,9 @@ PyObject* derivateOnKMesh_complex(long long data_addr, int dataDim, int kmesh[3]
     return Py_BuildValue("(LLL)",dData_dkx_addr,dData_dky_addr,dData_dkz_addr);
 }
 
-PyObject* derivateOnKMesh_eigenvector(long long vec_addr, long long DHkDk1_addr, long long DHkDk2_addr, long long DHkDk3_addr, long long eigs_addr, int norb, int kmesh[3], double lat[3][3], int nthreads){
+PyObject* derivateOnKMesh_eigenvector(long long vec_addr, long long DHkDk1_addr, long long DHkDk2_addr, long long DHkDk3_addr, long long eigs_addr, int norb, int nocc, int kmesh[3], double lat[3][3], int nthreads){
     lapack_complex_double*vecs=(lapack_complex_double*)vec_addr;
-    lapack_complex_double*eigs=(lapack_complex_double*)eigs_addr;
+    double*eigs=(double*)eigs_addr;
     lapack_complex_double*DHkDk1=(lapack_complex_double*)DHkDk1_addr;
     lapack_complex_double*DHkDk2=(lapack_complex_double*)DHkDk2_addr;
     lapack_complex_double*DHkDk3=(lapack_complex_double*)DHkDk3_addr;
@@ -736,7 +736,7 @@ PyObject* derivateOnKMesh_eigenvector(long long vec_addr, long long DHkDk1_addr,
             int index_dq1=((ik1+1)%kmesh[0]*sizeK1+ik2*sizeK2+ik3)*norb2;
             int index_dq2=(ik1*sizeK1+(ik2+1)%kmesh[1]*sizeK2+ik3)*norb2;
             int index_dq3=(ik1*sizeK1+ik2*sizeK2+(ik3+1)%kmesh[2])*norb2;
-            printf("k0: %d, k+dk1: %d, k+dk2: %d, k+dk3: %d\n",ikpt,index_dq1/norb2,index_dq2/norb2,index_dq3/norb2);
+            //if(ikpt<100)printf("k0: %d, k+dk1: %d, k+dk2: %d, k+dk3: %d\n",ikpt,index_dq1/norb2,index_dq2/norb2,index_dq3/norb2);
             lapack_complex_double vec_0[norb][norb];
             lapack_complex_double vec_1[norb][norb];
             lapack_complex_double vec_2[norb][norb];
@@ -768,23 +768,34 @@ PyObject* derivateOnKMesh_eigenvector(long long vec_addr, long long DHkDk1_addr,
                         overlap_numeric[1][ivec][jvec]+=conj(vec_0[icontract][ivec])*vec_2[icontract][jvec];
                         overlap_numeric[2][ivec][jvec]+=conj(vec_0[icontract][ivec])*vec_3[icontract][jvec];
                     }
+
+                    //double abs1=cabs(overlap_numeric[0][ivec][jvec]);
+                    //double abs2=cabs(overlap_numeric[1][ivec][jvec]);
+                    //double abs3=cabs(overlap_numeric[2][ivec][jvec]);
+                    //if(abs1>1e-6)overlap_numeric[0][ivec][jvec]/=abs1;
+                    //if(abs2>1e-6)overlap_numeric[1][ivec][jvec]/=abs2;
+                    //if(abs3>1e-6)overlap_numeric[2][ivec][jvec]/=abs3;
                 }
             }
+            /*
+            if(ikpt<100){
             for(int idir=0;idir<3;idir++){
                 printf("numeric overlap dir=%d\n",idir);
                 for(int ivec=0;ivec<norb;ivec++){
                     for(int jvec=0;jvec<norb;jvec++)printf("%9.6f+%9.6fj ",creal(overlap_numeric[idir][ivec][jvec]),cimag(overlap_numeric[idir][ivec][jvec]));
                     printf("\n");
                 }
-            }
+            }}*/
             // calc analytic overlaps
             lapack_complex_double _dhkdk123[3][norb][norb];
+            double _eig[norb];
             for(int i=0;i<norb;i++){
                 for(int j=0;j<norb;j++){
                     _dhkdk123[0][i][j]=DHkDk1[index_base+i*norb+j];
                     _dhkdk123[1][i][j]=DHkDk2[index_base+i*norb+j];
                     _dhkdk123[2][i][j]=DHkDk3[index_base+i*norb+j];
                 }
+                _eig[i]=eigs[ikpt*norb+i];
             }
             
             lapack_complex_double overlap_analytic[3][norb][norb];
@@ -804,19 +815,38 @@ PyObject* derivateOnKMesh_eigenvector(long long vec_addr, long long DHkDk1_addr,
                             overlap_analytic[2][ivec][jvec]+=conj(vec_0[icontract][ivec])*_dhkdk123[2][icontract][jcontract]*vec_0[jcontract][jvec];
                         }
                     }
+                    //overlap_analytic[0][ivec][jvec]*=dk[0];
+                    //overlap_analytic[1][ivec][jvec]*=dk[1];
+                    //overlap_analytic[2][ivec][jvec]*=dk[2];
+                    //double abs1=cabs(overlap_analytic[0][ivec][jvec]);
+                    //double abs2=cabs(overlap_analytic[1][ivec][jvec]);
+                    //double abs3=cabs(overlap_analytic[2][ivec][jvec]);
+                    //if(abs1>1e-6)overlap_analytic[0][ivec][jvec]/=abs1;
+                    //if(abs2>1e-6)overlap_analytic[1][ivec][jvec]/=abs2;
+                    //if(abs3>1e-6)overlap_analytic[2][ivec][jvec]/=abs3;
+                    /*if((ivec<=nocc & jvec>nocc)|(ivec>nocc & jvec<=nocc)){
+                        overlap_analytic[0][ivec][jvec]/=(_eig[ivec]-_eig[jvec]);
+                        overlap_analytic[1][ivec][jvec]/=(_eig[ivec]-_eig[jvec]);
+                        overlap_analytic[2][ivec][jvec]/=(_eig[ivec]-_eig[jvec]);
+                    }*/
                 }
             }
+            /*
+            if(ikpt<100){
             for(int idir=0;idir<3;idir++){
                 printf("analytic overlap dir=%d\n",idir);
                 for(int ivec=0;ivec<norb;ivec++){
                     for(int jvec=0;jvec<norb;jvec++)printf("%9.6f+%9.6fj ",creal(overlap_analytic[idir][ivec][jvec]),cimag(overlap_analytic[idir][ivec][jvec]));
                     printf("\n");
                 }
-            }
+            }}*/
             // fix the phases
+            int num_ref_states;
+            lapack_complex_double ref_phase_shift;
             for(int ivec=0;ivec<norb;ivec++){
                 //printf("band %d diag phase1: %f %f, abs: %f\n",ivec,creal(overlap_numeric[0]),cimag(overlap_numeric[0]),cabs(overlap_numeric[0]));
                 //printf("band %d diag phase2: %f %f, abs: %f\n",ivec,creal(overlap_numeric[1]),cimag(overlap_numeric[1]),cabs(overlap_numeric[1]));
+                /*
                 overlap_numeric[0][ivec][ivec]/=cabs(overlap_numeric[0][ivec][ivec]);
                 overlap_numeric[1][ivec][ivec]/=cabs(overlap_numeric[1][ivec][ivec]);
                 overlap_numeric[2][ivec][ivec]/=cabs(overlap_numeric[2][ivec][ivec]);
@@ -824,6 +854,48 @@ PyObject* derivateOnKMesh_eigenvector(long long vec_addr, long long DHkDk1_addr,
                     vec_1[i][ivec]/=overlap_numeric[0][ivec][ivec];
                     vec_2[i][ivec]/=overlap_numeric[1][ivec][ivec];
                     vec_3[i][ivec]/=overlap_numeric[2][ivec][ivec];
+                }
+                */
+                //if(ikpt<100){
+                num_ref_states=0;
+                ref_phase_shift=0;
+                //for(int i=0;i<norb;i++)ref_phase_shift[i]=0;
+                //printf("phase shift for vec%d on k+dk1:\n",ivec);
+                for(int jvec=0;jvec<norb;jvec++){ // jvec is the vector in k0
+                    if(ivec==jvec)continue; // skip diagonal terms
+                    if(abs(_eig[ivec]-_eig[jvec])<1e-6)continue; // skip degenerated terms
+                    double numeric_abs=cabs(overlap_numeric[0][jvec][ivec]);
+                    double analytic_abs=cabs(overlap_analytic[0][jvec][ivec]);
+                    if(numeric_abs<1e-9 | analytic_abs<1e-9)continue; // skip zero amplitudes
+                    ref_phase_shift+=overlap_analytic[0][jvec][ivec]/overlap_numeric[0][jvec][ivec]*dk[0]/(_eig[ivec]-_eig[jvec]);
+                    //printf("%9.6f+%9.6fj (%9.6f)",creal(ref_phase_shift),cimag(ref_phase_shift),cabs(ref_phase_shift));
+                    num_ref_states+=1;
+                }
+                //printf("\n");
+                //}
+                if(num_ref_states>0){
+                    ref_phase_shift/=num_ref_states;
+                    double ref_abs=cabs(ref_phase_shift);
+                    if(ref_abs>1e-9)ref_phase_shift/=ref_abs;
+                    for(int i=0;i<norb;i++)vec_1[i][ivec]*=ref_phase_shift;
+                }
+
+                num_ref_states=0;
+                ref_phase_shift=0;
+                for(int jvec=0;jvec<norb;jvec++){ // jvec is the vector in k0
+                    if(ivec==jvec)continue; // skip diagonal terms
+                    if(abs(_eig[ivec]-_eig[jvec])<1e-6)continue; // skip degenerated terms
+                    double numeric_abs=cabs(overlap_numeric[1][jvec][ivec]);
+                    double analytic_abs=cabs(overlap_analytic[1][jvec][ivec]);
+                    if(numeric_abs<1e-9 | analytic_abs<1e-9)continue; // skip zero amplitudes
+                    ref_phase_shift+=overlap_analytic[1][jvec][ivec]/overlap_numeric[1][jvec][ivec]*dk[1]/(_eig[ivec]-_eig[jvec]);
+                    num_ref_states+=1;
+                }
+                if(num_ref_states>0){
+                    ref_phase_shift/=num_ref_states;
+                    double ref_abs=cabs(ref_phase_shift);
+                    if(ref_abs>1e-9)ref_phase_shift/=ref_abs;
+                    for(int i=0;i<norb;i++)vec_2[i][ivec]*=ref_phase_shift;
                 }
             }
             
@@ -1466,7 +1538,7 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                             
                             lapack_complex_double factor_global=0;
                             //if(fabs(En-El)>1e-6)
-                            factor_global=fln/(omega*omega)/(En-Em+itau)*(1/(En-El+omega+itau)+1/(En-El-omega+itau));
+                            factor_global=fln/(omega*omega)/(En-Em+itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
                             //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
                             //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
                             //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
@@ -1595,22 +1667,6 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                 for(int i=0;i<2;i++) DhkDkxy[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
                 for(int i=0;i<2;i++)for(int j=0;j<2;j++)DhkDk1xyDk2xy[sourceID[ihopping]][targetID[ihopping]][i][j]+=tk*hopping_R_c[i]*hopping_R_c[j];
             }
-            // unitary transform into real space partial, note each lattice[k] represent one crystal vector with three xyz components
-            /*
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    for(int k=0;k<3;k++){
-                        DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
-                        DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
-                        for(int p=0;p<3;p++){
-                            DhkDk1xyDk2xy[i][j][0][0]+=Dhk1k2[i][j][k][p]*lattice[k][0]*lattice[k][0];
-                            DhkDk1xyDk2xy[i][j][0][1]+=Dhk1k2[i][j][k][p]*lattice[k][0]*lattice[k][1];
-                            DhkDk1xyDk2xy[i][j][1][0]+=Dhk1k2[i][j][k][p]*lattice[k][1]*lattice[k][0];
-                            DhkDk1xyDk2xy[i][j][1][1]+=Dhk1k2[i][j][k][p]*lattice[k][1]*lattice[k][1];
-                        }
-                    }
-                }
-            }*/
 
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             // vec[i]=hk[:][i]
@@ -1621,7 +1677,7 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                 if(El<erange[0] | El>erange[1]) continue;
                 int fl=0;
                 if(El<=fermi)fl=1;
-                for(int bandn=0;bandn<norbs;bandn++){ // loop over band_m
+                for(int bandn=0;bandn<norbs;bandn++){ // loop over band_n
                     double En=eigs[bandn];
                     if(En<erange[0] | En>erange[1]) continue;
                     int fn=0;
@@ -1651,8 +1707,8 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                     lapack_complex_double vx_ln=conj(vx_nl);
                     lapack_complex_double vy_ln=conj(vy_nl);
 
-                    lapack_complex_double rx_nl=-_Complex_I*vx_nl/Enl;
-                    lapack_complex_double ry_nl=-_Complex_I*vy_nl/Enl;
+                    lapack_complex_double rx_nl=_Complex_I*vx_nl/Enl;
+                    lapack_complex_double ry_nl=_Complex_I*vy_nl/Enl;
 
                     lapack_complex_double wxx_ln=0;
                     lapack_complex_double wxy_ln=0;
@@ -1660,10 +1716,10 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                     lapack_complex_double wyy_ln=0;
                     for(int i=0;i<norbs;i++){
                         for(int j=0;j<norbs;j++){
-                            wxx_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][0][0]*hk[i][bandn];
-                            wxy_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][0][1]*hk[i][bandn];
-                            wyx_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][1][0]*hk[i][bandn];
-                            wyy_ln+=_Complex_I*conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][1][1]*hk[i][bandn];
+                            wxx_ln+=conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][0][0]*hk[i][bandn];
+                            wxy_ln+=conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][0][1]*hk[i][bandn];
+                            wyx_ln+=conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][1][0]*hk[i][bandn];
+                            wyy_ln+=conj(hk[j][bandl])*DhkDk1xyDk2xy[j][i][1][1]*hk[i][bandn];
                         }
                     }
                     //wxx_ln=0;wxy_ln=0;wyx_ln=0;wyy_ln=0;
@@ -1688,12 +1744,12 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                             
                             }
                         }
-                        double Elm=El-Em;
-                        double Emn=Em-En;
-                        SIGMA_xx_ln+=vx_lm*vx_mn*(1/Emn-1/Elm);
-                        SIGMA_xy_ln+=vx_lm*vy_mn/Emn-vy_lm*vx_mn/Elm;
-                        SIGMA_yx_ln+=vy_lm*vx_mn/Emn-vx_lm*vy_mn/Elm;
-                        SIGMA_yy_ln+=vy_lm*vy_mn*(1/Emn-1/Elm);
+                        double Eml=Em-El;
+                        double Enm=En-Em;
+                        SIGMA_xx_ln+=vx_lm*vx_mn*(1/Eml+1/Enm);
+                        SIGMA_xy_ln+=vx_lm*vy_mn/Eml+vy_lm*vx_mn/Enm;
+                        SIGMA_yx_ln+=vy_lm*vx_mn/Eml+vx_lm*vy_mn/Enm;
+                        SIGMA_yy_ln+=vy_lm*vy_mn*(1/Eml+1/Enm);
 
                     }
                     lapack_complex_double rxx_ln=_Complex_I/Eln*(
@@ -1713,12 +1769,13 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                         //if(fabs(En-El)>1e-6)
                         //factor_global=-fln*(creal(1/(Enl-omega-itau))+_Complex_I*cimag(1/(Enl-omega-itau)))/2;
                         //factor_global=-fln*(_Complex_I*cimag(1/(Enl-omega-itau)))/2;
-                        lapack_complex_double factor_global1=-fln*(1/(Enl-omega-itau))/2;
-                        lapack_complex_double factor_global2=-fln*(1/(Enl+omega-itau))/2;
+                        lapack_complex_double factor_global1=fln*(1/(Enl-omega-itau))/2;
+                        lapack_complex_double factor_global2=fln*(1/(Enl+omega+itau))/2;
                         //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
                         //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
                         //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
                         //printf("                   xxx: %.4f, %.4f yyx: %.4f, %.4f\n",creal(px_nl*px_lm*px_mn),cimag(px_nl*px_lm*px_mn),creal(py_nl*py_lm*px_mn),cimag(py_nl*py_lm*px_mn));
+                        
                         conductance_on_kmesh_on_omega[writing_ph_index  ]+=(rx_nl*rxx_ln*factor_global1+rx_nl*rxx_ln*factor_global2);//*factor_global; //x_xx
                         conductance_on_kmesh_on_omega[writing_ph_index+1]+=(rx_nl*rxy_ln*factor_global1+rx_nl*rxy_ln*factor_global2);//*factor_global; //y_xx
                         conductance_on_kmesh_on_omega[writing_ph_index+2]+=(ry_nl*ryx_ln*factor_global1+ry_nl*ryx_ln*factor_global2);//*factor_global; //x_yy
