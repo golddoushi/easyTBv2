@@ -494,13 +494,17 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
                        double hopping_real[nhoppings],
                        double hopping_imag[nhoppings],
                        double orbCorr[norbs][3],
+                       double lattice[3][3],
                        int _nthreads){
     double * eigs=(double*)malloc(nkpt*norbs*sizeof(double));
     lapack_complex_double * vecs=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    lapack_complex_double * DHkDk1=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    lapack_complex_double * DHkDk2=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    lapack_complex_double * DHkDk3=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    printf("estimated memory: %d MB\n",(nkpt*norbs*(sizeof(double)+3*norbs*sizeof(lapack_complex_double)))/1024/1024);
+    lapack_complex_double * DHkDkx=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * DHkDky=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * DHkDkz=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * DHkDkxDkx=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * DHkDkyDky=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * DHkDkxDky=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    printf("estimated memory: %d MB\n",(nkpt*norbs*(sizeof(double)+7*norbs*sizeof(lapack_complex_double)))/1024/1024);
     int nthreads;
     nthreads=_nthreads;
     if(nkpt<_nthreads*10)nthreads=1;
@@ -512,11 +516,14 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
             //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //int kBaseIndex=ikpt*norbs*norbs;
             lapack_complex_double _hk[norbs][norbs]; // init Hk
-            lapack_complex_double _dhkdk123[3][norbs][norbs];
+            lapack_complex_double _dhkdkxyz[norbs][norbs][3];
+            lapack_complex_double _dhkdkxdky[norbs][norbs][3][3];
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
                     _hk[i][j]=0;
-                    for(int k=0;k<3;k++)_dhkdk123[k][i][j]=0;
+                    
+                    for(int k=0;k<3;k++)_dhkdkxyz[i][j][k]=0;
+                    for(int x=0;x<3;x++)for(int y=0;y<3;y++)_dhkdkxdky[i][j][x][y]=0;
                 }
             }
             double _eigs[norbs]; // output eigenvalues of Hk
@@ -530,7 +537,13 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
                 
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
                 _hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                for(int i=0;i<3;i++)_dhkdk123[i][sourceID[ihopping]][targetID[ihopping]]+=tk*hopping_R[i];
+
+                lapack_complex_double hopping_R_c[3];
+                for(int i=0;i<3;i++)hopping_R_c[i]=0;
+                for(int i=0;i<3;i++)for(int j=0;j<3;j++)hopping_R_c[i]+=hopping_R[j]*lattice[j][i];
+
+                for(int i=0;i<2;i++) _dhkdkxyz[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
+                for(int i=0;i<2;i++)for(int j=0;j<2;j++)_dhkdkxdky[sourceID[ihopping]][targetID[ihopping]][i][j]+=tk*hopping_R_c[i]*hopping_R_c[j];
             }
             //printf("kpt%d %.3f %.3f %.3f hamk:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //for(int i=0;i<norbs;i++){
@@ -551,9 +564,12 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
                 for(int jorb=0;jorb<norbs;jorb++){
                     int index=ikpt*norbs*norbs+iorb*norbs+jorb;
                     vecs[index]=_hk[iorb][jorb];
-                    DHkDk1[index]=_dhkdk123[0][iorb][jorb];
-                    DHkDk2[index]=_dhkdk123[1][iorb][jorb];
-                    DHkDk3[index]=_dhkdk123[2][iorb][jorb];
+                    DHkDkx[index]=_dhkdkxyz[iorb][jorb][0];
+                    DHkDky[index]=_dhkdkxyz[iorb][jorb][1];
+                    DHkDkz[index]=_dhkdkxyz[iorb][jorb][2];
+                    DHkDkxDkx[index]=_dhkdkxdky[iorb][jorb][0][0];
+                    DHkDkyDky[index]=_dhkdkxdky[iorb][jorb][1][1];
+                    DHkDkxDky[index]=_dhkdkxdky[iorb][jorb][0][1];
                 }
             }
         }
@@ -561,14 +577,17 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
     
     long long eigs_addr=(long long)eigs;
     long long vecs_addr=(long long)vecs;
-    long long DHkDk1_addr=(long long)DHkDk1;
-    long long DHkDk2_addr=(long long)DHkDk2;
-    long long DHkDk3_addr=(long long)DHkDk3;
+    long long DHkDkx_addr=(long long)DHkDkx;
+    long long DHkDky_addr=(long long)DHkDky;
+    long long DHkDkz_addr=(long long)DHkDkz;
+    long long DHkDkxDkx_addr=(long long)DHkDkxDkx;
+    long long DHkDkyDky_addr=(long long)DHkDkyDky;
+    long long DHkDkxDky_addr=(long long)DHkDkxDky;
     printf("in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(lapack_complex_double *));
     printf("pls. see if they are identical. Otherwise the calc. results with cdll are seriously wrong!\n");
     printf("in ham.dll the addr. of eigs and vecs are %p, %p\n",eigs_addr,vecs_addr);
-    printf("DHkDk123: %p, %p, %p\n",DHkDk1_addr,DHkDk2_addr,DHkDk3_addr);
-    return Py_BuildValue("(LLLLL)",eigs_addr,vecs_addr,DHkDk1_addr,DHkDk2_addr,DHkDk3_addr);
+    printf("DHkDkx,ky,kz: %p, %p, %p\n",DHkDkx_addr,DHkDky_addr,DHkDkz_addr);
+    return Py_BuildValue("(LLLLLLLL)",eigs_addr,vecs_addr,DHkDkx_addr,DHkDky_addr,DHkDkz_addr,DHkDkxDkx_addr,DHkDkyDky_addr,DHkDkxDky_addr);
 }
 
 PyObject* derivateOnKMesh_double(long long data_addr, int dataDim, int kmesh[3], double lat[3][3], int nthreads){

@@ -1151,7 +1151,11 @@ class Response:
                     c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
                     ikpt+=1
                     #print(k1,k2,k3)
-
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
         nhoppings=len(hr.bondList)
         c_sourceID=(c_int*nhoppings)()
         c_targetID=(c_int*nhoppings)()
@@ -1181,14 +1185,15 @@ class Response:
         
         hamDLL=CDLL("./ham.dll")
         hamDLL.calcFullBandsAndVecsInMemory.restype=py_object
-        eigs_addr,vecs_addr,DHkDk1_addr,DHkDk2_addr,DHkDk3_addr=hamDLL.calcFullBandsAndVecsInMemory(c_int(nkpts),c_kmesh,
+        eigs_addr,vecs_addr,DHkDkx_addr,DHkDky_addr,DHkDkz_addr,DHkDkxDkx_addr,DHkDkyDky_addr,DHkDkxDky_addr=hamDLL.calcFullBandsAndVecsInMemory(
+                        c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
-                        c_orbCorrList,
+                        c_orbCorrList,c_lat,
                         c_int(nthreads))
         print('Ham solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         print('pls. check the address of vecs and eigs',hex(eigs_addr),hex(vecs_addr))
-        return eigs_addr,vecs_addr,DHkDk1_addr,DHkDk2_addr,DHkDk3_addr
+        return eigs_addr,vecs_addr,DHkDkx_addr,DHkDky_addr,DHkDkz_addr,DHkDkxDkx_addr,DHkDkyDky_addr,DHkDkxDky_addr
     
     def derivateQuantitiesOnKGrid_CDLL(self,data_addr:int,data_dim:int,kmesh:list,data_type='double',nthreads=1):
         time0=time.time()

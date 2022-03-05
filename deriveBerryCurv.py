@@ -153,49 +153,8 @@ class VASPProcessor:
         print('Berry curv calculated in %.3fs'%(time.time()-time0))
         return curv_x, curv_y, curv_z
     
-    def calcBPVC(self,EphotonList,erange=[-50,50],itau=0.02j):
+    def calcBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.066,type='bulk',mainDir:str=None):
         time0=time.time()
-        '''
-        nphoton=len(EphotonList)
-        cx_xx=np.zeros((nphoton,self.nkpt),dtype=complex)
-        cy_xx=np.zeros((nphoton,self.nkpt),dtype=complex)
-        cx_yy=np.zeros((nphoton,self.nkpt),dtype=complex)
-        cy_yy=np.zeros((nphoton,self.nkpt),dtype=complex)
-        cx_xy=np.zeros((nphoton,self.nkpt),dtype=complex)
-        cy_xy=np.zeros((nphoton,self.nkpt),dtype=complex)
-        cx_yx=np.zeros((nphoton,self.nkpt),dtype=complex)
-        cy_yx=np.zeros((nphoton,self.nkpt),dtype=complex)
-        for ikpt in range(self.nkpt):
-            for ispin in range(self.nspin):
-                for ibandl in range(self.nbnd):
-                    El=self.eigs[ispin][ikpt][ibandl]
-                    if El<erange[0] or El>erange[1]: continue
-                    fl=self.occupations[ispin][ikpt][ibandl]
-                    for ibandn in range(self.nbnd):
-                        En=self.eigs[ispin][ikpt][ibandn]
-                        if En<erange[0] or En>erange[1]: continue
-                        fn=self.occupations[ispin][ikpt][ibandn]
-                        fln=fl-fn
-                        if abs(fln)<paramReader.SYMPREC:continue
-                        vx_nl,vy_nl=self.velocities[0,ispin,ikpt,ibandn,ibandl],self.velocities[1,ispin,ikpt,ibandn,ibandl]
-                        for ibandm in range(self.nbnd):
-                            Em=self.eigs[ispin][ikpt][ibandm]
-                            if Em<erange[0] or Em>erange[1]: continue
-                            vx_lm,vy_lm=self.velocities[0,ispin,ikpt,ibandl,ibandm],self.velocities[1,ispin,ikpt,ibandl,ibandm]
-                            vx_mn,vy_mn=self.velocities[0,ispin,ikpt,ibandm,ibandn],self.velocities[1,ispin,ikpt,ibandm,ibandn]
-                            for iphoton, omega in enumerate(EphotonList):
-                                factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau))
-                                cx_xx[iphoton,ikpt]+=vx_nl*vx_lm*vx_mn*factor_global
-                                cy_xx[iphoton,ikpt]+=vx_nl*vx_lm*vy_mn*factor_global
-                                cx_yy[iphoton,ikpt]+=vy_nl*vy_lm*vx_mn*factor_global
-                                cy_yy[iphoton,ikpt]+=vy_nl*vy_lm*vy_mn*factor_global
-                                cx_xy[iphoton,ikpt]+=vx_nl*vy_lm*vx_mn*factor_global
-                                cy_xy[iphoton,ikpt]+=vx_nl*vy_lm*vy_mn*factor_global
-                                cx_yx[iphoton,ikpt]+=vy_nl*vx_lm*vx_mn*factor_global
-                                cy_yx[iphoton,ikpt]+=vy_nl*vx_lm*vy_mn*factor_global
-                                #if ikpt==18:
-                                #    print("omega %f fac %f %f cxxx %f %f"%(omega,factor_global.real,factor_global.imag,cx_xx[iphoton,ikpt].real,cx_xx[iphoton,ikpt].imag))
-        '''
         #'''
         c_erange=(2*c_double)()
         c_erange[0],c_erange[1]=c_double(erange[0]),c_double(erange[1])
@@ -214,9 +173,15 @@ class VASPProcessor:
                     c_occupations[cnt]=c_double(self.occupations[ispin][ikpt][iband])
                     cnt+=1
         mylib=CDLL('./auxiliary.dll')
-        calcBPVC=mylib.calcBPVC
+        if type=='bulk':
+            calcBPVC=mylib.calcBPVC
+        elif type=='shift':
+            calcBPVC=mylib.calcShiftBPVC
+        else:
+            print("Error: type should be either bulk or shift")
+            exit()
         calcBPVC.restype=py_object
-        data=calcBPVC(c_int(nphoton),c_EphotonList,c_erange,c_double(abs(itau)),c_longlong(self.velocity_addr),
+        data=calcBPVC(c_int(nphoton),c_EphotonList,c_erange,c_double(tau),c_longlong(self.velocity_addr),
                       c_int(self.nspin),c_int(self.nkpt),c_int(self.nbnd),c_eigs,c_occupations)
         cx_xx_r, cx_xx_i, cy_xx_r, cy_xx_i, cx_yy_r, cx_yy_i, cy_yy_r, cy_yy_i, cx_xy_r, cx_xy_i, cy_xy_r, cy_xy_i, cx_yx_r, cx_yx_i, cy_yx_r, cy_yx_i=data
         cx_xx=(np.array(cx_xx_r)+1j*np.array(cx_xx_i)).reshape((nphoton,self.nkpt))
@@ -228,16 +193,67 @@ class VASPProcessor:
         cx_yx=(np.array(cx_yx_r)+1j*np.array(cx_yx_i)).reshape((nphoton,self.nkpt))
         cy_yx=(np.array(cy_yx_r)+1j*np.array(cy_yx_i)).reshape((nphoton,self.nkpt))
         #'''
-        #for ikpt in range(self.nkpt):
-        #    print(cx_xx[0][ikpt])
-        #print(cx_xx[0][10])
-        #print(sum(cx_xx[0]))
         print('Bulk photovoltaic conductances calculated in %.3fs'%(time.time()-time0))
-        #exit()
-        #print(sum(sum(cx_xx)),sum(sum(cy_xx)),sum(sum(cx_yy)),sum(sum(cy_yy)),sum(sum(cx_xy)),sum(sum(cy_xy)),sum(sum(cx_yx)),sum(sum(cy_yx)))
-        #for iphoton in range(nphoton):
-        #    print(sum(cx_xx[iphoton]),sum(cy_xx[iphoton]))
-        #exit()
+
+        if mainDir!=None:
+            #pathToFile=os.path.join(mainDir,'photoCondTensorVsOmega.txt')
+            #if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensorVsOmega.txt')
+            
+            if nphoton==1:
+                pathToFile=os.path.join(mainDir,'photoCondTensor.txt')
+                if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensor.txt')
+                with open(pathToFile,'w') as fout:
+                    for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(self.vkpt,cx_xx[0],cy_xx[0],cx_yy[0],cy_yy[0],cx_xy[0],cy_xy[0],cx_yx[0],cy_yx[0]):
+                        fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+                return
+            else:
+                pathToFile=os.path.join(mainDir,'photoCondTensorVsOmega.txt')
+                if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensorVsOmega.txt')
+                with open(pathToFile,'w') as fout:
+                    fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
+                    for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(EphotonList,cx_xx,cy_xx,cx_yy,cy_yy,cx_xy,cy_xy,cx_yx,cy_yx):
+                        fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                            omega,
+                            sum(_cxxx/self.nkpt).real,sum(_cxxx/self.nkpt).imag,
+                            sum(_cxxy/self.nkpt).real,sum(_cxxy/self.nkpt).imag,
+                            sum(_cyyx/self.nkpt).real,sum(_cyyx/self.nkpt).imag,
+                            sum(_cyyy/self.nkpt).real,sum(_cyyy/self.nkpt).imag,
+                            sum(_cxyx/self.nkpt).real,sum(_cxyx/self.nkpt).imag,
+                            sum(_cxyy/self.nkpt).real,sum(_cxyy/self.nkpt).imag,
+                            sum(_cyxx/self.nkpt).real,sum(_cyxx/self.nkpt).imag,
+                            sum(_cyxy/self.nkpt).real,sum(_cyxy/self.nkpt).imag))
+                for iomega, omega in enumerate(EphotonList):
+                    pathToFile=os.path.join(mainDir,'photoCondTensor%d_E%.3f.txt'%(iomega,omega))
+                    if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensor%d_E%.3f.txt'%(iomega,omega))
+                    with open(pathToFile,'w') as fout:
+                        for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(self.vkpt,cx_xx[iomega],cy_xx[iomega],cx_yy[iomega],cy_yy[iomega],cx_xy[iomega],cy_xy[iomega],cx_yx[iomega],cy_yx[iomega]):
+                            fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+            
+
+        condcxxxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_xx])
+        condcxxyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_xx])
+        condcyyxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_yy])
+        condcyyyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_yy])
+        condcxyxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_xy])
+        condcxyyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_xy])
+        condcyxxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_yx])
+        condcyxyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_yx])
+
+        fig,ax=plt.subplots(2,4,sharey=True)
+        ax[0,0].scatter(omegaList,condcxxxList.real,label=r'$Re\ \sigma^x_{xx}$')
+        ax[0,1].scatter(omegaList,condcxxyList.real,label=r'$Re\ \sigma^y_{xx}$')
+        ax[0,2].scatter(omegaList,condcyyxList.real,label=r'$Re\ \sigma^x_{yy}$')
+        ax[0,3].scatter(omegaList,condcyyyList.real,label=r'$Re\ \sigma^y_{yy}$')
+        ax[1,0].scatter(omegaList,condcxyxList.real,label=r'$Re\ \sigma^x_{xy}$')
+        ax[1,1].scatter(omegaList,condcxyyList.real,label=r'$Re\ \sigma^y_{xy}$')
+        ax[1,2].scatter(omegaList,condcyxxList.real,label=r'$Re\ \sigma^x_{yx}$')
+        ax[1,3].scatter(omegaList,condcyxyList.real,label=r'$Re\ \sigma^y_{yx}$')
+        for row in ax:
+            for _ax in row:
+                _ax.legend()
+                _ax.plot([EphotonList[0],EphotonList[-1]],[0,0],'--',linewidth=1)
+        plt.show()
+
         return cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx
 
 def makeGrid(kmesh,reciLat,curv_z):
@@ -327,32 +343,7 @@ vaspPro.readVelocity()
 #exit()
 omegaList=np.linspace(10.0,17.0,21,endpoint=True)
 cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx=vaspPro.calcBPVC(
-    EphotonList=omegaList,itau=0.1)
-#exit()
-
-condcxxxList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cx_xx])
-condcxxyList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cy_xx])
-condcyyxList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cx_yy])
-condcyyyList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cy_yy])
-condcxyxList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cx_xy])
-condcxyyList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cy_xy])
-condcyxxList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cx_yx])
-condcyxyList=np.array([np.sum(cond_on_omega/vaspPro.nkpt) for cond_on_omega in cy_yx])
-       
-fig,ax=plt.subplots(2,4,sharey=True)
-ax[0,0].scatter(omegaList,condcxxxList.real,label=r'$Re\ \sigma^x_{xx}$')
-ax[0,1].scatter(omegaList,condcxxyList.real,label=r'$Re\ \sigma^y_{xx}$')
-ax[0,2].scatter(omegaList,condcyyxList.real,label=r'$Re\ \sigma^x_{yy}$')
-ax[0,3].scatter(omegaList,condcyyyList.real,label=r'$Re\ \sigma^y_{yy}$')
-ax[1,0].scatter(omegaList,condcxyxList.real,label=r'$Re\ \sigma^x_{xy}$')
-ax[1,1].scatter(omegaList,condcxyyList.real,label=r'$Re\ \sigma^y_{xy}$')
-ax[1,2].scatter(omegaList,condcyxxList.real,label=r'$Re\ \sigma^x_{yx}$')
-ax[1,3].scatter(omegaList,condcyxyList.real,label=r'$Re\ \sigma^y_{yx}$')
-for row in ax:
-    for _ax in row:
-        _ax.legend()
-        _ax.plot([omegaList[0],omegaList[-1]],[0,0],'--',linewidth=1)
-plt.show()
+    EphotonList=omegaList,tau=0.066,type='bulk',mainDir='./mcalc/BN/')
 exit()
 
 #curv_x_flat,curv_y_flat,curv_z_flat=vaspPro.calcBerryCurv()
