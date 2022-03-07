@@ -27,7 +27,7 @@ atomicMagMomList=[
 #hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
 #                  spinor=False,atomicMagMomList=atomicMagMomList)
 #hr.adjustSOCStrength(socFactor=1.0)
-
+'''
 Lk=101
 nocc=2
 vbm,cbm=0,2
@@ -85,7 +85,7 @@ for ikpt in range(Lk*Lk):
     Berry_curv.append(rxx.real)
 drawHotmapOnHexagonalBZ('./mcalc/BN/',np.array(Berry_curv),[Lk-1,Lk-1,1])
 #exit()
-
+'''
 #res.calcInjectPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(1.0,3.0,20),tau=0.01,erange=[-80,80],nthreads=1)
-#res.calcShiftPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,3.0,20),tau=0.05,erange=[-80,80],nthreads=1)
-#res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,3.0,20),tau=0.06,erange=[-80,80],nthreads=1)
+#res.calcShiftPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,3.0,20),tau=0.06,erange=[-80,80],nthreads=1)
+res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,3.0,20),tau=0.06,erange=[-80,80],nthreads=1)

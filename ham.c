@@ -1557,7 +1557,7 @@ PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3
                             
                             lapack_complex_double factor_global=0;
                             //if(fabs(En-El)>1e-6)
-                            factor_global=fln/(omega*omega)/(En-Em+itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                            factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
                             //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
                             //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
                             //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
@@ -1763,8 +1763,8 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                             
                             }
                         }
-                        double Eml=Em-El;
-                        double Enm=En-Em;
+                        lapack_complex_double Eml=Em-El+itau;
+                        lapack_complex_double Enm=En-Em-itau;
                         SIGMA_xx_ln+=vx_lm*vx_mn*(1/Eml+1/Enm);
                         SIGMA_xy_ln+=vx_lm*vy_mn/Eml+vy_lm*vx_mn/Enm;
                         SIGMA_yx_ln+=vy_lm*vx_mn/Eml+vx_lm*vy_mn/Enm;

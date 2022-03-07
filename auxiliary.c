@@ -58,7 +58,7 @@ PyObject * readVelocity(char rpath[],int nspin, int nkpt, int nbands)
 }
 
 PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange[2], double tau, long long velocity_addr,
-                    int nspin, int nkpt, int nbands, double eigs[nspin][nkpt][nbands], double occupations[nspin][nkpt][nbands])
+                    int nspin, int nkpt, int nbands, double eigs[nspin][nkpt][nbands], double occupations[nspin][nkpt][nbands],int nthreads)
 {
     //complex double velocity_matrix[3][nspin][nkpt][nbands][nbands];
     complex double*velocity_matrix=(complex double*)velocity_addr;
@@ -83,18 +83,11 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
         cy_yx[i]=0;
     }
     
-    double El,Em,En,Enl,Eln,Eml,Enm,fl,fn,fln,omega;
-    complex double vx_nl,vy_nl,vx_ln,vy_ln,vx_nn,vy_nn,vx_ll,vy_ll;
-    complex double rx_nl,ry_nl,rxx_ln,rxy_ln,ryx_ln,ryy_ln;
-    complex double SIGMA_xx_ln, SIGMA_xy_ln, SIGMA_yx_ln, SIGMA_yy_ln;
-    complex double vx_lm,vy_lm,vx_mn,vy_mn;
-    complex double factor_global1,factor_global2;
     complex double itau=tau*_Complex_I;
     int bnd_base=nbands;
     int kpt_base=nbands*nbands;
     int spin_base=nkpt*kpt_base;
     int dir_base=nspin*spin_base;
-    int ipos;
     printf("entering Shift BPVC main loop...\n");
     /*
     for(int iband=0;iband<nbands;iband++){
@@ -104,6 +97,17 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
     }
     exit(1);
     */
+    #pragma omp parallel num_threads(nthreads)
+    {
+    double El,Em,En,fl,fn,fln,omega;
+    complex double Enl,Eln,Eml,Enm; // this is essnetial to consider energy difference as complex
+    complex double vx_nl,vy_nl,vx_ln,vy_ln,vx_nn,vy_nn,vx_ll,vy_ll;
+    complex double rx_nl,ry_nl,rxx_ln,rxy_ln,ryx_ln,ryy_ln;
+    complex double SIGMA_xx_ln, SIGMA_xy_ln, SIGMA_yx_ln, SIGMA_yy_ln;
+    complex double vx_lm,vy_lm,vx_mn,vy_mn;
+    complex double factor_global1,factor_global2;
+    int ipos;
+    #pragma omp for
     for(int ikpt=0;ikpt<nkpt;ikpt++){
         for(int ispin=0;ispin<nspin;ispin++){
             for(int ibandl=0;ibandl<nbands;ibandl++){
@@ -138,8 +142,8 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
                     for(int ibandm=0;ibandm<nbands;ibandm++){
                         if(ibandm==ibandn|ibandm==ibandl)continue;
                         Em=eigs[ispin][ikpt][ibandm];
-                        Eml=Em-El;
-                        Enm=En-Em;
+                        Eml=Em-El+itau; // to avoid singularity
+                        Enm=En-Em-itau; // to avoid singularity
 
                         vx_lm=velocity_matrix[         ispin*spin_base+ikpt*kpt_base+ibandl*bnd_base+ibandm];
                         vy_lm=velocity_matrix[dir_base+ispin*spin_base+ikpt*kpt_base+ibandl*bnd_base+ibandm];
@@ -185,6 +189,7 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
             }
         }
     }
+    }
     printf("Shift BPVC finished\n");
 
     PyObject *cx_xx_real=PyTuple_New(nphoton*nkpt);
@@ -205,7 +210,7 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
     PyObject *cy_yx_imag=PyTuple_New(nphoton*nkpt);
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
-            ipos=iphoton*nkpt+ikpt;
+            int ipos=iphoton*nkpt+ikpt;
             PyTuple_SetItem(cx_xx_real, ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
             PyTuple_SetItem(cx_xx_imag, ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
             PyTuple_SetItem(cy_xx_real, ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
@@ -239,7 +244,7 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
 }
 
 PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], double tau, long long velocity_addr,
-                    int nspin, int nkpt, int nbands, double eigs[nspin][nkpt][nbands], double occupations[nspin][nkpt][nbands])
+                    int nspin, int nkpt, int nbands, double eigs[nspin][nkpt][nbands], double occupations[nspin][nkpt][nbands],int nthreads)
 {
     //complex double velocity_matrix[3][nspin][nkpt][nbands][nbands];
     complex double*velocity_matrix=(complex double*)velocity_addr;
@@ -264,14 +269,10 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
         cy_yx[i]=0;
     }
     
-    double El,Em,En,fl,fn,fln,omega;
-    complex double vx_nl,vy_nl,vx_lm,vy_lm,vx_mn,vy_mn,factor_global;
-    complex double itau=tau*_Complex_I;
     int bnd_base=nbands;
     int kpt_base=nbands*nbands;
     int spin_base=nkpt*kpt_base;
     int dir_base=nspin*spin_base;
-    int ipos;
     printf("entering BPVC main loop...\n");
     /*
     for(int iband=0;iband<nbands;iband++){
@@ -281,6 +282,13 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
     }
     exit(1);
     */
+    #pragma omp parallel num_threads(nthreads)
+    {
+    double El,Em,En,fl,fn,fln,omega;
+    complex double vx_nl,vy_nl,vx_lm,vy_lm,vx_mn,vy_mn,factor_global1,factor_global2;
+    complex double itau=tau*_Complex_I;
+    int ipos;
+    #pragma omp for
     for(int ikpt=0;ikpt<nkpt;ikpt++){
         for(int ispin=0;ispin<nspin;ispin++){
             for(int ibandl=0;ibandl<nbands;ibandl++){
@@ -308,16 +316,17 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
                         vy_mn=velocity_matrix[dir_base+ispin*spin_base+ikpt*kpt_base+ibandm*bnd_base+ibandn];
                         for(int iphoton=0;iphoton<nphoton;iphoton++){
                             omega=EphotonList[iphoton];
-                            factor_global=fln/(omega*omega)/(En-Em+itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                            factor_global1=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                            //factor_global2=fln/(omega*omega)/(Em-El-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau))/2;
                             ipos=iphoton*nkpt+ikpt;
-                            cx_xx[ipos]+=vx_nl*vx_lm*vx_mn*factor_global;
-                            cy_xx[ipos]+=vx_nl*vx_lm*vy_mn*factor_global;
-                            cx_yy[ipos]+=vy_nl*vy_lm*vx_mn*factor_global;
-                            cy_yy[ipos]+=vy_nl*vy_lm*vy_mn*factor_global;
-                            cx_xy[ipos]+=vx_nl*vy_lm*vx_mn*factor_global;
-                            cy_xy[ipos]+=vx_nl*vy_lm*vy_mn*factor_global;
-                            cx_yx[ipos]+=vy_nl*vx_lm*vx_mn*factor_global;
-                            cy_yx[ipos]+=vy_nl*vx_lm*vy_mn*factor_global;
+                            cx_xx[ipos]+=vx_nl*vx_lm*vx_mn*factor_global1;//-vx_nl*vx_lm*vx_mn*factor_global2;
+                            cy_xx[ipos]+=vx_nl*vx_lm*vy_mn*factor_global1;//-vx_nl*vy_lm*vx_mn*factor_global2;
+                            cx_yy[ipos]+=vy_nl*vy_lm*vx_mn*factor_global1;//-vy_nl*vx_lm*vy_mn*factor_global2;
+                            cy_yy[ipos]+=vy_nl*vy_lm*vy_mn*factor_global1;//-vy_nl*vy_lm*vy_mn*factor_global2;
+                            cx_xy[ipos]+=vx_nl*vy_lm*vx_mn*factor_global1;//-vx_nl*vx_lm*vy_mn*factor_global2;
+                            cy_xy[ipos]+=vx_nl*vy_lm*vy_mn*factor_global1;//-vx_nl*vy_lm*vy_mn*factor_global2;
+                            cx_yx[ipos]+=vy_nl*vx_lm*vx_mn*factor_global1;//-vy_nl*vx_lm*vx_mn*factor_global2;
+                            cy_yx[ipos]+=vy_nl*vx_lm*vy_mn*factor_global1;//-vy_nl*vy_lm*vx_mn*factor_global2;
                             //if(ikpt==18){
                             //    printf("omega %f fac %f %f cxxx %f %f\n",
                             //    omega,creal(factor_global),cimag(factor_global),creal(cx_xx[iphoton*nphoton+ikpt]),cimag(cx_xx[iphoton*nphoton+ikpt]));
@@ -329,6 +338,7 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
                 }
             }
         }
+    }
     }
     printf("BPVC finished\n");
 
@@ -350,7 +360,7 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
     PyObject *cy_yx_imag=PyTuple_New(nphoton*nkpt);
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
-            ipos=iphoton*nkpt+ikpt;
+            int ipos=iphoton*nkpt+ikpt;
             PyTuple_SetItem(cx_xx_real, ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
             PyTuple_SetItem(cx_xx_imag, ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
             PyTuple_SetItem(cy_xx_real, ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
