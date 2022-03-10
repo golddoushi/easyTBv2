@@ -191,7 +191,7 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
     }
     }
     printf("Shift BPVC finished\n");
-
+    /*
     PyObject *cx_xx_real=PyTuple_New(nphoton*nkpt);
     PyObject *cx_xx_imag=PyTuple_New(nphoton*nkpt);
     PyObject *cy_xx_real=PyTuple_New(nphoton*nkpt);
@@ -208,9 +208,12 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
     PyObject *cx_yx_imag=PyTuple_New(nphoton*nkpt);
     PyObject *cy_yx_real=PyTuple_New(nphoton*nkpt);
     PyObject *cy_yx_imag=PyTuple_New(nphoton*nkpt);
+    */
+    PyObject *conductance=PyTuple_New(nphoton*nkpt*8*2);
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
             int ipos=iphoton*nkpt+ikpt;
+            /*
             PyTuple_SetItem(cx_xx_real, ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
             PyTuple_SetItem(cx_xx_imag, ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
             PyTuple_SetItem(cy_xx_real, ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
@@ -227,20 +230,38 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
             PyTuple_SetItem(cx_yx_imag, ipos,   PyFloat_FromDouble(cimag(cx_yx[ipos])));
             PyTuple_SetItem(cy_yx_real, ipos,   PyFloat_FromDouble(creal(cy_yx[ipos])));
             PyTuple_SetItem(cy_yx_imag, ipos,   PyFloat_FromDouble(cimag(cy_yx[ipos])));
+            */
             //if(ikpt==18){
             //    printf("cxxx %f %f\n",creal(cx_xx[ipos]),cimag(cx_xx[ipos]));
             //    printf("cyxx %f %f\n",creal(cy_xx[ipos]),cimag(cy_xx[ipos]));
             //    printf("cxyy %f %f\n",creal(cx_yy[ipos]),cimag(cx_yy[ipos]));
             //    printf("cyyy %f %f\n",creal(cy_yy[ipos]),cimag(cy_yy[ipos]));
             //}
+            PyTuple_SetItem(conductance,  0*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
+            PyTuple_SetItem(conductance,  1*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
+            PyTuple_SetItem(conductance,  2*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
+            PyTuple_SetItem(conductance,  3*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cy_xx[ipos])));
+            PyTuple_SetItem(conductance,  4*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_yy[ipos])));
+            PyTuple_SetItem(conductance,  5*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_yy[ipos])));
+            PyTuple_SetItem(conductance,  6*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cy_yy[ipos])));
+            PyTuple_SetItem(conductance,  7*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cy_yy[ipos])));
+            PyTuple_SetItem(conductance,  8*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_xy[ipos])));
+            PyTuple_SetItem(conductance,  9*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_xy[ipos])));
+            PyTuple_SetItem(conductance, 10*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cy_xy[ipos])));
+            PyTuple_SetItem(conductance, 11*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cy_xy[ipos])));
+            PyTuple_SetItem(conductance, 12*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cx_yx[ipos])));
+            PyTuple_SetItem(conductance, 13*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cx_yx[ipos])));
+            PyTuple_SetItem(conductance, 14*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cy_yx[ipos])));
+            PyTuple_SetItem(conductance, 15*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cy_yx[ipos])));
         }
     }
     free(cx_xx);free(cy_xx);free(cx_yy);free(cy_yy);free(cx_xy);free(cy_xy);free(cx_yx);free(cy_yx);
-    return Py_BuildValue("(OOOOOOOOOOOOOOOO)",
+    /*return Py_BuildValue("(OOOOOOOOOOOOOOOO)",
     cx_xx_real,cx_xx_imag,cy_xx_real,cy_xx_imag,
     cx_yy_real,cx_yy_imag,cy_yy_real,cy_yy_imag,
     cx_xy_real,cx_xy_imag,cy_xy_real,cy_xy_imag,
-    cx_yx_real,cx_yx_imag,cy_yx_real,cy_yx_imag);
+    cx_yx_real,cx_yx_imag,cy_yx_real,cy_yx_imag);*/
+    return Py_BuildValue("O",conductance);
 }
 
 PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], double tau, long long velocity_addr,
@@ -341,7 +362,7 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
     }
     }
     printf("BPVC finished\n");
-
+    /*
     PyObject *cx_xx_real=PyTuple_New(nphoton*nkpt);
     PyObject *cx_xx_imag=PyTuple_New(nphoton*nkpt);
     PyObject *cy_xx_real=PyTuple_New(nphoton*nkpt);
@@ -357,10 +378,12 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
     PyObject *cx_yx_real=PyTuple_New(nphoton*nkpt);
     PyObject *cx_yx_imag=PyTuple_New(nphoton*nkpt);
     PyObject *cy_yx_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_yx_imag=PyTuple_New(nphoton*nkpt);
+    PyObject *cy_yx_imag=PyTuple_New(nphoton*nkpt);*/
+    PyObject *conductance=PyTuple_New(nphoton*nkpt*8*2);
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
             int ipos=iphoton*nkpt+ikpt;
+            /*
             PyTuple_SetItem(cx_xx_real, ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
             PyTuple_SetItem(cx_xx_imag, ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
             PyTuple_SetItem(cy_xx_real, ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
@@ -377,18 +400,36 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
             PyTuple_SetItem(cx_yx_imag, ipos,   PyFloat_FromDouble(cimag(cx_yx[ipos])));
             PyTuple_SetItem(cy_yx_real, ipos,   PyFloat_FromDouble(creal(cy_yx[ipos])));
             PyTuple_SetItem(cy_yx_imag, ipos,   PyFloat_FromDouble(cimag(cy_yx[ipos])));
+            */
             //if(ikpt==18){
             //    printf("cxxx %f %f\n",creal(cx_xx[ipos]),cimag(cx_xx[ipos]));
             //    printf("cyxx %f %f\n",creal(cy_xx[ipos]),cimag(cy_xx[ipos]));
             //    printf("cxyy %f %f\n",creal(cx_yy[ipos]),cimag(cx_yy[ipos]));
             //    printf("cyyy %f %f\n",creal(cy_yy[ipos]),cimag(cy_yy[ipos]));
             //}
+            PyTuple_SetItem(conductance,  0*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
+            PyTuple_SetItem(conductance,  1*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
+            PyTuple_SetItem(conductance,  2*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
+            PyTuple_SetItem(conductance,  3*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cy_xx[ipos])));
+            PyTuple_SetItem(conductance,  4*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_yy[ipos])));
+            PyTuple_SetItem(conductance,  5*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_yy[ipos])));
+            PyTuple_SetItem(conductance,  6*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cy_yy[ipos])));
+            PyTuple_SetItem(conductance,  7*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cy_yy[ipos])));
+            PyTuple_SetItem(conductance,  8*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_xy[ipos])));
+            PyTuple_SetItem(conductance,  9*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_xy[ipos])));
+            PyTuple_SetItem(conductance, 10*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cy_xy[ipos])));
+            PyTuple_SetItem(conductance, 11*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cy_xy[ipos])));
+            PyTuple_SetItem(conductance, 12*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cx_yx[ipos])));
+            PyTuple_SetItem(conductance, 13*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cx_yx[ipos])));
+            PyTuple_SetItem(conductance, 14*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cy_yx[ipos])));
+            PyTuple_SetItem(conductance, 15*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cy_yx[ipos])));
         }
     }
     free(cx_xx);free(cy_xx);free(cx_yy);free(cy_yy);free(cx_xy);free(cy_xy);free(cx_yx);free(cy_yx);
-    return Py_BuildValue("(OOOOOOOOOOOOOOOO)",
+    /*return Py_BuildValue("(OOOOOOOOOOOOOOOO)",
     cx_xx_real,cx_xx_imag,cy_xx_real,cy_xx_imag,
     cx_yy_real,cx_yy_imag,cy_yy_real,cy_yy_imag,
     cx_xy_real,cx_xy_imag,cy_xy_real,cy_xy_imag,
-    cx_yx_real,cx_yx_imag,cy_yx_real,cy_yx_imag);
+    cx_yx_real,cx_yx_imag,cy_yx_real,cy_yx_imag);*/
+    return Py_BuildValue("O",conductance);
 }

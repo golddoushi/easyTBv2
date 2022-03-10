@@ -183,17 +183,17 @@ class VASPProcessor:
         calcBPVC.restype=py_object
         data=calcBPVC(c_int(nphoton),c_EphotonList,c_erange,c_double(tau),c_longlong(self.velocity_addr),
                       c_int(self.nspin),c_int(self.nkpt),c_int(self.nbnd),c_eigs,c_occupations,c_int(nthreads))
-        cx_xx_r, cx_xx_i, cy_xx_r, cy_xx_i, cx_yy_r, cx_yy_i, cy_yy_r, cy_yy_i, cx_xy_r, cx_xy_i, cy_xy_r, cy_xy_i, cx_yx_r, cx_yx_i, cy_yx_r, cy_yx_i=data
-        cx_xx=(np.array(cx_xx_r)+1j*np.array(cx_xx_i)).reshape((nphoton,self.nkpt))
-        cy_xx=(np.array(cy_xx_r)+1j*np.array(cy_xx_i)).reshape((nphoton,self.nkpt))
-        cx_yy=(np.array(cx_yy_r)+1j*np.array(cx_yy_i)).reshape((nphoton,self.nkpt))
-        cy_yy=(np.array(cy_yy_r)+1j*np.array(cy_yy_i)).reshape((nphoton,self.nkpt))
-        cx_xy=(np.array(cx_xy_r)+1j*np.array(cx_xy_i)).reshape((nphoton,self.nkpt))
-        cy_xy=(np.array(cy_xy_r)+1j*np.array(cy_xy_i)).reshape((nphoton,self.nkpt))
-        cx_yx=(np.array(cx_yx_r)+1j*np.array(cx_yx_i)).reshape((nphoton,self.nkpt))
-        cy_yx=(np.array(cy_yx_r)+1j*np.array(cy_yx_i)).reshape((nphoton,self.nkpt))
+        cx_xx_r, cx_xx_i, cy_xx_r, cy_xx_i, cx_yy_r, cx_yy_i, cy_yy_r, cy_yy_i, cx_xy_r, cx_xy_i, cy_xy_r, cy_xy_i, cx_yx_r, cx_yx_i, cy_yx_r, cy_yx_i=np.array(data).reshape((16,nphoton,self.nkpt))
+        cx_xx=(np.array(cx_xx_r)+1j*np.array(cx_xx_i))#.reshape((nphoton,self.nkpt))
+        cy_xx=(np.array(cy_xx_r)+1j*np.array(cy_xx_i))#.reshape((nphoton,self.nkpt))
+        cx_yy=(np.array(cx_yy_r)+1j*np.array(cx_yy_i))#.reshape((nphoton,self.nkpt))
+        cy_yy=(np.array(cy_yy_r)+1j*np.array(cy_yy_i))#.reshape((nphoton,self.nkpt))
+        cx_xy=(np.array(cx_xy_r)+1j*np.array(cx_xy_i))#.reshape((nphoton,self.nkpt))
+        cy_xy=(np.array(cy_xy_r)+1j*np.array(cy_xy_i))#.reshape((nphoton,self.nkpt))
+        cx_yx=(np.array(cx_yx_r)+1j*np.array(cx_yx_i))#.reshape((nphoton,self.nkpt))
+        cy_yx=(np.array(cy_yx_r)+1j*np.array(cy_yx_i))#.reshape((nphoton,self.nkpt))
         #'''
-        print('Bulk photovoltaic conductances calculated in %.3fs'%(time.time()-time0))
+        print('Conductances calculated in %.3fs'%(time.time()-time0))
 
         if mainDir!=None:
             #pathToFile=os.path.join(mainDir,'photoCondTensorVsOmega.txt')
@@ -343,7 +343,7 @@ vaspPro.readVelocity()
 #exit()
 omegaList=np.linspace(3.0,6.0,31,endpoint=True)
 cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx=vaspPro.calcBPVC(
-    EphotonList=omegaList,tau=0.02,type='shift',mainDir='./mcalc/BN/',nthreads=4)
+    EphotonList=omegaList,tau=0.02,type='bulk',mainDir='./mcalc/BN/',nthreads=4)
 exit()
 
 #curv_x_flat,curv_y_flat,curv_z_flat=vaspPro.calcBerryCurv()
