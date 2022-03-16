@@ -191,52 +191,10 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
     }
     }
     printf("Shift BPVC finished\n");
-    /*
-    PyObject *cx_xx_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cx_xx_imag=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_xx_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_xx_imag=PyTuple_New(nphoton*nkpt);
-    PyObject *cx_yy_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cx_yy_imag=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_yy_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_yy_imag=PyTuple_New(nphoton*nkpt);
-    PyObject *cx_xy_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cx_xy_imag=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_xy_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_xy_imag=PyTuple_New(nphoton*nkpt);
-    PyObject *cx_yx_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cx_yx_imag=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_yx_real=PyTuple_New(nphoton*nkpt);
-    PyObject *cy_yx_imag=PyTuple_New(nphoton*nkpt);
-    */
     PyObject *conductance=PyTuple_New(nphoton*nkpt*8*2);
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
             int ipos=iphoton*nkpt+ikpt;
-            /*
-            PyTuple_SetItem(cx_xx_real, ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
-            PyTuple_SetItem(cx_xx_imag, ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
-            PyTuple_SetItem(cy_xx_real, ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
-            PyTuple_SetItem(cy_xx_imag, ipos,   PyFloat_FromDouble(cimag(cy_xx[ipos])));
-            PyTuple_SetItem(cx_yy_real, ipos,   PyFloat_FromDouble(creal(cx_yy[ipos])));
-            PyTuple_SetItem(cx_yy_imag, ipos,   PyFloat_FromDouble(cimag(cx_yy[ipos])));
-            PyTuple_SetItem(cy_yy_real, ipos,   PyFloat_FromDouble(creal(cy_yy[ipos])));
-            PyTuple_SetItem(cy_yy_imag, ipos,   PyFloat_FromDouble(cimag(cy_yy[ipos])));
-            PyTuple_SetItem(cx_xy_real, ipos,   PyFloat_FromDouble(creal(cx_xy[ipos])));
-            PyTuple_SetItem(cx_xy_imag, ipos,   PyFloat_FromDouble(cimag(cx_xy[ipos])));
-            PyTuple_SetItem(cy_xy_real, ipos,   PyFloat_FromDouble(creal(cy_xy[ipos])));
-            PyTuple_SetItem(cy_xy_imag, ipos,   PyFloat_FromDouble(cimag(cy_xy[ipos])));
-            PyTuple_SetItem(cx_yx_real, ipos,   PyFloat_FromDouble(creal(cx_yx[ipos])));
-            PyTuple_SetItem(cx_yx_imag, ipos,   PyFloat_FromDouble(cimag(cx_yx[ipos])));
-            PyTuple_SetItem(cy_yx_real, ipos,   PyFloat_FromDouble(creal(cy_yx[ipos])));
-            PyTuple_SetItem(cy_yx_imag, ipos,   PyFloat_FromDouble(cimag(cy_yx[ipos])));
-            */
-            //if(ikpt==18){
-            //    printf("cxxx %f %f\n",creal(cx_xx[ipos]),cimag(cx_xx[ipos]));
-            //    printf("cyxx %f %f\n",creal(cy_xx[ipos]),cimag(cy_xx[ipos]));
-            //    printf("cxyy %f %f\n",creal(cx_yy[ipos]),cimag(cx_yy[ipos]));
-            //    printf("cyyy %f %f\n",creal(cy_yy[ipos]),cimag(cy_yy[ipos]));
-            //}
             PyTuple_SetItem(conductance,  0*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
             PyTuple_SetItem(conductance,  1*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
             PyTuple_SetItem(conductance,  2*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
@@ -256,11 +214,6 @@ PyObject * calcShiftBPVC(int nphoton, double EphotonList[nphoton], double erange
         }
     }
     free(cx_xx);free(cy_xx);free(cx_yy);free(cy_yy);free(cx_xy);free(cy_xy);free(cx_yx);free(cy_yx);
-    /*return Py_BuildValue("(OOOOOOOOOOOOOOOO)",
-    cx_xx_real,cx_xx_imag,cy_xx_real,cy_xx_imag,
-    cx_yy_real,cx_yy_imag,cy_yy_real,cy_yy_imag,
-    cx_xy_real,cx_xy_imag,cy_xy_real,cy_xy_imag,
-    cx_yx_real,cx_yx_imag,cy_yx_real,cy_yx_imag);*/
     return Py_BuildValue("O",conductance);
 }
 
@@ -431,5 +384,121 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
     cx_yy_real,cx_yy_imag,cy_yy_real,cy_yy_imag,
     cx_xy_real,cx_xy_imag,cy_xy_real,cy_xy_imag,
     cx_yx_real,cx_yx_imag,cy_yx_real,cy_yx_imag);*/
+    return Py_BuildValue("O",conductance);
+}
+
+PyObject * calcProjBPVC(int nphoton, double EphotonList[nphoton], double erange[2], double tau, long long velocity_addr,
+                    int nspin, int nkpt, int nbands, 
+                    double eigs[nspin][nkpt][nbands], double occupations[nspin][nkpt][nbands],
+                    int nion, int iion, double iproj[nspin][nkpt][nbands][nion],
+                    int nthreads)
+{
+    //complex double velocity_matrix[3][nspin][nkpt][nbands][nbands];
+    complex double*velocity_matrix=(complex double*)velocity_addr;
+    //printf("%f %f\n",creal(velocity_matrix[2]),cimag(velocity_matrix[2]));
+    //exit(1);
+    complex double *cx_xx=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    complex double *cy_xx=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    complex double *cx_yy=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    complex double *cy_yy=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    complex double *cx_xy=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    complex double *cy_xy=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    complex double *cx_yx=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    complex double *cy_yx=(complex double*)malloc(nphoton*nkpt*sizeof(complex double));
+    for(int i=0;i<nphoton*nkpt;i++){
+        cx_xx[i]=0;
+        cy_xx[i]=0;
+        cx_yy[i]=0;
+        cy_yy[i]=0;
+        cx_xy[i]=0;
+        cy_xy[i]=0;
+        cx_yx[i]=0;
+        cy_yx[i]=0;
+    }
+    
+    int bnd_base=nbands;
+    int kpt_base=nbands*nbands;
+    int spin_base=nkpt*kpt_base;
+    int dir_base=nspin*spin_base;
+    printf("entering BPVC main loop...\n");
+    
+    #pragma omp parallel num_threads(nthreads)
+    {
+    double El,Em,En,Pmn,fl,fn,fln,omega;
+    complex double vx_nl,vy_nl,vx_lm,vy_lm,vx_mn,vy_mn,factor_global1,factor_global2;
+    complex double itau=tau*_Complex_I;
+    int ipos;
+    #pragma omp for
+    for(int ikpt=0;ikpt<nkpt;ikpt++){
+        for(int ispin=0;ispin<nspin;ispin++){
+            for(int ibandl=0;ibandl<nbands;ibandl++){
+                El=eigs[ispin][ikpt][ibandl];
+                if(El<erange[0] | El>erange[1]) continue;
+                fl=occupations[ispin][ikpt][ibandl];
+                //printf("ikpt %d iband %d eig: %.6f occ: %.2f\n",ikpt,ibandl,El,fl);
+                for(int ibandn=0;ibandn<nbands;ibandn++){
+                    En=eigs[ispin][ikpt][ibandn];
+                    if(En<erange[0] | En>erange[1]) continue;
+                    fn=occupations[ispin][ikpt][ibandn];
+                    fln=fl-fn;
+                    if(fabs(fln)<0.1) continue;
+                    vx_nl=velocity_matrix[         ispin*spin_base+ikpt*kpt_base+ibandn*bnd_base+ibandl];
+                    vy_nl=velocity_matrix[dir_base+ispin*spin_base+ikpt*kpt_base+ibandn*bnd_base+ibandl];
+                    //printf("vx: %f %f, vy: %f %f\n",creal(vx_nl),cimag(vx_nl),creal(vy_nl),cimag(vy_nl));
+                    for(int ibandm=0;ibandm<nbands;ibandm++){
+                        Em=eigs[ispin][ikpt][ibandm];
+                        if(Em<erange[0] | Em>erange[1]) continue;
+                        Pmn=(iproj[ispin][ikpt][ibandm][iion]+iproj[ispin][ikpt][ibandn][iion])/2;
+                        //if(ibandm==ibandn) continue;
+                        //if(ibandl==ibandm) continue;
+                        vx_lm=velocity_matrix[         ispin*spin_base+ikpt*kpt_base+ibandl*bnd_base+ibandm];
+                        vy_lm=velocity_matrix[dir_base+ispin*spin_base+ikpt*kpt_base+ibandl*bnd_base+ibandm];
+                        vx_mn=velocity_matrix[         ispin*spin_base+ikpt*kpt_base+ibandm*bnd_base+ibandn]*Pmn;
+                        vy_mn=velocity_matrix[dir_base+ispin*spin_base+ikpt*kpt_base+ibandm*bnd_base+ibandn]*Pmn;
+                        for(int iphoton=0;iphoton<nphoton;iphoton++){
+                            omega=EphotonList[iphoton];
+                            factor_global1=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                            //factor_global2=fln/(omega*omega)/(Em-El-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau))/2;
+                            ipos=iphoton*nkpt+ikpt;
+                            cx_xx[ipos]+=vx_nl*vx_lm*vx_mn*factor_global1;//-vx_nl*vx_lm*vx_mn*factor_global2;
+                            cy_xx[ipos]+=vx_nl*vx_lm*vy_mn*factor_global1;//-vx_nl*vy_lm*vx_mn*factor_global2;
+                            cx_yy[ipos]+=vy_nl*vy_lm*vx_mn*factor_global1;//-vy_nl*vx_lm*vy_mn*factor_global2;
+                            cy_yy[ipos]+=vy_nl*vy_lm*vy_mn*factor_global1;//-vy_nl*vy_lm*vy_mn*factor_global2;
+                            cx_xy[ipos]+=vx_nl*vy_lm*vx_mn*factor_global1;//-vx_nl*vx_lm*vy_mn*factor_global2;
+                            cy_xy[ipos]+=vx_nl*vy_lm*vy_mn*factor_global1;//-vx_nl*vy_lm*vy_mn*factor_global2;
+                            cx_yx[ipos]+=vy_nl*vx_lm*vx_mn*factor_global1;//-vy_nl*vx_lm*vx_mn*factor_global2;
+                            cy_yx[ipos]+=vy_nl*vx_lm*vy_mn*factor_global1;//-vy_nl*vy_lm*vx_mn*factor_global2;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    }
+    printf("BPVC finished\n");
+    
+    PyObject *conductance=PyTuple_New(nphoton*nkpt*8*2);
+    for(int iphoton=0;iphoton<nphoton;iphoton++){
+        for(int ikpt=0;ikpt<nkpt;ikpt++){
+            int ipos=iphoton*nkpt+ikpt;
+            PyTuple_SetItem(conductance,  0*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_xx[ipos])));
+            PyTuple_SetItem(conductance,  1*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_xx[ipos])));
+            PyTuple_SetItem(conductance,  2*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cy_xx[ipos])));
+            PyTuple_SetItem(conductance,  3*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cy_xx[ipos])));
+            PyTuple_SetItem(conductance,  4*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_yy[ipos])));
+            PyTuple_SetItem(conductance,  5*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_yy[ipos])));
+            PyTuple_SetItem(conductance,  6*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cy_yy[ipos])));
+            PyTuple_SetItem(conductance,  7*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cy_yy[ipos])));
+            PyTuple_SetItem(conductance,  8*nphoton*nkpt+ipos,   PyFloat_FromDouble(creal(cx_xy[ipos])));
+            PyTuple_SetItem(conductance,  9*nphoton*nkpt+ipos,   PyFloat_FromDouble(cimag(cx_xy[ipos])));
+            PyTuple_SetItem(conductance, 10*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cy_xy[ipos])));
+            PyTuple_SetItem(conductance, 11*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cy_xy[ipos])));
+            PyTuple_SetItem(conductance, 12*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cx_yx[ipos])));
+            PyTuple_SetItem(conductance, 13*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cx_yx[ipos])));
+            PyTuple_SetItem(conductance, 14*nphoton*nkpt+ipos,  PyFloat_FromDouble(creal(cy_yx[ipos])));
+            PyTuple_SetItem(conductance, 15*nphoton*nkpt+ipos,  PyFloat_FromDouble(cimag(cy_yx[ipos])));
+        }
+    }
+    free(cx_xx);free(cy_xx);free(cx_yy);free(cy_yy);free(cx_xy);free(cy_xy);free(cx_yx);free(cy_yx);
     return Py_BuildValue("O",conductance);
 }

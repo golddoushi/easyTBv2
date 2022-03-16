@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import time
 import os
 from ctypes import c_double, c_int, CDLL, py_object, c_char, c_longlong
+from bandkit import ProEval
 
 class VASPProcessor:
     def __init__(self,rpath) -> None:
@@ -14,6 +15,7 @@ class VASPProcessor:
         self.nbnd=-1
         self.nelect=-1
         self.nspin=-1
+        self.nion=-1
 
     def readEIGENVAL(self) -> None:
         pathToEIGENVAL=os.path.join(self.rpath,'EIGENVAL')
@@ -64,6 +66,53 @@ class VASPProcessor:
                     print("unknow format by countering:",line)
         print("EIGENVAL read in %.3fs"%(time.time()-time0))
     
+    def readPROCAR(self,spinor=True,orb_f=False,phase=True):
+        time0=time.time()
+        pro=ProEval() # NOTE: the pro obj is destroyed before clib finishing
+        pro.readPROCAR(spinor=spinor,fermi=0,orb_f=orb_f,phase_cal=phase,rpath=self.rpath)
+        print("PROCAR read in %.3fs"%(time.time()-time0))
+        self.nkpt=pro.nkp
+        self.nbnd=pro.nbnd
+        #self.nelect=-1
+        self.nion=pro.nion
+        self.vkpt=pro.kpt_path
+        self.weights=pro.wkpt
+        if pro.spn_ndg:
+            self.nspin=2
+            self.eigs=[[],[]]
+            self.occupations=[[],[]]
+            self.ipro=[[],[]]
+            for ikpt in range(self.nkpt):
+                self.eigs[0].append([])
+                self.eigs[1].append([])
+                self.occupations[0].append([])
+                self.occupations[1].append([])
+                self.ipro[0].append([])
+                self.ipro[1].append([])
+                for ibnd in range(self.nbnd):
+                    self.eigs[0][-1].append(pro.teval[ikpt][ibnd])
+                    self.eigs[1][-1].append(pro.teval_dn[ikpt][ibnd])
+                    self.occupations[0][-1].append(pro.tocc[ikpt][ibnd])
+                    self.occupations[1][-1].append(pro.tocc_dn[ikpt][ibnd])
+                    self.ipro[0][-1].append([frac for frac in pro.ipro[ikpt][ibnd]])
+                    self.ipro[1][-1].append([frac for frac in pro.ipro_dn[ikpt][ibnd]])
+        else:
+            self.nspin=1
+            self.occupations=[[]]
+            self.eigs=[[]]
+            self.ipro=[[]]
+            for ikpt in range(self.nkpt):
+                self.eigs[0].append([])
+                self.occupations[0].append([])
+                self.ipro[0].append([])
+                for ibnd in range(self.nbnd):
+                    self.eigs[0][-1].append(pro.teval[ikpt][ibnd])
+                    self.occupations[0][-1].append(pro.tocc[ikpt][ibnd])
+                    self.ipro[0][-1].append([frac for frac in pro.ipro[ikpt][ibnd]])
+        del pro
+        print("NBANDS: %d, NKPTS: %d, NSPIN: %d"%(self.nbnd,self.nkpt,self.nspin))
+        return
+
     def getFullKPT(self,kmesh,rotations,timeReversalSym=True) -> None:
         '''
         getFullKPT(kmesh: 3d-list, rotations: list of symmetry rotations, timeReversalSym: bool to switch the TRS)
@@ -153,7 +202,127 @@ class VASPProcessor:
         print('Berry curv calculated in %.3fs'%(time.time()-time0))
         return curv_x, curv_y, curv_z
     
-    def calcBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.066,type='bulk',mainDir:str=None,nthreads:int=1):
+    def calcBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.066,type='bulk',mainDir:str=None,proj_ion:int=-1,nthreads:int=1):
+        if proj_ion>=0: assert self.nion>0, "Error: projected BPVC calc need info. of PROCAR, pls. read PROCAR first"
+        time0=time.time()
+        #'''
+        c_erange=(2*c_double)()
+        c_erange[0],c_erange[1]=c_double(erange[0]),c_double(erange[1])
+        nphoton=len(EphotonList)
+        c_EphotonList=(nphoton*c_double)()
+        for iomega, omega in enumerate(EphotonList):
+            c_EphotonList[iomega]=c_double(omega)
+        
+        c_eigs=(self.nspin*self.nkpt*self.nbnd*c_double)()
+        c_occupations=(self.nspin*self.nkpt*self.nbnd*c_double)()
+        cnt=0
+        for ispin in range(self.nspin):
+            for ikpt in range(self.nkpt):
+                for iband in range(self.nbnd):
+                    c_eigs[cnt]=c_double(self.eigs[ispin][ikpt][iband])
+                    c_occupations[cnt]=c_double(self.occupations[ispin][ikpt][iband])
+                    cnt+=1
+        #exit()
+        if proj_ion>=0 and self.nion>0:
+            c_ipro=(self.nspin*self.nkpt*self.nbnd*self.nion*c_double)()
+            cnt=0
+            for ispin in range(self.nspin):
+                for ikpt in range(self.nkpt):
+                    for iband in range(self.nbnd):
+                        for iion in range(self.nion):
+                            c_ipro[cnt]=c_double(self.ipro[ispin][ikpt][iband][iion])
+                            cnt+=1
+        mylib=CDLL('./auxiliary.dll')
+        if type=='bulk':
+            calcBPVC=mylib.calcBPVC
+            if proj_ion>=0 and self.nion>0: calcBPVC=mylib.calcProjBPVC
+        elif type=='shift':
+            calcBPVC=mylib.calcShiftBPVC
+        else:
+            print("Error: type should be either bulk or shift")
+            exit()
+        calcBPVC.restype=py_object
+        if proj_ion>=0 and self.nion>0:
+            data=calcBPVC(c_int(nphoton),c_EphotonList,c_erange,c_double(tau),c_longlong(self.velocity_addr),
+                          c_int(self.nspin),c_int(self.nkpt),c_int(self.nbnd),c_eigs,c_occupations,
+                          c_int(self.nion),c_int(proj_ion),c_ipro,c_int(nthreads))
+        else:
+            data=calcBPVC(c_int(nphoton),c_EphotonList,c_erange,c_double(tau),c_longlong(self.velocity_addr),
+                          c_int(self.nspin),c_int(self.nkpt),c_int(self.nbnd),c_eigs,c_occupations,c_int(nthreads))
+        cx_xx_r, cx_xx_i, cy_xx_r, cy_xx_i, cx_yy_r, cx_yy_i, cy_yy_r, cy_yy_i, cx_xy_r, cx_xy_i, cy_xy_r, cy_xy_i, cx_yx_r, cx_yx_i, cy_yx_r, cy_yx_i=np.array(data).reshape((16,nphoton,self.nkpt))
+        cx_xx=(np.array(cx_xx_r)+1j*np.array(cx_xx_i))#.reshape((nphoton,self.nkpt))
+        cy_xx=(np.array(cy_xx_r)+1j*np.array(cy_xx_i))#.reshape((nphoton,self.nkpt))
+        cx_yy=(np.array(cx_yy_r)+1j*np.array(cx_yy_i))#.reshape((nphoton,self.nkpt))
+        cy_yy=(np.array(cy_yy_r)+1j*np.array(cy_yy_i))#.reshape((nphoton,self.nkpt))
+        cx_xy=(np.array(cx_xy_r)+1j*np.array(cx_xy_i))#.reshape((nphoton,self.nkpt))
+        cy_xy=(np.array(cy_xy_r)+1j*np.array(cy_xy_i))#.reshape((nphoton,self.nkpt))
+        cx_yx=(np.array(cx_yx_r)+1j*np.array(cx_yx_i))#.reshape((nphoton,self.nkpt))
+        cy_yx=(np.array(cy_yx_r)+1j*np.array(cy_yx_i))#.reshape((nphoton,self.nkpt))
+        #'''
+        print('Conductances calculated in %.3fs'%(time.time()-time0))
+
+        if mainDir!=None:
+            #pathToFile=os.path.join(mainDir,'photoCondTensorVsOmega.txt')
+            #if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensorVsOmega.txt')
+            
+            if nphoton==1:
+                pathToFile=os.path.join(mainDir,'photoCondTensor.txt')
+                if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensor.txt')
+                with open(pathToFile,'w') as fout:
+                    for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(self.vkpt,cx_xx[0],cy_xx[0],cx_yy[0],cy_yy[0],cx_xy[0],cy_xy[0],cx_yx[0],cy_yx[0]):
+                        fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+                return
+            else:
+                pathToFile=os.path.join(mainDir,'photoCondTensorVsOmega.txt')
+                if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensorVsOmega.txt')
+                with open(pathToFile,'w') as fout:
+                    fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
+                    for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(EphotonList,cx_xx,cy_xx,cx_yy,cy_yy,cx_xy,cy_xy,cx_yx,cy_yx):
+                        fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                            omega,
+                            sum(_cxxx/self.nkpt).real,sum(_cxxx/self.nkpt).imag,
+                            sum(_cxxy/self.nkpt).real,sum(_cxxy/self.nkpt).imag,
+                            sum(_cyyx/self.nkpt).real,sum(_cyyx/self.nkpt).imag,
+                            sum(_cyyy/self.nkpt).real,sum(_cyyy/self.nkpt).imag,
+                            sum(_cxyx/self.nkpt).real,sum(_cxyx/self.nkpt).imag,
+                            sum(_cxyy/self.nkpt).real,sum(_cxyy/self.nkpt).imag,
+                            sum(_cyxx/self.nkpt).real,sum(_cyxx/self.nkpt).imag,
+                            sum(_cyxy/self.nkpt).real,sum(_cyxy/self.nkpt).imag))
+                for iomega, omega in enumerate(EphotonList):
+                    pathToFile=os.path.join(mainDir,'photoCondTensor%d_E%.3f.txt'%(iomega,omega))
+                    if type=='shift':pathToFile=os.path.join(mainDir,'shiftCondTensor%d_E%.3f.txt'%(iomega,omega))
+                    with open(pathToFile,'w') as fout:
+                        for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(self.vkpt,cx_xx[iomega],cy_xx[iomega],cx_yy[iomega],cy_yy[iomega],cx_xy[iomega],cy_xy[iomega],cx_yx[iomega],cy_yx[iomega]):
+                            fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+            
+
+        condcxxxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_xx])
+        condcxxyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_xx])
+        condcyyxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_yy])
+        condcyyyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_yy])
+        condcxyxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_xy])
+        condcxyyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_xy])
+        condcyxxList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cx_yx])
+        condcyxyList=np.array([np.sum(cond_on_omega/self.nkpt) for cond_on_omega in cy_yx])
+
+        fig,ax=plt.subplots(2,4,sharey=True)
+        ax[0,0].scatter(omegaList,condcxxxList.real,label=r'$Re\ \sigma^x_{xx}$')
+        ax[0,1].scatter(omegaList,condcxxyList.real,label=r'$Re\ \sigma^y_{xx}$')
+        ax[0,2].scatter(omegaList,condcyyxList.real,label=r'$Re\ \sigma^x_{yy}$')
+        ax[0,3].scatter(omegaList,condcyyyList.real,label=r'$Re\ \sigma^y_{yy}$')
+        ax[1,0].scatter(omegaList,condcxyxList.real,label=r'$Re\ \sigma^x_{xy}$')
+        ax[1,1].scatter(omegaList,condcxyyList.real,label=r'$Re\ \sigma^y_{xy}$')
+        ax[1,2].scatter(omegaList,condcyxxList.real,label=r'$Re\ \sigma^x_{yx}$')
+        ax[1,3].scatter(omegaList,condcyxyList.real,label=r'$Re\ \sigma^y_{yx}$')
+        for row in ax:
+            for _ax in row:
+                _ax.legend()
+                _ax.plot([EphotonList[0],EphotonList[-1]],[0,0],'--',linewidth=1)
+        plt.show()
+
+        return cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx
+
+    def calcProjectedBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.066,type='bulk',mainDir:str=None,nthreads:int=1):
         time0=time.time()
         #'''
         c_erange=(2*c_double)()
@@ -331,10 +500,14 @@ def drawPatternOnHexagonalBZ(rpath,kx_grid,ky_grid,data_grid,reciLat):
 
 pR.readPOS('./mcalc/BN/POSCAR')
 reciLat=np.linalg.inv(pR.lat)*np.pi*2
-kmesh=[100,100,1]
+kmesh=[50,50,1]
 
 vaspPro=VASPProcessor('./mcalc/BN')
-vaspPro.readEIGENVAL()
+
+vaspPro.readPROCAR(spinor=False, orb_f=False, phase=True)
+#vaspPro.readEIGENVAL()
+
+#exit()
 #rotations,translations=pR.getWholeSymmetryOperator()
 #vaspPro.getFullKPT(kmesh,rotations)
 vaspPro.readVelocity()
@@ -343,7 +516,7 @@ vaspPro.readVelocity()
 #exit()
 omegaList=np.linspace(3.0,6.0,31,endpoint=True)
 cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx=vaspPro.calcBPVC(
-    EphotonList=omegaList,tau=0.02,type='bulk',mainDir='./mcalc/BN/',nthreads=4)
+    EphotonList=omegaList,tau=0.02,type='bulk',mainDir='./mcalc/BN/',proj_ion=1,nthreads=4)
 exit()
 
 #curv_x_flat,curv_y_flat,curv_z_flat=vaspPro.calcBerryCurv()
