@@ -1,3 +1,4 @@
+from typing import List
 import paramReader
 paramReader.readGlobalConst()
 import posReader as pR
@@ -202,8 +203,10 @@ class VASPProcessor:
         print('Berry curv calculated in %.3fs'%(time.time()-time0))
         return curv_x, curv_y, curv_z
     
-    def calcBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.066,type='bulk',mainDir:str=None,proj_ion:int=-1,nthreads:int=1):
-        if proj_ion>=0: assert self.nion>0, "Error: projected BPVC calc need info. of PROCAR, pls. read PROCAR first"
+    def calcBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.066,type='bulk',mainDir:str=None,proj_ion_list:List=[],nthreads:int=1):
+        if len(proj_ion_list)>0: 
+            assert self.nion>0, "Error: projected BPVC calc need info. of PROCAR, pls. read PROCAR first"
+            assert type=='bulk', "Error: for now, only BPVE can be projected"
         time0=time.time()
         #'''
         c_erange=(2*c_double)()
@@ -223,29 +226,33 @@ class VASPProcessor:
                     c_occupations[cnt]=c_double(self.occupations[ispin][ikpt][iband])
                     cnt+=1
         #exit()
-        if proj_ion>=0 and self.nion>0:
-            c_ipro=(self.nspin*self.nkpt*self.nbnd*self.nion*c_double)()
+        if len(proj_ion_list)>0 and self.nion>0:
+            c_ipro=(self.nspin*self.nkpt*self.nbnd*c_double)()
             cnt=0
             for ispin in range(self.nspin):
                 for ikpt in range(self.nkpt):
                     for iband in range(self.nbnd):
-                        for iion in range(self.nion):
-                            c_ipro[cnt]=c_double(self.ipro[ispin][ikpt][iband][iion])
-                            cnt+=1
+                        frac=0
+                        for iion in proj_ion_list:
+                            frac+=self.ipro[ispin][ikpt][iband][iion]
+                        c_ipro[cnt]=c_double(frac)
+                        #if ikpt==0:
+                        #    print(iband,frac)
+                        cnt+=1
+        #exit()
         mylib=CDLL('./auxiliary.dll')
         if type=='bulk':
             calcBPVC=mylib.calcBPVC
-            if proj_ion>=0 and self.nion>0: calcBPVC=mylib.calcProjBPVC
+            if len(proj_ion_list)>0 and self.nion>0: calcBPVC=mylib.calcProjBPVC
         elif type=='shift':
             calcBPVC=mylib.calcShiftBPVC
         else:
             print("Error: type should be either bulk or shift")
             exit()
         calcBPVC.restype=py_object
-        if proj_ion>=0 and self.nion>0:
+        if len(proj_ion_list)>0 and self.nion>0:
             data=calcBPVC(c_int(nphoton),c_EphotonList,c_erange,c_double(tau),c_longlong(self.velocity_addr),
-                          c_int(self.nspin),c_int(self.nkpt),c_int(self.nbnd),c_eigs,c_occupations,
-                          c_int(self.nion),c_int(proj_ion),c_ipro,c_int(nthreads))
+                          c_int(self.nspin),c_int(self.nkpt),c_int(self.nbnd),c_eigs,c_occupations,c_ipro,c_int(nthreads))
         else:
             data=calcBPVC(c_int(nphoton),c_EphotonList,c_erange,c_double(tau),c_longlong(self.velocity_addr),
                           c_int(self.nspin),c_int(self.nkpt),c_int(self.nbnd),c_eigs,c_occupations,c_int(nthreads))
@@ -516,7 +523,7 @@ vaspPro.readVelocity()
 #exit()
 omegaList=np.linspace(3.0,6.0,31,endpoint=True)
 cx_xx, cy_xx, cx_yy, cy_yy, cx_xy, cy_xy, cx_yx, cy_yx=vaspPro.calcBPVC(
-    EphotonList=omegaList,tau=0.02,type='bulk',mainDir='./mcalc/BN/',proj_ion=1,nthreads=4)
+    EphotonList=omegaList,tau=0.02,type='bulk',mainDir='./mcalc/BN/',proj_ion_list=[0,1],nthreads=4)
 exit()
 
 #curv_x_flat,curv_y_flat,curv_z_flat=vaspPro.calcBerryCurv()

@@ -490,6 +490,38 @@ class Hr:
                         print(magmom_list[0])
                         print('to:')
                         print(magmom_rotated_list[0])
+                    
+                    # check time reversal symmetry
+                    rotate_s=rotate_s.dot(np.array([[0,1],[1,0]],dtype=complex))
+                    magmom_rotated_list=[]
+                    for m in atomicMagMomList:
+                        m_su2=rotate_s.dot(np.array(m,dtype=complex))
+                        mx=m_su2.conjugate().dot(sx).dot(m_su2)
+                        my=m_su2.conjugate().dot(sy).dot(m_su2)
+                        mz=m_su2.conjugate().dot(sz).dot(m_su2)
+                        magmom_rotated_list.append(np.array([mx,my,mz]).real)
+                    #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
+                    diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(pR.nions))]
+                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
+                        print('crystal sym. op. + time reversal preserved:')
+                        print(rotate_r)
+                        print(translate)
+                        print(rotate_s)
+                        print('magmom:')
+                        print(magmom_rotated_list[0])
+                        new_symRotateList.append(rotate_r)
+                        new_symTranslateList.append(translate)
+                        new_symIonMap.append(ionMap)
+                        new_spinRotateList.append(rotate_s)
+                    else:
+                        print('crystal sym. op. + time reversal broken due to magnetism')
+                        print(rotate_r)
+                        print(translate)
+                        print(rotate_s)
+                        print('magmom:')
+                        print(magmom_list[0])
+                        print('to:')
+                        print(magmom_rotated_list[0])
                 symRotateList, symTranslateList, symIonMap, spinRotateList=new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList
             return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList}
         
@@ -642,7 +674,7 @@ class Hr:
         '''
         # check the whether operations are right
         np.set_printoptions(precision=2)
-        i,j=0,1
+        i,j=0,9
         orbAtomI=[]
         for L in atomicOrbIndexList[i]:
             for iorb in L: orbAtomI.append(iorb)
@@ -673,10 +705,12 @@ class Hr:
                 for iorb in L: orbAtomJ.append(iorb)
             print('rotation:')
             print(rotate)
+            print('translation:')
+            print(translate)
             #print(localSymOp[i_trans])
             #print(localSymOp[j_trans])
-            print('source orb',orbAtomI)
-            print('target orb',orbAtomJ)
+            print('source atom%d'%i_trans,'source orb',orbAtomI)
+            print('target atom%d'%j_trans,'target orb',orbAtomJ)
 
             sourceCoor1=rotate.dot(sourceCoor0)+translate
             targetCoor1=rotate.dot(targetCoor0)+translate

@@ -390,7 +390,7 @@ PyObject * calcBPVC(int nphoton, double EphotonList[nphoton], double erange[2], 
 PyObject * calcProjBPVC(int nphoton, double EphotonList[nphoton], double erange[2], double tau, long long velocity_addr,
                     int nspin, int nkpt, int nbands, 
                     double eigs[nspin][nkpt][nbands], double occupations[nspin][nkpt][nbands],
-                    int nion, int iion, double iproj[nspin][nkpt][nbands][nion],
+                    double iproj[nspin][nkpt][nbands],
                     int nthreads)
 {
     //complex double velocity_matrix[3][nspin][nkpt][nbands][nbands];
@@ -420,7 +420,7 @@ PyObject * calcProjBPVC(int nphoton, double EphotonList[nphoton], double erange[
     int kpt_base=nbands*nbands;
     int spin_base=nkpt*kpt_base;
     int dir_base=nspin*spin_base;
-    printf("entering BPVC main loop...\n");
+    printf("entering Projected BPVC main loop...\n");
     
     #pragma omp parallel num_threads(nthreads)
     {
@@ -448,7 +448,7 @@ PyObject * calcProjBPVC(int nphoton, double EphotonList[nphoton], double erange[
                     for(int ibandm=0;ibandm<nbands;ibandm++){
                         Em=eigs[ispin][ikpt][ibandm];
                         if(Em<erange[0] | Em>erange[1]) continue;
-                        Pmn=(iproj[ispin][ikpt][ibandm][iion]+iproj[ispin][ikpt][ibandn][iion])/2;
+                        Pmn=(iproj[ispin][ikpt][ibandm]+iproj[ispin][ikpt][ibandn])/2;
                         //if(ibandm==ibandn) continue;
                         //if(ibandl==ibandm) continue;
                         vx_lm=velocity_matrix[         ispin*spin_base+ikpt*kpt_base+ibandl*bnd_base+ibandm];
@@ -475,7 +475,7 @@ PyObject * calcProjBPVC(int nphoton, double EphotonList[nphoton], double erange[
         }
     }
     }
-    printf("BPVC finished\n");
+    printf("Projected BPVC finished\n");
     
     PyObject *conductance=PyTuple_New(nphoton*nkpt*8*2);
     for(int iphoton=0;iphoton<nphoton;iphoton++){

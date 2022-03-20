@@ -171,8 +171,8 @@ class ProEval:
                     pro_tmp.append(ion_tmp)
                     pro_sum+=ion_tmp
                     data_index+=1
-                #for ipro in range(self.nion):
-                #    pro_tmp[ipro] = pro_tmp[ipro]/pro_sum if pro_sum>0 else 0
+                for ipro in range(self.nion):
+                    pro_tmp[ipro] = pro_tmp[ipro]/pro_sum if pro_sum>1e-5 else 0
                     
                 ipro_tmp.append(pro_tmp)
                 itpro_tmp.append(orb_factor)
