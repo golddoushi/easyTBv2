@@ -8,6 +8,22 @@ import paramReader
 import posReader as pR
 
 class BondInfo:
+    '''
+    Encode the infomation of Atom-atom bonds (Not orb-orb bonds)
+    Bonds are classified according to symmetry.
+    One specific bond, says, bond0, will be transformed to bond0 (itself), or bond1, bond2, etc.,
+    then all of them are treated as one bond class.
+    Apparently, the num. of bonds in bond class is exactly the order of (magnetic) space group
+
+    the bond length of each bond class is encoded in bondLengthList
+    all the dRs, adn atom id pairs, of each bond class, consist List, and encoded in dRList and atomPairList
+    the symmerized bond tensor (on dim. of orbitals) is encoded in bondSymList, 
+    corresponding to the first bond tensor of first atom-atom bond in the class
+    usually the one with identity sym. operation
+
+    NOTE: in the bond class, there will be many possibilities, cautions are suggested
+    e.g., there might be the same bond in the class, and the conjugated bonds are also possible in the same class
+    '''
     def __init__(self) -> None:
         self.bondLengthList=[]
         self.atomPairList=[]
@@ -457,8 +473,7 @@ class Hr:
                 magmom_list.append(np.array([mx,my,mz]).real)
             tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list]) if len(magmom_list)>0 else 0.
             if tot_abs_mag>paramReader.SYMPREC and spinor: # find proper sub-group consist with magnetism (but without time-reversal operator)
-                #spinRotateList=readSpinWFCSymOp(symRotateList)
-                new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList= [], [], [], []
+                new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
                 for isym in range(len(symIonMap)):
                     rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
                     magmom_rotated_list=[]
@@ -475,27 +490,28 @@ class Hr:
                         print(rotate_r)
                         print(translate)
                         print(rotate_s)
-                        print('magmom:')
-                        print(magmom_rotated_list[0])
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
                         new_symIonMap.append(ionMap)
                         new_spinRotateList.append(rotate_s)
+                        new_timeReversalList.append(False)
                     else:
                         print('crystal sym. op. broken due to magnetism')
                         print(rotate_r)
                         print(translate)
                         print(rotate_s)
-                        print('magmom:')
-                        print(magmom_list[0])
-                        print('to:')
-                        print(magmom_rotated_list[0])
-                    
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
+                    #continue
                     # check time reversal symmetry
-                    rotate_s=rotate_s.dot(np.array([[0,1],[1,0]],dtype=complex))
+                    rotate_s_tr=rotate_s.dot(np.array([[0,1],[1,0]],dtype=complex))
                     magmom_rotated_list=[]
                     for m in atomicMagMomList:
-                        m_su2=rotate_s.dot(np.array(m,dtype=complex))
+                        m_su2=rotate_s_tr.dot(np.array(m,dtype=complex))
                         mx=m_su2.conjugate().dot(sx).dot(m_su2)
                         my=m_su2.conjugate().dot(sy).dot(m_su2)
                         mz=m_su2.conjugate().dot(sz).dot(m_su2)
@@ -506,24 +522,25 @@ class Hr:
                         print('crystal sym. op. + time reversal preserved:')
                         print(rotate_r)
                         print(translate)
-                        print(rotate_s)
-                        print('magmom:')
-                        print(magmom_rotated_list[0])
+                        print(rotate_s_tr)
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
                         new_symIonMap.append(ionMap)
-                        new_spinRotateList.append(rotate_s)
+                        new_spinRotateList.append(rotate_s_tr)
+                        new_timeReversalList.append(True)
                     else:
                         print('crystal sym. op. + time reversal broken due to magnetism')
                         print(rotate_r)
                         print(translate)
-                        print(rotate_s)
-                        print('magmom:')
-                        print(magmom_list[0])
-                        print('to:')
-                        print(magmom_rotated_list[0])
+                        print(rotate_s_tr)
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
                 symRotateList, symTranslateList, symIonMap, spinRotateList=new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList
-            return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList}
+            return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':new_timeReversalList}
         
         def generateAtomicWFCSymOp(symRotateList):
             '''generate transformation matrix of cubic harmonics for each sym. Op
@@ -635,12 +652,13 @@ class Hr:
                 if len(orbL)>0:print('%s orb:'%orbName[iorbL],orbL)
         # obtain sym. Ops. of atomic wavefunctions
         sym= getSymOpsAndSymSiteMap(atomicMagMomList=atomicMagMomList)
-        symRotateList, symTranslateList, symSiteMapList, symSpinRotateList=sym['rotations'], sym['translations'], sym['atom map'], sym['spin rotations']
+        symRotateList, symTranslateList, symSiteMapList, symSpinRotateList, symTimeReversalList=sym['rotations'], sym['translations'], sym['atom map'], sym['spin rotations'], sym['time reversal']
         if len(symOpSelection)>0:
             symRotateList=[symRotateList[isym] for isym in symOpSelection]
             symTranslateList=[symTranslateList[isym] for isym in symOpSelection]
             symSiteMapList=[symSiteMapList[isym] for isym in symOpSelection]
             symSpinRotateList=[symSpinRotateList[isym] for isym in symOpSelection]
+            symTimeReversalList=[symTimeReversalList[isym] for isym in symOpSelection]
         atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList)
         #print(atomicWaveSymOpList[1][2])
         #exit()
@@ -673,8 +691,8 @@ class Hr:
             localSymOpList.append(localSymOp)
         '''
         # check the whether operations are right
-        np.set_printoptions(precision=2)
-        i,j=0,9
+        np.set_printoptions(precision=4)
+        i,j=0,2
         orbAtomI=[]
         for L in atomicOrbIndexList[i]:
             for iorb in L: orbAtomI.append(iorb)
@@ -694,7 +712,7 @@ class Hr:
         print('bond1 atom%d-atom%d [%d %d %d]'%(i,j,*dR))
         print(bond)
         #exit()
-        for rotate, translate, localSymOp, siteMap in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList):
+        for rotate, translate, localSymOp, siteMap, timeReversal in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList,symTimeReversalList):
             i_trans=siteMap[i]
             j_trans=siteMap[j]
             orbAtomI=[]
@@ -707,6 +725,7 @@ class Hr:
             print(rotate)
             print('translation:')
             print(translate)
+            print('time reversal:',timeReversal)
             #print(localSymOp[i_trans])
             #print(localSymOp[j_trans])
             print('source atom%d'%i_trans,'source orb',orbAtomI)
@@ -726,6 +745,13 @@ class Hr:
                     bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
             #print(bond)
             bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
+            if timeReversal:
+                bonduu=bond[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
+                bonddd=bond[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
+                bond[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]=bonduu.conjugate()
+                bond[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]=bonddd.conjugate()
+            #else:
+            #    bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
             print(bond)
             #print(localSymOp[i_trans])
             #print(localSymOp[j_trans])
@@ -754,7 +780,7 @@ class Hr:
                     sub_dR_list=[]
                     outOfReach=False
                     #print('start constructions')
-                    for rotate, translate, localSymOp, siteMap in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList):
+                    for rotate, translate, localSymOp, siteMap, timeReversal in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList,symTimeReversalList):
                         iatom_source_trans=siteMap[iatom_source]
                         iatom_target_trans=siteMap[iatom_target]
 
@@ -768,14 +794,16 @@ class Hr:
                         for x in dR_tmp:
                             assert abs(x-np.around(x))<paramReader.SYMPREC, 'dR is not interger %.6f'%x
                         dR=np.array([int(np.around(x)) for x in dR_tmp],dtype=int)
-                        #print('symmetry dR:',dR)
+                        #print('symmetry dR:',dR,'time reversal:',timeReversal)
                         if dR[0]>self.Rx_max or dR[0]<self.Rx_min or dR[1]>self.Ry_max or dR[1]<self.Ry_min or dR[2]>self.Rz_max or dR[2]<self.Rz_min:
                             nDropedBond+=1
                             outOfReach=True
+                            #print('dR is out of range, drop all related bonds')
                             break
                         
                         sub_atom_pair_list.append((iatom_source_trans,iatom_target_trans))
                         sub_dR_list.append(dR)
+                        #print('symmetry atom pair:',iatom_source_trans,iatom_target_trans)
 
                         orbAtomI=[]
                         for L in atomicOrbIndexList[iatom_source_trans]:
@@ -788,9 +816,16 @@ class Hr:
                         for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomI):
                             for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomJ):
                                 bond[iLocalOrbI,iLocalOrbJ]=self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
-                                #print('supporting bond, local index %d %d, global dR:(%d %d %d) %d %d'%(iLocalOrbI,iLocalOrbJ,*dR,iGlobalOrbI,iGlobalOrbJ),
-                                #self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ])
-                        bond_sym=bond_sym+(localSymOp[iatom_source_trans].conjugate().T).dot(bond).dot(localSymOp[iatom_target_trans])
+                                #print('supporting bond, local index %d %d, global dR:(%d %d %d) %d %d'%(iLocalOrbI,iLocalOrbJ,*dR,iGlobalOrbI,iGlobalOrbJ),orbAtomI,orbAtomJ,
+                                #       self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ],timeReversal)
+                        bond_tmp=(localSymOp[iatom_source_trans].conjugate().T).dot(bond).dot(localSymOp[iatom_target_trans])
+                        #print(bond)
+                        if timeReversal:
+                            bonduu=bond_tmp[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
+                            bonddd=bond_tmp[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
+                            bond_tmp[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]=bonduu.conjugate()
+                            bond_tmp[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]=bonddd.conjugate()
+                        bond_sym=bond_sym+bond_tmp
                         #print(bond)
                         #print("setting")
                     
@@ -803,25 +838,46 @@ class Hr:
                                            sub_atom_pair_list,
                                            sub_dR_list,
                                            bond_sym)
+        #for dRList, atomPairList, bondLen in zip(bondInfo.dRList,bondInfo.atomPairList,bondInfo.bondLengthList):
+        #    print(bondLen,len(dRList))
+        #    for dR, atomPair in zip(dRList,atomPairList):
+        #        print(dR,atomPair)
         #exit()
         #return
         # reconstruct symmetry-constrained Ham.
         self.bondList=[]
-        for dRList, atomPairList, bond_elementary in zip(bondInfo.dRList,bondInfo.atomPairList,bondInfo.bondSymList):
-            bond_setted_info=[]
-            for dR, atomPair, localSymOp in zip(dRList,atomPairList,localSymOpList):
+        bondLen_old=-1
+        #cnt=0
+        for dRList, atomPairList, bondLen, bond_elementary in zip(bondInfo.dRList,bondInfo.atomPairList,bondInfo.bondLengthList,bondInfo.bondSymList):
+            if abs(bondLen-bondLen_old)>paramReader.SYMPREC: # since the bonds are sorted according to bond lengths
+                bond_setted_info=[]
+                bondLen_old=bondLen
+            for dR, atomPair, localSymOp, timeReversal in zip(dRList,atomPairList,localSymOpList,symTimeReversalList):
+                #if timeReversal: continue
                 iatom_source_trans, iatom_target_trans= atomPair
                 # avoid redundant setting
                 already_setted=False
-                bond_info_new=np.array([dR[0],dR[1],dR[2],iatom_source_trans,iatom_target_trans],dtype=int)
+                bond_info_new=np.array([int(dR[0]),int(dR[1]),int(dR[2]),iatom_source_trans,iatom_target_trans],dtype=int)
+                #if cnt<2:print('attempt to add atom-atom bond:',bond_info_new)
                 for bond_info in bond_setted_info:
-                    if sum(abs(bond_info-bond_info_new))==0:
+                    #if cnt<2:print('existed bonds:',bond_info)
+                    if sum(abs(bond_info-bond_info_new))==0:# or sum(abs(bond_info-bond_conj_info_new))==0:
                         already_setted=True
+                        if cnt<2:print('redundant')
                         break
                 if already_setted: continue
+                
+                bond_conj_info_new=np.array([-int(dR[0]),-int(dR[1]),-int(dR[2]),iatom_target_trans,iatom_source_trans],dtype=int)
                 bond_setted_info.append(bond_info_new)
-
+                if sum(abs(bond_conj_info_new-bond_info_new))>0:bond_setted_info.append(bond_conj_info_new)
+                
                 bond_rotated=localSymOp[iatom_source_trans].dot(bond_elementary).dot(localSymOp[iatom_target_trans].T.conjugate())
+                if timeReversal:
+                    sizeI,sizeJ=bond_rotated.shape[0],bond_rotated.shape[1]
+                    bonduu=bond_rotated[0:sizeI//2,0:sizeJ//2]
+                    bonddd=bond_rotated[sizeI//2:sizeI,sizeJ//2:sizeJ]
+                    bond_rotated[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
+                    bond_rotated[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
                 
                 atom_source,atom_target=atomicOrbIndexList[iatom_source_trans],atomicOrbIndexList[iatom_target_trans]
                 orbAtomSource=[]
@@ -831,18 +887,32 @@ class Hr:
                 for L in atom_target:
                     for iorb in L: orbAtomTarget.append(iorb)
                 
+                #if cnt<2:print('including orb-orb bonds:')
                 for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomSource):
                     for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomTarget):
-                        self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ]))
-                        #print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ])
-                if np.dot(dR,dR)==0 and iatom_source_trans==iatom_target_trans:
-                    for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomSource): self.onsite[iGlobalOrbI]=bond_rotated[iLocalOrbI,iLocalOrbI]
+                        if sum(abs(dR))==0 and iatom_source_trans==iatom_target_trans:
+                            if iGlobalOrbI>iGlobalOrbJ:
+                                self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ]))
+                                self.bondList.append(lat.BondDigital(iGlobalOrbJ,iGlobalOrbI,-dR,bond_rotated[iLocalOrbI,iLocalOrbJ].conjugate()))
+                                #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'with conjugation (intra atom conjugation)')
+                            elif iGlobalOrbI==iGlobalOrbJ:
+                                self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ]))
+                                self.onsite[iGlobalOrbI]=bond_rotated[iLocalOrbI,iLocalOrbI]
+                                #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'onsite term (no conjugation)')
+                        else:
+                            self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ]))
+                            self.bondList.append(lat.BondDigital(iGlobalOrbJ,iGlobalOrbI,-dR,bond_rotated[iLocalOrbI,iLocalOrbJ].conjugate()))
+                            #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'with conjugation (normal)')
+                #cnt+=1
         
         #print(self.onsite)
         print("re-construct bonds in %.3fs, %d bonds droped"%(time.time()-time0,nDropedBond))
         #print(len(bondInfo.bondLengthList),cnt_redundant)
         #exit()
-
+        #with open ('./hr_symmerized.tmp.txt','w') as fout:
+        #    for bond in self.bondList:
+        #        fout.write("%5d%5d%5d%5d%5d%12.6f%12.6f\n"%(*bond.overlat,bond.source,bond.target,bond.t.real,bond.t.imag))
+        
         # update bond scope
         RxList, RyList, RzList=[], [], []
         for dRList in bondInfo.dRList:
