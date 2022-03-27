@@ -11,6 +11,9 @@ pR.readPOS('./mcalc/BN/POSCAR')
 hr=reader.Hr()
 hr.readSingleFile('./mcalc/BN/hr.dat',ignoreImagPart=False,cutoff=-0.01)
 
+#gr=Green()
+#gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/BN/',saveFig=True,redBands=[1,2])
+#exit()
 res=Response()
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
 atomicOrbIndexList=[[[0]],
@@ -27,7 +30,7 @@ atomicMagMomList=[
 #hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
 #                  spinor=False,atomicMagMomList=atomicMagMomList)
 #hr.adjustSOCStrength(socFactor=1.0)
-'''
+#'''
 Lk=101
 nocc=2
 vbm,cbm=0,2
@@ -82,10 +85,11 @@ for ikpt in range(Lk*Lk):
     ryx=1j/(eig[vbm]-eig[cbm])*((vy[vbm,cbm]*(vx[vbm,vbm]-vx[cbm,cbm])+vx[vbm,cbm]*(vy[vbm,vbm]-vy[cbm,cbm]))/(eig[vbm]-eig[cbm])-vxy[vbm,cbm]+Sigma_yx)
     ryy=1j/(eig[vbm]-eig[cbm])*((vy[vbm,cbm]*(vy[vbm,vbm]-vy[cbm,cbm])+vy[vbm,cbm]*(vy[vbm,vbm]-vy[cbm,cbm]))/(eig[vbm]-eig[cbm])-vyy[vbm,cbm]+Sigma_yy)
     
-    Berry_curv.append(rxx.real)
+    berry_z=(vx[0,2]*vy[2,0]/(eig[2]-eig[0])**2+vx[1,2]*vy[2,1]/(eig[2]-eig[1])**2).real
+    Berry_curv.append(berry_z)
 drawHotmapOnHexagonalBZ('./mcalc/BN/',np.array(Berry_curv),[Lk-1,Lk-1,1])
 #exit()
-'''
+#'''
 #res.calcInjectPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(1.0,3.0,20),tau=0.01,erange=[-80,80],nthreads=1)
 #res.calcShiftPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,3.0,20),tau=0.06,erange=[-80,80],nthreads=1)
-res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,3.0,20),tau=0.06,erange=[-80,80],nthreads=1)
+#res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,3.0,20),tau=0.06,erange=[-80,80],nthreads=1)

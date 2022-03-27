@@ -29,6 +29,7 @@ class BondInfo:
         self.atomPairList=[]
         self.dRList=[]
         self.bondSymList=[]
+        self.bondSymIDList=[]
     
     def appendNewBond(self,bondLen,atomPair,dR,bondSym):
         self.bondLengthList.append(bondLen)
@@ -41,6 +42,7 @@ class BondInfo:
         self.atomPairList.insert(posix,atomPair)
         self.dRList.insert(posix,dR)
         self.bondSymList.insert(posix,bondSym)
+        self.bondSymIDList.insert(posix,len(self.bondSymIDList)-1)
     
     def checkIfOldBond(self,bondLen,atomPair,dR):
         for ibond, existedBondLen in enumerate(self.bondLengthList):
@@ -692,7 +694,7 @@ class Hr:
         '''
         # check the whether operations are right
         np.set_printoptions(precision=4)
-        i,j=0,2
+        i,j=1,2
         orbAtomI=[]
         for L in atomicOrbIndexList[i]:
             for iorb in L: orbAtomI.append(iorb)
@@ -743,20 +745,24 @@ class Hr:
             for iorbAtomI, orbAtomIIndex in enumerate(orbAtomI):
                 for iorbAtomJ, orbAtomJIndex in enumerate(orbAtomJ):
                     bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
+            #print('original bond')
             #print(bond)
             bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
             if timeReversal:
-                bonduu=bond[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
-                bonddd=bond[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
+                bond_bak=np.array(list(list(bond)))
+                bonduu=bond_bak[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
+                bonddd=bond_bak[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
+                bondud=bond_bak[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]
+                bonddu=bond_bak[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]
                 bond[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]=bonduu.conjugate()
                 bond[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]=bonddd.conjugate()
-            #else:
-            #    bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
+                bond[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]=(-bondud).conjugate()
+                bond[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]=(-bonddu).conjugate()
+            print('transformed bond')
             print(bond)
-            #print(localSymOp[i_trans])
-            #print(localSymOp[j_trans])
         exit()
         '''
+        #np.set_printoptions(precision=4)
         # impose symmetry constrains
         time0=time.time()
         nDropedBond=0
@@ -821,10 +827,15 @@ class Hr:
                         bond_tmp=(localSymOp[iatom_source_trans].conjugate().T).dot(bond).dot(localSymOp[iatom_target_trans])
                         #print(bond)
                         if timeReversal:
-                            bonduu=bond_tmp[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
-                            bonddd=bond_tmp[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
+                            bond_tmp_bak=np.array(list(list(bond_tmp))) #NOTE: the slice sometimes is not independent, and the conjugation on slice also vary the original matrix
+                            bonduu=bond_tmp_bak[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
+                            bonddd=bond_tmp_bak[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
+                            bondud=bond_tmp_bak[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]
+                            bonddu=bond_tmp_bak[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]
                             bond_tmp[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]=bonduu.conjugate()
                             bond_tmp[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]=bonddd.conjugate()
+                            bond_tmp[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]=(-bondud).conjugate()
+                            bond_tmp[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]=(-bonddu).conjugate()
                         bond_sym=bond_sym+bond_tmp
                         #print(bond)
                         #print("setting")
@@ -847,8 +858,9 @@ class Hr:
         # reconstruct symmetry-constrained Ham.
         self.bondList=[]
         bondLen_old=-1
+        bondSymIDTrackList=[] # record the id of bond_elementary to which this bond corresponds
         #cnt=0
-        for dRList, atomPairList, bondLen, bond_elementary in zip(bondInfo.dRList,bondInfo.atomPairList,bondInfo.bondLengthList,bondInfo.bondSymList):
+        for dRList, atomPairList, bondLen, bond_elementary, bond_ele_ID in zip(bondInfo.dRList,bondInfo.atomPairList,bondInfo.bondLengthList,bondInfo.bondSymList,bondInfo.bondSymIDList):
             if abs(bondLen-bondLen_old)>paramReader.SYMPREC: # since the bonds are sorted according to bond lengths
                 bond_setted_info=[]
                 bondLen_old=bondLen
@@ -863,22 +875,53 @@ class Hr:
                     #if cnt<2:print('existed bonds:',bond_info)
                     if sum(abs(bond_info-bond_info_new))==0:# or sum(abs(bond_info-bond_conj_info_new))==0:
                         already_setted=True
-                        if cnt<2:print('redundant')
+                        #if cnt<2:print('redundant')
                         break
                 if already_setted: continue
-                
-                bond_conj_info_new=np.array([-int(dR[0]),-int(dR[1]),-int(dR[2]),iatom_target_trans,iatom_source_trans],dtype=int)
+
                 bond_setted_info.append(bond_info_new)
+                bond_conj_info_new=np.array([-int(dR[0]),-int(dR[1]),-int(dR[2]),iatom_target_trans,iatom_source_trans],dtype=int)
                 if sum(abs(bond_conj_info_new-bond_info_new))>0:bond_setted_info.append(bond_conj_info_new)
                 
-                bond_rotated=localSymOp[iatom_source_trans].dot(bond_elementary).dot(localSymOp[iatom_target_trans].T.conjugate())
+                bond_core=np.array(list(list(bond_elementary)))
                 if timeReversal:
-                    sizeI,sizeJ=bond_rotated.shape[0],bond_rotated.shape[1]
-                    bonduu=bond_rotated[0:sizeI//2,0:sizeJ//2]
-                    bonddd=bond_rotated[sizeI//2:sizeI,sizeJ//2:sizeJ]
-                    bond_rotated[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
-                    bond_rotated[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
-                
+                    bond_core_tmp=np.array(list(list(bond_elementary))) #NOTE: the slice sometimes is not independent, and the conjugation on slice also vary the original matrix
+                    sizeI,sizeJ=bond_core_tmp.shape[0],bond_core_tmp.shape[1]
+                    bonduu=bond_core_tmp[0:sizeI//2,0:sizeJ//2]
+                    bonddd=bond_core_tmp[sizeI//2:sizeI,sizeJ//2:sizeJ]
+                    bondud=bond_core_tmp[0:sizeI//2,sizeJ//2:sizeJ]
+                    bonddu=bond_core_tmp[sizeI//2:sizeI,0:sizeJ//2]
+                    bond_core[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
+                    bond_core[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
+                    bond_core[0:sizeI//2,sizeJ//2:sizeJ]=(-bondud).conjugate()
+                    bond_core[sizeI//2:sizeI,0:sizeJ//2]=(-bonddu).conjugate()
+                bond_rotated=localSymOp[iatom_source_trans].dot(bond_core).dot(localSymOp[iatom_target_trans].T.conjugate())
+                '''
+                if bond_ele_ID==56 and timeReversal:
+                    print("orb%d-orb%d [%d %d %d], TR:"%(iatom_source_trans,iatom_target_trans,*dR),timeReversal)
+                    print("transformer")
+                    print(localSymOp[iatom_source_trans].T.conjugate())
+                    print(localSymOp[iatom_target_trans])
+                    print("bond_rotate record:")
+                    print(bond_rotated)
+
+                    #bond_core=np.array(list(list(bond_rotated)))
+                    bond_back=(localSymOp[iatom_source_trans].T.conjugate()).dot(bond_rotated).dot(localSymOp[iatom_target_trans])
+                    if timeReversal:
+                        sizeI,sizeJ=bond_core.shape[0],bond_back.shape[1]
+                        bonduu=bond_back[0:sizeI//2,0:sizeJ//2]
+                        bonddd=bond_back[sizeI//2:sizeI,sizeJ//2:sizeJ]
+                        bondud=bond_back[0:sizeI//2,sizeJ//2:sizeJ]
+                        bonddu=bond_back[sizeI//2:sizeI,0:sizeJ//2]
+                        bond_back[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
+                        bond_back[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
+                        bond_back[0:sizeI//2,sizeJ//2:sizeJ]=(-bondud).conjugate()
+                        bond_back[sizeI//2:sizeI,0:sizeJ//2]=(-bonddu).conjugate()
+                    
+                    print("bring back imediately:")
+                    print(bond_back)
+                    exit()
+                '''
                 atom_source,atom_target=atomicOrbIndexList[iatom_source_trans],atomicOrbIndexList[iatom_target_trans]
                 orbAtomSource=[]
                 for L in atom_source:
@@ -894,17 +937,22 @@ class Hr:
                             if iGlobalOrbI>iGlobalOrbJ:
                                 self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ]))
                                 self.bondList.append(lat.BondDigital(iGlobalOrbJ,iGlobalOrbI,-dR,bond_rotated[iLocalOrbI,iLocalOrbJ].conjugate()))
+                                bondSymIDTrackList.append(bond_ele_ID)
+                                bondSymIDTrackList.append(bond_ele_ID)
                                 #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'with conjugation (intra atom conjugation)')
                             elif iGlobalOrbI==iGlobalOrbJ:
                                 self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ]))
+                                bondSymIDTrackList.append(bond_ele_ID)
                                 self.onsite[iGlobalOrbI]=bond_rotated[iLocalOrbI,iLocalOrbI]
                                 #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'onsite term (no conjugation)')
                         else:
                             self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ]))
                             self.bondList.append(lat.BondDigital(iGlobalOrbJ,iGlobalOrbI,-dR,bond_rotated[iLocalOrbI,iLocalOrbJ].conjugate()))
+                            bondSymIDTrackList.append(bond_ele_ID)
+                            bondSymIDTrackList.append(bond_ele_ID)
                             #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'with conjugation (normal)')
                 #cnt+=1
-        
+        #exit()
         #print(self.onsite)
         print("re-construct bonds in %.3fs, %d bonds droped"%(time.time()-time0,nDropedBond))
         #print(len(bondInfo.bondLengthList),cnt_redundant)
@@ -921,9 +969,135 @@ class Hr:
         self.Rx_max, self.Rx_min, self.Ry_max, self.Ry_min, self.Rz_max, self.Rz_min= max(RxList),min(RxList),max(RyList),min(RyList),max(RzList),min(RzList)
         # data structure: bondInVecForm[Rx,Ry,Rz,source,target]=hopping
         self.bondInVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=complex)
-        for bond in self.bondList:
+        bondSymIDVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=int)
+        for bond, bondSymID in zip(self.bondList,bondSymIDTrackList):
             self.bondInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.t
+            bondSymIDVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bondSymID
+        
+        # verification
+        time0=time.time()
+        bondInfo_verification=BondInfo()
+        cnt_redundant=0
+        for dR0 in self.dRList:
+            if dR0[0]>self.Rx_max or dR0[0]<self.Rx_min or dR0[1]>self.Ry_max or dR0[1]<self.Ry_min or dR0[2]>self.Rz_max or dR0[2]<self.Rz_min:continue
+            #print('original dR:',dR0)
+            for iatom_source, atom_source in enumerate(atomicOrbIndexList):
+                source_coor=pR.pos_ions[iatom_source]
+                for iatom_target, atom_target in enumerate(atomicOrbIndexList):
+                    target_coor=pR.pos_ions[iatom_target]+dR0
+                    dR_xyz=(target_coor-source_coor).dot(pR.lat)
+                    dR_xyz_len=np.sqrt(np.dot(dR_xyz,dR_xyz))
+                    if bondInfo_verification.checkIfOldBond(dR_xyz_len,(iatom_source,iatom_target),dR0):
+                        cnt_redundant+=1
+                        continue
+
+                    sub_bond_list=[]
+                    bond_sym_list=[]
+                    bond_sym_id_list=[]
+                    sub_atom_pair_list=[]
+                    sub_dR_list=[]
+                    outOfReach=False
+                    for rotate, translate, localSymOp, siteMap, timeReversal in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList,symTimeReversalList):
+                        iatom_source_trans=siteMap[iatom_source]
+                        iatom_target_trans=siteMap[iatom_target]
+
+                        source_coor_trans=rotate.dot(source_coor)+translate
+                        target_coor_trans=rotate.dot(target_coor)+translate
+                        dR_xyz_rotated=(target_coor_trans-source_coor_trans).dot(pR.lat)
+                        dR_xyz_rotated_len=np.sqrt(np.dot(dR_xyz_rotated,dR_xyz_rotated))
+                        assert abs(dR_xyz_rotated_len-dR_xyz_len)<paramReader.SYMPREC, 'sym. op. change bond length'
+
+                        dR_tmp=target_coor_trans-source_coor_trans+pR.pos_ions[iatom_source_trans]-pR.pos_ions[iatom_target_trans]#(target_coor_trans-target_coor_trans%1)-(source_coor_trans-source_coor_trans%1)
+                        for x in dR_tmp:
+                            assert abs(x-np.around(x))<paramReader.SYMPREC, 'dR is not interger %.6f'%x
+                        dR=np.array([int(np.around(x)) for x in dR_tmp],dtype=int)
+                        #print('symmetry dR:',dR,'time reversal:',timeReversal)
+                        if dR[0]>self.Rx_max or dR[0]<self.Rx_min or dR[1]>self.Ry_max or dR[1]<self.Ry_min or dR[2]>self.Rz_max or dR[2]<self.Rz_min:
+                            outOfReach=True
+                            #print('dR is out of range, drop all related bonds')
+                            break
+                        
+                        sub_atom_pair_list.append((iatom_source_trans,iatom_target_trans))
+                        sub_dR_list.append(dR)
+                        #print('symmetry atom pair:',iatom_source_trans,iatom_target_trans)
+
+                        orbAtomI=[]
+                        for L in atomicOrbIndexList[iatom_source_trans]:
+                            for iorb in L: orbAtomI.append(iorb)
+                        orbAtomJ=[]
+                        for L in atomicOrbIndexList[iatom_target_trans]:
+                            for iorb in L: orbAtomJ.append(iorb)
+                        
+                        sub_bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+                        bond_rotated=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+                        for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomI):
+                            for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomJ):
+                                bond_rotated[iLocalOrbI,iLocalOrbJ]=self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                                sub_bond[iLocalOrbI,iLocalOrbJ]=self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        sub_bond_list.append(sub_bond)
+
+                        bond_back=(localSymOp[iatom_source_trans].T.conjugate()).dot(bond_rotated).dot(localSymOp[iatom_target_trans])
+                        if timeReversal:
+                            bond_back_tmp=np.array(list(list(bond_back)))
+                            sizeI,sizeJ=bond_back_tmp.shape[0],bond_back_tmp.shape[1]
+                            bonduu=bond_back_tmp[0:sizeI//2,0:sizeJ//2]
+                            bonddd=bond_back_tmp[sizeI//2:sizeI,sizeJ//2:sizeJ]
+                            bondud=bond_back_tmp[0:sizeI//2,sizeJ//2:sizeJ]
+                            bonddu=bond_back_tmp[sizeI//2:sizeI,0:sizeJ//2]
+                            bond_back[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
+                            bond_back[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
+                            bond_back[0:sizeI//2,sizeJ//2:sizeJ]=(-bondud).conjugate()
+                            bond_back[sizeI//2:sizeI,0:sizeJ//2]=(-bonddu).conjugate()
+                        
+                        bond_sym_list.append(bond_back)
+                        
+                        bondSymIDMatrix=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=int)
+                        for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomI):
+                            for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomJ):
+                                bondSymIDMatrix[iLocalOrbI,iLocalOrbJ]=bondSymIDVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        bond_sym_id_list.append(bondSymIDMatrix)
+
+                    if outOfReach: continue
+                    assert len(bond_sym_list)==len(symRotateList), 'symmery parts of bond do not align with sym. op.'
+                    res_tot=0
+                    res_list=[]
+                    bond_elementary=bond_sym_list[0]
+                    for sym_part in bond_sym_list:
+                        sym_res=sym_part-bond_elementary
+                        res_list.append(sum(sum(abs(sym_res))))
+                        res_tot+=sum(sum(abs(sym_res)))
+                    if res_tot>paramReader.SYMPREC:
+                        np.set_printoptions(precision=4)
+                        print("failed verification, with total res:",res_tot)
+                        for sub_bond, sym_part, sym_id, localSymOp, atom_pair, _dR, _res, _TR in zip(sub_bond_list,bond_sym_list,bond_sym_id_list,localSymOpList,sub_atom_pair_list,sub_dR_list,res_list, symTimeReversalList):
+                            print("orb%d-orb%d [%d %d %d], TR:"%(atom_pair[0],atom_pair[1],*_dR),_TR,"res (ref bond0):",_res)
+                            print("transformer:")
+                            print(localSymOp[atom_pair[0]].T.conjugate())
+                            print(localSymOp[atom_pair[1]])
+                            print("sym. id for each link:")
+                            print(sym_id)
+                            print("recorded sub bond matrix:")
+                            print(sub_bond)
+                            print("recorded sym_bond (brought back) is:")
+                            print(sym_part)
+                            print("re-calculate brought back:")
+                            
+                            bond_back=(localSymOp[atom_pair[0]].T.conjugate()).dot(sub_bond).dot(localSymOp[atom_pair[1]])
+                            if timeReversal:
+                                bond_back_tmp=np.array(list(list(bond_back)))
+                                sizeI,sizeJ=bond_back_tmp.shape[0],bond_back_tmp.shape[1]
+                                bonduu=bond_back_tmp[0:sizeI//2,0:sizeJ//2]
+                                bonddd=bond_back_tmp[sizeI//2:sizeI,sizeJ//2:sizeJ]
+                                bondud=bond_back_tmp[0:sizeI//2,sizeJ//2:sizeJ]
+                                bonddu=bond_back_tmp[sizeI//2:sizeI,0:sizeJ//2]
+                                bond_back[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
+                                bond_back[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
+                                bond_back[0:sizeI//2,sizeJ//2:sizeJ]=(-bondud).conjugate()
+                                bond_back[sizeI//2:sizeI,0:sizeJ//2]=(-bonddu).conjugate()
+                            print(bond_back)
+                        exit()
         #exit()
+        print("verrification success in %.3fs"%(time.time()-time0))
            
     def adjustSOCStrength(self,socFactor=1):
         assert self.norb%2==0, 'num. of orbs is odd, inconsistent with SOC processing'
