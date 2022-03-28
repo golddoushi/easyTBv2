@@ -474,7 +474,7 @@ class Hr:
                 mz=m_su2.conjugate().dot(sz).dot(m_su2)
                 magmom_list.append(np.array([mx,my,mz]).real)
             tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list]) if len(magmom_list)>0 else 0.
-            if spinor: # find proper sub-group consist with magnetism (but without time-reversal operator)
+            if spinor: # find proper sub-group consist with magnetism and time reversal symmetry
                 new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
                 for isym in range(len(symIonMap)):
                     rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
@@ -751,15 +751,7 @@ class Hr:
             #print(bond)
             bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
             if timeReversal:
-                bond_bak=np.array(list(list(bond)))
-                bonduu=bond_bak[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
-                bonddd=bond_bak[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
-                bondud=bond_bak[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]
-                bonddu=bond_bak[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]
-                bond[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]=bonduu.conjugate()
-                bond[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]=bonddd.conjugate()
-                bond[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]=(-bondud).conjugate()
-                bond[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]=(-bonddu).conjugate()
+                bond=bond.conjugate()
             print('transformed bond')
             print(bond)
         exit()
@@ -828,17 +820,7 @@ class Hr:
                                 #       self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ],timeReversal)
                         bond_tmp=(localSymOp[iatom_source_trans].conjugate().T).dot(bond).dot(localSymOp[iatom_target_trans])
                         #print(bond)
-                        if timeReversal:
-                            #bond_tmp_bak=np.array(list(list(bond_tmp))) #NOTE: the slice sometimes is not independent, and the conjugation on slice also vary the original matrix
-                            #bonduu=bond_tmp_bak[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]
-                            #bonddd=bond_tmp_bak[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]
-                            #bondud=bond_tmp_bak[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]
-                            #bonddu=bond_tmp_bak[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]
-                            #bond_tmp[0:len(orbAtomI)//2,0:len(orbAtomJ)//2]=bonduu.conjugate()
-                            #bond_tmp[len(orbAtomI)//2:len(orbAtomI),len(orbAtomJ)//2:len(orbAtomJ)]=bonddd.conjugate()
-                            #bond_tmp[0:len(orbAtomI)//2,len(orbAtomJ)//2:len(orbAtomJ)]=bondud.conjugate()
-                            #bond_tmp[len(orbAtomI)//2:len(orbAtomI),0:len(orbAtomJ)//2]=bonddu.conjugate()
-                            bond_tmp=bond_tmp.conjugate()
+                        if timeReversal: bond_tmp=bond_tmp.conjugate()
                         bond_sym=bond_sym+bond_tmp
                         #print(bond)
                         #print("setting")
@@ -887,18 +869,7 @@ class Hr:
                 if sum(abs(bond_conj_info_new-bond_info_new))>0:bond_setted_info.append(bond_conj_info_new)
                 
                 bond_core=np.array(list(list(bond_elementary)))
-                if timeReversal:
-                    #bond_core_tmp=np.array(list(list(bond_elementary))) #NOTE: the slice sometimes is not independent, and the conjugation on slice also vary the original matrix
-                    #sizeI,sizeJ=bond_core_tmp.shape[0],bond_core_tmp.shape[1]
-                    #bonduu=bond_core_tmp[0:sizeI//2,0:sizeJ//2]
-                    #bonddd=bond_core_tmp[sizeI//2:sizeI,sizeJ//2:sizeJ]
-                    #bondud=bond_core_tmp[0:sizeI//2,sizeJ//2:sizeJ]
-                    #bonddu=bond_core_tmp[sizeI//2:sizeI,0:sizeJ//2]
-                    #bond_core[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
-                    #bond_core[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
-                    #bond_core[0:sizeI//2,sizeJ//2:sizeJ]=bondud.conjugate()
-                    #bond_core[sizeI//2:sizeI,0:sizeJ//2]=bonddu.conjugate()
-                    bond_core=bond_core.conjugate()
+                if timeReversal: bond_core=bond_core.conjugate()
                 bond_rotated=localSymOp[iatom_source_trans].dot(bond_core).dot(localSymOp[iatom_target_trans].T.conjugate())
                 '''
                 if bond_ele_ID==56 and timeReversal:
@@ -1041,18 +1012,7 @@ class Hr:
                         sub_bond_list.append(sub_bond)
 
                         bond_back=(localSymOp[iatom_source_trans].T.conjugate()).dot(bond_rotated).dot(localSymOp[iatom_target_trans])
-                        if timeReversal:
-                            #bond_back_tmp=np.array(list(list(bond_back)))
-                            #sizeI,sizeJ=bond_back_tmp.shape[0],bond_back_tmp.shape[1]
-                            #bonduu=bond_back_tmp[0:sizeI//2,0:sizeJ//2]
-                            #bonddd=bond_back_tmp[sizeI//2:sizeI,sizeJ//2:sizeJ]
-                            #bondud=bond_back_tmp[0:sizeI//2,sizeJ//2:sizeJ]
-                            #bonddu=bond_back_tmp[sizeI//2:sizeI,0:sizeJ//2]
-                            #bond_back[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
-                            #bond_back[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
-                            #bond_back[0:sizeI//2,sizeJ//2:sizeJ]=bondud.conjugate()
-                            #bond_back[sizeI//2:sizeI,0:sizeJ//2]=bonddu.conjugate()
-                            bond_back=bond_back.conjugate()
+                        if timeReversal: bond_back=bond_back.conjugate()
                         
                         bond_sym_list.append(bond_back)
                         
@@ -1088,17 +1048,7 @@ class Hr:
                             print("re-calculate brought back:")
                             
                             bond_back=(localSymOp[atom_pair[0]].T.conjugate()).dot(sub_bond).dot(localSymOp[atom_pair[1]])
-                            if timeReversal:
-                                bond_back_tmp=np.array(list(list(bond_back)))
-                                sizeI,sizeJ=bond_back_tmp.shape[0],bond_back_tmp.shape[1]
-                                bonduu=bond_back_tmp[0:sizeI//2,0:sizeJ//2]
-                                bonddd=bond_back_tmp[sizeI//2:sizeI,sizeJ//2:sizeJ]
-                                bondud=bond_back_tmp[0:sizeI//2,sizeJ//2:sizeJ]
-                                bonddu=bond_back_tmp[sizeI//2:sizeI,0:sizeJ//2]
-                                bond_back[0:sizeI//2,0:sizeJ//2]=bonduu.conjugate()
-                                bond_back[sizeI//2:sizeI,sizeJ//2:sizeJ]=bonddd.conjugate()
-                                bond_back[0:sizeI//2,sizeJ//2:sizeJ]=bondud.conjugate()
-                                bond_back[sizeI//2:sizeI,0:sizeJ//2]=bonddu.conjugate()
+                            if timeReversal: bond_back=bond_back.conjugate()
                             print(bond_back)
                         exit()
         #exit()

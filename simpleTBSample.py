@@ -96,8 +96,8 @@ atomicMagMomList=[[0,1], # in z direction
                   [0,0], # 0 mag.mom.
                  ]
 '''
-#hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-#                  spinor=True,atomicMagMomList=atomicMagMomList)
+hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
+                  spinor=True,atomicMagMomList=atomicMagMomList)
 #exit()
 #hr.adjustSOCStrength(socFactor=0.0)
 #hr.adjustInterLayerInteraction(
