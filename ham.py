@@ -956,7 +956,7 @@ class Response:
         plt.show()
         return
 
-    def calcProjectiveBulkPhotovoltaicConductor_CDLL(self,hr,mainDir:str=None,kgrid=[20,20,1],atomicOrbIndexList=[],proj_atomID=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],nthreads=1):
+    def calcProjectiveBulkPhotovoltaicConductor_CDLL(self,hr,mainDir:str=None,kgrid=[20,20,1],atomicOrbIndexList=[],proj_atomID=[[],[]],omegaList=[],tau=0.01,erange=[-1000.,1000.],nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
@@ -988,14 +988,20 @@ class Response:
             c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
 
         # construct the orbital weights for projection
-        orbWeightList=[0.]*hr.norb
-        for atomID in proj_atomID:
+        orbProj1WeightList=[0]*hr.norb
+        for atomID in proj_atomID[0]:
             for L in atomicOrbIndexList[atomID]:
-                for iorb in L: orbWeightList[iorb]=0.5
+                for iorb in L: orbProj1WeightList[iorb]=1
+        orbProj2WeightList=[0]*hr.norb
+        for atomID in proj_atomID[1]:
+            for L in atomicOrbIndexList[atomID]:
+                for iorb in L: orbProj2WeightList[iorb]=1
         #print(orbWeightList)
-        c_orbWeightList=(c_double*hr.norb)()
+        c_orbProj1WeightList=(c_int*hr.norb)()
+        c_orbProj2WeightList=(c_int*hr.norb)()
         for i in range(hr.norb):
-            c_orbWeightList[i]=c_double(orbWeightList[i])
+            c_orbProj1WeightList[i]=c_int(orbProj1WeightList[i])
+            c_orbProj2WeightList[i]=c_int(orbProj2WeightList[i])
 
         nkpts=len(kmesh)
         c_kmesh=(c_double*(nkpts*3))()
@@ -1034,7 +1040,7 @@ class Response:
                         c_sourceID,c_targetID,c_hopping_real,c_hopping_imag,c_overLat,
                         c_lat,
                         c_orbCorrList,
-                        c_orbWeightList,
+                        c_orbProj1WeightList,c_orbProj2WeightList,
                         c_int(nthreads))
         print("velocity calc. finished in %.3fs"%(time.time()-time0))
         print('pls. check the address in python:',hex(eigs_addr),hex(vel_addr),hex(vel_proj_addr))

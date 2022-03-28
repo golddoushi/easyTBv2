@@ -2069,7 +2069,7 @@ PyObject * calcFullBandsAndVecsAndProjectedVelocityInMemory(int nkpt, double kme
                        int overLat[nhoppings][3],
                        double lattice[3][3],
                        double orbCorr[norbs][3], // fractional coor. of each orb
-                       double orbWeight[norbs],  // weight of each orb, either 1 or 0, for projection calc.
+                       int orbProj1Weight[norbs], int orbProj2Weight[norbs],  // weight of each orb, either 1 or 0, for projection calc.
                        int _nthreads){
     printf("entering velocity calc. in cdll\n");
     FILE*fp;
@@ -2131,7 +2131,7 @@ PyObject * calcFullBandsAndVecsAndProjectedVelocityInMemory(int nkpt, double kme
                 for(int i=0;i<2;i++)for(int j=0;j<3;j++)hopping_R_c[i]+=hopping_R[j]*lattice[j][i];
 
                 for(int i=0;i<2;i++) DhkDkxy[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
-                for(int i=0;i<2;i++) DhkDkxy_proj[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i]*(orbWeight[sourceID[ihopping]]+orbWeight[targetID[ihopping]]);
+                for(int i=0;i<2;i++) if(orbProj1Weight[sourceID[ihopping]]*orbProj2Weight[targetID[ihopping]]+orbProj2Weight[sourceID[ihopping]]*orbProj1Weight[targetID[ihopping]]>0) DhkDkxy_proj[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
             }
             
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
