@@ -3,27 +3,28 @@ import paramReader
 paramReader.readGlobalConst()
 import posReader as pR
 import hrReader as reader
-from ham import Green
+from ham import Green, Response
+from illustrator import drawJDOSOnHexagonalBZ
 
 #pR.readPOS('./mcalc/FeCl2/POSCAR')
-pR.readPOS('./mcalc/MoTe2/POSCAR')
+#pR.readPOS('./mcalc/MoTe2/POSCAR')
 #pR.readPOS('./mcalc/MoTe2CrI3/POSCAR')
 #pR.readPOS('./mcalc/Cr2P2Se6/POSCAR')
-#pR.readPOS('./mcalc/MnPSe3/POSCAR')
+pR.readPOS('./mcalc/MnPSe3/POSCAR')
 #pR.readPOS('./mcalc/BN/POSCAR')
 #pR.readPOS('./mcalc/CrI3/bilayer/POSCAR')
 hr=reader.Hr()
 #hr.readSingleFile('./mcalc/FeCl2/wannier90.dn_hr.dat',ignoreImagPart=True,cutoff=0.01)
 #hr.readSingleFile('./mcalc/FeCl2/wannier90_hr.dat',ignoreImagPart=False,cutoff=0.01)
-hr.readSingleFile('./mcalc/MoTe2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1,format="QE")
+#hr.readSingleFile('./mcalc/MoTe2/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1,format="QE")
 #hr.readSingleFile('./mcalc/MoTe2CrI3/wannier90_hr.mz.dat',ignoreImagPart=False,cutoff=-0.1,format="QE")
 #hr.readDoubleFiles('./mcalc/Cr2P2Se6/wannier90.up_hr.dat','./mcalc/Cr2P2Se6/wannier90.dn_hr.dat',cutoff=0.01)
 #hr.readSingleFile('./mcalc/Cr2P2Se6/wannier90.up_hr.dat',cutoff=-0.01)
-#hr.readSingleFile('./mcalc/MnPSe3/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
+hr.readSingleFile('./mcalc/MnPSe3/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
 #hr.readSingleFile('./mcalc/BN/hr.soc.dat',ignoreImagPart=False,cutoff=-0.1)
 #hr.readSingleFile('./mcalc/CrI3/bilayer/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
-#'''
+'''
 # MoTe2
 atomicOrbIndexList=[[[],[],[0,1,2,3,4,11,12,13,14,15]],       # Mo
                     [[],[5,6,7,16,17,18]],                 # Te1
@@ -33,8 +34,8 @@ atomicMagMomList=[[0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
                  ]
-#'''
 '''
+#'''
 # MnPS3
 atomicOrbIndexList=[[[],[],[0,1,2,3,4,34,35,36,37,38]],       # Mn1
                     [[],[],[5,6,7,8,9,39,40,41,42,43]],       # Mn2
@@ -58,7 +59,7 @@ atomicMagMomList=[[0,1], # in z direction
                   [0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
                  ]
-'''
+#'''
 '''
 # CrI3
 atomicOrbIndexList=[[[],[],[0,1,2,3,4,56,57,58,59,60]],       # Cr1
@@ -96,8 +97,8 @@ atomicMagMomList=[[0,1], # in z direction
                   [0,0], # 0 mag.mom.
                  ]
 '''
-hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-                  spinor=True,atomicMagMomList=atomicMagMomList)
+#hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
+#                  spinor=True,atomicMagMomList=atomicMagMomList)
 #exit()
 #hr.adjustSOCStrength(socFactor=0.0)
 #hr.adjustInterLayerInteraction(
@@ -107,10 +108,14 @@ hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
 #)
 #print(hr.onsite)
 #exit()
-gr=Green()
+#gr=Green()
 #gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/FeCl2/',saveFig=True,redBands=[17,18])
-gr.calcFullBands_CDLL(hr,fermi=0.0,mainDir='./mcalc/MoTe2/',saveFig=True,redBands=[13,14])
-#gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/MnPSe3/',saveFig=True,redBands=[42,43])
+#gr.calcFullBands_CDLL(hr,fermi=0.0,mainDir='./mcalc/MoTe2/',saveFig=True,redBands=[13,14])
+#gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/MnPSe3/',saveFig=True,redBands=[43,44])
 #gr.calcFullBands_CDLL(hr,fermi=-1.6042,mainDir='./mcalc/Cr2P2Se6/',saveFig=True,redBands=[41,42])
 #gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/BN/',saveFig=True,redBands=[1,2])
 #gr.calcFullBands_CDLL(hr,fermi=-0.98,mainDir='./mcalc/CrI3/bilayer/',saveFig=True,redBands=[83,84])
+
+#res=Response()
+#res.calcJDOS_CDLL(hr,mainDir='./mcalc/MnPSe3/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[200,200,1],omegaList=np.linspace(1,3,100),tau=0.01,erange=[-80,80],nthreads=4)
+drawJDOSOnHexagonalBZ('./mcalc/MnPSe3/JDOS98_E2.980.txt','./mcalc/MnPSe3/',[200,200,1])
