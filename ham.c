@@ -2528,7 +2528,148 @@ PyObject * calcProjectiveBulkPhotovoltaicCond(int nkpt,
     fprintf(fp,"projective BPVE done\n");
     fprintf(fp,"clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
     fclose(fp);
-    free(velocity);free(energy);
+    free(velocity);free(velocity_proj);free(energy);
+
+    PyObject * conductance_real=PyTuple_New(nphoton*nkpt*8);
+    PyObject * conductance_imag=PyTuple_New(nphoton*nkpt*8);
+
+    for(int iphoton=0;iphoton<nphoton;iphoton++){
+        for(int ikpt=0;ikpt<nkpt;ikpt++){
+            for(int icomponent=0;icomponent<8;icomponent++){
+                PyTuple_SetItem(conductance_real, icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomponent])));
+                PyTuple_SetItem(conductance_imag, icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomponent])));
+            }
+        }
+    }
+    free(conductance_on_kmesh_on_omega);
+    return Py_BuildValue("(OO)",conductance_real,conductance_imag);
+}
+
+PyObject * calcSpinProjectiveBulkPhotovoltaicCond(int nkpt,
+                       long long eigs_addr, long long vel_addr, long long vel_proj_sx_addr, long long vel_proj_sy_addr, long long vel_proj_sz_addr,
+                       int norbs,
+                       int nphoton,
+                       double omegaList[nphoton],
+                       double fermi,
+                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
+                       double orbCorr[norbs][3], // fractional corrdinates of orbs
+                       double tau,
+                       double erange[2],
+                       int _nthreads){
+    printf("entering spinful projective BPVC module in cdll\n");
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    // verification
+    fprintf(fp,"nkpt: %d, norbs: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nphoton,erange[0],erange[1]);
+    fprintf(fp,"memory estimation: %.4f MB\n",(double)(nphoton*nkpt*32+(2*norbs*norbs+norbs)*nkpt)/1024/1024*sizeof(lapack_complex_double));
+    fclose(fp);
+    printf("nkpt: %d, norbs: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nphoton,erange[0],erange[1]);
+    printf("memory estimation: %.4f MB\n",(double)(nphoton*nkpt*32+(2*norbs*norbs+norbs)*nkpt)/1024/1024*sizeof(lapack_complex_double));
+    
+    double *energy=(double*)eigs_addr;
+    lapack_complex_double *velocity=(lapack_complex_double*)vel_addr;
+    lapack_complex_double *velocity_proj_sx=(lapack_complex_double*)vel_proj_sx_addr;
+    lapack_complex_double *velocity_proj_sy=(lapack_complex_double*)vel_proj_sy_addr;
+    lapack_complex_double *velocity_proj_sz=(lapack_complex_double*)vel_proj_sz_addr;
+    lapack_complex_double itau=tau*_Complex_I;
+    lapack_complex_double * conductance_on_kmesh_on_omega=(lapack_complex_double*)malloc(nphoton*nkpt*24*sizeof(lapack_complex_double));
+    for(int i=0;i<nphoton*nkpt*24;i++)conductance_on_kmesh_on_omega[i]=0;
+
+    int kpt_width=norbs*norbs;
+    int dir_width=nkpt*kpt_width;
+    int spin_width=nkpt*nphoton*8;
+
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("calc spin projective BPVE using %d cores in ham.dll\n",nthreads);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"calc spin projective BPVE using %d cores in ham.dll\n",nthreads);
+    fclose(fp);
+
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            int writing_k_index=ikpt*nphoton*8;
+            for(int bandl=0;bandl<norbs;bandl++){ // loop over band_l
+                double El=energy[ikpt*norbs+bandl];
+                if(El<erange[0] | El>erange[1]) continue;
+                int fl=0;
+                if(El<=fermi)fl=1;
+                for(int bandn=0;bandn<norbs;bandn++){ // loop over band_m
+                    double En=energy[ikpt*norbs+bandn];
+                    if(En<erange[0] | En>erange[1]) continue;
+                    int fn=0;
+                    if(En<=fermi)fn=1;
+                    int fln=fl-fn;
+                    if (fln==0) continue;
+
+                    // calc overlap
+                    lapack_complex_double px_nl=velocity[          ikpt*kpt_width+bandn*norbs+bandl];
+                    lapack_complex_double py_nl=velocity[dir_width+ikpt*kpt_width+bandn*norbs+bandl];
+                    //printf("band%d-%d, px_nl %f %f, py_nl %f %f\n",bandn,bandl,creal(px_nl),cimag(px_nl),creal(py_nl),cimag(py_nl));
+                    for(int bandm=0;bandm<norbs;bandm++){ // loop over band_n
+                        //if(bandn!=bandl)continue; // switch for bandn
+                        double Em=energy[ikpt*norbs+bandm];
+                        if(Em<erange[0] | Em>erange[1]) continue;
+                        // calc overlap
+                        lapack_complex_double px_lm=velocity[          ikpt*kpt_width+bandl*norbs+bandm];
+                        lapack_complex_double py_lm=velocity[dir_width+ikpt*kpt_width+bandl*norbs+bandm];
+                        lapack_complex_double px_sx_mn=velocity_proj_sx[          ikpt*kpt_width+bandm*norbs+bandn];
+                        lapack_complex_double py_sx_mn=velocity_proj_sx[dir_width+ikpt*kpt_width+bandm*norbs+bandn];
+                        lapack_complex_double px_sy_mn=velocity_proj_sy[          ikpt*kpt_width+bandm*norbs+bandn];
+                        lapack_complex_double py_sy_mn=velocity_proj_sy[dir_width+ikpt*kpt_width+bandm*norbs+bandn];
+                        lapack_complex_double px_sz_mn=velocity_proj_sz[          ikpt*kpt_width+bandm*norbs+bandn];
+                        lapack_complex_double py_sz_mn=velocity_proj_sz[dir_width+ikpt*kpt_width+bandm*norbs+bandn];
+
+                        for(int iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
+                            int writing_ph_index=writing_k_index+iphoton*8;
+                            double omega=omegaList[iphoton];
+                            
+                            lapack_complex_double factor_global=0;
+                            factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                            
+                            conductance_on_kmesh_on_omega[             writing_ph_index  ]+=px_nl*px_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+1]+=px_nl*px_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+2]+=py_nl*py_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+3]+=py_nl*py_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+4]+=px_nl*py_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+5]+=px_nl*py_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+6]+=py_nl*px_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+7]+=py_nl*px_lm*py_sz_mn*factor_global;
+
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index  ]+=px_nl*px_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+1]+=px_nl*px_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+2]+=py_nl*py_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+3]+=py_nl*py_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+4]+=px_nl*py_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+5]+=px_nl*py_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+6]+=py_nl*px_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+7]+=py_nl*px_lm*py_sz_mn*factor_global;
+
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index  ]+=px_nl*px_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+1]+=px_nl*px_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+2]+=py_nl*py_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+3]+=py_nl*py_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+4]+=px_nl*py_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+5]+=px_nl*py_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+6]+=py_nl*px_lm*px_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+7]+=py_nl*px_lm*py_sz_mn*factor_global;
+                        }
+                    } 
+                }
+            }
+        }
+    }
+    printf("spin projective BPVE done\n");
+    printf("clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    fp=fopen("./c_log","a");
+    fprintf(fp,"spin projective BPVE done\n");
+    fprintf(fp,"clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    fclose(fp);
+    free(velocity);free(velocity_proj_sx);free(velocity_proj_sy);free(velocity_proj_sz);free(energy);
 
     PyObject * conductance_real=PyTuple_New(nphoton*nkpt*8);
     PyObject * conductance_imag=PyTuple_New(nphoton*nkpt*8);

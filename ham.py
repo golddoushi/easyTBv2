@@ -1285,9 +1285,9 @@ class Response:
         print('pls. check the address in python:',hex(eigs_addr),hex(vel_addr),hex(vel_proj_sx_addr),hex(vel_proj_sy_addr),hex(vel_proj_sz_addr))
         time0=time.time()
 
-        hamDLL.calcProjectiveBulkPhotovoltaicCond.restype=py_object
-        result=hamDLL.calcProjectiveBulkPhotovoltaicCond(c_int(nkpts),
-                        c_longlong(eigs_addr),c_longlong(vel_addr),c_longlong(vel_proj_sz_addr),
+        hamDLL.calcSpinProjectiveBulkPhotovoltaicCond.restype=py_object
+        result=hamDLL.calcSpinProjectiveBulkPhotovoltaicCond(c_int(nkpts),
+                        c_longlong(eigs_addr),c_longlong(vel_addr),c_longlong(vel_proj_sx_addr),c_longlong(vel_proj_sy_addr),c_longlong(vel_proj_sz_addr),
                         c_int(hr.norb),
                         c_int(len(omegaList)),
                         c_omega_list,
