@@ -2631,23 +2631,23 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond(int nkpt,
                             lapack_complex_double factor_global=0;
                             factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
                             
-                            conductance_on_kmesh_on_omega[             writing_ph_index  ]+=px_nl*px_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[             writing_ph_index+1]+=px_nl*px_lm*py_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[             writing_ph_index+2]+=py_nl*py_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[             writing_ph_index+3]+=py_nl*py_lm*py_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[             writing_ph_index+4]+=px_nl*py_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[             writing_ph_index+5]+=px_nl*py_lm*py_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[             writing_ph_index+6]+=py_nl*px_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[             writing_ph_index+7]+=py_nl*px_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index  ]+=px_nl*px_lm*px_sx_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+1]+=px_nl*px_lm*py_sx_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+2]+=py_nl*py_lm*px_sx_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+3]+=py_nl*py_lm*py_sx_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+4]+=px_nl*py_lm*px_sx_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+5]+=px_nl*py_lm*py_sx_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+6]+=py_nl*px_lm*px_sx_mn*factor_global;
+                            conductance_on_kmesh_on_omega[             writing_ph_index+7]+=py_nl*px_lm*py_sx_mn*factor_global;
 
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index  ]+=px_nl*px_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+1]+=px_nl*px_lm*py_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+2]+=py_nl*py_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+3]+=py_nl*py_lm*py_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+4]+=px_nl*py_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+5]+=px_nl*py_lm*py_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+6]+=py_nl*px_lm*px_sz_mn*factor_global;
-                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+7]+=py_nl*px_lm*py_sz_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index  ]+=px_nl*px_lm*px_sy_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+1]+=px_nl*px_lm*py_sy_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+2]+=py_nl*py_lm*px_sy_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+3]+=py_nl*py_lm*py_sy_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+4]+=px_nl*py_lm*px_sy_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+5]+=px_nl*py_lm*py_sy_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+6]+=py_nl*px_lm*px_sy_mn*factor_global;
+                            conductance_on_kmesh_on_omega[  spin_width+writing_ph_index+7]+=py_nl*px_lm*py_sy_mn*factor_global;
 
                             conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index  ]+=px_nl*px_lm*px_sz_mn*factor_global;
                             conductance_on_kmesh_on_omega[2*spin_width+writing_ph_index+1]+=px_nl*px_lm*py_sz_mn*factor_global;
@@ -2671,14 +2671,16 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond(int nkpt,
     fclose(fp);
     free(velocity);free(velocity_proj_sx);free(velocity_proj_sy);free(velocity_proj_sz);free(energy);
 
-    PyObject * conductance_real=PyTuple_New(nphoton*nkpt*8);
-    PyObject * conductance_imag=PyTuple_New(nphoton*nkpt*8);
+    PyObject * conductance_real=PyTuple_New(nphoton*nkpt*24);
+    PyObject * conductance_imag=PyTuple_New(nphoton*nkpt*24);
 
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
             for(int icomponent=0;icomponent<8;icomponent++){
-                PyTuple_SetItem(conductance_real, icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomponent])));
-                PyTuple_SetItem(conductance_imag, icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomponent])));
+                for(int ispin=0;ispin<3;ispin++){
+                    PyTuple_SetItem(conductance_real, ispin*8*nphoton*nkpt+icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ispin*nkpt*nphoton*8+ikpt*nphoton*8+iphoton*8+icomponent])));
+                    PyTuple_SetItem(conductance_imag, ispin*8*nphoton*nkpt+icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ispin*nkpt*nphoton*8+ikpt*nphoton*8+iphoton*8+icomponent])));
+                }
             }
         }
     }

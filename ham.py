@@ -1301,30 +1301,34 @@ class Response:
         condFull=(np.array(result[0])+1j*np.array(result[1]))#.reshape(8,len(omegaList)*nkpts)
         if mainDir!=None:
             if len(omegaList)==1:
-                cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy=condFull.reshape(8,nkpts)
-                with open(mainDir+'photoCondTensor.txt','w') as fout:
-                    for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
-                        fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+                condSx,condSy,condSz=condFull.reshape(3,8,nkpts)
+                for condSpin, spinlabel in zip([condSx,condSy,condSz],['sx','sy','sz']):
+                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy=condSpin
+                    with open(mainDir+'photoCondTensor.%s.txt'%spinlabel,'w') as fout:
+                        for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
+                            fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
                 return
             else:
-                cxxx,cyxx,cxyy,cyyy,cxxy,cyxy,cxyx,cyyx=condFull.reshape(8,len(omegaList),nkpts)
-                with open(mainDir+'photoCondTensorVsOmega.txt','w') as fout:
-                    fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
-                    for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
-                        fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
-                            omega,
-                            sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
-                            sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
-                            sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
-                            sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
-                            sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
-                            sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
-                            sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
-                            sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag))
-                for iomega, omega in enumerate(omegaList):
-                    with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
-                        for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
-                            fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+                condSx,condSy,condSz=condFull.reshape(3,8,len(omegaList),nkpts)
+                for condSpin, spinlabel in zip([condSx,condSy,condSz],['sx','sy','sz']):
+                    cxxx,cyxx,cxyy,cyyy,cxxy,cyxy,cxyx,cyyx=condSpin
+                    with open(mainDir+'photoCondTensorVsOmega.%s.txt'%spinlabel,'w') as fout:
+                        fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
+                        for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
+                            fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                                omega,
+                                sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
+                                sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
+                                sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
+                                sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
+                                sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
+                                sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
+                                sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
+                                sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag))
+                    for iomega, omega in enumerate(omegaList):
+                        with open(mainDir+'photoCondTensor%d_E%.3f.%s.txt'%(iomega,omega,spinlabel),'w') as fout:
+                            for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
+                                fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
 
         condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
         condcxxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxy])
@@ -1334,7 +1338,7 @@ class Response:
         condcxyyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxyy])
         condcyxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxx])
         condcyxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxy])
-        print('Projective Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
+        print('Spin projective Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
         #exit()
         fig,ax=plt.subplots(2,4,sharey=True)
         ax[0,0].scatter(omegaList,condcxxxList.real,label=r'$Re\ \sigma^x_{xx}$')
@@ -1351,7 +1355,7 @@ class Response:
             for _ax in row:
                 _ax.legend()
                 _ax.plot([omegaList[0],omegaList[-1]],[0,0],'--',linewidth=1)
-        if mainDir!=None: plt.savefig(mainDir+'projPhotoconductance.png',dpi=300)
+        if mainDir!=None: plt.savefig(mainDir+'spinProjPhotoconductance.png',dpi=300)
         plt.show()
         return
 
