@@ -2297,6 +2297,17 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
     lapack_complex_double *velocity=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
     lapack_complex_double *velocity_proj=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
 
+    double sz[norbs][norbs];
+    for(int i=0;i<norbs;i++){
+        for(int j=0;j<norbs;j++){
+            sz[i][j]=0;
+        }
+    }
+    for(int i=0;i<norbs/2;i++){
+        sz[i][i]=0.5;
+        sz[i+norbs/2][i+norbs/2]=-0.5;
+    }
+
     int kpt_width=norbs*norbs;
     int dir_width=nkpt*kpt_width;
 
@@ -2318,6 +2329,7 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
             lapack_complex_double hk[norbs][norbs]; // init Hk
             lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
             lapack_complex_double DhkDkxy_proj[norbs][norbs][2]; // init projective DHk/Dkx,Dky
+            lapack_complex_double DhkDkxy_proj_sz[norbs][norbs][2]; // init projective DHk/Dkx,Dky
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
                     hk[i][j]=0;
@@ -2325,6 +2337,8 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
                     DhkDkxy[i][j][1]=0;
                     DhkDkxy_proj[i][j][0]=0;
                     DhkDkxy_proj[i][j][1]=0;
+                    DhkDkxy_proj_sz[i][j][0]=0;
+                    DhkDkxy_proj_sz[i][j][1]=0;
                 }
             }
             double eigs[norbs]; // output eigenvalues of Hk
@@ -2344,17 +2358,18 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
                 for(int i=0;i<2;i++) DhkDkxy[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
                 for(int i=0;i<2;i++) {
                     // project to hopping path
-                    if(orbProj1Weight[sourceID[ihopping]]*orbProj2Weight[targetID[ihopping]]+orbProj2Weight[sourceID[ihopping]]*orbProj1Weight[targetID[ihopping]]>0){
-                        if(sourceID[ihopping]<norbs/2 & targetID[ihopping]<norbs/2){
-                            DhkDkxy_proj[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
-                        }else if (sourceID[ihopping]>=norbs/2 & targetID[ihopping]>=norbs/2){
-                            DhkDkxy_proj[sourceID[ihopping]][targetID[ihopping]][i]-=tk*hopping_R_c[i];
-                        }
-                        
+                    if(orbProj1Weight[sourceID[ihopping]]*orbProj2Weight[targetID[ihopping]]+orbProj2Weight[sourceID[ihopping]]*orbProj1Weight[targetID[ihopping]]>0)DhkDkxy_proj[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
+                }
+            }
+            // project to spin
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    for(int icontract=0;icontract<norbs;icontract++){
+                        DhkDkxy_proj_sz[i][j][0]+=DhkDkxy_proj[i][icontract][0]*sz[icontract][j]+sz[i][icontract]*DhkDkxy_proj[icontract][j][0];
+                        DhkDkxy_proj_sz[i][j][1]+=DhkDkxy_proj[i][icontract][1]*sz[icontract][j]+sz[i][icontract]*DhkDkxy_proj[icontract][j][1];
                     }
                 }
             }
-            
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             // vec[i]=hk[:][i]
             if(info!=0){
@@ -2371,7 +2386,7 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
                         for(int icontract=0;icontract<norbs;icontract++){
                             for(int jcontract=0;jcontract<norbs;jcontract++){
                                 velocity[ipos]+=conj(hk[icontract][bandm])*DhkDkxy[icontract][jcontract][idir]*hk[jcontract][bandn];
-                                velocity_proj[ipos]+=conj(hk[icontract][bandm])*DhkDkxy_proj[icontract][jcontract][idir]*hk[jcontract][bandn];
+                                velocity_proj[ipos]+=conj(hk[icontract][bandm])*DhkDkxy_proj_sz[icontract][jcontract][idir]*hk[jcontract][bandn];
                             }
                         }
                     }
@@ -2470,12 +2485,7 @@ PyObject * calcProjectiveBulkPhotovoltaicCond(int nkpt,
                             double omega=omegaList[iphoton];
                             
                             lapack_complex_double factor_global=0;
-                            //if(fabs(En-El)>1e-6)
                             factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
-                            //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
-                            //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
-                            //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
-                            //printf("                   xxx: %.4f, %.4f yyx: %.4f, %.4f\n",creal(px_nl*px_lm*px_mn),cimag(px_nl*px_lm*px_mn),creal(py_nl*py_lm*px_mn),cimag(py_nl*py_lm*px_mn));
                             conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global;
                             conductance_on_kmesh_on_omega[writing_ph_index+1]+=px_nl*px_lm*py_mn*factor_global;
                             conductance_on_kmesh_on_omega[writing_ph_index+2]+=py_nl*py_lm*px_mn*factor_global;
