@@ -1274,20 +1274,20 @@ class Response:
         hamDLL=CDLL("./ham.dll")
         hamDLL.calcFullBandsAndVecsAndSpinProjectedVelocityInMemory.restype=py_object
 
-        eigs_addr,vel_addr,vel_proj_addr=hamDLL.calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(c_int(nkpts),c_kmesh,
+        eigs_addr,vel_addr,vel_proj_sx_addr,vel_proj_sy_addr,vel_proj_sz_addr=hamDLL.calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_hopping_real,c_hopping_imag,c_overLat,
                         c_lat,
                         c_orbCorrList,
                         c_orbProj1WeightList,c_orbProj2WeightList,
                         c_int(nthreads))
-        print("velocity calc. finished in %.3fs"%(time.time()-time0))
-        print('pls. check the address in python:',hex(eigs_addr),hex(vel_addr),hex(vel_proj_addr))
+        print("spinfully projective velocity calc. finished in %.3fs"%(time.time()-time0))
+        print('pls. check the address in python:',hex(eigs_addr),hex(vel_addr),hex(vel_proj_sx_addr),hex(vel_proj_sy_addr),hex(vel_proj_sz_addr))
         time0=time.time()
 
         hamDLL.calcProjectiveBulkPhotovoltaicCond.restype=py_object
         result=hamDLL.calcProjectiveBulkPhotovoltaicCond(c_int(nkpts),
-                        c_longlong(eigs_addr),c_longlong(vel_addr),c_longlong(vel_proj_addr),
+                        c_longlong(eigs_addr),c_longlong(vel_addr),c_longlong(vel_proj_sz_addr),
                         c_int(hr.norb),
                         c_int(len(omegaList)),
                         c_omega_list,

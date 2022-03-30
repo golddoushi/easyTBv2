@@ -2173,7 +2173,7 @@ PyObject * calcFullBandsAndVecsAndProjectedVelocityInMemory(int nkpt, double kme
                        double orbCorr[norbs][3], // fractional coor. of each orb
                        int orbProj1Weight[norbs], int orbProj2Weight[norbs],  // weight of each orb, either 1 or 0, for projection calc.
                        int _nthreads){
-    printf("entering velocity calc. in cdll\n");
+    printf("entering projective velocity calc. in cdll\n");
     FILE*fp;
     fp=fopen("./c_log","w");
     fprintf(fp,"#Log file of ham.dll\n");
@@ -2196,10 +2196,10 @@ PyObject * calcFullBandsAndVecsAndProjectedVelocityInMemory(int nkpt, double kme
     if(nkpt<_nthreads*10)nthreads=1;
     printf("use %d cores in ham.dll\n",nthreads);
     fp=fopen("./c_log","a");
-    fprintf(fp,"calc velocity using %d cores in ham.dll\n",nthreads);
+    fprintf(fp,"calc projective velocity using %d cores in ham.dll\n",nthreads);
     fclose(fp);
 
-    printf("calc velocities using %d cores in ham.dll\n",nthreads);
+    printf("calc projective velocity using %d cores in ham.dll\n",nthreads);
     //for(int i=0;i<norbs;i++)printf("%f ",orbWeight[i]);
     //exit(1);
     #pragma omp parallel num_threads(nthreads)
@@ -2261,7 +2261,7 @@ PyObject * calcFullBandsAndVecsAndProjectedVelocityInMemory(int nkpt, double kme
         }
     }
     fp=fopen("./c_log","a");
-    fprintf(fp,"velocity completed\ncalc BPVE...\n");
+    fprintf(fp,"projective velocity completed\n");
     fclose(fp);
     
     long long eigs_addr=(long long)energy;
@@ -2282,28 +2282,38 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
                        double orbCorr[norbs][3], // fractional coor. of each orb
                        int orbProj1Weight[norbs], int orbProj2Weight[norbs],  // weight of each orb, either 1 or 0, for projection calc.
                        int _nthreads){
-    printf("entering velocity calc. in cdll\n");
+    printf("entering spin-polarized projective velocity calc. in cdll\n");
     FILE*fp;
     fp=fopen("./c_log","w");
     fprintf(fp,"#Log file of ham.dll\n");
     // verification
     fprintf(fp,"nkpt: %d, norbs: %d, nhoppings: %d\n",nkpt,norbs,nhoppings);
-    fprintf(fp,"memory estimation: %.4f MB\n",(double)(4*norbs*norbs+norbs)*nkpt/1024/1024*sizeof(lapack_complex_double));
+    fprintf(fp,"memory estimation: %.4f MB\n",(double)(8*norbs*norbs+norbs)*nkpt/1024/1024*sizeof(lapack_complex_double));
     fclose(fp);
     printf("nkpt: %d, norbs: %d, nhoppings: %d\n",nkpt,norbs,nhoppings);
-    printf("memory estimation: %.4f MB\n",(double)(4*norbs*norbs+norbs)*nkpt/1024/1024*sizeof(lapack_complex_double));
+    printf("memory estimation: %.4f MB\n",(double)(8*norbs*norbs+norbs)*nkpt/1024/1024*sizeof(lapack_complex_double));
     
     double *energy=(double*)malloc(nkpt*norbs*sizeof(double));
     lapack_complex_double *velocity=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    lapack_complex_double *velocity_proj=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double *velocity_proj_sx=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double *velocity_proj_sy=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double *velocity_proj_sz=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
 
+    double sx[norbs][norbs];
+    lapack_complex_double sy[norbs][norbs];
     double sz[norbs][norbs];
     for(int i=0;i<norbs;i++){
         for(int j=0;j<norbs;j++){
+            sx[i][j]=0;
+            sy[i][j]=0;
             sz[i][j]=0;
         }
     }
     for(int i=0;i<norbs/2;i++){
+        sx[i][i+norbs/2]=0.5;
+        sx[i+norbs/2][i]=0.5;
+        sy[i][i+norbs/2]=-0.5*_Complex_I;
+        sy[i+norbs/2][i]=0.5*_Complex_I;
         sz[i][i]=0.5;
         sz[i+norbs/2][i+norbs/2]=-0.5;
     }
@@ -2316,10 +2326,10 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
     if(nkpt<_nthreads*10)nthreads=1;
     printf("use %d cores in ham.dll\n",nthreads);
     fp=fopen("./c_log","a");
-    fprintf(fp,"calc spin polarized velocity using %d cores in ham.dll\n",nthreads);
+    fprintf(fp,"calc spin-polarized velocity using %d cores in ham.dll\n",nthreads);
     fclose(fp);
 
-    printf("calc velocities using %d cores in ham.dll\n",nthreads);
+    printf("calc spin-polarized projective velocities using %d cores in ham.dll\n",nthreads);
     //for(int i=0;i<norbs;i++)printf("%f ",orbWeight[i]);
     //exit(1);
     #pragma omp parallel num_threads(nthreads)
@@ -2329,16 +2339,19 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
             lapack_complex_double hk[norbs][norbs]; // init Hk
             lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
             lapack_complex_double DhkDkxy_proj[norbs][norbs][2]; // init projective DHk/Dkx,Dky
+            lapack_complex_double DhkDkxy_proj_sx[norbs][norbs][2]; // init projective DHk/Dkx,Dky
+            lapack_complex_double DhkDkxy_proj_sy[norbs][norbs][2]; // init projective DHk/Dkx,Dky
             lapack_complex_double DhkDkxy_proj_sz[norbs][norbs][2]; // init projective DHk/Dkx,Dky
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
                     hk[i][j]=0;
-                    DhkDkxy[i][j][0]=0;
-                    DhkDkxy[i][j][1]=0;
-                    DhkDkxy_proj[i][j][0]=0;
-                    DhkDkxy_proj[i][j][1]=0;
-                    DhkDkxy_proj_sz[i][j][0]=0;
-                    DhkDkxy_proj_sz[i][j][1]=0;
+                    for(int k=0;k<2;k++){
+                        DhkDkxy[i][j][k]=0;
+                        DhkDkxy_proj[i][j][k]=0;
+                        DhkDkxy_proj_sx[i][j][k]=0;
+                        DhkDkxy_proj_sy[i][j][k]=0;
+                        DhkDkxy_proj_sz[i][j][k]=0;
+                    }
                 }
             }
             double eigs[norbs]; // output eigenvalues of Hk
@@ -2364,9 +2377,12 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
             // project to spin
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
-                    for(int icontract=0;icontract<norbs;icontract++){
-                        DhkDkxy_proj_sz[i][j][0]+=DhkDkxy_proj[i][icontract][0]*sz[icontract][j]+sz[i][icontract]*DhkDkxy_proj[icontract][j][0];
-                        DhkDkxy_proj_sz[i][j][1]+=DhkDkxy_proj[i][icontract][1]*sz[icontract][j]+sz[i][icontract]*DhkDkxy_proj[icontract][j][1];
+                    for(int k=0;k<2;k++){
+                        for(int icontract=0;icontract<norbs;icontract++){
+                            DhkDkxy_proj_sx[i][j][k]+=DhkDkxy_proj[i][icontract][k]*sx[icontract][j]+sx[i][icontract]*DhkDkxy_proj[icontract][j][k];
+                            DhkDkxy_proj_sy[i][j][k]+=DhkDkxy_proj[i][icontract][k]*sy[icontract][j]+sy[i][icontract]*DhkDkxy_proj[icontract][j][k];
+                            DhkDkxy_proj_sz[i][j][k]+=DhkDkxy_proj[i][icontract][k]*sz[icontract][j]+sz[i][icontract]*DhkDkxy_proj[icontract][j][k];
+                        }
                     }
                 }
             }
@@ -2382,11 +2398,15 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
                     for(int idir=0;idir<2;idir++){
                         int ipos=idir*dir_width+ikpt*kpt_width+bandm*norbs+bandn;
                         velocity[ipos]=0;
-                        velocity_proj[ipos]=0;
+                        velocity_proj_sx[ipos]=0;
+                        velocity_proj_sy[ipos]=0;
+                        velocity_proj_sz[ipos]=0;
                         for(int icontract=0;icontract<norbs;icontract++){
                             for(int jcontract=0;jcontract<norbs;jcontract++){
                                 velocity[ipos]+=conj(hk[icontract][bandm])*DhkDkxy[icontract][jcontract][idir]*hk[jcontract][bandn];
-                                velocity_proj[ipos]+=conj(hk[icontract][bandm])*DhkDkxy_proj_sz[icontract][jcontract][idir]*hk[jcontract][bandn];
+                                velocity_proj_sx[ipos]+=conj(hk[icontract][bandm])*DhkDkxy_proj_sx[icontract][jcontract][idir]*hk[jcontract][bandn];
+                                velocity_proj_sy[ipos]+=conj(hk[icontract][bandm])*DhkDkxy_proj_sy[icontract][jcontract][idir]*hk[jcontract][bandn];
+                                velocity_proj_sz[ipos]+=conj(hk[icontract][bandm])*DhkDkxy_proj_sz[icontract][jcontract][idir]*hk[jcontract][bandn];
                             }
                         }
                     }
@@ -2395,16 +2415,18 @@ PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double
         }
     }
     fp=fopen("./c_log","a");
-    fprintf(fp,"velocity completed\ncalc BPVE...\n");
+    fprintf(fp,"spin projective velocity completed\ncalc BPVE...\n");
     fclose(fp);
     
     long long eigs_addr=(long long)energy;
     long long vel_addr=(long long)velocity;
-    long long vel_proj_addr=(long long)velocity_proj;
+    long long vel_proj_sx_addr=(long long)velocity_proj_sx;
+    long long vel_proj_sy_addr=(long long)velocity_proj_sy;
+    long long vel_proj_sz_addr=(long long)velocity_proj_sz;
     printf("in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(lapack_complex_double *));
     printf("pls. see if they are identical. Otherwise the calc. results with cdll are seriously wrong!\n");
-    printf("in ham.dll, eig.:%p, vel.:%p, proj. vel.:%p\n",energy,velocity,velocity_proj);
-    return Py_BuildValue("(LLL)",eigs_addr,vel_addr,vel_proj_addr);
+    printf("in ham.dll, eig.:%p, vel.:%p, proj. vel.:%p %p %p\n",energy,velocity,velocity_proj_sx,velocity_proj_sy,velocity_proj_sz);
+    return Py_BuildValue("(LLLLL)",eigs_addr,vel_addr,vel_proj_sx_addr,vel_proj_sy_addr,vel_proj_sz_addr);
 }
 
 // 2. calc BPVE
@@ -2513,23 +2535,10 @@ PyObject * calcProjectiveBulkPhotovoltaicCond(int nkpt,
 
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
-            PyTuple_SetItem(conductance_real, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
-            PyTuple_SetItem(conductance_real, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
-            PyTuple_SetItem(conductance_real, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
-            PyTuple_SetItem(conductance_real, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
-            PyTuple_SetItem(conductance_real, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
-            PyTuple_SetItem(conductance_real, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
-            PyTuple_SetItem(conductance_real, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
-            PyTuple_SetItem(conductance_real, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
-
-            PyTuple_SetItem(conductance_imag, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
-            PyTuple_SetItem(conductance_imag, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
-            PyTuple_SetItem(conductance_imag, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
-            PyTuple_SetItem(conductance_imag, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
-            PyTuple_SetItem(conductance_imag, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
-            PyTuple_SetItem(conductance_imag, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
-            PyTuple_SetItem(conductance_imag, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
-            PyTuple_SetItem(conductance_imag, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
+            for(int icomponent=0;icomponent<8;icomponent++){
+                PyTuple_SetItem(conductance_real, icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomponent])));
+                PyTuple_SetItem(conductance_imag, icomponent*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomponent])));
+            }
         }
     }
     free(conductance_on_kmesh_on_omega);
