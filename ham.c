@@ -1892,12 +1892,24 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                         lapack_complex_double vx_mn=velocity[          ikpt*kpt_width+bandm*norbs+bandn];
                         lapack_complex_double vy_mn=velocity[dir_width+ikpt*kpt_width+bandm*norbs+bandn];
                         
-                        lapack_complex_double Eml=Em-El+itau;
-                        lapack_complex_double Enm=En-Em-itau;
-                        SIGMA_xx_ln+=vx_lm*vx_mn*(1/Eml+1/Enm);
-                        SIGMA_xy_ln+=vx_lm*vy_mn/Eml+vy_lm*vx_mn/Enm;
-                        SIGMA_yx_ln+=vy_lm*vx_mn/Eml+vx_lm*vy_mn/Enm;
-                        SIGMA_yy_ln+=vy_lm*vy_mn*(1/Eml+1/Enm);
+                        double Eml=Em-El;//-itau;
+                        double Enm=En-Em;//-itau;
+                        double Eml_reverse, Enm_reverse;
+                        if(fabs(Eml)<1e-7){
+                            Eml_reverse=0;
+                        }else{
+                            Eml_reverse=1/Eml;
+                        }
+                        if(fabs(Enm)<1e-7){
+                            Enm_reverse=0;
+                        }else{
+                            Enm_reverse=1/Enm;
+                        }
+                        
+                        SIGMA_xx_ln+=vx_lm*vx_mn*(Eml_reverse+Enm_reverse);
+                        SIGMA_xy_ln+=vx_lm*vy_mn*Eml_reverse+vy_lm*vx_mn*Enm_reverse;
+                        SIGMA_yx_ln+=vy_lm*vx_mn*Eml_reverse+vx_lm*vy_mn*Enm_reverse;
+                        SIGMA_yy_ln+=vy_lm*vy_mn*(Eml_reverse+Enm_reverse);
 
                     }
                     lapack_complex_double rxx_ln=_Complex_I/Eln*(

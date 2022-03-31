@@ -97,10 +97,10 @@ atomicMagMomList=[[0,1], # in z direction
                   [0,0], # 0 mag.mom.
                  ]
 '''
-#hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-#                  spinor=True,atomicMagMomList=atomicMagMomList)
+hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
+                  spinor=True,atomicMagMomList=atomicMagMomList)
 #exit()
-#hr.adjustSOCStrength(socFactor=0.0)
+hr.adjustSOCStrength(socFactor=0.0)
 #hr.adjustInterLayerInteraction(
 #    [0,1,2,3,4,72,73,74,75,76,5,6,7,8,9,77,78,79,80,81,10,11,12,82,83,84,13,14,15,85,86,87,16,17,18,88,89,90,19,20,21,91,92,93,22,23,24,94,95,96,25,26,27,97,98,99],
 #    [],
@@ -108,14 +108,14 @@ atomicMagMomList=[[0,1], # in z direction
 #)
 #print(hr.onsite)
 #exit()
-#gr=Green()
+gr=Green()
 #gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/FeCl2/',saveFig=True,redBands=[17,18])
 #gr.calcFullBands_CDLL(hr,fermi=0.0,mainDir='./mcalc/MoTe2/',saveFig=True,redBands=[13,14])
-#gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/MnPSe3/',saveFig=True,redBands=[43,44])
+gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/MnPSe3/',saveFig=True,redBands=[43,44])
 #gr.calcFullBands_CDLL(hr,fermi=-1.6042,mainDir='./mcalc/Cr2P2Se6/',saveFig=True,redBands=[41,42])
 #gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/BN/',saveFig=True,redBands=[1,2])
 #gr.calcFullBands_CDLL(hr,fermi=-0.98,mainDir='./mcalc/CrI3/bilayer/',saveFig=True,redBands=[83,84])
 
 #res=Response()
 #res.calcJDOS_CDLL(hr,mainDir='./mcalc/MnPSe3/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[200,200,1],omegaList=np.linspace(1,3,100),tau=0.01,erange=[-80,80],nthreads=4)
-drawJDOSOnHexagonalBZ('./mcalc/MnPSe3/JDOS98_E2.980.txt','./mcalc/MnPSe3/',[200,200,1])
+#drawJDOSOnHexagonalBZ('./mcalc/MnPSe3/JDOS98_E2.980.txt','./mcalc/MnPSe3/',[200,200,1])
