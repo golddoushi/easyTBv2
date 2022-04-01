@@ -376,7 +376,7 @@ class Hr:
         print('dropping bonds:',ndropping)
         return ndropping
 
-    def symmerizeBonds(self,atomicOrbIndexList,spinor=False,symOpSelection=[],atomicMagMomList=[]):
+    def symmerizeBonds(self,atomicOrbIndexList,spinor=False,saxis=np.array([0,0,1]),symOpSelection=[],atomicMagMomList=[]):
         def vecAround(vec):
             newVec=[]
             for x in vec:
@@ -473,8 +473,16 @@ class Hr:
                 my=m_su2.conjugate().dot(sy).dot(m_su2)
                 mz=m_su2.conjugate().dot(sz).dot(m_su2)
                 magmom_list.append(np.array([mx,my,mz]).real)
-            tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list]) if len(magmom_list)>0 else 0.
+            #tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list]) if len(magmom_list)>0 else 0.
             if spinor: # find proper sub-group consist with magnetism and time reversal symmetry
+                assert np.sqrt(sum(saxis*saxis))==1, 'saxis should be normalized vector'
+                #Usx=np.array([[ 1, 1],
+                #              [ 1,-1]])/np.sqrt(2)
+                #Usy=np.array([[ 1,1j],
+                #              [1j,1 ]],dtype=complex)/np.sqrt(2)
+                #Usz=np.array([[ 1, 0],
+                #              [ 0, 1]])/np.sqrt(2)
+                _,Us=np.linalg.eigh(saxis[0]*sx+saxis[1]*sy+saxis[2]*sz)
                 new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
                 for isym in range(len(symIonMap)):
                     rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
@@ -491,20 +499,22 @@ class Hr:
                         print('crystal sym. op. preserved:')
                         print(rotate_r)
                         print(translate)
-                        print(rotate_s)
+                        #print(rotate_s)
+                        #print(Usy)
+                        print(Us.conjugate().T.dot(rotate_s).dot(Us))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
                         new_symIonMap.append(ionMap)
-                        new_spinRotateList.append(rotate_s)
+                        new_spinRotateList.append(Us.conjugate().T.dot(rotate_s).dot(Us))
                         new_timeReversalList.append(False)
                     else:
                         print('crystal sym. op. broken due to magnetism')
                         print(rotate_r)
                         print(translate)
-                        print(rotate_s)
+                        print(Us.conjugate().T.dot(rotate_s).dot(Us))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
@@ -513,7 +523,7 @@ class Hr:
                     rotate_s_tr=rotate_s.dot(np.array([[0,-1],[1,0]],dtype=complex))
                     magmom_rotated_list=[]
                     for m in atomicMagMomList:
-                        m_su2=rotate_s_tr.dot(np.array(m,dtype=complex))
+                        m_su2=(rotate_s_tr.dot(np.array(m,dtype=complex))).conjugate() # NOTE the conjugation inherent in TRS
                         mx=m_su2.conjugate().dot(sx).dot(m_su2)
                         my=m_su2.conjugate().dot(sy).dot(m_su2)
                         mz=m_su2.conjugate().dot(sz).dot(m_su2)
@@ -524,20 +534,22 @@ class Hr:
                         print('crystal sym. op. + time reversal preserved:')
                         print(rotate_r)
                         print(translate)
-                        print(rotate_s_tr)
+                        #print(rotate_s_tr)
+                        #print(Usy)
+                        print(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
                         new_symIonMap.append(ionMap)
-                        new_spinRotateList.append(rotate_s_tr)
+                        new_spinRotateList.append(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
                         new_timeReversalList.append(True)
                     else:
                         print('crystal sym. op. + time reversal broken due to magnetism')
                         print(rotate_r)
                         print(translate)
-                        print(rotate_s_tr)
+                        print(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: print(idmag,dmag)
@@ -696,7 +708,7 @@ class Hr:
         '''
         # check the whether operations are right
         np.set_printoptions(precision=4)
-        i,j=1,2
+        i,j=0,2
         orbAtomI=[]
         for L in atomicOrbIndexList[i]:
             for iorb in L: orbAtomI.append(iorb)
@@ -749,6 +761,9 @@ class Hr:
                     bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
             #print('original bond')
             #print(bond)
+            #print('transformer')
+            #print(localSymOp[i_trans])
+            #print(localSymOp[j_trans])
             bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
             if timeReversal:
                 bond=bond.conjugate()
