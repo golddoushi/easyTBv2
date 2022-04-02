@@ -476,12 +476,6 @@ class Hr:
             #tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list]) if len(magmom_list)>0 else 0.
             if spinor: # find proper sub-group consist with magnetism and time reversal symmetry
                 assert np.sqrt(sum(saxis*saxis))==1, 'saxis should be normalized vector'
-                #Usx=np.array([[ 1, 1],
-                #              [ 1,-1]])/np.sqrt(2)
-                #Usy=np.array([[ 1,1j],
-                #              [1j,1 ]],dtype=complex)/np.sqrt(2)
-                #Usz=np.array([[ 1, 0],
-                #              [ 0, 1]])/np.sqrt(2)
                 _,Us=np.linalg.eigh(saxis[0]*sx+saxis[1]*sy+saxis[2]*sz)
                 new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
                 for isym in range(len(symIonMap)):

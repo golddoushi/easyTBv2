@@ -20,7 +20,7 @@ hr=reader.Hr()
 #hr.readSingleFile('./mcalc/MoTe2CrI3/wannier90_hr.mz.dat',ignoreImagPart=False,cutoff=-0.1,format="QE")
 #hr.readDoubleFiles('./mcalc/Cr2P2Se6/wannier90.up_hr.dat','./mcalc/Cr2P2Se6/wannier90.dn_hr.dat',cutoff=0.01)
 #hr.readSingleFile('./mcalc/Cr2P2Se6/wannier90.up_hr.dat',cutoff=-0.01)
-hr.readSingleFile('./mcalc/MnPSe3/wannier90_hr.mx.dat',ignoreImagPart=False,cutoff=-0.1)
+hr.readSingleFile('./mcalc/MnPSe3/wannier90_hr.my.dat',ignoreImagPart=False,cutoff=-0.1)
 #hr.readSingleFile('./mcalc/BN/hr.soc.dat',ignoreImagPart=False,cutoff=-0.1)
 #hr.readSingleFile('./mcalc/CrI3/bilayer/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
@@ -48,8 +48,8 @@ atomicOrbIndexList=[[[],[],[0,1,2,3,4,34,35,36,37,38]],       # Mn1
                     [[],[28,29,30,62,63,64]],                 # S5
                     [[],[31,32,33,65,66,67]],                 # S6
                    ]
-atomicMagMomList=[[1,1], # in z direction
-                  [1,-1], # in -z direction
+atomicMagMomList=[[1,1j], # in z direction
+                  [1j,1], # in -z direction
                   [0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
@@ -97,8 +97,8 @@ atomicMagMomList=[[0,1], # in z direction
                   [0,0], # 0 mag.mom.
                  ]
 '''
-#hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-#                  spinor=True,saxis=np.array([1,0,0]),atomicMagMomList=atomicMagMomList)
+hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
+                  spinor=True,saxis=np.array([0,1,0]),atomicMagMomList=atomicMagMomList)
 #exit()
 #hr.adjustSOCStrength(socFactor=0.0)
 #hr.adjustInterLayerInteraction(

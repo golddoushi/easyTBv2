@@ -103,7 +103,7 @@ atomicMagMomList=[[0,1], # in z direction
 '''
 
 hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-                  spinor=True,atomicMagMomList=atomicMagMomList)
+                  spinor=True,saxis=np.array([0,0,1]),atomicMagMomList=atomicMagMomList)
 #hr.adjustSOCStrength(socFactor=1.0)
 #exit()
 # NOTE check the fermi in GlobalConst first
