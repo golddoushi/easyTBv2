@@ -2944,13 +2944,14 @@ class Green:
         '''Linear response approximation
            using Gaussian integration along semi-circle in upper complex plane
         '''
-        assert len(sourceOrbList)==len(targetOrbList), 'Now, the coupling ions is assumed to be symmtric to each other'
-        S=len(sourceOrbList)/2.
+        #assert len(sourceOrbList)==len(targetOrbList), 'Now, the coupling ions is assumed to be symmtric to each other'
+        #S=1#len(sourceOrbList)/2.
+        assert hr.norb%2==0, 'spin hr must have even orbs'
         norb=hr.norb
         halfNOrb=int(norb/2)
         onsite=np.array(hr.onsite)
         deltaList=onsite[:halfNOrb]-onsite[halfNOrb:]
-        print('S=%.1f'%S)
+        #print('S=%.1f'%S)
         print('Exchange splitting are:')
         print(deltaList)
         
@@ -2986,10 +2987,10 @@ class Green:
             scatterSingle1List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
             scatterSingle1List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
 
-            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.*np.sin(theta)])
-            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.*np.sin(theta)])
-            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],deltaList[iorb]*(np.cos(theta)-1)])
-            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],-deltaList[iorb]*(np.cos(theta)-1)])
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.])#*np.sin(theta)])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.])#*np.sin(theta)])
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])#deltaList[iorb]*(np.cos(theta)-1)])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])#-deltaList[iorb]*(np.cos(theta)-1)])
         
         # analyze scattering list
         # construct scattering matrix with all irrelevant zeros suppressed
@@ -3035,14 +3036,18 @@ class Green:
         #print(scatteringDoubleCenter)
 
         c_scatteringDoubleCenter=(c_double*(scatteringOrder*scatteringOrder*2))()
-        c_scatteringSingleCenter=(c_double*(scatteringOrder*scatteringOrder*2))()
+        c_scatteringSingle1Center=(c_double*(scatteringOrder*scatteringOrder*2))()
+        c_scatteringSingle2Center=(c_double*(scatteringOrder*scatteringOrder*2))()
         for i in range(scatteringOrder):
             for j in range(scatteringOrder):
                 c_scatteringDoubleCenter[i*scatteringOrder*2+j*2]=c_double(scatteringDoubleCenter[i][j].real)
                 c_scatteringDoubleCenter[i*scatteringOrder*2+j*2+1]=c_double(scatteringDoubleCenter[i][j].imag)
 
-                c_scatteringSingleCenter[i*scatteringOrder*2+j*2]=c_double(scatteringSingle1Center[i][j].real)
-                c_scatteringSingleCenter[i*scatteringOrder*2+j*2+1]=c_double(scatteringSingle1Center[i][j].imag)
+                c_scatteringSingle1Center[i*scatteringOrder*2+j*2]=c_double(scatteringSingle1Center[i][j].real)
+                c_scatteringSingle1Center[i*scatteringOrder*2+j*2+1]=c_double(scatteringSingle1Center[i][j].imag)
+
+                c_scatteringSingle2Center[i*scatteringOrder*2+j*2]=c_double(scatteringSingle2Center[i][j].real)
+                c_scatteringSingle2Center[i*scatteringOrder*2+j*2+1]=c_double(scatteringSingle2Center[i][j].imag)
         
         c_r=c_double((energyRange[1]-energyRange[0])/2)
         c_o=c_double((energyRange[0]+energyRange[1])/2)
@@ -3070,7 +3075,8 @@ class Green:
                          c_int(scatteringOrder),
                          c_relevantOrbR,c_relevantOrbIndex,
                          c_scatteringDoubleCenter,
-                         c_scatteringSingleCenter)
+                         c_scatteringSingle1Center,
+                         c_scatteringSingle2Center)
         
         #a=getEOnCircle(np.pi)
         #print(a)

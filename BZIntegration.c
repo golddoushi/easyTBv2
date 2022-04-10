@@ -41,7 +41,8 @@ PyObject * getEOnCircle(int nthreads,
                         int scatteringOrder, 
                         int relevantOrbR[scatteringOrder][3], int relevantOrbIndex[scatteringOrder],
                         double scatteringDoubleCenterOrigin[scatteringOrder*scatteringOrder*2],
-                        double scatteringSingleCenterOrigin[scatteringOrder*scatteringOrder*2])
+                        double scatteringSingle1CenterOrigin[scatteringOrder*scatteringOrder*2],
+                        double scatteringSingle2CenterOrigin[scatteringOrder*scatteringOrder*2])
 {
     //printf("enering BZIntegration.dll\n");
     double * kmesh=(double*)kmesh_address;
@@ -59,7 +60,8 @@ PyObject * getEOnCircle(int nthreads,
     lapack_complex_double* g_internal=(lapack_complex_double*)malloc(scatteringOrder*scatteringOrder*sizeof(lapack_complex_double));
     lapack_complex_double* g_external_contracted=(lapack_complex_double*)malloc(scatteringOrder*scatteringOrder*sizeof(lapack_complex_double));
     lapack_complex_double* scatteringDoubleCenter=(lapack_complex_double*)malloc(scatteringOrder*scatteringOrder*sizeof(lapack_complex_double));
-    lapack_complex_double* scatteringSingleCenter=(lapack_complex_double*)malloc(scatteringOrder*scatteringOrder*sizeof(lapack_complex_double));
+    lapack_complex_double* scatteringSingle1Center=(lapack_complex_double*)malloc(scatteringOrder*scatteringOrder*sizeof(lapack_complex_double));
+    lapack_complex_double* scatteringSingle2Center=(lapack_complex_double*)malloc(scatteringOrder*scatteringOrder*sizeof(lapack_complex_double));
     
     // initialize green's functions and scattering matrix
     for(int i=0;i<scatteringOrder;i++){
@@ -67,7 +69,8 @@ PyObject * getEOnCircle(int nthreads,
             *(g_internal+i*scatteringOrder+j)=0;
             *(g_external_contracted+i*scatteringOrder+j)=0;
             *(scatteringDoubleCenter+i*scatteringOrder+j)=*(scatteringDoubleCenterOrigin+i*scatteringOrder*2+j*2)+(*(scatteringDoubleCenterOrigin+i*scatteringOrder*2+j*2+1))*_Complex_I;
-            *(scatteringSingleCenter+i*scatteringOrder+j)=*(scatteringSingleCenterOrigin+i*scatteringOrder*2+j*2)+(*(scatteringSingleCenterOrigin+i*scatteringOrder*2+j*2+1))*_Complex_I;
+            *(scatteringSingle1Center+i*scatteringOrder+j)=*(scatteringSingle1CenterOrigin+i*scatteringOrder*2+j*2)+(*(scatteringSingle1CenterOrigin+i*scatteringOrder*2+j*2+1))*_Complex_I;
+            *(scatteringSingle2Center+i*scatteringOrder+j)=*(scatteringSingle2CenterOrigin+i*scatteringOrder*2+j*2)+(*(scatteringSingle2CenterOrigin+i*scatteringOrder*2+j*2+1))*_Complex_I;
         }
     }
 
@@ -192,6 +195,7 @@ PyObject * getEOnCircle(int nthreads,
       for(j=0;j<4;j++) printf("(%.6f, %.6f) ",creal(*(scatteringDoubleCenter+i*scatteringOrder+j)),cimag(*(scatteringDoubleCenter+i*scatteringOrder+j)));
       printf("\n");
     }*/
+    //G(V12)G(V12)G
     lapack_complex_double*contract1=conventional_tensor_contraction(scatteringOrder,scatteringOrder,scatteringOrder,
                                                                     g_external_contracted,
                                                                     scatteringDoubleCenter);
@@ -209,16 +213,26 @@ PyObject * getEOnCircle(int nthreads,
     //G(V1)G(V1)G
     lapack_complex_double*contract4=conventional_tensor_contraction(scatteringOrder,scatteringOrder,scatteringOrder,
                                                                     g_external_contracted,
-                                                                    scatteringSingleCenter);
+                                                                    scatteringSingle1Center);
     lapack_complex_double*contract5=conventional_tensor_contraction(scatteringOrder,scatteringOrder,scatteringOrder,
                                                                     contract4,
                                                                     g_internal);
     lapack_complex_double*contract6=conventional_tensor_contraction(scatteringOrder,scatteringOrder,scatteringOrder,
                                                                     contract5,
-                                                                    scatteringSingleCenter);
+                                                                    scatteringSingle1Center);
+    //G(V2)G(V2)G
+    lapack_complex_double*contract7=conventional_tensor_contraction(scatteringOrder,scatteringOrder,scatteringOrder,
+                                                                    g_external_contracted,
+                                                                    scatteringSingle2Center);
+    lapack_complex_double*contract8=conventional_tensor_contraction(scatteringOrder,scatteringOrder,scatteringOrder,
+                                                                    contract7,
+                                                                    g_internal);
+    lapack_complex_double*contract9=conventional_tensor_contraction(scatteringOrder,scatteringOrder,scatteringOrder,
+                                                                    contract8,
+                                                                    scatteringSingle2Center);
     //trance
     lapack_complex_double delta_trace=0;
-    for(int i=0;i<scatteringOrder;i++) delta_trace+=(*(contract3+i*scatteringOrder+i)-2*(*(contract6+i*scatteringOrder+i)));
+    for(int i=0;i<scatteringOrder;i++) delta_trace+=(*(contract3+i*scatteringOrder+i)-(*(contract6+i*scatteringOrder+i))-(*(contract9+i*scatteringOrder+i)));
     free(contract1);free(contract2);free(contract3);free(contract4);free(contract5);free(contract6);
     free(g_internal);free(g_external_contracted);
     lapack_complex_double delta_dos=-2*delta_trace/TwoPI;
