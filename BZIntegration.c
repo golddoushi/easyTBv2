@@ -233,7 +233,7 @@ PyObject * getEOnCircle(int nthreads,
     //trance
     lapack_complex_double delta_trace=0;
     for(int i=0;i<scatteringOrder;i++) delta_trace+=(*(contract3+i*scatteringOrder+i)-(*(contract6+i*scatteringOrder+i))-(*(contract9+i*scatteringOrder+i)));
-    free(contract1);free(contract2);free(contract3);free(contract4);free(contract5);free(contract6);
+    free(contract1);free(contract2);free(contract3);free(contract4);free(contract5);free(contract6);free(contract7);free(contract8);free(contract9);
     free(g_internal);free(g_external_contracted);
     lapack_complex_double delta_dos=-2*delta_trace/TwoPI;
     double dE_onCircle=cimag(E*delta_dos*z*_Complex_I);
