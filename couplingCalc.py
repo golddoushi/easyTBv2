@@ -171,7 +171,7 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
     #if param.MAGTYPE=='ISING':
     #    calcIsotropicJ(mainDir,bondList=bondListWithClassification,supercellSize=[sizeL,sizeW,sizeH])
 
-def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=[], MAE=0):
+def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,erange=(-500,500),emptySpace=5,autoFixFermi=False,spinList=[], MAE=0, hrcutoff=-0.01):
     '''
     mainDir: the position of Hr file
     fermi: assumed Fermi level
@@ -189,15 +189,15 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=
         for bondType in bondList:
             bondType[0].broadCastExchange(verbose=True)
         writeMCSolverIsingFile(mainDir)
-        calcSpinWaveSpectra(mainDir,spinList,MAE)
-        calcSpinWaveDOS(mainDir,spinList,MAE)
+        #calcSpinWaveSpectra(mainDir,spinList,MAE)
+        #calcSpinWaveDOS(mainDir,spinList,MAE)
         return
     
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
     if len(hrFileList)==2:
-        hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=True)
+        hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=True,cutoff=hrcutoff)
     elif len(hrFileList)==1:
-        hr.readSingleFile(hrFileList[0],ignoreImagPart=True)
+        hr.readSingleFile(hrFileList[0],ignoreImagPart=True,cutoff=hrcutoff)
     elif len(hrFileList)==0:
         print("Error: cannot find Hr file in %s, pls. provide Hr file with name hr(.up or .dn) in %s"%(mainDir,mainDir))
         exit()
@@ -209,10 +209,15 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=
     gr=hamilton.Green()
     # obtain kmesh and Hk 
     nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2],GammaMode=1,nthreads=param.NCORE)
-    emin,emax,fermi_adjusted=gr.calcFullDOS_CDLL(hr,c_Hk_addr,nkpt,hr.norb,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True,
-                                                nthreads=param.NCORE)
-    gr.calcFullBands_CDLL(hr,fermi=fermi,optimalFermi=fermi_adjusted,mainDir=mainDir,saveFig=True,nthreads=param.NCORE)
-    #fermi_adjusted=fermi
+    if autoFixFermi:
+        emin,emax,fermi_adjusted=gr.calcFullDOS_CDLL(hr,c_Hk_addr,nkpt,hr.norb,fermi=fermi,eta=eta,mainDir=mainDir,saveFig=True,nthreads=param.NCORE)
+    else:
+        emin,emax,fermi_adjusted=-1000,1000,fermi
+    emin=np.max([emin,erange[0]])
+    emax=np.min([emax,erange[1]])
+    print("Energy window for bands: [%f, %f]"%(emin,emax))
+    #gr.calcFullBands_CDLL(hr,fermi=fermi,optimalFermi=fermi_adjusted,mainDir=mainDir,saveFig=True,nthreads=param.NCORE)
+    
     # now the c part, enjoy :-P
     for ibondType, bondType in enumerate(bondList):
         bond=bondType[0]
@@ -228,8 +233,8 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,emptySpace=5, spinList=
     
     fileio.writeJ(mainDir, bondList, sc)
     writeMCSolverIsingFile(mainDir)
-    calcSpinWaveSpectra(mainDir,spinList,MAE)
-    calcSpinWaveDOS(mainDir,spinList,MAE)
+    #calcSpinWaveSpectra(mainDir,spinList,MAE)
+    #calcSpinWaveDOS(mainDir,spinList,MAE)
     
 def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5, ini_S=[], MAE=0.1):
     '''
@@ -249,7 +254,7 @@ def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5, ini_S=[], MAE=0.1)
         for bondType in bondList:
             bondType[0].broadCastExchange(verbose=True)
         writeMCSolverIsingFile(mainDir)
-        calcSpinWaveSpectra(mainDir,ini_S,MAE)
+        #calcSpinWaveSpectra(mainDir,ini_S,MAE)
         
         return
     
@@ -282,7 +287,7 @@ def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5, ini_S=[], MAE=0.1)
     
     fileio.writeJ(mainDir, bondList, supercellSize)
     writeMCSolverIsingFile(mainDir)
-    calcSpinWaveSpectra(mainDir,ini_S,MAE)
+    #calcSpinWaveSpectra(mainDir,ini_S,MAE)
 
 def __updateSource(source_list,ini_mag,ini_S,size=2):
     outSource=[]
@@ -307,13 +312,13 @@ def writeMCSolverIsingFile(path):
     for iorb, orb in enumerate(magOrbList):
         orb.index_tmp=iorb
     with open(path+pR.getUniqueName()+'.txt','w') as f:
-        f.write("This is mcsolver's save file, version: 2.2\n")
+        f.write("This is mcsolver's save file, version: 2.3\n")
         f.write('Lattice:\n')
         for vec in pR.lat:
             f.write('%.9f %.9f %.9f\n'%(vec[0],vec[1],vec[2]))
         f.write('Supercell used in MC simulations:\n')
         if param.PBC==3:
-            f.write('16 16 16\n')
+            f.write('8 8 8\n')
         elif param.PBC==2:
             f.write('16 16 1\n')
         elif param.PBC==1:
@@ -325,23 +330,45 @@ def writeMCSolverIsingFile(path):
             return
         f.write('Orbitals in cell:\n')
         f.write('%d\n'%len(magOrbList))
-        f.write('Postions, initial spin states and onsite-anisotropy of every orbitals:\n')
+        f.write('Positions, initial spin states and onsite-anisotropy of every orbital:\n')
         for orb in magOrbList:
             factor=param.EV2K/abs(orb.spin)
-            f.write('orb %d : type %d spin %.1f pos [%.9f %.9f %.9f] Dz: %.9f Dx: %.9f Dy: %.9f\n'%(
-                orb.index_tmp,orb.type,orb.spin*orb.magmom/abs(orb.magmom),*orb.pos,orb.D[2]*factor,orb.D[0]*factor,orb.D[1]*factor
+            f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dz: %.9f Dx: %.9f Dy: %.9f\n'%(
+                orb.index_tmp,orb.type,abs(orb.spin)*orb.magmom/abs(orb.magmom),*orb.pos,orb.D[2]*factor,orb.D[0]*factor,orb.D[1]*factor
             ))
         f.write('Bonds:\n')
         f.write('%d\n'%len(pR.bondList))
         f.write('id, source, target, overLat, Jz, Jx, Jy of each bond:\n')
         for bond in pR.bondList:
-            s1=abs(bond.sourceOrb.spin)
-            s2=abs(bond.targetOrb.spin)
-            factor=param.EV2K/s1/s2
+            s1=bond.sourceOrb.spin
+            s2=bond.targetOrb.spin
+            factor=param.EV2K/s1/s2 # NOTE: exchange energy obtained from perturbation has sign dependence on spin already
             f.write('bond %d: Jz %.9f Jx %.9f Jy %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
                 bond.id, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, 0, 0, 0, 0, 0, 0,
                 bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat
             ))
+        f.write('Dipole long range correction:\n')
+        f.write('alpha 0.0\n')
+        f.write('Temperature scanning region:\n')
+        f.write('Tmin 100 Tmax 500 nT 8\n')
+        f.write('Field scanning region:\n')
+        f.write('Hmin 0 Hmax 0.1 nH 1\n')
+        f.write('Measurement:\n')
+        f.write('measure the correlation function between orb0 and orb0 over [0 0 0]\n')
+        f.write('OrbGroup: 1\n')
+        f.write('Supergroup\n')
+        f.write('group0 orb0-orb0\n')
+        f.write('Sweeps for thermalization and statistics, and relaxiation step for each sweep:\n')
+        f.write('80000 640000 0\n')
+        f.write('Model type:\n')
+        f.write('Ising\n')
+        f.write('Algorithm:\n')
+        f.write('Metropolis\n')
+        f.write('XAxis type:\n')
+        f.write('T\n')
+        f.write('Distribution output frame: 0 \n')
+        f.write('Ncores:\n')
+        f.write('4\n')
 
 def calcSpinWaveDOS(path,SList,MAE=0):
     magOrbID=[iorb for iorb in range(len(SList)) if SList[iorb]>0.1]
