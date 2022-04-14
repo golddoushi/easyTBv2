@@ -2923,3 +2923,310 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond(int nkpt,
     free(conductance_on_kmesh_on_omega);
     return Py_BuildValue("(OO)",conductance_real,conductance_imag);
 }
+
+
+// New version of Proj. BPVE
+int _calcBandsAndProjectedVelocities(
+                       int nkpt, double kmesh[], // num. of kpts and frac. coor. of kpts
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings],
+                       int overLat[nhoppings][3],
+                       double lattice[3][3],
+                       double orbCorr[norbs][3], // fractional coor. of each orb
+                       double erange[2], // energy range for calc.
+                       int nProj, // num. of projections
+                       int wOrbSourceProj[nProj][norbs], // index of source orb in each projection
+                       int wOrbTargetProj[nProj][norbs], // index of target orb in each projection
+                       double * energy, // output energies
+                       lapack_complex_double * velocities, // output projected velocities
+                       int _nthreads){
+    printf("projective velocity calc. in cdll\n");
+    //FILE*fp;
+    //fp=fopen("./c_log","a");
+    // verification
+    //fprintf(fp,"nkpt: %d, norbs: %d, nhoppings: %d\n",nkpt,norbs,nhoppings);
+    //fprintf(fp,"memory estimation: %.4f MB\n",(4.*norbs*norbs+norbs)/1024/1024*nkpt*nProj*sizeof(lapack_complex_double));
+    //fclose(fp);
+    //printf("nkpt: %d, norbs: %d, nhoppings: %d\n",nkpt,norbs,nhoppings);
+    //printf("memory estimation: %.4f MB\n",(4.*norbs*norbs+norbs)/1024/1024*nkpt*nProj*sizeof(lapack_complex_double));
+    
+    //double *energy=(double*)malloc(nkpt*norbs*sizeof(double));
+    //lapack_complex_double *velocity=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
+    //lapack_complex_double *velocity_proj=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
+
+    int kpt_width=norbs*norbs;
+    int dir_width=nkpt*kpt_width;
+    int proj_width=2*dir_width;
+
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("calc projective velocity using %d cores in ham.dll\n",nthreads);
+    //fp=fopen("./c_log","a");
+    //fprintf(fp,"calc projective velocity using %d cores in ham.dll\n",nthreads);
+    //fclose(fp);
+
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            lapack_complex_double hk[norbs][norbs]; // init Hk
+            lapack_complex_double DhkDkf[nProj][norbs][norbs][2]; // init DHk/Dk1,Dk2 for each projection
+            lapack_complex_double DhkDkc[nProj][norbs][norbs][2]; // init DHk/Dkx,Dky for each projection
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    hk[i][j]=0;
+                    for(int k=0;k<nProj;k++){
+                        DhkDkf[k][i][j][0]=0;
+                        DhkDkf[k][i][j][1]=0;
+                        DhkDkc[k][i][j][0]=0;
+                        DhkDkc[k][i][j][1]=0;
+                    }
+                }
+            }
+            double eigs[norbs]; // output eigenvalues of Hk
+            int isource,itarget;
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){ // setting Hk, derivated Hk, and projectively derivated Hk
+                lapack_complex_double hopping_R[3];
+                isource=sourceID[ihopping];
+                itarget=targetID[ihopping];
+                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
+
+                lapack_complex_double phase=0;
+                for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt*3+i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
+                hk[isource][itarget]+=tk;
+
+                for(int iproj=0;iproj<nProj;iproj++){// setting projected DhkDkf
+                    if(wOrbSourceProj[iproj][isource]*wOrbTargetProj[iproj][itarget]+wOrbSourceProj[iproj][itarget]*wOrbTargetProj[iproj][isource]>0){
+                        for(int i=0;i<2;i++)DhkDkf[iproj][isource][itarget][i]+=tk*hopping_R[i];
+                    }
+                }
+            }
+            // unitary transform into real space partial
+            for(int iproj=0;iproj<nProj;iproj++){
+                for(int i=0;i<norbs;i++){
+                    for(int j=0;j<norbs;j++){
+                        for(int k=0;k<3;k++){
+                            DhkDkc[iproj][i][j][0]+=DhkDkf[iproj][i][j][k]*lattice[k][0];
+                            DhkDkc[iproj][i][j][1]+=DhkDkf[iproj][i][j][k]*lattice[k][1];
+                        }
+                    }
+                }
+            }
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            // vec[i]=hk[:][i]
+            if(info!=0){
+                printf("LAPACKE failed, info: %d\n",info);
+                exit(1);
+            }
+            double Em, En;
+            for(int bandm=0;bandm<norbs;bandm++){
+                Em=eigs[bandm];
+                energy[ikpt*norbs+bandm]=Em;
+                if(Em>erange[1] | Em<erange[0])continue;
+                for(int bandn=0;bandn<norbs;bandn++){
+                    En=eigs[bandn];
+                    if(En>erange[1] | En<erange[0])continue;
+                    for(int iproj=0;iproj<nProj;iproj++){
+                        for(int idir=0;idir<2;idir++){
+                            int ipos=iproj*proj_width+idir*dir_width+ikpt*kpt_width+bandm*norbs+bandn;
+                            velocities[ipos]=0;
+                            for(int icontract=0;icontract<norbs;icontract++){
+                                for(int jcontract=0;jcontract<norbs;jcontract++){
+                                    velocities[ipos]+=conj(hk[icontract][bandm])*DhkDkc[iproj][icontract][jcontract][idir]*hk[jcontract][bandn];
+                                }
+                            }
+                        }
+                    }
+                }
+            }  
+        }
+    }
+    //fp=fopen("./c_log","a");
+    //fprintf(fp,"projective velocity completed\n");
+    //fclose(fp);
+    return 0;
+}
+
+PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
+                       int nkpt, double kmesh[nkpt][3],
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       int overLat[nhoppings][3], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings],
+                       int nphoton,
+                       double omegaList[nphoton],
+                       double fermi,
+                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
+                       double orbCorr[norbs][3], // fractional corrdinates of orbs
+                       double tau,
+                       double erange[2],
+                       // projection part
+                       int nProj, // num. of projections
+                       int wOrbSourceProj[nProj][norbs], // index of source orb in each projection
+                       int wOrbTargetProj[nProj][norbs], // index of target orb in each projection
+                       int nScatterRoute, // num. of scattering routes
+                       int scatterProjOrder[nScatterRoute][3], // proj. vel. order in each scattering route
+                       // parallel part
+                       int ndivide, // num. of parts
+                       int _nthreads){
+    printf("entering Projective BPVC module in cdll\n");
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    // verification
+    fprintf(fp,"nkpt: %d, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nphoton,erange[0],erange[1]);
+    fprintf(fp,"memory estimation: %.3f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(2*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
+    fclose(fp);
+    printf("nkpt: %d, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nphoton,erange[0],erange[1]);
+    printf("memory estimation: %.4f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(2*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
+    //exit(1);
+    
+    lapack_complex_double itau=tau*_Complex_I;
+    lapack_complex_double * conductance_on_kmesh_on_omega=(lapack_complex_double*)malloc(nScatterRoute*nphoton*nkpt*8*sizeof(lapack_complex_double));
+    for(int i=0;i<nScatterRoute*nphoton*nkpt*8;i++)conductance_on_kmesh_on_omega[i]=0;
+    
+    
+    int nkpt_part=nkpt/ndivide;
+    int ikpt_head;
+    if(nkpt%ndivide!=0){
+        printf("Error: nkpt %d cannot be divide by %d, exiting now!\n",nkpt,ndivide);
+        exit(0);
+    }
+    lapack_complex_double *velocity=(lapack_complex_double*)malloc(nProj*2*nkpt_part*norbs*norbs*sizeof(lapack_complex_double));
+    double *energy=(double*)malloc(nkpt_part*norbs*sizeof(double));
+    double *sub_kmesh=(double*)malloc(nkpt_part*3*sizeof(double));
+    int kpt_width=norbs*norbs;
+    int dir_width=nkpt_part*kpt_width;
+    int proj_width=2*dir_width;
+
+    int sca_width=nkpt*nphoton*8;
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt_part<_nthreads*10)nthreads=1;
+
+    for(int ipart=0;ipart<ndivide;ipart++){// kmesh partition
+        ikpt_head=nkpt_part*ipart;
+        for(int i=0;i<nkpt_part;i++)for(int j=0;j<3;j++)sub_kmesh[i*3+j]=kmesh[i+ikpt_head][j];
+
+        printf("use %d cores in ham.dll\n",nthreads);
+        fp=fopen("./c_log","a");
+        fprintf(fp,"calc velocities (part%d/%d) using %d cores in ham.dll\n",ipart+1,ndivide,nthreads);
+        fclose(fp);
+        printf("calc velocities (part%d/%d) using %d cores in ham.dll\n",ipart+1,ndivide,nthreads);
+        
+        int status=_calcBandsAndProjectedVelocities(
+                       nkpt_part, sub_kmesh, // num. of kpts and frac. coor. of kpts
+                       norbs, nhoppings,
+                       sourceID, targetID, 
+                       hopping_real,
+                       hopping_imag,
+                       overLat,
+                       lattice,
+                       orbCorr, // fractional coor. of each orb
+                       erange, // energy range for calc.
+                       nProj, // num. of projections
+                       wOrbSourceProj, // index of source orb in each projection
+                       wOrbTargetProj, // index of target orb in each projection
+                       energy, // output energies
+                       velocity, // output projected velocities
+                       nthreads);
+        if(status!=0){
+            printf("Error: velocity calc. failed\n");
+            exit(1);
+        }
+        fp=fopen("./c_log","a");
+        fprintf(fp,"velocities part%d completed\ncalc BPVE...\n",ipart+1);
+        fclose(fp);
+        printf("velocities part%d completed\nnow calc BPVE use %d cores in ham.dll\n",ipart+1,nthreads);
+
+        #pragma omp parallel num_threads(nthreads)
+        {
+            #pragma omp for
+            for(int ikpt=0;ikpt<nkpt_part;ikpt++){// loop over kmesh
+                int ikpt_true=ikpt_head+ikpt;
+                int writing_k_index=ikpt_true*nphoton*8;
+                for(int bandl=0;bandl<norbs;bandl++){ // loop over band_l
+                    double El=energy[ikpt*norbs+bandl];
+                    if(El<erange[0] | El>erange[1]) continue;
+                    int fl=0;
+                    if(El<=fermi)fl=1;
+                    for(int bandn=0;bandn<norbs;bandn++){ // loop over band_m
+                        double En=energy[ikpt*norbs+bandn];
+                        if(En<erange[0] | En>erange[1]) continue;
+                        int fn=0;
+                        if(En<=fermi)fn=1;
+                        int fln=fl-fn;
+                        if (fln==0) continue;
+
+                        int iv0,iv1,iv2;
+                        for(int iscatter=0;iscatter<nScatterRoute;iscatter++){
+                            iv0=scatterProjOrder[iscatter][0];
+                            iv1=scatterProjOrder[iscatter][1];
+                            iv2=scatterProjOrder[iscatter][2];
+                            int writing_scatter_index=iscatter*sca_width;
+                            // calc overlap
+                            lapack_complex_double px_nl=velocity[iv0*proj_width+          ikpt*kpt_width+bandn*norbs+bandl];
+                            lapack_complex_double py_nl=velocity[iv0*proj_width+dir_width+ikpt*kpt_width+bandn*norbs+bandl];
+                            //printf("band%d-%d, px_nl %f %f, py_nl %f %f\n",bandn,bandl,creal(px_nl),cimag(px_nl),creal(py_nl),cimag(py_nl));
+                            for(int bandm=0;bandm<norbs;bandm++){ // loop over band_n
+                                //if(bandn!=bandl)continue; // switch for bandn
+                                double Em=energy[ikpt*norbs+bandm];
+                                if(Em<erange[0] | Em>erange[1]) continue;
+                                // calc overlap
+                                lapack_complex_double px_lm=velocity[iv1*proj_width+          ikpt*kpt_width+bandl*norbs+bandm];
+                                lapack_complex_double py_lm=velocity[iv1*proj_width+dir_width+ikpt*kpt_width+bandl*norbs+bandm];
+                                lapack_complex_double px_mn=velocity[iv2*proj_width+          ikpt*kpt_width+bandm*norbs+bandn];
+                                lapack_complex_double py_mn=velocity[iv2*proj_width+dir_width+ikpt*kpt_width+bandm*norbs+bandn];
+
+                                for(int iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
+                                    int writing_ph_index=writing_scatter_index+writing_k_index+iphoton*8;
+                                    double omega=omegaList[iphoton];
+                            
+                                    lapack_complex_double factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                                    conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global;
+                                    conductance_on_kmesh_on_omega[writing_ph_index+1]+=px_nl*px_lm*py_mn*factor_global;
+                                    conductance_on_kmesh_on_omega[writing_ph_index+2]+=py_nl*py_lm*px_mn*factor_global;
+                                    conductance_on_kmesh_on_omega[writing_ph_index+3]+=py_nl*py_lm*py_mn*factor_global;
+                                    conductance_on_kmesh_on_omega[writing_ph_index+4]+=px_nl*py_lm*px_mn*factor_global;
+                                    conductance_on_kmesh_on_omega[writing_ph_index+5]+=px_nl*py_lm*py_mn*factor_global;
+                                    conductance_on_kmesh_on_omega[writing_ph_index+6]+=py_nl*px_lm*px_mn*factor_global;
+                                    conductance_on_kmesh_on_omega[writing_ph_index+7]+=py_nl*px_lm*py_mn*factor_global;
+                                }
+                            } 
+                        }
+                    }
+                }
+            }
+        }
+        printf("BPVE part%d done\n",ipart+1);
+        fp=fopen("./c_log","a");
+        fprintf(fp,"BPVE part%d done\n",ipart+1);
+        fclose(fp);
+    }
+    free(velocity);free(energy);
+    printf("All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    fp=fopen("./c_log","a");
+    fprintf(fp,"All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    fclose(fp);
+
+    PyObject * conductance_real=PyTuple_New(nScatterRoute*nphoton*nkpt*8);
+    PyObject * conductance_imag=PyTuple_New(nScatterRoute*nphoton*nkpt*8);
+
+    for(int iscatter=0;iscatter<nScatterRoute;iscatter++){
+        for(int iphoton=0;iphoton<nphoton;iphoton++){
+            for(int ikpt=0;ikpt<nkpt;ikpt++){
+                for(int icomp=0;icomp<8;icomp++){
+                    PyTuple_SetItem(conductance_real, iscatter*sca_width+icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*nphoton*8+iphoton*8+icomp])));
+                    PyTuple_SetItem(conductance_imag, iscatter*sca_width+icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*nphoton*8+iphoton*8+icomp])));
+                }
+            }
+        }
+    }
+    free(conductance_on_kmesh_on_omega);
+    return Py_BuildValue("(OO)",conductance_real,conductance_imag);
+}
