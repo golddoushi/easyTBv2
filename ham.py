@@ -533,7 +533,7 @@ class Response:
 
         return
 
-    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],nthreads=1):
+    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],ndivide=1,nthreads=1):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
@@ -602,10 +602,10 @@ class Response:
         c_erange[1]=c_double(erange[1])
         #exit()
         hamDLL=CDLL("./ham.dll")
-        hamDLL.calcBulkPhotovoltaicCond.restype=py_object
+        hamDLL.calcBulkPhotovoltaicCond_memoryReduce.restype=py_object
 
         #tau=0.05
-        result=hamDLL.calcBulkPhotovoltaicCond(c_int(nkpts),c_kmesh,c_dk,
+        result=hamDLL.calcBulkPhotovoltaicCond_memoryReduce(c_int(nkpts),c_kmesh,c_dk,
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(len(omegaList)),
@@ -615,6 +615,7 @@ class Response:
                         c_orbCorrList,
                         c_double(tau),
                         c_erange,
+                        c_int(ndivide),
                         c_int(nthreads))
                         
         condFull=(np.array(result[0])+1j*np.array(result[1]))#.reshape(8,len(omegaList)*nkpts)
