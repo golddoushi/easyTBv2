@@ -79,7 +79,49 @@ def __drawPatternOnHexagonalBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray
     plt.ylim(-corr_max,corr_max)
     plt.xticks([])
     plt.yticks([])
-    plt.savefig(rpath+"hotmap.png",dpi=300)
+    plt.savefig(rpath+"hotmap.png",dpi=2000)
+    plt.show()
+
+def __drawPatternOnSquareBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray,ky_grid:np.ndarray,reciLat:list,
+                              valueSignSym=True,cmap="Spectral"
+                              ):
+    g1,g2=reciLat[:2,0],reciLat[:2,1]
+    maxValue=np.max(abs(data_grid))
+    minValue=-maxValue if valueSignSym else 0
+    plt.figure(figsize=(6,6))
+
+    plt.pcolormesh(kx_grid,ky_grid,data_grid,shading='nearest',cmap=cmap,vmin=minValue,vmax=maxValue)
+    plt.pcolormesh(kx_grid-g1[0],ky_grid-g1[1],data_grid,shading='nearest',cmap=cmap,vmin=minValue,vmax=maxValue)
+    plt.pcolormesh(kx_grid-g2[0],ky_grid-g2[1],data_grid,shading='nearest',cmap=cmap,vmin=minValue,vmax=maxValue)
+    plt.pcolormesh(kx_grid-(g1+g2)[0],ky_grid-(g1+g2)[1],data_grid,shading='nearest',cmap=cmap,vmin=minValue,vmax=maxValue)
+    
+    #plt.colorbar()
+    # shift grid for contour plotting
+    shiftx=(reciLat[0][0]+reciLat[0][1])/(2*kx_grid.shape[0])
+    shifty=(reciLat[1][0]+reciLat[1][1])/(2*kx_grid.shape[1])
+    _kx_grid=kx_grid+shiftx
+    _ky_grid=ky_grid+shifty
+    #print(_kx_grid.shape)
+    #sub1=plt.contour(_kx_grid,_ky_grid,data_grid,linewidths=1,linestyles="dashed",colors="black")
+    #sub2=plt.contour(_kx_grid-g1[0],_ky_grid-g1[1],data_grid,linewidths=1,linestyles="dashed",colors="black")
+    #sub3=plt.contour(_kx_grid-g2[0],_ky_grid-g2[1],data_grid,linewidths=1,linestyles="dashed",colors="black")
+    #sub4=plt.contour(_kx_grid-(g1+g2)[0],_ky_grid-(g1+g2)[1],data_grid,linewidths=1,linestyles="dashed",colors="black")
+
+    
+    K1=(g1+g2)/2
+    K2=(g1-g2)/2
+    K3=(-g1-g2)/2
+    K4=(-g1+g2)/2
+    
+
+    K=np.array([K1,K2,K3,K4,K1])
+    corr_max=np.max([np.max(K[:,0]),np.max(K[:,1])])*1.1
+    plt.plot(K[:,0]+shiftx,K[:,1]+shifty,linewidth=2,c="black")
+    plt.xlim(-corr_max,corr_max)
+    plt.ylim(-corr_max,corr_max)
+    plt.xticks([])
+    plt.yticks([])
+    plt.savefig(rpath+"hotmap.png",dpi=2000)
     plt.show()
 
 def drawHotmapOnHexagonalBZ(rpath:str,data:np.ndarray,kmesh:list,
@@ -90,6 +132,17 @@ def drawHotmapOnHexagonalBZ(rpath:str,data:np.ndarray,kmesh:list,
     #exit()
     kx_grid, ky_grid, data_grid= __makeGrid(data,kmesh,reciLat)
     __drawPatternOnHexagonalBZ(rpath,data_grid,kx_grid,ky_grid,reciLat,
+    valueSignSym=valueSignSym,cmap=cmap
+    )
+
+def drawHotmapOnSquareBZ(rpath:str,data:np.ndarray,kmesh:list,
+                            valueSignSym=True,cmap="Spectral"
+                            ):
+    reciLat=np.linalg.inv(pR.lat)*np.pi*2
+    #print(data)
+    #exit()
+    kx_grid, ky_grid, data_grid= __makeGrid(data,kmesh,reciLat)
+    __drawPatternOnSquareBZ(rpath,data_grid,kx_grid,ky_grid,reciLat,
     valueSignSym=valueSignSym,cmap=cmap
     )
 
