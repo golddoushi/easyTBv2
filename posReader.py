@@ -26,6 +26,7 @@ global rwigs   # RWIGS of each elements
 global type
 type='D'
 global pos_ions # fractional coor. of ions
+global label_ions # label of ions
 global pos_orbs # fractional coor. of orbs (defined in POSCAR)
 global bondList
 global orbList
@@ -81,12 +82,13 @@ class Orb:
         return [iorb for iorb, orb in enumerate(self.sameTypeOrbList) if orb.id==orb_ref.id]
 
 def readPOS(path='./POSCAR',ini_mag=[],ini_S=[],wann_ID=[],rotations=[],translations=[]):
-    global title,scale,lat,ele_str,nions,tot_ions,type,pos_ions,orbList,bondList,pos_orbs
+    global title,scale,lat,ele_str,nions,tot_ions,type,label_ions,pos_ions,orbList,bondList,pos_orbs
     global ncount
     lat=[]
     ele_str=[]
     nions=[]
     pos_ions=[]
+    label_ions=[]
     pos_orbs=[] # inital pos. of orbs
     orbList=[]
     bondList=[]
@@ -103,6 +105,9 @@ def readPOS(path='./POSCAR',ini_mag=[],ini_S=[],wann_ID=[],rotations=[],translat
     lat=np.array(lat)
     ele_str=[l for l in re.findall('[A-Za-z]+',data[5])]
     nions=[int(l) for l in re.findall('[0-9]+',data[6])]
+    label_ions=[]
+    for itype, nion in enumerate(nions):
+        for cnt in range(nion): label_ions.append(ele_str[itype])
     tot_ions=np.sum(nions)
     type=re.findall('[A-Za-z]+',data[7])
     norb_cnt=0

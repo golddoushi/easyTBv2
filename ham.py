@@ -560,6 +560,8 @@ class Response:
         for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
             for L in atom:
                 for iorb in L: orbCorrList[iorb]=pos
+        #for pos in orbCorrList: print(pos)
+        #exit()
         #assert sum(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
         c_orbCorrList=(c_double*(3*hr.norb))()
         for i in range(hr.norb):
@@ -1458,6 +1460,7 @@ class Response:
         time0=time.time()
         m,n=ibandv,ibandc
         filePath=mainDir+'opticalOverlap.txt' if mainDir else './opticalOverlap.txt'
+        vx,vy,vz=[],[],[]
         with open(filePath,'w') as fout:
             for ikpt, kpt in enumerate(kmesh):
                 Em, En=eigList[ikpt][m], eigList[ikpt][n]
@@ -1479,8 +1482,10 @@ class Response:
                     vmn_x.real,vmn_x.imag,vmn_y.real,vmn_y.imag,vmn_z.real,vmn_z.imag,
                     vmm_x.real,vmm_x.imag,vmm_y.real,vmm_y.imag,vmm_z.real,vmm_z.imag,
                     vnn_x.real,vnn_x.imag,vnn_y.real,vnn_y.imag,vnn_z.real,vnn_z.imag,))
+                vx.append(vmn_x);vy.append(vmn_y);vz.append(vmn_z)
                 
         print('overlap solved in %.3fs, data saved in %s'%(time.time()-time0,filePath))
+        return np.array(vx), np.array(vy), np.array(vz)
 
     def calcTransverseFieldResponse_CDLL(self,hr,mainDir=None,fermi=0,Lx=10,Ly=10,Lz=1,omegaAxis=[0],eta=0.001,nthreads=1):
         halfOrb=hr.norb//2

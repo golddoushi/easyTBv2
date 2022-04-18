@@ -305,7 +305,7 @@ class Hr:
                         #iorb0_sc=iinter_cell*self.norb+iorb0
                         #hopping_orb0=[iorb0_sc]
                         iorb1, aug_vec = bond.target, bond.overlat
-                        #print('iorb0, iorb1:', iorb0, iorb1, 'aug_vec:',aug_vec)
+                        #print('iorb0:%d iorb1:%d aug_vec (p.c.):%d %d %d'%(iorb0, iorb1, aug_vec[0], aug_vec[1], aug_vec[2]))
                         orb1_cell_ori=interior_cell+aug_vec # the origin coordinates (a1,a2,a3 lattice)
                         orb1_cell_ori_sc=np.dot(orb1_cell_ori,invTmatrix) # in supercell lattice
                         orb1_cell_ori_sc_reduced=orb1_cell_ori_sc%1       # reduced by 1
@@ -340,19 +340,21 @@ class Hr:
         pR.nions=nions
         print("Warning: the atom coor. of s.c. is updated externally (in hrReader) rather by posReader")
         print("         only the lat, pos_ions, nions, and tot_ions are updated!")
-        print(pR.pos_ions)
         self.norb=norbital
         self.onsite=onsite_energy
         self.bondList=hopping
 
+        #for bond in self.bondList:
+        #    print('%5d%5d%5d%5d%5d%12.6f%12.6f'%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
+        #print(pR.lat)
         print("the atomic orbs. in super cell:")
         orbName=['s','p','d','f']
         for iatom, atom in enumerate(atomicOrbIndexList_sc):
-            print('atom %d'%iatom)
+            print('atom %d, coor. (%.6f %.6f %.6f)'%(iatom,*pR.pos_ions[iatom]))
             for iorbL, orbL in enumerate(atom):
                 if len(orbL)>0:
                     print('%s orb:'%orbName[iorbL],orbL)
-        exit()
+        #exit()
         return atomicOrbIndexList_sc
     
     def sortOverlap(self,idirection=0):
@@ -733,9 +735,10 @@ class Hr:
                 for iL, L in enumerate(atom):
                     if len(L)==0: continue
                     nLorbitTunnels=2*iL+1
-                    assert len(L)%nLorbitTunnels==0, 'Error, in atom%d size of orbit L=%d is %d'%(iatom,iL,len(L))
+                    assert len(L)%nLorbitTunnels==0, 'Error: in atom%d size of orbit L=%d is %d'%(iatom,iL,len(L))
                     if spinor:
                         nLorbit=(len(L)//2)//nLorbitTunnels
+                        assert nLorbit>0, 'Error: in atom%d size of orbit L=%d is %d, not accommondate to (spinful) orbit size %d'%(iatom,iL,len(L),2*nLorbitTunnels)
                         if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,iL,iatom))
                         
                         spinRotate= symSpinRotateList[isymOp]
@@ -747,14 +750,18 @@ class Hr:
                             cnt+=2*nLorbitTunnels
                     elif self.spin_polarized:
                         nLorbit=(len(L)//2)//nLorbitTunnels
+                        assert nLorbit>0, 'Error: in atom%d size of orbit L=%d is %d, not accommondate to (spinful) orbit size %d'%(iatom,iL,len(L),2*nLorbitTunnels)
                         if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,iL,iatom))
 
-                        atomSymOp[cnt:(cnt+len(L)//2),         cnt:(cnt+len(L)//2)         ]=atomicWaveSymOpList[isymOp][iL]
-                        atomSymOp[(cnt+len(L)//2):(cnt+len(L)),(cnt+len(L)//2):(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]
-                        cnt+=len(L)
+                        for iLorbit in range(nLorbit):
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),                   cnt:(cnt+nLorbitTunnels)                   ]=atomicWaveSymOpList[isymOp][iL]
+                            atomSymOp[(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels),(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels)]=atomicWaveSymOpList[isymOp][iL]
+                            cnt+=2*nLorbitTunnels
                     else:
                         nLorbit=len(L)//nLorbitTunnels
+                        assert nLorbit>0, 'Error: in atom%d size of orbit L=%d is %d, not accommondate to orbit size %d'%(iatom,iL,len(L),nLorbitTunnels)
                         if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,iL,iatom))
+                        
                         for iLorbit in range(nLorbit):
                             atomSymOp[cnt:(cnt+nLorbitTunnels),cnt:(cnt+nLorbitTunnels)]=atomicWaveSymOpList[isymOp][iL]
                             cnt+=nLorbitTunnels

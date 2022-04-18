@@ -1928,23 +1928,10 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
 
     for(int iphoton=0;iphoton<nphoton;iphoton++){
         for(int ikpt=0;ikpt<nkpt;ikpt++){
-            PyTuple_SetItem(conductance_real, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
-            PyTuple_SetItem(conductance_real, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
-            PyTuple_SetItem(conductance_real, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
-            PyTuple_SetItem(conductance_real, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
-            PyTuple_SetItem(conductance_real, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
-            PyTuple_SetItem(conductance_real, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
-            PyTuple_SetItem(conductance_real, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
-            PyTuple_SetItem(conductance_real, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
-
-            PyTuple_SetItem(conductance_imag, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
-            PyTuple_SetItem(conductance_imag, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
-            PyTuple_SetItem(conductance_imag, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
-            PyTuple_SetItem(conductance_imag, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
-            PyTuple_SetItem(conductance_imag, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
-            PyTuple_SetItem(conductance_imag, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
-            PyTuple_SetItem(conductance_imag, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
-            PyTuple_SetItem(conductance_imag, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
+            for(int icomp=0;icomp<8;icomp++){
+                PyTuple_SetItem(conductance_real, icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomp])));
+                PyTuple_SetItem(conductance_imag, icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+icomp])));
+            }
         }
     }
     free(conductance_on_kmesh_on_omega);
