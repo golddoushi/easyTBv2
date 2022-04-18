@@ -210,7 +210,7 @@ class Hr:
             print('file %s (spin-dn) has been successfully read in %.3fms, %d/%d skipped'%(filepath2,1000*(time.time()-time0),nSkip,nTotal))
 
     # transform Hr data of cell into Hr of supercell
-    def make_supercell(self,sc_dir0=[1.,1.,0.],sc_dir1=[1.,-1.,0.],sc_dir2=[0.,0.,1.],soc=False):#,toHome=True):
+    def make_supercell(self,sc_dir0=[1.,1.,0.],sc_dir1=[1.,-1.,0.],sc_dir2=[0.,0.,1.],atomicOrbIndexList=[],soc=False):#,toHome=True):
         '''
         construct a supercell model.
         often used with slab fun. to get slab model with chosen border.
@@ -245,25 +245,57 @@ class Hr:
         #print("%d cells included in supercell"%len(interior_cell_list))
         #exit()
         ### now add every orbs and their attributes
+        # analyze the atomic structure in p.c.
+        assert len(atomicOrbIndexList)==pR.tot_ions,'Error, we need the atomicOrbIndexList, now the num. of atoms is %d != %d in POSCAR'%(len(atomicOrbIndexList),pR.tot_ions)
+        print("the atomic orbs. in primitive cell:")
+        orbDic=[[] for i in range(self.norb)] # orbDic[iorb] gives the corresponding atom, and L
+        lmax=0
+        orbName=['s','p','d','f']
+        for iatom, atom in enumerate(atomicOrbIndexList):
+            print('atom %d, lmax=%d'%(iatom,len(atom)-1))
+            lmax=max([lmax,len(atom)-1])
+            for iorbL, orbL in enumerate(atom):
+                if len(orbL)>0:
+                    print('%s orb:'%orbName[iorbL],orbL)
+                    for iorb in orbL:
+                        orbDic[iorb].extend([iatom,iorbL])
+        for iorb, orb in enumerate(orbDic):
+            assert len(orb)==2, 'Error, orb%d is attached to %d atom(s)'%(iorb,len(orb)//2)
         #sc_orbital_coor=[]
         norbital=self.norb*len(interior_cell_list)
-        onsite_energy=np.zeros(norbital)
+        onsite_energy=np.zeros(norbital,dtype=complex)
         
         hopping=[]
         nhoppings=0
+        atomicOrbIndexList_sc=[[[] for l in range(lmax+1)] for iatom in range(pR.tot_ions*len(interior_cell_list))]
+        #print(len(atomicOrbIndexList_sc),len(atomicOrbIndexList_sc[0]))
+        nions=[_nion*len(interior_cell_list) for _nion in pR.nions]
+        pos_ions=[]
+        label_ions=[]
         for iinter_cell, interior_cell in enumerate(interior_cell_list):
+            # setting atoms
+            for iatom, pos in enumerate(pR.pos_ions):
+                pos_sc=np.dot(pos+interior_cell,invTmatrix)
+                pos_ions.append(pos_sc)
+                label_ions.append(pR.label_ions[iatom])
+            # setting wann. orbs.
             for iorb0 in range(self.norb):
                 # add coordinates; no need to know exact coordinates of orbitals
                 #orb_sc=np.dot(orb0+interior_cell,invTmatrix)
                 #sc_orbital_coor.append(orb_sc)
                 #norbital+=1
-                orb0_index_sc=iinter_cell*self.norb+iorb0
-                if soc:
+                if soc or self.spin_polarized:
                     half_index=iorb0%(self.norb//2)
                     if iorb0<self.norb//2:
                         orb0_index_sc=iinter_cell*(self.norb//2)+half_index
                     else:
                         orb0_index_sc=iinter_cell*(self.norb//2)+half_index+norbital//2
+                else:
+                    orb0_index_sc=iinter_cell*self.norb+iorb0
+                
+                iatom_pc, iL_sc=orbDic[iorb0]
+                iatom_sc=iinter_cell*pR.tot_ions+iatom_pc
+                atomicOrbIndexList_sc[iatom_sc][iL_sc].append(orb0_index_sc)
                 # add on-site energy
                 onsite_energy[orb0_index_sc]=self.onsite[iorb0]#.append(self.onsite[iorb0])
                 # add hopping
@@ -277,7 +309,7 @@ class Hr:
                         orb1_cell_ori=interior_cell+aug_vec # the origin coordinates (a1,a2,a3 lattice)
                         orb1_cell_ori_sc=np.dot(orb1_cell_ori,invTmatrix) # in supercell lattice
                         orb1_cell_ori_sc_reduced=orb1_cell_ori_sc%1       # reduced by 1
-                        aug_vec_sc=np.array([int(x) for x in (orb1_cell_ori_sc-orb1_cell_ori_sc_reduced)]) # aug vector in supercell frame
+                        aug_vec_sc=np.array([int(np.around(x)) for x in (orb1_cell_ori_sc-orb1_cell_ori_sc_reduced)]) # aug vector in supercell frame
                         
                         orb1_coor_reduced=orb1_cell_ori-np.dot(aug_vec_sc,Tmatrix)
                         #print("bond to orb%d, overLat: %d %d %d, ori: %d %d %d, sc: %.3f %.3f %.3f, sc reduced: %d %d %d, aug: %d %d %d, t:(%.1f, %.1f)"%(
@@ -289,7 +321,7 @@ class Hr:
                         for iori_coor, ori_coor in enumerate(interior_cell_list):
                             if(ori_coor==orb1_coor_reduced).all():
                                 orb1_index_sc=iori_coor*self.norb+iorb1
-                                if soc:
+                                if soc or self.spin_polarized:
                                     half_index=iorb1%(self.norb//2)
                                     if iorb1<self.norb//2:
                                         orb1_index_sc=iori_coor*(self.norb//2)+half_index
@@ -301,10 +333,27 @@ class Hr:
                         hopping_orb0=lat.BondDigital(orb0_index_sc,orb1_index_sc,aug_vec_sc,bond.t)#[iorb0_sc, iorb1_sc, aug_vec_sc, amplify]
                         hopping.append(hopping_orb0)
                         nhoppings+=1
-        #exit()
+        
+        pR.lat=np.dot(Tmatrix,pR.lat)
+        pR.pos_ions=pos_ions
+        pR.tot_ions=sum(pos_ions)
+        pR.nions=nions
+        print("Warning: the atom coor. of s.c. is updated externally (in hrReader) rather by posReader")
+        print("         only the lat, pos_ions, nions, and tot_ions are updated!")
+        print(pR.pos_ions)
         self.norb=norbital
         self.onsite=onsite_energy
         self.bondList=hopping
+
+        print("the atomic orbs. in super cell:")
+        orbName=['s','p','d','f']
+        for iatom, atom in enumerate(atomicOrbIndexList_sc):
+            print('atom %d'%iatom)
+            for iorbL, orbL in enumerate(atom):
+                if len(orbL)>0:
+                    print('%s orb:'%orbName[iorbL],orbL)
+        exit()
+        return atomicOrbIndexList_sc
     
     def sortOverlap(self,idirection=0):
         # try to adjust coordinates of orbs, to reduce the number in overlat
@@ -670,39 +719,53 @@ class Hr:
             symSpinRotateList=[symSpinRotateList[isym] for isym in symOpSelection]
             symTimeReversalList=[symTimeReversalList[isym] for isym in symOpSelection]
         atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList)
-        #print(atomicWaveSymOpList[1][2])
+        #print(atomicWaveSymOpList[0])
         #exit()
         
         # construct local sym. Op. for each sym. op.
         localSymOpList=[] # localSymOpList[isymOp][iatom] give sym. op. in atomic subspace
         for isymOp in range(len(symRotateList)):
             localSymOp=[]
-            for atom in atomicOrbIndexList:
+            for iatom, atom in enumerate(atomicOrbIndexList):
                 atom_size=sum([len(L) for L in atom])
                 atomSymOp=np.zeros((atom_size,atom_size),dtype=complex)
                 cnt=0
                 for iL, L in enumerate(atom):
                     if len(L)==0: continue
+                    nLorbitTunnels=2*iL+1
+                    assert len(L)%nLorbitTunnels==0, 'Error, in atom%d size of orbit L=%d is %d'%(iatom,iL,len(L))
                     if spinor:
+                        nLorbit=(len(L)//2)//nLorbitTunnels
+                        if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,iL,iatom))
+                        
                         spinRotate= symSpinRotateList[isymOp]
-                        atomSymOp[cnt:(cnt+len(L)//2),         cnt:(cnt+len(L)//2)         ]=atomicWaveSymOpList[isymOp][iL]*spinRotate[0,0]
-                        atomSymOp[cnt:(cnt+len(L)//2),         (cnt+len(L)//2):(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]*spinRotate[0,1]
-                        atomSymOp[(cnt+len(L)//2):(cnt+len(L)),cnt:(cnt+len(L)//2)         ]=atomicWaveSymOpList[isymOp][iL]*spinRotate[1,0]
-                        atomSymOp[(cnt+len(L)//2):(cnt+len(L)),(cnt+len(L)//2):(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]*spinRotate[1,1]
-                        cnt+=len(L)
+                        for iLorbit in range(nLorbit):
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),                   cnt:(cnt+nLorbitTunnels)                   ]=atomicWaveSymOpList[isymOp][iL]*spinRotate[0,0]
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),                   (cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels)]=atomicWaveSymOpList[isymOp][iL]*spinRotate[0,1]
+                            atomSymOp[(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels),cnt:(cnt+nLorbitTunnels)                   ]=atomicWaveSymOpList[isymOp][iL]*spinRotate[1,0]
+                            atomSymOp[(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels),(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels)]=atomicWaveSymOpList[isymOp][iL]*spinRotate[1,1]
+                            cnt+=2*nLorbitTunnels
                     elif self.spin_polarized:
+                        nLorbit=(len(L)//2)//nLorbitTunnels
+                        if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,iL,iatom))
+
                         atomSymOp[cnt:(cnt+len(L)//2),         cnt:(cnt+len(L)//2)         ]=atomicWaveSymOpList[isymOp][iL]
                         atomSymOp[(cnt+len(L)//2):(cnt+len(L)),(cnt+len(L)//2):(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]
                         cnt+=len(L)
                     else:
-                        atomSymOp[cnt:(cnt+len(L)),cnt:(cnt+len(L))]=atomicWaveSymOpList[isymOp][iL]
-                        cnt+=len(L)
+                        nLorbit=len(L)//nLorbitTunnels
+                        if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,iL,iatom))
+                        for iLorbit in range(nLorbit):
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),cnt:(cnt+nLorbitTunnels)]=atomicWaveSymOpList[isymOp][iL]
+                            cnt+=nLorbitTunnels
+                        #print(atomicWaveSymOpList[isymOp][iL])
+                        
                 localSymOp.append(atomSymOp)
             localSymOpList.append(localSymOp)
         '''
         # check the whether operations are right
         np.set_printoptions(precision=4)
-        i,j=0,2
+        i,j=0,1
         orbAtomI=[]
         for L in atomicOrbIndexList[i]:
             for iorb in L: orbAtomI.append(iorb)
