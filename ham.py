@@ -607,7 +607,7 @@ class Response:
         hamDLL.calcBulkPhotovoltaicCond_memoryReduce.restype=py_object
 
         #tau=0.05
-        result=hamDLL.calcBulkPhotovoltaicCond_memoryReduce(c_int(nkpts),c_kmesh,c_dk,
+        result=hamDLL.calcBulkPhotovoltaicCond_memoryReduce(c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(len(omegaList)),

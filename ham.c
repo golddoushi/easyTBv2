@@ -1506,234 +1506,7 @@ PyObject * calcJointDOS(int nkpt, double kmesh[nkpt][3],
     return Py_BuildValue("O",JDOS);
 }
 
-PyObject * calcBulkPhotovoltaicCond(int nkpt, double kmesh[nkpt][3], double dk[3],
-                       int norbs, int nhoppings,
-                       int sourceID[nhoppings], int targetID[nhoppings], 
-                       int overLat[nhoppings][3], 
-                       double hopping_real[nhoppings],
-                       double hopping_imag[nhoppings],
-                       int nphoton,
-                       double omegaList[nphoton],
-                       double fermi,
-                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
-                       double orbCorr[norbs][3], // fractional corrdinates of orbs
-                       double tau,
-                       double erange[2],
-                       int _nthreads){
-    printf("entering BPVC module in cdll\n");
-    FILE*fp;
-    fp=fopen("./c_log","w");
-    fprintf(fp,"#Log file of ham.dll\n");
-    // verification
-    fprintf(fp,"nkpt: %d, dk: %.2f %.2f %.2f, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,dk[0],dk[1],dk[2],norbs,nhoppings,nphoton,erange[0],erange[1]);
-    fprintf(fp,"memory estimation: %.3f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(2*norbs*norbs+norbs)/1024/1024*nkpt)*sizeof(lapack_complex_double));
-    fclose(fp);
-    printf("nkpt: %d, dk: %.2f %.2f %.2f, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,dk[0],dk[1],dk[2],norbs,nhoppings,nphoton,erange[0],erange[1]);
-    printf("memory estimation: %.4f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(2*norbs*norbs+norbs)/1024/1024*nkpt)*sizeof(lapack_complex_double));
-    //exit(1);
-    
-    lapack_complex_double *velocity=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    lapack_complex_double *energy=(lapack_complex_double*)malloc(nkpt*norbs*sizeof(lapack_complex_double));
-    lapack_complex_double itau=tau*_Complex_I;
-    lapack_complex_double * conductance_on_kmesh_on_omega=(lapack_complex_double*)malloc(nphoton*nkpt*8*sizeof(lapack_complex_double));
-    for(int i=0;i<nphoton*nkpt*8;i++)conductance_on_kmesh_on_omega[i]=0;
-
-    int kpt_width=norbs*norbs;
-    int dir_width=nkpt*kpt_width;
-
-    int nthreads;
-    nthreads=_nthreads;
-    if(nkpt<_nthreads*10)nthreads=1;
-    printf("use %d cores in ham.dll\n",nthreads);
-    fp=fopen("./c_log","a");
-    fprintf(fp,"calc velocity using %d cores in ham.dll\n",nthreads);
-    fclose(fp);
-
-    printf("calc velocities using %d cores in ham.dll\n",nthreads);
-    #pragma omp parallel num_threads(nthreads)
-    {
-        #pragma omp for
-        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
-            lapack_complex_double hk[norbs][norbs]; // init Hk
-            lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
-            lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
-            double Em, En;
-            //lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    hk[i][j]=0;
-                    Dhk[i][j][0]=0;
-                    Dhk[i][j][1]=0;
-                    Dhk[i][j][2]=0;
-                    DhkDkxy[i][j][0]=0;
-                    DhkDkxy[i][j][1]=0;
-                    //SDhk_x[i][j]=0;
-                }
-            }
-            double eigs[norbs]; // output eigenvalues of Hk
-            for(int ihopping=0;ihopping<nhoppings;ihopping++){
-                /*
-                lapack_complex_double hopping_R[3];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
-
-                lapack_complex_double phase=0;
-                for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
-                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-
-                lapack_complex_double hopping_R_c[3];
-                for(int i=0;i<3;i++)hopping_R_c[i]=0;
-                for(int i=0;i<3;i++)for(int j=0;j<3;j++)hopping_R_c[i]+=hopping_R[j]*lattice[j][i];
-
-                for(int i=0;i<3;i++) DhkDkxy[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
-                */
-                lapack_complex_double hopping_R[3];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
-                
-                lapack_complex_double phase=0;
-                for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
-                
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
-                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                //Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
-                //Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
-                //Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
-                for(int i=0;i<3;i++)Dhk[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R[i];
-                
-            }
-            
-            // unitary transform into real space partial
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    for(int k=0;k<3;k++){
-                        DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
-                        DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
-                    }
-                }
-            }
-            
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
-            // vec[i]=hk[:][i]
-            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-            for(int bandm=0;bandm<norbs;bandm++){
-                Em=eigs[bandm];
-                energy[ikpt*norbs+bandm]=Em;
-                if(Em<erange[0] | Em>erange[1]) continue;
-                for(int bandn=0;bandn<norbs;bandn++){
-                    En=eigs[bandn];
-                    if(En<erange[0] | En>erange[1]) continue;
-                    for(int idir=0;idir<2;idir++){
-                        int ipos=idir*dir_width+ikpt*kpt_width+bandm*norbs+bandn;
-                        velocity[ipos]=0;
-                        for(int icontract=0;icontract<norbs;icontract++){
-                            for(int jcontract=0;jcontract<norbs;jcontract++){
-                                velocity[ipos]+=conj(hk[icontract][bandm])*DhkDkxy[icontract][jcontract][idir]*hk[jcontract][bandn];
-                            }
-                        }
-                    }
-                }
-            }  
-        }
-    }
-    fp=fopen("./c_log","a");
-    fprintf(fp,"velocity completed\ncalc BPVE...\n");
-    fclose(fp);
-    printf("velocity completed\nnow calc BPVE use %d cores in ham.dll\n",nthreads);
-
-    #pragma omp parallel num_threads(nthreads)
-    {
-        #pragma omp for
-        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
-            int writing_k_index=ikpt*nphoton*8;
-            for(int bandl=0;bandl<norbs;bandl++){ // loop over band_l
-                double El=energy[ikpt*norbs+bandl];
-                if(El<erange[0] | El>erange[1]) continue;
-                int fl=0;
-                if(El<=fermi)fl=1;
-                for(int bandn=0;bandn<norbs;bandn++){ // loop over band_m
-                    double En=energy[ikpt*norbs+bandn];
-                    if(En<erange[0] | En>erange[1]) continue;
-                    int fn=0;
-                    if(En<=fermi)fn=1;
-                    int fln=fl-fn;
-                    if (fln==0) continue;
-
-                    // calc overlap
-                    lapack_complex_double px_nl=velocity[          ikpt*kpt_width+bandn*norbs+bandl];
-                    lapack_complex_double py_nl=velocity[dir_width+ikpt*kpt_width+bandn*norbs+bandl];
-                    //printf("band%d-%d, px_nl %f %f, py_nl %f %f\n",bandn,bandl,creal(px_nl),cimag(px_nl),creal(py_nl),cimag(py_nl));
-                    for(int bandm=0;bandm<norbs;bandm++){ // loop over band_n
-                        //if(bandn!=bandl)continue; // switch for bandn
-                        double Em=energy[ikpt*norbs+bandm];
-                        if(Em<erange[0] | Em>erange[1]) continue;
-                        // calc overlap
-                        lapack_complex_double px_lm=velocity[          ikpt*kpt_width+bandl*norbs+bandm];
-                        lapack_complex_double py_lm=velocity[dir_width+ikpt*kpt_width+bandl*norbs+bandm];
-                        lapack_complex_double px_mn=velocity[          ikpt*kpt_width+bandm*norbs+bandn];
-                        lapack_complex_double py_mn=velocity[dir_width+ikpt*kpt_width+bandm*norbs+bandn];
-
-                        for(int iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
-                            int writing_ph_index=writing_k_index+iphoton*8;
-                            double omega=omegaList[iphoton];
-                            
-                            lapack_complex_double factor_global=0;
-                            //if(fabs(En-El)>1e-6)
-                            factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
-                            //printf("ik%d omega %.4f El:%.4f Em:%.4f En:%.4f fln:%d dEmn:%.4f dEnl:%.4f factor: %.4f,%.4f\n",ikpt,omega,El,Em,En,fln,Em-En,En-El,creal(factor_global),cimag(factor_global));
-                            //printf("   l,m,n: %d %d %d -- px_nl: %.4f, %.4f px_lm: %.4f, %.4f px_mn: %.4f, %.4f\n",bandl,bandm,bandn,creal(px_nl),cimag(px_nl),creal(px_lm),cimag(px_lm),creal(px_mn),cimag(px_mn));
-                            //printf("                   py_nl: %.4f, %.4f py_lm: %.4f, %.4f py_mn: %.4f, %.4f\n",creal(py_nl),cimag(py_nl),creal(py_lm),cimag(py_lm),creal(py_mn),cimag(py_mn));
-                            //printf("                   xxx: %.4f, %.4f yyx: %.4f, %.4f\n",creal(px_nl*px_lm*px_mn),cimag(px_nl*px_lm*px_mn),creal(py_nl*py_lm*px_mn),cimag(py_nl*py_lm*px_mn));
-                            conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global;
-                            conductance_on_kmesh_on_omega[writing_ph_index+1]+=px_nl*px_lm*py_mn*factor_global;
-                            conductance_on_kmesh_on_omega[writing_ph_index+2]+=py_nl*py_lm*px_mn*factor_global;
-                            conductance_on_kmesh_on_omega[writing_ph_index+3]+=py_nl*py_lm*py_mn*factor_global;
-                            conductance_on_kmesh_on_omega[writing_ph_index+4]+=px_nl*py_lm*px_mn*factor_global;
-                            conductance_on_kmesh_on_omega[writing_ph_index+5]+=px_nl*py_lm*py_mn*factor_global;
-                            conductance_on_kmesh_on_omega[writing_ph_index+6]+=py_nl*px_lm*px_mn*factor_global;
-                            conductance_on_kmesh_on_omega[writing_ph_index+7]+=py_nl*px_lm*py_mn*factor_global;
-                        }
-                    } 
-                }
-            }
-        }
-    }
-    printf("BPVE done\n");
-    printf("clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
-    fp=fopen("./c_log","a");
-    fprintf(fp,"clib tips: pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
-    fprintf(fp,"BPVE done\n");
-    fclose(fp);
-    free(velocity);free(energy);
-
-    PyObject * conductance_real=PyTuple_New(nphoton*nkpt*8);
-    PyObject * conductance_imag=PyTuple_New(nphoton*nkpt*8);
-
-    for(int iphoton=0;iphoton<nphoton;iphoton++){
-        for(int ikpt=0;ikpt<nkpt;ikpt++){
-            PyTuple_SetItem(conductance_real, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
-            PyTuple_SetItem(conductance_real, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
-            PyTuple_SetItem(conductance_real, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
-            PyTuple_SetItem(conductance_real, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
-            PyTuple_SetItem(conductance_real, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
-            PyTuple_SetItem(conductance_real, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
-            PyTuple_SetItem(conductance_real, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
-            PyTuple_SetItem(conductance_real, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
-
-            PyTuple_SetItem(conductance_imag, 0*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8  ])));
-            PyTuple_SetItem(conductance_imag, 1*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+1])));
-            PyTuple_SetItem(conductance_imag, 2*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+2])));
-            PyTuple_SetItem(conductance_imag, 3*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+3])));
-            PyTuple_SetItem(conductance_imag, 4*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+4])));
-            PyTuple_SetItem(conductance_imag, 5*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+5])));
-            PyTuple_SetItem(conductance_imag, 6*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+6])));
-            PyTuple_SetItem(conductance_imag, 7*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*8+iphoton*8+7])));
-        }
-    }
-    free(conductance_on_kmesh_on_omega);
-    return Py_BuildValue("(OO)",conductance_real,conductance_imag);
-}
-
-PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3], double dk[3],
+PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3],
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
                        int overLat[nhoppings][3], 
@@ -1753,10 +1526,10 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
     fp=fopen("./c_log","w");
     fprintf(fp,"#Log file of ham.dll\n");
     // verification
-    fprintf(fp,"nkpt: %d, dk: %.2f %.2f %.2f, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,dk[0],dk[1],dk[2],norbs,nhoppings,nphoton,erange[0],erange[1]);
+    fprintf(fp,"nkpt: %d, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nphoton,erange[0],erange[1]);
     fprintf(fp,"memory estimation: %.3f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(2*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*sizeof(lapack_complex_double));
     fclose(fp);
-    printf("nkpt: %d, dk: %.2f %.2f %.2f, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,dk[0],dk[1],dk[2],norbs,nhoppings,nphoton,erange[0],erange[1]);
+    printf("nkpt: %d, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nphoton,erange[0],erange[1]);
     printf("memory estimation: %.4f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(2*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*sizeof(lapack_complex_double));
     //exit(1);
     
@@ -1789,24 +1562,32 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
         printf("calc velocities (part%d/%d) using %d cores in ham.dll\n",ipart+1,ndivide,nthreads);
         #pragma omp parallel num_threads(nthreads)
         {
+            lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double));
+            lapack_complex_double * DhkDkf=(lapack_complex_double*)malloc(norbs*norbs*3*sizeof(lapack_complex_double));
+            lapack_complex_double * DhkDkc=(lapack_complex_double*)malloc(norbs*norbs*2*sizeof(lapack_complex_double));
+            int ipos,ipos1,ipos2,ipos3,ipos4,ipos1_s,ipos2_s,ipos3_s,ipos4_s;
             #pragma omp for
             for(int ikpt=0;ikpt<nkpt_part;ikpt++){// loop over kmesh
-                lapack_complex_double hk[norbs][norbs]; // init Hk
-                lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
-                lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
+                //lapack_complex_double hk[norbs][norbs]; // init Hk
+                //lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
+                //lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
                 double Em, En;
-                //lapack_complex_double SDhk_x[norbs][norbs]; // init S \dot DHk/Dkx
                 for(int i=0;i<norbs;i++){
                     for(int j=0;j<norbs;j++){
-                        hk[i][j]=0;
-                        Dhk[i][j][0]=0;
-                        Dhk[i][j][1]=0;
-                        Dhk[i][j][2]=0;
-                        DhkDkxy[i][j][0]=0;
-                        DhkDkxy[i][j][1]=0;
-                        //SDhk_x[i][j]=0;
+                        hk[i*norbs+j]=0;
+                        //Dhk[i][j][0]=0;
+                        //Dhk[i][j][1]=0;
+                        //Dhk[i][j][2]=0;
+                        //DhkDkxy[i][j][0]=0;
+                        //DhkDkxy[i][j][1]=0;
+                        DhkDkf[i*norbs*3+j*3+0]=0;
+                        DhkDkf[i*norbs*3+j*3+1]=0;
+                        DhkDkf[i*norbs*3+j*3+2]=0;
+                        DhkDkc[i*norbs*2+j*2+0]=0;
+                        DhkDkc[i*norbs*2+j*2+1]=0;
                     }
                 }
+                
                 double eigs[norbs]; // output eigenvalues of Hk
                 for(int ihopping=0;ihopping<nhoppings;ihopping++){
                     lapack_complex_double hopping_R[3];
@@ -1816,21 +1597,26 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
                     for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt_head+ikpt][i];
                 
                     lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
-                    hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                    for(int i=0;i<3;i++)Dhk[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R[i];        
+                    //hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                    hk[sourceID[ihopping]*norbs+targetID[ihopping]]+=tk;
+                    //for(int i=0;i<3;i++)Dhk[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R[i];
+                    for(int i=0;i<3;i++)DhkDkf[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+i]+=tk*hopping_R[i];
                 }
             
                 // unitary transform into real space partial
                 for(int i=0;i<norbs;i++){
                     for(int j=0;j<norbs;j++){
                         for(int k=0;k<3;k++){
-                            DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
-                            DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
+                            //DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
+                            //DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
+                            DhkDkc[i*norbs*2+j*2+0]+=DhkDkf[i*norbs*3+j*3+k]*lattice[k][0];
+                            DhkDkc[i*norbs*2+j*2+1]+=DhkDkf[i*norbs*3+j*3+k]*lattice[k][1];
                         }
                     }
                 }
             
-                int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+                //int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+                int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,hk,norbs,eigs);
                 // vec[i]=hk[:][i]
                 if(info!=0){printf("LAPACKE failed, info: %d\n",info);exit(1);}
                 for(int bandm=0;bandm<norbs;bandm++){
@@ -1841,17 +1627,19 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
                         En=eigs[bandn];
                         if(En<erange[0] | En>erange[1]) continue;
                         for(int idir=0;idir<2;idir++){
-                            int ipos=idir*dir_width+ikpt*kpt_width+bandm*norbs+bandn;
+                            ipos=idir*dir_width+ikpt*kpt_width+bandm*norbs+bandn;
                             velocity[ipos]=0;
                             for(int icontract=0;icontract<norbs;icontract++){
                                 for(int jcontract=0;jcontract<norbs;jcontract++){
-                                    velocity[ipos]+=conj(hk[icontract][bandm])*DhkDkxy[icontract][jcontract][idir]*hk[jcontract][bandn];
+                                    //velocity[ipos]+=conj(hk[icontract*norbs+bandm])*DhkDkxy[icontract][jcontract][idir]*hk[jcontract*norbs+bandn];
+                                    velocity[ipos]+=conj(hk[icontract*norbs+bandm])*DhkDkc[icontract*norbs*2+jcontract*2+idir]*hk[jcontract*norbs+bandn];
                                 }
                             }
                         }
                     }
                 }  
             }
+            free(hk);free(DhkDkf);free(DhkDkc);
         }
         fp=fopen("./c_log","a");
         fprintf(fp,"velocities part%d completed\ncalc BPVE...\n",ipart+1);
@@ -2930,46 +2718,36 @@ int _calcBandsAndProjectedVelocities(
                        lapack_complex_double * velocities, // output projected velocities
                        int _nthreads){
     printf("projective velocity calc. in cdll\n");
-    //FILE*fp;
-    //fp=fopen("./c_log","a");
-    // verification
-    //fprintf(fp,"nkpt: %d, norbs: %d, nhoppings: %d\n",nkpt,norbs,nhoppings);
-    //fprintf(fp,"memory estimation: %.4f MB\n",(4.*norbs*norbs+norbs)/1024/1024*nkpt*nProj*sizeof(lapack_complex_double));
-    //fclose(fp);
-    //printf("nkpt: %d, norbs: %d, nhoppings: %d\n",nkpt,norbs,nhoppings);
-    //printf("memory estimation: %.4f MB\n",(4.*norbs*norbs+norbs)/1024/1024*nkpt*nProj*sizeof(lapack_complex_double));
-    
-    //double *energy=(double*)malloc(nkpt*norbs*sizeof(double));
-    //lapack_complex_double *velocity=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
-    //lapack_complex_double *velocity_proj=(lapack_complex_double*)malloc(2*nkpt*norbs*norbs*sizeof(lapack_complex_double));
 
-    int kpt_width=norbs*norbs;
-    int dir_width=nkpt*kpt_width;
-    int proj_width=2*dir_width;
+    int kpt_width_g=norbs*norbs;
+    int dir_width_g=nkpt*kpt_width_g;
+    int proj_width_g=2*dir_width_g;
 
     int nthreads;
     nthreads=_nthreads;
     if(nkpt<_nthreads*10)nthreads=1;
     printf("calc projective velocity using %d cores in ham.dll\n",nthreads);
-    //fp=fopen("./c_log","a");
-    //fprintf(fp,"calc projective velocity using %d cores in ham.dll\n",nthreads);
-    //fclose(fp);
 
     #pragma omp parallel num_threads(nthreads)
     {
+        lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double));
+        lapack_complex_double * DhkDkf=(lapack_complex_double*)malloc(nProj*norbs*norbs*3*sizeof(lapack_complex_double));
+        lapack_complex_double * DhkDkc=(lapack_complex_double*)malloc(nProj*norbs*norbs*2*sizeof(lapack_complex_double));
+        int ipos;
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
-            lapack_complex_double hk[norbs][norbs]; // init Hk
-            lapack_complex_double DhkDkf[nProj][norbs][norbs][2]; // init DHk/Dk1,Dk2 for each projection
-            lapack_complex_double DhkDkc[nProj][norbs][norbs][2]; // init DHk/Dkx,Dky for each projection
+            //lapack_complex_double hk[norbs][norbs]; // init Hk
+            //lapack_complex_double DhkDkf[nProj][norbs][norbs][2]; // init DHk/Dk1,Dk2 for each projection
+            //lapack_complex_double DhkDkc[nProj][norbs][norbs][2]; // init DHk/Dkx,Dky for each projection
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
-                    hk[i][j]=0;
+                    hk[i*norbs+j]=0;
                     for(int k=0;k<nProj;k++){
-                        DhkDkf[k][i][j][0]=0;
-                        DhkDkf[k][i][j][1]=0;
-                        DhkDkc[k][i][j][0]=0;
-                        DhkDkc[k][i][j][1]=0;
+                        DhkDkf[k*norbs*norbs*3+i*norbs*3+j*3+0]=0;
+                        DhkDkf[k*norbs*norbs*3+i*norbs*3+j*3+1]=0;
+                        DhkDkf[k*norbs*norbs*3+i*norbs*3+j*3+2]=0;
+                        DhkDkc[k*norbs*norbs*2+i*norbs*2+j*2+0]=0;
+                        DhkDkc[k*norbs*norbs*2+i*norbs*2+j*2+1]=0;
                     }
                 }
             }
@@ -2984,11 +2762,11 @@ int _calcBandsAndProjectedVelocities(
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt*3+i];
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
-                hk[isource][itarget]+=tk;
+                hk[isource*norbs+itarget]+=tk;
 
                 for(int iproj=0;iproj<nProj;iproj++){// setting projected DhkDkf
                     if(wOrbSourceProj[iproj][isource]*wOrbTargetProj[iproj][itarget]+wOrbSourceProj[iproj][itarget]*wOrbTargetProj[iproj][isource]>0){
-                        for(int i=0;i<2;i++)DhkDkf[iproj][isource][itarget][i]+=tk*hopping_R[i];
+                        for(int i=0;i<3;i++)DhkDkf[iproj*norbs*norbs*3+isource*norbs*3+itarget*3+i]+=tk*hopping_R[i];
                     }
                 }
             }
@@ -2997,13 +2775,15 @@ int _calcBandsAndProjectedVelocities(
                 for(int i=0;i<norbs;i++){
                     for(int j=0;j<norbs;j++){
                         for(int k=0;k<3;k++){
-                            DhkDkc[iproj][i][j][0]+=DhkDkf[iproj][i][j][k]*lattice[k][0];
-                            DhkDkc[iproj][i][j][1]+=DhkDkf[iproj][i][j][k]*lattice[k][1];
+                            //DhkDkc[iproj][i][j][0]+=DhkDkf[iproj][i][j][k]*lattice[k][0];
+                            //DhkDkc[iproj][i][j][1]+=DhkDkf[iproj][i][j][k]*lattice[k][1];
+                            DhkDkc[iproj*norbs*norbs*2+i*norbs*2+j*2+0]+=DhkDkf[iproj*norbs*norbs*3+i*norbs*3+j*3+k]*lattice[k][0];
+                            DhkDkc[iproj*norbs*norbs*2+i*norbs*2+j*2+1]+=DhkDkf[iproj*norbs*norbs*3+i*norbs*3+j*3+k]*lattice[k][1];
                         }
                     }
                 }
             }
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,hk,norbs,eigs);
             // vec[i]=hk[:][i]
             if(info!=0){
                 printf("LAPACKE failed, info: %d\n",info);
@@ -3019,11 +2799,11 @@ int _calcBandsAndProjectedVelocities(
                     if(En>erange[1] | En<erange[0])continue;
                     for(int iproj=0;iproj<nProj;iproj++){
                         for(int idir=0;idir<2;idir++){
-                            int ipos=iproj*proj_width+idir*dir_width+ikpt*kpt_width+bandm*norbs+bandn;
+                            ipos=iproj*proj_width_g+idir*dir_width_g+ikpt*kpt_width_g+bandm*norbs+bandn;
                             velocities[ipos]=0;
                             for(int icontract=0;icontract<norbs;icontract++){
                                 for(int jcontract=0;jcontract<norbs;jcontract++){
-                                    velocities[ipos]+=conj(hk[icontract][bandm])*DhkDkc[iproj][icontract][jcontract][idir]*hk[jcontract][bandn];
+                                    velocities[ipos]+=conj(hk[icontract*norbs+bandm])*DhkDkc[iproj*norbs*norbs*2+icontract*norbs*2+jcontract*2+idir]*hk[jcontract*norbs+bandn];
                                 }
                             }
                         }
@@ -3031,6 +2811,7 @@ int _calcBandsAndProjectedVelocities(
                 }
             }  
         }
+        free(hk);free(DhkDkf);free(DhkDkc);
     }
     //fp=fopen("./c_log","a");
     //fprintf(fp,"projective velocity completed\n");
