@@ -533,7 +533,7 @@ class Response:
 
         return
 
-    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],ndivide=1,nthreads=1):
+    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],ndivide=1,nthreads=1,show=True):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
@@ -647,7 +647,8 @@ class Response:
                     with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
                         for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
                             fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
-
+        if not show:
+            return
         condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
         condcxxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxy])
         condcyyxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyyx])
@@ -1044,7 +1045,7 @@ class Response:
             proj_op=[[[],[]]], # proj_op[iproj][0,1] give the atom id for source and target projection 
             scatter_route=[[0,0,0]], # scatter_route[iroute][istage=0,1,2] gives the id of projection  
             omegaList=[],tau=0.01,erange=[-1000.,1000.],
-            ndivide=1,nthreads=1):
+            ndivide=1,nthreads=1,show=True):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
@@ -1194,7 +1195,8 @@ class Response:
                                 fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
 
         print('Projective Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
-
+        if not show:
+            return
         condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
         condcxxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxy])
         condcyyxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyyx])
