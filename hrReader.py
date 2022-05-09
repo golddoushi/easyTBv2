@@ -539,7 +539,6 @@ class Hr:
                     _,Us=np.linalg.eigh(saxis[0]*sx+saxis[1]*sy+saxis[2]*sz)
                     print("Calculated spin basis:")
                     print(Us)
-                exit()
                 new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
                 for isym in range(len(symIonMap)):
                     rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
