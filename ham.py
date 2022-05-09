@@ -1047,6 +1047,7 @@ class Response:
             omegaList=[],tau=0.01,erange=[-1000.,1000.],
             ndivide=1,nthreads=1,show=True):
         time0=time.time()
+        assert mainDir!=None,'mainDir is required in projective BPVE calc.'
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
         kyaxis=np.linspace(0,1,kgrid[1],endpoint=False)
@@ -1161,8 +1162,44 @@ class Response:
                         c_int(ndivide),
                         c_int(nthreads))
                         
-        condFull=(np.array(result[0])+1j*np.array(result[1]))#.reshape(8,len(omegaList)*nkpts)
-        #exit()
+        condFull_scatter=(np.array(result[0])+1j*np.array(result[1])).reshape(nScatter,8,len(omegaList))
+        for iscatter in range(nScatter):
+            cxxx,cyxx,cxyy,cyyy,cxxy,cyxy,cxyx,cyyx=condFull_scatter[iscatter]
+            with open(mainDir+'photoCondTensorVsOmega_proj%d.txt'%iscatter,'w') as fout:
+                fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
+                for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
+                    fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                        omega,
+                        _cxxx.real,_cxxx.imag,
+                        _cxxy.real,_cxxy.imag,
+                        _cyyx.real,_cyyx.imag,
+                        _cyyy.real,_cyyy.imag,
+                        _cxyx.real,_cxyx.imag,
+                        _cxyy.real,_cxyy.imag,
+                        _cyxx.real,_cyxx.imag,
+                        _cyxy.real,_cyxy.imag))
+
+        print('Projective Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
+        if not show:
+            return
+        
+        fig,ax=plt.subplots(2,4,sharey=True)
+        ax[0,0].scatter(omegaList,cxxx.real,label=r'$Re\ \sigma^x_{xx}$')
+        ax[0,1].scatter(omegaList,cxxy.real,label=r'$Re\ \sigma^y_{xx}$')
+        ax[0,2].scatter(omegaList,cyyx.real,label=r'$Re\ \sigma^x_{yy}$')
+        ax[0,3].scatter(omegaList,cyyy.real,label=r'$Re\ \sigma^y_{yy}$')
+        ax[1,0].scatter(omegaList,cxyx.real,label=r'$Re\ \sigma^x_{xy}$')
+        ax[1,1].scatter(omegaList,cxyy.real,label=r'$Re\ \sigma^y_{xy}$')
+        ax[1,2].scatter(omegaList,cyxx.real,label=r'$Re\ \sigma^x_{yx}$')
+        ax[1,3].scatter(omegaList,cyxy.real,label=r'$Re\ \sigma^y_{yx}$')
+        for row in ax:
+            for _ax in row:
+                _ax.legend()
+                _ax.plot([omegaList[0],omegaList[-1]],[0,0],'--',linewidth=1)
+        plt.savefig(mainDir+'projPhotoconductance.png',dpi=300)
+        plt.show()
+        return
+        '''
         if mainDir!=None:
             if len(omegaList)==1:
                 condFull_scatter=condFull.reshape(nScatter,8,nkpts)
@@ -1197,6 +1234,7 @@ class Response:
         print('Projective Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
         if not show:
             return
+        
         condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
         condcxxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxy])
         condcyyxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyyx])
@@ -1222,6 +1260,8 @@ class Response:
         if mainDir!=None: plt.savefig(mainDir+'projPhotoconductance.png',dpi=300)
         plt.show()
         return
+        '''
+
 
     def calcSpinProjectiveBulkPhotovoltaicConductor_CDLL(self,hr,mainDir:str=None,kgrid=[20,20,1],atomicOrbIndexList=[],proj_atomID=[[],[]],omegaList=[],tau=0.01,erange=[-1000.,1000.],nthreads=1):
         time0=time.time()

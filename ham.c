@@ -2854,12 +2854,21 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
     printf("memory estimation: %.4f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(2*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
     //exit(1);
     
-    lapack_complex_double itau=tau*_Complex_I;
-    lapack_complex_double * conductance_on_kmesh_on_omega=(lapack_complex_double*)malloc(nScatterRoute*nphoton*nkpt*8*sizeof(lapack_complex_double));
-    for(int i=0;i<nScatterRoute*nphoton*nkpt*8;i++)conductance_on_kmesh_on_omega[i]=0;
-    
-    
     int nkpt_part=nkpt/ndivide;
+    unsigned long long kpt_width=norbs*norbs;
+    unsigned long long dir_width=nkpt_part*kpt_width;
+    unsigned long long proj_width=2*dir_width;
+
+    unsigned long long _nphoton=nphoton;
+    unsigned long long _nkpt=nkpt;
+    unsigned long long sca_width=_nkpt*_nphoton*8;
+
+    unsigned long long _nScatterRoute=nScatterRoute;
+
+    lapack_complex_double itau=tau*_Complex_I;
+    lapack_complex_double * conductance_on_kmesh_on_omega=(lapack_complex_double*)malloc(_nScatterRoute*_nphoton*_nkpt*(unsigned long long)8*sizeof(lapack_complex_double));
+    for(unsigned long long i=0;i<_nScatterRoute*_nphoton*_nkpt*(unsigned long long)8;i++)conductance_on_kmesh_on_omega[i]=0;
+    
     int ikpt_head;
     if(nkpt%ndivide!=0){
         printf("Error: nkpt %d cannot be divide by %d, exiting now!\n",nkpt,ndivide);
@@ -2868,11 +2877,7 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
     lapack_complex_double *velocity=(lapack_complex_double*)malloc(nProj*2*nkpt_part*norbs*norbs*sizeof(lapack_complex_double));
     double *energy=(double*)malloc(nkpt_part*norbs*sizeof(double));
     double *sub_kmesh=(double*)malloc(nkpt_part*3*sizeof(double));
-    int kpt_width=norbs*norbs;
-    int dir_width=nkpt_part*kpt_width;
-    int proj_width=2*dir_width;
-
-    int sca_width=nkpt*nphoton*8;
+    
     int nthreads;
     nthreads=_nthreads;
     if(nkpt_part<_nthreads*10)nthreads=1;
@@ -2916,8 +2921,9 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
         {
             #pragma omp for
             for(int ikpt=0;ikpt<nkpt_part;ikpt++){// loop over kmesh
-                int ikpt_true=ikpt_head+ikpt;
-                int writing_k_index=ikpt_true*nphoton*8;
+                unsigned long long ikpt_true=ikpt_head+ikpt;
+                unsigned long long writing_k_index=ikpt_true*nphoton*8;
+                // printf("ikpt_true: %d\n",ikpt_true);
                 for(int bandl=0;bandl<norbs;bandl++){ // loop over band_l
                     double El=energy[ikpt*norbs+bandl];
                     if(El<erange[0] | El>erange[1]) continue;
@@ -2931,12 +2937,17 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
                         int fln=fl-fn;
                         if (fln==0) continue;
 
-                        int iv0,iv1,iv2;
+                        unsigned long long iv0,iv1,iv2;
                         for(int iscatter=0;iscatter<nScatterRoute;iscatter++){
                             iv0=scatterProjOrder[iscatter][0];
                             iv1=scatterProjOrder[iscatter][1];
                             iv2=scatterProjOrder[iscatter][2];
-                            int writing_scatter_index=iscatter*sca_width;
+                            //printf("iv0 %d iv1 %d iv2 %d\n",iv0,iv1,iv2);
+                            unsigned long long writing_scatter_index=iscatter*sca_width;
+                            //if(writing_scatter_index<0){
+                            //    printf("wri sca %d, isc %d, sca_width %d\n",writing_scatter_index,iscatter,sca_width);
+                            //    exit(1);
+                            //}
                             // calc overlap
                             lapack_complex_double px_nl=velocity[iv0*proj_width+          ikpt*kpt_width+bandn*norbs+bandl];
                             lapack_complex_double py_nl=velocity[iv0*proj_width+dir_width+ikpt*kpt_width+bandn*norbs+bandl];
@@ -2950,12 +2961,12 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
                                 lapack_complex_double py_lm=velocity[iv1*proj_width+dir_width+ikpt*kpt_width+bandl*norbs+bandm];
                                 lapack_complex_double px_mn=velocity[iv2*proj_width+          ikpt*kpt_width+bandm*norbs+bandn];
                                 lapack_complex_double py_mn=velocity[iv2*proj_width+dir_width+ikpt*kpt_width+bandm*norbs+bandn];
-
-                                for(int iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
-                                    int writing_ph_index=writing_scatter_index+writing_k_index+iphoton*8;
+                                //printf("band%d-%d, px_lm %f %f, py_lm %f %f band%d-%d px_mn %f %f py_mn %f %f\n",bandl,bandm,creal(px_lm),cimag(px_lm),creal(py_lm),cimag(py_lm),bandm,bandn,creal(px_mn),cimag(px_mn),creal(py_mn),cimag(py_mn));
+                                for(unsigned long long iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
+                                    unsigned long long writing_ph_index=writing_scatter_index+writing_k_index+iphoton*8;
                                     double omega=omegaList[iphoton];
-                            
                                     lapack_complex_double factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
+                                    //printf("iphoton %d start, pos=%d (wri sca %d, wri k %d), omega=%f factor: %f %f\n",iphoton,writing_ph_index,writing_scatter_index,writing_k_index,omega,creal(factor_global),cimag(factor_global));
                                     conductance_on_kmesh_on_omega[writing_ph_index  ]+=px_nl*px_lm*px_mn*factor_global;
                                     conductance_on_kmesh_on_omega[writing_ph_index+1]+=px_nl*px_lm*py_mn*factor_global;
                                     conductance_on_kmesh_on_omega[writing_ph_index+2]+=py_nl*py_lm*px_mn*factor_global;
@@ -2964,6 +2975,7 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
                                     conductance_on_kmesh_on_omega[writing_ph_index+5]+=px_nl*py_lm*py_mn*factor_global;
                                     conductance_on_kmesh_on_omega[writing_ph_index+6]+=py_nl*px_lm*px_mn*factor_global;
                                     conductance_on_kmesh_on_omega[writing_ph_index+7]+=py_nl*px_lm*py_mn*factor_global;
+                                    //printf("iphoton %d end\n",iphoton);
                                 }
                             } 
                         }
@@ -2981,20 +2993,44 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
     fp=fopen("./c_log","a");
     fprintf(fp,"All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
     fclose(fp);
-
-    PyObject * conductance_real=PyTuple_New(nScatterRoute*nphoton*nkpt*8);
-    PyObject * conductance_imag=PyTuple_New(nScatterRoute*nphoton*nkpt*8);
-
-    for(int iscatter=0;iscatter<nScatterRoute;iscatter++){
-        for(int iphoton=0;iphoton<nphoton;iphoton++){
-            for(int ikpt=0;ikpt<nkpt;ikpt++){
-                for(int icomp=0;icomp<8;icomp++){
-                    PyTuple_SetItem(conductance_real, iscatter*sca_width+icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*nphoton*8+iphoton*8+icomp])));
-                    PyTuple_SetItem(conductance_imag, iscatter*sca_width+icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*nphoton*8+iphoton*8+icomp])));
+    
+    
+    /*
+    PyObject * conductance_real=PyTuple_New((unsigned long long)nScatterRoute*_nphoton*8*_nkpt);
+    PyObject * conductance_imag=PyTuple_New((unsigned long long)nScatterRoute*_nphoton*8*_nkpt);
+    printf("memory allocated\n");
+     
+    for(unsigned long long iscatter=0;iscatter<nScatterRoute;iscatter++){
+        for(unsigned long long iphoton=0;iphoton<nphoton;iphoton++){
+            for(unsigned long long ikpt=0;ikpt<nkpt;ikpt++){
+                for(unsigned long long icomp=0;icomp<8;icomp++){
+                    PyTuple_SetItem(conductance_real, iscatter*sca_width+icomp*_nphoton*_nkpt+iphoton*_nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp])));
+                    PyTuple_SetItem(conductance_imag, iscatter*sca_width+icomp*_nphoton*_nkpt+iphoton*_nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp])));
                 }
             }
         }
     }
+    */
+    PyObject * conductance_real=PyTuple_New(_nScatterRoute*_nphoton*8);
+    PyObject * conductance_imag=PyTuple_New(_nScatterRoute*_nphoton*8);
+    printf("memory allocated\n");
+    lapack_complex_double bzIntegration;
+    unsigned long long pos;
+    for(unsigned long long iscatter=0;iscatter<nScatterRoute;iscatter++){
+        for(unsigned long long iphoton=0;iphoton<nphoton;iphoton++){
+            for(unsigned long long icomp=0;icomp<8;icomp++){
+                bzIntegration=0;
+                for(unsigned long long ikpt=0;ikpt<nkpt;ikpt++){
+                    pos=iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp;
+                    bzIntegration+=conductance_on_kmesh_on_omega[pos];
+                }
+                PyTuple_SetItem(conductance_real, iscatter*_nphoton*8+icomp*_nphoton+iphoton, PyFloat_FromDouble(creal(bzIntegration/nkpt)));
+                PyTuple_SetItem(conductance_imag, iscatter*_nphoton*8+icomp*_nphoton+iphoton, PyFloat_FromDouble(cimag(bzIntegration/nkpt)));
+            }
+        }
+    }
+
+    printf("py data setted\n");
     free(conductance_on_kmesh_on_omega);
     return Py_BuildValue("(OO)",conductance_real,conductance_imag);
 }
