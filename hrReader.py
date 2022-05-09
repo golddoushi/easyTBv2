@@ -1,5 +1,6 @@
 from cgi import print_environ_usage
 import time
+from typing import List
 import Lattice as lat
 import numpy as np
 from math import acos, cos, asin, sin, sqrt
@@ -427,7 +428,9 @@ class Hr:
         print('dropping bonds:',ndropping)
         return ndropping
 
-    def symmerizeBonds(self,atomicOrbIndexList,spinor=False,saxis=np.array([0,0,1]),symOpSelection=[],atomicMagMomList=[]):
+    def symmerizeBonds(self,atomicOrbIndexList:list,
+                        spinor=False,saxis:np.ndarray=np.array([0,0,1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
+                        symOpSelection:list=[],atomicMagMomList:list=[]):
         def vecAround(vec):
             newVec=[]
             for x in vec:
@@ -526,8 +529,17 @@ class Hr:
                 magmom_list.append(np.array([mx,my,mz]).real)
             #tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list]) if len(magmom_list)>0 else 0.
             if spinor: # find proper sub-group consist with magnetism and time reversal symmetry
-                assert np.sqrt(sum(saxis*saxis))==1, 'saxis should be normalized vector'
-                _,Us=np.linalg.eigh(saxis[0]*sx+saxis[1]*sy+saxis[2]*sz)
+                if abs(sum(sum(spin_basis.dot(spin_basis.conjugate().T)-np.eye(2)))-2)<paramReader.SYMPREC:
+                    Us=spin_basis
+                else:
+                    print("Warning: spin_basis is not set or not set correctly. So, I have to calc. this via saxis.")
+                    print("         However, in some cases the saxis-inferred spin space is not satisfied.")
+                    print("         Be caucious and re-check the result!")
+                    assert np.sqrt(sum(saxis*saxis))==1, 'saxis should be normalized vector'
+                    _,Us=np.linalg.eigh(saxis[0]*sx+saxis[1]*sy+saxis[2]*sz)
+                    print("Calculated spin basis:")
+                    print(Us)
+                exit()
                 new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
                 for isym in range(len(symIonMap)):
                     rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
@@ -714,6 +726,12 @@ class Hr:
         # obtain sym. Ops. of atomic wavefunctions
         sym= getSymOpsAndSymSiteMap(atomicMagMomList=atomicMagMomList)
         symRotateList, symTranslateList, symSiteMapList, symSpinRotateList, symTimeReversalList=sym['rotations'], sym['translations'], sym['atom map'], sym['spin rotations'], sym['time reversal']
+        #for isym, rotate in enumerate(symRotateList):
+        #    print('sym. op. %d/%d'%(isym,len(symRotateList)-1))
+        #    print(rotate)
+        #    print(symTranslateList[isym])
+        #    print('time reversal:',symTimeReversalList[isym])
+        #exit()
         if len(symOpSelection)>0:
             symRotateList=[symRotateList[isym] for isym in symOpSelection]
             symTranslateList=[symTranslateList[isym] for isym in symOpSelection]
@@ -772,7 +790,7 @@ class Hr:
         '''
         # check the whether operations are right
         np.set_printoptions(precision=4)
-        i,j=0,1
+        i,j=0,4
         orbAtomI=[]
         for L in atomicOrbIndexList[i]:
             for iorb in L: orbAtomI.append(iorb)
@@ -782,7 +800,7 @@ class Hr:
         print(orbAtomI)
         print(orbAtomJ)
         bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
-        dR=[0,0,0]
+        dR=[0,1,0]
         sourceCoor0=pR.pos_ions[i]
         targetCoor0=pR.pos_ions[j]+np.array(dR)
         for iorbAtomI, orbAtomIIndex in enumerate(orbAtomI):
@@ -826,7 +844,7 @@ class Hr:
             #print('original bond')
             #print(bond)
             #print('transformer')
-            #print(localSymOp[i_trans])
+            #print(localSymOp[i_trans].conjugate().T)
             #print(localSymOp[j_trans])
             bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
             if timeReversal:
