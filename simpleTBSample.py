@@ -11,8 +11,8 @@ from illustrator import drawJDOSOnHexagonalBZ
 #pR.readPOS('./mcalc/MoTe2CrI3/POSCAR')
 #pR.readPOS('./mcalc/Cr2P2Se6/POSCAR')
 #pR.readPOS('./mcalc/MnPSe3/POSCAR')
-pR.readPOS('./mcalc/BN/POSCAR.square.vasp')
-#pR.readPOS('./mcalc/CrI3/bilayer/POSCAR')
+#pR.readPOS('./mcalc/BN/POSCAR.square.vasp')
+pR.readPOS('./mcalc/CrI3/bilayer/POSCAR')
 #pR.readPOS('./mcalc/Si/POSCAR')
 hr=reader.Hr()
 #hr.readSingleFile('./mcalc/FeCl2/wannier90.dn_hr.dat',ignoreImagPart=True,cutoff=0.01)
@@ -23,10 +23,10 @@ hr=reader.Hr()
 #hr.readSingleFile('./mcalc/Cr2P2Se6/wannier90.up_hr.dat',cutoff=-0.01)
 #hr.readSingleFile('./mcalc/MnPSe3/wannier90_hr.mz.dat',ignoreImagPart=False,cutoff=-0.1)
 #hr.readSingleFile('./mcalc/Si/hr.dat',ignoreImagPart=False,cutoff=-0.1)
-hr.readSingleFile('./mcalc/BN/hr.square.dat',ignoreImagPart=False,cutoff=-0.1)
-#hr.readSingleFile('./mcalc/CrI3/bilayer/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
+#hr.readSingleFile('./mcalc/BN/hr.square.dat',ignoreImagPart=False,cutoff=-0.1)
+hr.readSingleFile('./mcalc/CrI3/bilayer/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
-#'''
+'''
 # BN
 atomicOrbIndexList=[
     [[0,2]],
@@ -35,7 +35,7 @@ atomicOrbIndexList=[
 atomicMagMomList=[[0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
                  ]
-#'''
+'''
 '''
 # MoTe2
 atomicOrbIndexList=[[[],[],[0,1,2,3,4,11,12,13,14,15]],       # Mo
@@ -72,7 +72,7 @@ atomicMagMomList=[[0,1], # in z direction
                   [0,0], # 0 mag.mom.
                  ]
 '''
-'''
+#'''
 # CrI3
 atomicOrbIndexList=[[[],[],[0,1,2,3,4,56,57,58,59,60]],       # Cr1
                     [[],[],[5,6,7,8,9,61,62,63,64,65]],       # Cr2
@@ -92,8 +92,8 @@ atomicOrbIndexList=[[[],[],[0,1,2,3,4,56,57,58,59,60]],       # Cr1
                     [[],[53,54,55,109,110,111]],                 # I12
                    ]
 atomicMagMomList=[[0,1], # in z direction
-                  [1,0], # in z direction
-                  [0,1], # in -z direction
+                  [0,1], # in z direction
+                  [1,0], # in -z direction
                   [1,0], # in -z direction
                   [0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
@@ -108,9 +108,9 @@ atomicMagMomList=[[0,1], # in z direction
                   [0,0], # 0 mag.mom.
                   [0,0], # 0 mag.mom.
                  ]
-'''
-#hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-#                  spinor=False,saxis=np.array([0,0,1]),atomicMagMomList=atomicMagMomList)
+#'''
+hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
+                  spinor=True,saxis=np.array([0,0,-1]),atomicMagMomList=atomicMagMomList)
 #exit()
 #hr.adjustSOCStrength(socFactor=0.0)
 #hr.adjustInterLayerInteraction(
@@ -125,8 +125,8 @@ gr=Green()
 #gr.calcFullBands_CDLL(hr,fermi=0.0,mainDir='./mcalc/MoTe2/',saveFig=True,redBands=[13,14])
 #gr.calcFullBands_CDLL(hr,fermi=-2.1,mainDir='./mcalc/MnPSe3/',saveFig=True,redBands=[43,44])
 #gr.calcFullBands_CDLL(hr,fermi=-1.6042,mainDir='./mcalc/Cr2P2Se6/',saveFig=True,redBands=[41,42])
-gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/BN/',saveFig=True,redBands=[1,2])
-#gr.calcFullBands_CDLL(hr,fermi=-0.98,mainDir='./mcalc/CrI3/bilayer/',saveFig=True,redBands=[83,84])
+#gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/BN/',saveFig=True,redBands=[1,2])
+gr.calcFullBands_CDLL(hr,fermi=-0.5,mainDir='./mcalc/CrI3/bilayer/',saveFig=True,redBands=[83,84],nthreads=4)
 #gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/Si/',saveFig=True,redBands=[3,4])
 
 #res=Response()
