@@ -2105,7 +2105,7 @@ class Green:
         plt.show()
         plt.close()
 
-    def calcFullBands_CDLL(self,hr,fermi=0,optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1,redBands=[]):
+    def calcFullBands_CDLL(self,hr,fermi=0,erange=(0,0),optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1,redBands=[]):
         # prepare input parameters for cdll
         kaxis=[]
         time0=time.time()
@@ -2163,7 +2163,10 @@ class Green:
         plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
         if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
         plt.xlim(0,ikpt)
-        plt.ylim(fermi-paramReader.DFERMI,fermi+paramReader.DFERMI)
+        if erange[1]!=erange[0]:
+            plt.ylim(fermi+erange[0],fermi+erange[1])
+        else:    
+            plt.ylim(fermi-paramReader.DFERMI,fermi+paramReader.DFERMI)
         plt.xticks([])
         plt.xlabel('K')
         plt.ylabel('Energy')

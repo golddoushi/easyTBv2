@@ -511,19 +511,22 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
     printf("use %d cores in ham.dll\n",nthreads);
     #pragma omp parallel num_threads(nthreads)
     {
+        lapack_complex_double * _hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double));
+        lapack_complex_double * _dhkdkxyz=(lapack_complex_double*)malloc(norbs*norbs*3*sizeof(lapack_complex_double));
+        lapack_complex_double * _dhkdkxdky=(lapack_complex_double*)malloc(norbs*norbs*9*sizeof(lapack_complex_double));
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //int kBaseIndex=ikpt*norbs*norbs;
-            lapack_complex_double _hk[norbs][norbs]; // init Hk
-            lapack_complex_double _dhkdkxyz[norbs][norbs][3];
-            lapack_complex_double _dhkdkxdky[norbs][norbs][3][3];
+            //lapack_complex_double _hk[norbs][norbs]; // init Hk
+            //lapack_complex_double _dhkdkxyz[norbs][norbs][3];
+            //lapack_complex_double _dhkdkxdky[norbs][norbs][3][3];
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
-                    _hk[i][j]=0;
+                    _hk[i*norbs+j]=0;
                     
-                    for(int k=0;k<3;k++)_dhkdkxyz[i][j][k]=0;
-                    for(int x=0;x<3;x++)for(int y=0;y<3;y++)_dhkdkxdky[i][j][x][y]=0;
+                    for(int k=0;k<3;k++)_dhkdkxyz[i*norbs*3+j*3+k]=0;
+                    for(int x=0;x<3;x++)for(int y=0;y<3;y++)_dhkdkxdky[i*norbs*9+j*9+x*3+y]=0;
                 }
             }
             double _eigs[norbs]; // output eigenvalues of Hk
@@ -536,21 +539,21 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
                 
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
-                _hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                _hk[sourceID[ihopping]*norbs+targetID[ihopping]]+=tk;
 
                 lapack_complex_double hopping_R_c[3];
                 for(int i=0;i<3;i++)hopping_R_c[i]=0;
                 for(int i=0;i<3;i++)for(int j=0;j<3;j++)hopping_R_c[i]+=hopping_R[j]*lattice[j][i];
 
-                for(int i=0;i<2;i++) _dhkdkxyz[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
-                for(int i=0;i<2;i++)for(int j=0;j<2;j++)_dhkdkxdky[sourceID[ihopping]][targetID[ihopping]][i][j]+=tk*hopping_R_c[i]*hopping_R_c[j];
+                for(int i=0;i<2;i++) _dhkdkxyz[sourceID[ihopping]*3*norbs+targetID[ihopping]*3+i]+=tk*hopping_R_c[i];
+                for(int i=0;i<2;i++)for(int j=0;j<2;j++)_dhkdkxdky[sourceID[ihopping]*9*norbs+targetID[ihopping]*9+i*3+j]+=tk*hopping_R_c[i]*hopping_R_c[j];
             }
             //printf("kpt%d %.3f %.3f %.3f hamk:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //for(int i=0;i<norbs;i++){
             //    for(int j=0;j<norbs;j++)printf("%f %f,",creal(_hk[i][j]),cimag(_hk[i][j]));
             //    printf("\n");
             //}
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','U',norbs,*_hk,norbs,_eigs);
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','U',norbs,_hk,norbs,_eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
             //printf("eigs:");
             //for(int i=0;i<norbs;i++)printf(" %.4f",_eigs[i]);
@@ -563,13 +566,13 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
                     int index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    vecs[index]=_hk[iorb][jorb];
-                    DHkDkx[index]=_dhkdkxyz[iorb][jorb][0];
-                    DHkDky[index]=_dhkdkxyz[iorb][jorb][1];
-                    DHkDkz[index]=_dhkdkxyz[iorb][jorb][2];
-                    DHkDkxDkx[index]=_dhkdkxdky[iorb][jorb][0][0];
-                    DHkDkyDky[index]=_dhkdkxdky[iorb][jorb][1][1];
-                    DHkDkxDky[index]=_dhkdkxdky[iorb][jorb][0][1];
+                    vecs[index]=_hk[iorb*norbs+jorb];
+                    DHkDkx[index]=_dhkdkxyz[iorb*3*norbs+jorb*3+0];
+                    DHkDky[index]=_dhkdkxyz[iorb*3*norbs+jorb*3+1];
+                    DHkDkz[index]=_dhkdkxyz[iorb*3*norbs+jorb*3+2];
+                    DHkDkxDkx[index]=_dhkdkxdky[iorb*9*norbs+jorb*9+0*3+0];
+                    DHkDkyDky[index]=_dhkdkxdky[iorb*9*norbs+jorb*9+1*3+1];
+                    DHkDkxDky[index]=_dhkdkxdky[iorb*9*norbs+jorb*9+0*3+1];
                 }
             }
         }
@@ -2174,6 +2177,7 @@ PyObject * calcInjectCond(int nkpt, double kmesh[nkpt][3], double dk[3],
 
 //********** Blocks for projected currents *****************
 // 1. the velocities and projected velocities
+/*
 PyObject * calcFullBandsAndVecsAndSpinProjectedVelocityInMemory(int nkpt, double kmesh[nkpt][3],
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
@@ -2473,7 +2477,7 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond(int nkpt,
     free(conductance_on_kmesh_on_omega);
     return Py_BuildValue("(OO)",conductance_real,conductance_imag);
 }
-
+*/
 
 // New version of Proj. BPVE
 int _calcBandsAndProjectedVelocities(

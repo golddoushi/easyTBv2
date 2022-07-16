@@ -203,7 +203,7 @@ class VASPProcessor:
         print('Berry curv calculated in %.3fs'%(time.time()-time0))
         return curv_x, curv_y, curv_z
     
-    def calcBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.066,type='bulk',mainDir:str=None,proj_ion_list:List=[],nthreads:int=1):
+    def calcBPVC(self,EphotonList:np.ndarray,erange=[-50,50],tau=0.000658212,type='bulk',mainDir:str=None,proj_ion_list:List=[],nthreads:int=1):
         if len(proj_ion_list)>0: 
             assert self.nion>0, "Error: projected BPVC calc need info. of PROCAR, pls. read PROCAR first"
             assert type=='bulk', "Error: for now, only BPVE can be projected"

@@ -337,8 +337,9 @@ class Hr:
         
         pR.lat=np.dot(Tmatrix,pR.lat)
         pR.pos_ions=pos_ions
-        pR.tot_ions=sum(pos_ions)
+        pR.tot_ions=sum(nions)
         pR.nions=nions
+        pR.label_ions=label_ions
         print("Warning: the atom coor. of s.c. is updated externally (in hrReader) rather by posReader")
         print("         only the lat, pos_ions, nions, and tot_ions are updated!")
         self.norb=norbital
@@ -348,6 +349,7 @@ class Hr:
         #for bond in self.bondList:
         #    print('%5d%5d%5d%5d%5d%12.6f%12.6f'%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
         #print(pR.lat)
+        '''
         print("the atomic orbs. in super cell:")
         orbName=['s','p','d','f']
         for iatom, atom in enumerate(atomicOrbIndexList_sc):
@@ -356,6 +358,7 @@ class Hr:
                 if len(orbL)>0:
                     print('%s orb:'%orbName[iorbL],orbL)
         #exit()
+        '''
         return atomicOrbIndexList_sc
     
     def sortOverlap(self,idirection=0):
