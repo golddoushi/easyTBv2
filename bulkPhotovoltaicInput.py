@@ -153,6 +153,18 @@ hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
 #res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,2.5,29),tau=0.02,erange=[-80,80],ndivide=1,nthreads=4)
 #exit()
 
+#'''
+res.calcModernOrbitalProjectiveBulkPhotovoltaicConductor_CDLL(hr,
+    mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,1.2,29),tau=0.02,erange=[-5,0],
+    proj_op=[
+        [[0,1,2],[0,1,2]], # full vel
+        ],
+    scatter_route=[
+        [0,0,0],
+        ],
+    ndivide=4,nthreads=4)
+exit()
+#'''
 res.calcOrbitalProjectiveBulkPhotovoltaicConductor_CDLL(hr,
     mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,1.2,29),tau=0.02,erange=[-5,0],
     proj_op=[
