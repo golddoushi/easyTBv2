@@ -101,9 +101,9 @@ def __drawPatternOnSquareBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray,ky
     plt.figure(figsize=(6,6))
 
     if origin=='no shift':
-        K1=g1*0
+        K1=-shiftv
         K2=g1-shiftv
-        K3=g1+g2-2*shiftv
+        K3=g1+g2-shiftv
         K4=g2-shiftv
         plt.pcolormesh(kx_grid,ky_grid,data_grid,shading='nearest',cmap=cmap,vmin=minValue,vmax=maxValue)
     elif origin=='conventional':
