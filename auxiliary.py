@@ -8,6 +8,7 @@ import numpy as np
 import os
 import shutil
 import time
+import paramReader
 global time0
 time0=0
 
@@ -259,3 +260,41 @@ def showElapsedTime(offset=False,extraInfo=''):
     print('%s in %.3fms'%(extraInfo,(time.time()-time0)*1000))
     return
         
+
+def renormVec(vec:np.ndarray,cvg=paramReader.SYMPREC) -> np.ndarray:
+    '''shift the vector to wrap boders'''
+    rVec=[]
+    for x in vec:
+        if abs(x)<cvg:
+            rVec.append(0)
+            continue
+        if abs(x-1)<cvg:
+            rVec.append(1)
+            continue
+        if abs(x+1)<cvg:
+            rVec.append(-1)
+            continue
+        if abs(x-2)<cvg:
+            rVec.append(2)
+            continue
+        if abs(x+2)<cvg:
+            rVec.append(-2)
+            continue
+        rVec.append(x)
+    return np.array(rVec)
+
+def integeralizeVec(vec:np.ndarray, cvg=paramReader.SYMPREC) -> np.ndarray:
+    '''enforce the ele. of vec to be integer'''
+    inteVec=[]
+    for x in vec:
+        inte_x=int(np.around(x))
+        assert abs(x-inte_x)<cvg, 'make_supercell::Hr.Error: vec %.6f %.6f %.6f cannot be integeralized, symprec is %.6f'%(*vec,cvg)
+        inteVec.append(inte_x)
+    return np.array(inteVec)
+
+def crossProduct(vec1:np.ndarray,vec2:np.ndarray) -> np.ndarray:
+    return np.array([
+        vec1[1]*vec2[2]-vec1[2]*vec2[1],
+        vec1[2]*vec2[0]-vec1[0]*vec2[2],
+        vec1[0]*vec2[1]-vec1[1]*vec2[0],
+        ])
