@@ -1962,19 +1962,32 @@ class Response:
     '''
     PEAD region
     '''
-    def calcEigsAndVecsInMemory_CDLL(self,hr,atomicOrbIndexList:list,kmesh=[50,50,1],nthreads=1):
+    def calcEigsAndVecsInMemory_CDLL(self,hr,atomicOrbIndexList:list,kmesh:list=[50,50,1],kpt_list:list=[],nthreads=1):
+        '''
+        solve the Hk in give k-points
+        there are two way to define the k-points list, via kpt_list or kmesh
+        when use kpt_list, the frac. coor. of kpts (in units of 2\pi/a) should be expressed as tuples e.g., kpt_list=[(1/3,1/3,0), ...]
+        when use kmesh, the grid size should be give e.g., kmesh=[5,5,1]
+        If both are give, the kpt_list is prefered
+        '''
         # prepare input parameters for cdll
         time0=time.time()
-        nkpts=kmesh[0]*kmesh[1]*kmesh[2]
-        c_kmesh=(c_double*(nkpts*3))()
-        ikpt=0
-        # k3 run fastest
-        for k1 in np.linspace(0,1,kmesh[0],endpoint=True):
-            for k2 in np.linspace(0,1,kmesh[1],endpoint=True):
-                for k3 in np.linspace(0,1,kmesh[2],endpoint=True):
-                    c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
-                    ikpt+=1
-                    #print(k1,k2,k3)
+        if len(kpt_list)>0:
+            nkpts=len(kpt_list)
+            c_kmesh=(c_double*(nkpts*3))()
+            for ikpt, kpt in enumerate(kpt_list):
+                c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(kpt[0]),c_double(kpt[1]),c_double(kpt[2])
+        else:
+            nkpts=kmesh[0]*kmesh[1]*kmesh[2]
+            c_kmesh=(c_double*(nkpts*3))()
+            ikpt=0
+            # k3 run fastest
+            for k1 in np.linspace(0,1,kmesh[0],endpoint=True):
+                for k2 in np.linspace(0,1,kmesh[1],endpoint=True):
+                    for k3 in np.linspace(0,1,kmesh[2],endpoint=True):
+                        c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+                        ikpt+=1
+                        #print(k1,k2,k3)
         c_lat=(c_double*9)()
         for i in range(3):
             c_lat[i]=c_double(pR.lat[0][i])
