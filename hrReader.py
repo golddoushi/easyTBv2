@@ -209,7 +209,7 @@ class Hr:
             print('file %s (spin-dn) has been successfully read in %.3fms, %d/%d skipped'%(filepath2,1000*(time.time()-time0),nSkip,nTotal))
 
     # transform Hr data of cell into Hr of supercell
-    def make_supercell(self,sc_dir0=[1.,1.,0.],sc_dir1=[1.,-1.,0.],sc_dir2=[0.,0.,1.],atomicOrbIndexList=[],soc=False):#,toHome=True):
+    def make_supercell(self,sc_dir0=[1.,1.,0.],sc_dir1=[1.,-1.,0.],sc_dir2=[0.,0.,1.],atomicOrbIndexList=[],soc=False):
         '''
         construct a supercell model.
         often used with slab fun. to get slab model with chosen border.
@@ -433,6 +433,95 @@ class Hr:
         #self.nhoppings=nhoppings
         print('dropping bonds:',ndropping)
         return ndropping
+
+    def deletDanglingOrb(self,atomicOrbIndexList=[],soc=False,bondCvg=1e-6,nCoor=2):
+        '''
+        delet orbitals that couple to only one other atom
+        '''
+        time0=time.time()
+        # analyze the atomic structure in p.c.
+        assert len(atomicOrbIndexList)==pR.tot_ions,'Error, we need the atomicOrbIndexList, now the num. of atoms is %d != %d in POSCAR'%(len(atomicOrbIndexList),pR.tot_ions)
+        #print("the atomic orbs. in primitive cell:")
+        orbDic_pc=[{'id':iorb} for iorb in range(self.norb)] # orbDic[iorb] gives the corresponding atom, and L
+        lmax=0
+        orbName=['s','p','d','f']
+        for iatom, atom in enumerate(atomicOrbIndexList):
+            #print('atom %d, lmax=%d'%(iatom,len(atom)-1))
+            lmax=max([lmax,len(atom)-1])
+            for iorbL, orbL in enumerate(atom):
+                if len(orbL)>0:
+                    #print('%s orb:'%orbName[iorbL],orbL)
+                    for iorb in orbL:
+                        #orbDic[iorb].extend([iatom,iorbL])
+                        orbDic_pc[iorb]['atom id']=iatom
+                        orbDic_pc[iorb]['pos (p.c.)']=pR.pos_ions[iatom]
+                        orbDic_pc[iorb]['orbital L']=iorbL
+
+        def addDistinctBondAtom(infoList:list,newAtom:tuple) -> None:
+            #print('try to add',newAtom,'into',infoList)
+            for existedAtom in infoList:
+                if existedAtom[0]==newAtom[0] and sum(abs(existedAtom[1]-newAtom[1]))<1:
+                    return
+            infoList.append(newAtom)
+            #print('success')
+            return
+        
+        nCoordinateInfo=[[] for iorb in range(self.norb)]
+        for bond in self.bondList:
+            if abs(bond.t)<bondCvg:continue
+            isource, itarget, overLat= bond.source, bond.target, bond.overlat
+            newAtom=(orbDic_pc[itarget]['atom id'],np.array(overLat))
+            #print('source orb%d, attach to'%isource,newAtom)
+            addDistinctBondAtom(nCoordinateInfo[isource],newAtom)
+        
+        # collect the id of orbitals that are to be deleted
+        iOrbToDrop=[]
+        for iorb, info in enumerate(nCoordinateInfo):
+            nCoordinate=len(info)
+            if nCoordinate<=nCoor:
+                print('low coordinate: orb%d'%iorb,info)
+                if soc:
+                    if len(nCoordinateInfo[(iorb+self.norb//2)%self.norb])<=nCoor: iOrbToDrop.append(iorb)
+                else:
+                    iOrbToDrop.append(iorb)
+        print('Orb. to be droped:',iOrbToDrop)
+
+        # update hopping
+        def containedInList(iorb:int):
+            for iorb_ref in iOrbToDrop:
+                if iorb_ref==iorb: return True
+            return False
+        hopping_tmp=[bond for bond in self.bondList if (not (containedInList(bond.source) or containedInList(bond.target)))]
+        
+        # re-index remain orbitals
+        iorb_full=[iorb for iorb in range(self.norb)]
+        np.sort(iOrbToDrop)
+        for idrop in range(len(iOrbToDrop)):
+            iorb_full.pop(iOrbToDrop[-1-idrop])
+        #print(iorb_full)
+        iorb_map=[-1]*self.norb
+        cnt=0
+        for iorb in iorb_full:
+            iorb_map[iorb]=cnt
+            cnt+=1
+        #print(iorb_map)
+
+        # update indexes in hoppings
+        self.norb-=len(iOrbToDrop)
+        onsite_energy=np.zeros(self.norb,dtype=float)
+        hopping=[]
+        for bond in hopping_tmp:
+            isource, itarget, overlat, t= iorb_map[bond.source],iorb_map[bond.target],bond.overlat,bond.t
+            assert isource>=0, 'original orb%d is not mapped properly'%bond.source
+            assert itarget>=0, 'original orb%d is not mapped properly'%bond.target
+            hopping.append(lat.BondDigital(isource, itarget, overlat, t))
+            if isource==itarget and sum(abs(overLat))==0: onsite_energy[isource]=t.real
+        self.bondList=hopping
+        self.onsite=onsite_energy
+
+        # update atomicOrbIndexList
+        atomicOrbIndexList_update=[[[iorb_map[iorb] for iorb in L if iorb_map[iorb]>=0] for L in atom] for atom in atomicOrbIndexList]
+        return atomicOrbIndexList_update
 
     def symmerizeBonds(self,atomicOrbIndexList:list,
                         spinor=False,saxis:np.ndarray=np.array([0,0,1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
