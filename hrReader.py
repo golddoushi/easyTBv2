@@ -1,10 +1,8 @@
-from cgi import print_environ_usage
 import time
-from typing import List
 import Lattice as lat
 import numpy as np
 from math import acos, cos, asin, sin, sqrt
-from auxiliary import quicksort
+from auxiliary import quicksort, renormVec, integeralizeVec, crossProduct
 import paramReader
 import posReader as pR
 
@@ -216,40 +214,24 @@ class Hr:
         construct a supercell model.
         often used with slab fun. to get slab model with chosen border.
         '''
+        time0=time.time()
         Tmatrix=np.array([sc_dir0,sc_dir1,sc_dir2])  # sc_lat = T dot lat 
         invTmatrix=np.linalg.inv(Tmatrix)            #    lat = invT dot sc_lat
         # construct lattice matrix for supercell
         self.supercell_lat=Tmatrix#np.dot(Tmatrix,self.lattice) # just treat original cell as simple cubic
-    
+        supercell_volume_ratio=abs(crossProduct(np.array(sc_dir0),np.array(sc_dir1)).dot(np.array(sc_dir2)))
+        
         # construct orbitals for supercell
         R0max=int(np.max(abs(Tmatrix[:,0])))
         R1max=int(np.max(abs(Tmatrix[:,1])))
         R2max=int(np.max(abs(Tmatrix[:,2])))
         Rmax=np.max([R0max,R1max,R2max])
         
-        ### find which sub-cell is interior, just check the origins
-        interior_cell_list=[] # store Bravais lattice vectors in original cell coordinates
-        #interior_cell_coor=[] # store Bravais lattice vectors in supercell coordinates
-        for a0 in range(-Rmax,Rmax+1):
-            for a1 in range(-Rmax,Rmax+1):
-                for a2 in range(-Rmax,Rmax+1):
-                    ori_lat=np.array([a0,a1,a2])
-                    ori_sc_lat=np.dot(ori_lat,invTmatrix)
-                    interior=True
-                    for ori_coor in ori_sc_lat:
-                        if(ori_coor<0 or ori_coor>=1):
-                            interior=False
-                    if(interior):
-                        #print(ori_lat)
-                        interior_cell_list.append(ori_lat)
-                        #interior_cell_coor.append(ori_sc_lat)
-        #print("%d cells included in supercell"%len(interior_cell_list))
-        #exit()
-        ### now add every orbs and their attributes
+        ### find which sub-cell is interior, check which atoms are in the supercell region
         # analyze the atomic structure in p.c.
         assert len(atomicOrbIndexList)==pR.tot_ions,'Error, we need the atomicOrbIndexList, now the num. of atoms is %d != %d in POSCAR'%(len(atomicOrbIndexList),pR.tot_ions)
         print("the atomic orbs. in primitive cell:")
-        orbDic=[[] for i in range(self.norb)] # orbDic[iorb] gives the corresponding atom, and L
+        orbDic_pc=[{'id':iorb} for iorb in range(self.norb)] # orbDic[iorb] gives the corresponding atom, and L
         lmax=0
         orbName=['s','p','d','f']
         for iatom, atom in enumerate(atomicOrbIndexList):
@@ -259,106 +241,127 @@ class Hr:
                 if len(orbL)>0:
                     print('%s orb:'%orbName[iorbL],orbL)
                     for iorb in orbL:
-                        orbDic[iorb].extend([iatom,iorbL])
-        for iorb, orb in enumerate(orbDic):
-            assert len(orb)==2, 'Error, orb%d is attached to %d atom(s)'%(iorb,len(orb)//2)
-        #sc_orbital_coor=[]
-        norbital=self.norb*len(interior_cell_list)
-        onsite_energy=np.zeros(norbital,dtype=complex)
+                        #orbDic[iorb].extend([iatom,iorbL])
+                        orbDic_pc[iorb]['atom id']=iatom
+                        orbDic_pc[iorb]['pos (p.c.)']=pR.pos_ions[iatom]
+                        orbDic_pc[iorb]['orbital L']=iorbL
+        #for iorb, orb in enumerate(orbDic):
+        #    assert len(orb)==2, 'Error, orb%d is attached to %d atom(s)'%(iorb,len(orb)//2)
         
+        norbital_sc_predicted=self.norb*supercell_volume_ratio
+        interior_cell_list=[] # store Bravais lattice vectors in original cell coordinates
+        interior_cell_atom_ids=[]
+        pos_ions, label_ions, orbDic_sc=[], [], [{'id':iorb} for iorb in range(norbital_sc_predicted)]
+        iatom_sc, orb0_index_sc, orb0_index_sc_dn, norbital_sc_recorded=0, 0, int(np.around(norbital_sc_predicted//2)), 0
+        atomicOrbIndexList_sc=[]
+        for a0 in range(-Rmax,Rmax+1):
+            for a1 in range(-Rmax,Rmax+1):
+                for a2 in range(-Rmax,Rmax+1):
+                    cell_included=False
+                    atom_list=[]
+                    for iatom, pos in enumerate(pR.pos_ions):
+                        ori_lat=np.array([a0,a1,a2])
+                        pos_original=ori_lat+pos
+                        pos_sc_lat=renormVec(np.dot(pos_original,invTmatrix),cvg=1e-8)
+                        interior=True
+                        for fx in pos_sc_lat:
+                            if(fx<-paramReader.SYMPREC or fx>=1-paramReader.SYMPREC):
+                                interior=False
+                                break
+                        if interior:
+                            cell_included=True # this cell should be included in supercell
+                            # add information about atom
+                            atom_list.append(iatom) 
+                            pos_ions.append(pos_sc_lat)
+                            label_ions.append(pR.label_ions[iatom])
+                            # add information about wannier orbitals
+                            atomOrbitalList=[] # atomOrbitalList[iL][iorbital]=index of tb orb. in supercell
+                            for iL, L in enumerate(atomicOrbIndexList[iatom]):
+                                LOrbitalList=[]
+                                for iorb0_pc in L:
+                                    if soc or self.spin_polarized:
+                                        half_index=iorb0_pc%(self.norb//2)
+                                        if iorb0_pc<self.norb//2:
+                                            iorb0_sc=orb0_index_sc
+                                            orb0_index_sc+=1
+                                        else:
+                                            iorb0_sc=orb0_index_sc_dn
+                                            orb0_index_sc_dn+=1
+                                    else:
+                                        iorb0_sc=orb0_index_sc
+                                        orb0_index_sc+=1
+                                    orbDic_sc[iorb0_sc]['atom id']=iatom_sc
+                                    orbDic_sc[iorb0_sc]['pos']=pos_sc_lat
+                                    orbDic_sc[iorb0_sc]['pos (p.c.)']=pos
+                                    orbDic_sc[iorb0_sc]['p.c. origin']=ori_lat
+                                    orbDic_sc[iorb0_sc]['orbital L']=iL
+                                    orbDic_sc[iorb0_sc]['orb id (p.c.)']=iorb0_pc
+                                    LOrbitalList.append(iorb0_sc)
+                                    norbital_sc_recorded+=1
+                                atomOrbitalList.append(LOrbitalList)
+                            atomicOrbIndexList_sc.append(atomOrbitalList)
+                            iatom_sc+=1
+
+                    if cell_included: 
+                        interior_cell_list.append(ori_lat)
+                        interior_cell_atom_ids.append(atom_list)
+        tot_ions_sc=sum([len(atom_list) for atom_list in interior_cell_atom_ids])
+        assert abs(tot_ions_sc/pR.tot_ions-tot_ions_sc//pR.tot_ions)<1e-8, 'super cell contains %d atoms, not the interger time p.c. atom number %d'%(tot_ions_sc,pR.tot_ions)
+        assert norbital_sc_predicted==norbital_sc_recorded, '%d orbitals recorded in supercell, but it should be %d, since volume ratio is %d'%(norbital_sc_recorded,norbital_sc_predicted,supercell_volume_ratio)
+        print("%d cells %d atoms %d orbitals included in supercell"%(len(interior_cell_list),tot_ions_sc,norbital_sc_recorded))
+        #for inter_cell, inter_atom_list in zip(interior_cell_list, interior_cell_atom_ids):
+        #    print(f'cell origin: {inter_cell}, atom index: {inter_atom_list}')
+        nions=[int(np.around(_nion*tot_ions_sc//pR.tot_ions)) for _nion in pR.nions]
+        #for label, pos, atom in zip(label_ions,pos_ions,atomicOrbIndexList_sc):
+        #    print(label, pos)
+            #for iL, L in enumerate(atom):
+            #    if len(L)>0: print('%s orb:'%orbName[iL],L)
+        #for orb in orbDic_sc:
+        #    print('orb%d f: %.6f %.6f %.6f'%(orb['id'],*orb['pos']))
+        # set hoppings for every orbitals
+        onsite_energy=np.zeros(norbital_sc_recorded,dtype=complex)
         hopping=[]
         nhoppings=0
-        atomicOrbIndexList_sc=[[[] for l in range(lmax+1)] for iatom in range(pR.tot_ions*len(interior_cell_list))]
-        #print(len(atomicOrbIndexList_sc),len(atomicOrbIndexList_sc[0]))
-        nions=[_nion*len(interior_cell_list) for _nion in pR.nions]
-        pos_ions=[]
-        label_ions=[]
-        for iinter_cell, interior_cell in enumerate(interior_cell_list):
-            # setting atoms
-            for iatom, pos in enumerate(pR.pos_ions):
-                pos_sc=np.dot(pos+interior_cell,invTmatrix)
-                pos_ions.append(pos_sc)
-                label_ions.append(pR.label_ions[iatom])
-            # setting wann. orbs.
-            for iorb0 in range(self.norb):
-                # add coordinates; no need to know exact coordinates of orbitals
-                #orb_sc=np.dot(orb0+interior_cell,invTmatrix)
-                #sc_orbital_coor.append(orb_sc)
-                #norbital+=1
-                if soc or self.spin_polarized:
-                    half_index=iorb0%(self.norb//2)
-                    if iorb0<self.norb//2:
-                        orb0_index_sc=iinter_cell*(self.norb//2)+half_index
-                    else:
-                        orb0_index_sc=iinter_cell*(self.norb//2)+half_index+norbital//2
-                else:
-                    orb0_index_sc=iinter_cell*self.norb+iorb0
-                
-                iatom_pc, iL_sc=orbDic[iorb0]
-                iatom_sc=iinter_cell*pR.tot_ions+iatom_pc
-                atomicOrbIndexList_sc[iatom_sc][iL_sc].append(orb0_index_sc)
-                # add on-site energy
-                onsite_energy[orb0_index_sc]=self.onsite[iorb0]#.append(self.onsite[iorb0])
-                # add hopping
-                #print("--> source orb%d, id in supercell %d"%(iorb0,orb0_index_sc))
-                for bond in self.bondList:
-                    if(bond.source==iorb0):
-                        #iorb0_sc=iinter_cell*self.norb+iorb0
-                        #hopping_orb0=[iorb0_sc]
-                        iorb1, aug_vec = bond.target, bond.overlat
-                        #print('iorb0:%d iorb1:%d aug_vec (p.c.):%d %d %d'%(iorb0, iorb1, aug_vec[0], aug_vec[1], aug_vec[2]))
-                        orb1_cell_ori=interior_cell+aug_vec # the origin coordinates (a1,a2,a3 lattice)
-                        orb1_cell_ori_sc=np.dot(orb1_cell_ori,invTmatrix) # in supercell lattice
-                        orb1_cell_ori_sc_reduced=orb1_cell_ori_sc%1       # reduced by 1
-                        aug_vec_sc=np.array([int(np.around(x)) for x in (orb1_cell_ori_sc-orb1_cell_ori_sc_reduced)]) # aug vector in supercell frame
-                        
-                        orb1_coor_reduced=orb1_cell_ori-np.dot(aug_vec_sc,Tmatrix)
-                        #print("bond to orb%d, overLat: %d %d %d, ori: %d %d %d, sc: %.3f %.3f %.3f, sc reduced: %d %d %d, aug: %d %d %d, t:(%.1f, %.1f)"%(
-                        #    bond.target,*bond.overlat,*orb1_cell_ori,*orb1_cell_ori_sc_reduced,*orb1_coor_reduced,*aug_vec_sc,bond.t.real,bond.t.imag))
-                        #print("target in origianl %d %d %d, sc %.3f %.3f %.3f"%(*orb1_cell_ori,*orb1_cell_ori_sc_reduced))
-                        
-                        #orb1_cell_ori_sc_reduced=np.array([int(x) for x in np.dot(orb1_cell_ori_sc_reduced,Tmatrix)])
-                        # check which level is reached
-                        for iori_coor, ori_coor in enumerate(interior_cell_list):
-                            if(ori_coor==orb1_coor_reduced).all():
-                                orb1_index_sc=iori_coor*self.norb+iorb1
-                                if soc or self.spin_polarized:
-                                    half_index=iorb1%(self.norb//2)
-                                    if iorb1<self.norb//2:
-                                        orb1_index_sc=iori_coor*(self.norb//2)+half_index
-                                    else:
-                                        orb1_index_sc=iori_coor*(self.norb//2)+half_index+norbital//2
-                                #print("in sc coor. bond to orb%d, overLat: %d %d %d"%(orb1_index_sc,*aug_vec_sc))
-                                break
-                        #print('SC: iorb0, iorb1:', iorb0_sc, iorb1_sc, 'aug_vec:',aug_vec_sc)
-                        hopping_orb0=lat.BondDigital(orb0_index_sc,orb1_index_sc,aug_vec_sc,bond.t)#[iorb0_sc, iorb1_sc, aug_vec_sc, amplify]
-                        hopping.append(hopping_orb0)
-                        nhoppings+=1
+        for orb_source_sc in orbDic_sc:
+            onsite_energy[orb_source_sc['id']]=self.onsite[orb_source_sc['orb id (p.c.)']]
+            for bond in self.bondList:
+                if bond.source==orb_source_sc['orb id (p.c.)']:
+                    iorb_target_pc, aug_vec_pc = bond.target, bond.overlat
+                    
+                    orb_target_pos_pc=orbDic_pc[iorb_target_pc]['pos (p.c.)']+aug_vec_pc+orb_source_sc['p.c. origin']
+                    orb_target_pos_sc=renormVec(np.dot(orb_target_pos_pc,invTmatrix),cvg=1e-8) # frac. coor. in supercell lattice
+                    orb_target_pos_sc_reduced=orb_target_pos_sc%1       # reduced by 1
+                    aug_vec_sc=integeralizeVec(orb_target_pos_sc-orb_target_pos_sc_reduced) # aug vector in supercell frame    
+                    
+                    targetOrbFound=False
+                    for orb_target_sc in orbDic_sc:
+                        if orb_target_sc['orb id (p.c.)']==iorb_target_pc and \
+                            sum(abs(orb_target_sc['pos']-orb_target_pos_sc_reduced))<1e-8:
+                            iorb_target_sc=orb_target_sc['id']
+                            targetOrbFound=True
+                            break
+                    if not targetOrbFound:
+                        print("Error::make_supercell in hrReader, bonding lost. bond in pc orb%d-orb%d [%d %d %d]"%(bond.source,bond.target,*bond.overlat))
+                        print("attach cvg. (hard coded): %.6f"%(1e-8))
+                    assert targetOrbFound==True, 'failed to make supercell due to bond losing'
+
+                    #print('bond in sc:',orb_source_sc['id'],iorb_target_sc,aug_vec_sc,bond.t)
+                    hopping_orb0=lat.BondDigital(orb_source_sc['id'],iorb_target_sc,aug_vec_sc,bond.t)#[iorb0_sc, iorb1_sc, aug_vec_sc, amplify]
+                    hopping.append(hopping_orb0)
+                    nhoppings+=1
         
         pR.lat=np.dot(Tmatrix,pR.lat)
         pR.pos_ions=pos_ions
-        pR.tot_ions=sum(nions)
+        pR.tot_ions=tot_ions_sc
         pR.nions=nions
         pR.label_ions=label_ions
         print("Warning: the atom coor. of s.c. is updated externally (in hrReader) rather by posReader")
         print("         only the lat, pos_ions, nions, and tot_ions are updated!")
-        self.norb=norbital
+        self.norb=norbital_sc_recorded
         self.onsite=onsite_energy
         self.bondList=hopping
-
-        #for bond in self.bondList:
-        #    print('%5d%5d%5d%5d%5d%12.6f%12.6f'%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
-        #print(pR.lat)
-        '''
-        print("the atomic orbs. in super cell:")
-        orbName=['s','p','d','f']
-        for iatom, atom in enumerate(atomicOrbIndexList_sc):
-            print('atom %d, coor. (%.6f %.6f %.6f)'%(iatom,*pR.pos_ions[iatom]))
-            for iorbL, orbL in enumerate(atom):
-                if len(orbL)>0:
-                    print('%s orb:'%orbName[iorbL],orbL)
         #exit()
-        '''
+        print('supercell built in %.3fs'%(time.time()-time0))
         return atomicOrbIndexList_sc
     
     def sortOverlap(self,idirection=0):
