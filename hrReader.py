@@ -329,14 +329,14 @@ class Hr:
                     iorb_target_pc, aug_vec_pc = bond.target, bond.overlat
                     
                     orb_target_pos_pc=orbDic_pc[iorb_target_pc]['pos (p.c.)']+aug_vec_pc+orb_source_sc['p.c. origin']
-                    orb_target_pos_sc=renormVec(np.dot(orb_target_pos_pc,invTmatrix),cvg=1e-8) # frac. coor. in supercell lattice
+                    orb_target_pos_sc=renormVec(np.dot(orb_target_pos_pc,invTmatrix),cvg=1e-6) # frac. coor. in supercell lattice
                     orb_target_pos_sc_reduced=orb_target_pos_sc%1       # reduced by 1
                     aug_vec_sc=integeralizeVec(orb_target_pos_sc-orb_target_pos_sc_reduced) # aug vector in supercell frame    
                     
                     targetOrbFound=False
                     for orb_target_sc in orbDic_sc:
                         if orb_target_sc['orb id (p.c.)']==iorb_target_pc and \
-                            sum(abs(orb_target_sc['pos']-orb_target_pos_sc_reduced))<1e-8:
+                            sum(abs(orb_target_sc['pos']-orb_target_pos_sc_reduced))<1e-6:
                             iorb_target_sc=orb_target_sc['id']
                             targetOrbFound=True
                             break

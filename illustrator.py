@@ -34,7 +34,7 @@ def __makeGrid(data:np.ndarray,kmesh:list,reciLat:np.ndarray):
     return kx_grid, ky_grid, np.array(data_grid)
 
 def __drawPatternOnHexagonalBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray,ky_grid:np.ndarray,reciLat:list,
-                              valueSignSym=True,cmap="Spectral"
+                              valueSignSym=True,cmap="Spectral",colorbar=False
                               ):
     g1,g2=reciLat[:2,0],reciLat[:2,1]
     maxValue=np.max(abs(data_grid))
@@ -50,6 +50,7 @@ def __drawPatternOnHexagonalBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray
     # shift grid for contour plotting
     shiftx=(reciLat[0][0]+reciLat[0][1])/(2*kx_grid.shape[0])
     shifty=(reciLat[1][0]+reciLat[1][1])/(2*kx_grid.shape[1])
+    shiftv=np.array([shiftx,shifty])
     _kx_grid=kx_grid+shiftx
     _ky_grid=ky_grid+shifty
     #print(_kx_grid.shape)
@@ -59,19 +60,19 @@ def __drawPatternOnHexagonalBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray
     #sub4=plt.contour(_kx_grid-(g1+g2)[0],_ky_grid-(g1+g2)[1],data_grid,linewidths=1,linestyles="dashed",colors="black")
 
     if np.dot(reciLat[0],reciLat[1])>0: # g1 cross g2 by 60 deg.
-        K1=(g1+g2)/3
-        K2=((g1-g2)+g1)/3
-        K3=(-g2+(g1-g2))/3
-        K4=-(g1+g2)/3
-        K5=-((g1-g2)+g1)/3
-        K6=-(-g2+(g1-g2))/3
+        K1=(g1+g2)/3+shiftv
+        K2=((g1-g2)+g1)/3+shiftv
+        K3=(-g2+(g1-g2))/3+shiftv
+        K4=-(g1+g2)/3+shiftv
+        K5=-((g1-g2)+g1)/3+shiftv
+        K6=-(-g2+(g1-g2))/3+shiftv
     else: # g1 cross g2 by 120 deg.
-        K1=(g1+2*g2)/3
-        K2=(-g1+g2)/3
-        K3=(-2*g1-g2)/3
-        K4=-(g1+2*g2)/3
-        K5=-(-g1+g2)/3
-        K6=-(-2*g1-g2)/3
+        K1=(g1+2*g2)/3+shiftv
+        K2=(-g1+g2)/3+shiftv
+        K3=(-2*g1-g2)/3+shiftv
+        K4=-(g1+2*g2)/3+shiftv
+        K5=-(-g1+g2)/3+shiftv
+        K6=-(-2*g1-g2)/3+shiftv
 
     K=np.array([K1,K2,K3,K4,K5,K6,K1])
     corr_max=np.max([np.max(K[:,0]),np.max(K[:,1])])*1.1
@@ -81,11 +82,12 @@ def __drawPatternOnHexagonalBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray
     plt.ylim(-corr_max,corr_max)
     plt.xticks([])
     plt.yticks([])
+    if colorbar: plt.colorbar()
     plt.savefig(rpath+"hotmap.png",dpi=2000)
     plt.show()
 
 def __drawPatternOnSquareBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray,ky_grid:np.ndarray,reciLat:list,
-                              valueSignSym=True,cmap="Spectral",origin="no shift"
+                              valueSignSym=True,cmap="Spectral",origin="no shift",colorbar=False
                               ):
     g1,g2=reciLat[:2,0],reciLat[:2,1]
     maxValue=np.max(abs(data_grid))
@@ -131,22 +133,23 @@ def __drawPatternOnSquareBZ(rpath:str,data_grid:np.ndarray,kx_grid:np.ndarray,ky
     plt.xticks([])
     plt.yticks([])
     plt.axis('equal')
+    if colorbar: plt.colorbar()
     plt.savefig(rpath+"hotmap.png",dpi=2000)
     plt.show()
 
 def drawHotmapOnHexagonalBZ(rpath:str,data:np.ndarray,kmesh:list,
-                            valueSignSym=True,cmap="Spectral"
+                            valueSignSym=True,cmap="Spectral",colorbar=False
                             ):
     reciLat=np.linalg.inv(pR.lat)*np.pi*2
     #print(data)
     #exit()
     kx_grid, ky_grid, data_grid= __makeGrid(data,kmesh,reciLat)
     __drawPatternOnHexagonalBZ(rpath,data_grid,kx_grid,ky_grid,reciLat,
-    valueSignSym=valueSignSym,cmap=cmap
+    valueSignSym=valueSignSym,cmap=cmap,colorbar=colorbar
     )
 
 def drawHotmapOnSquareBZ(rpath:str,data:np.ndarray,kmesh:list,
-                            valueSignSym=True,cmap="Spectral",origin="no shift"
+                            valueSignSym=True,cmap="Spectral",origin="no shift",colorbar=False
                             ):
     '''
     Plot height map on square BZ
@@ -159,7 +162,7 @@ def drawHotmapOnSquareBZ(rpath:str,data:np.ndarray,kmesh:list,
     #exit()
     kx_grid, ky_grid, data_grid= __makeGrid(data,kmesh,reciLat)
     __drawPatternOnSquareBZ(rpath,data_grid,kx_grid,ky_grid,reciLat,
-    valueSignSym=valueSignSym,cmap=cmap,origin=origin
+    valueSignSym=valueSignSym,cmap=cmap,origin=origin,colorbar=colorbar
     )
 
 def drawJDOSOnHexagonalBZ(filepath:str,mainDir:str,kmesh:list):
