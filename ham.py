@@ -533,6 +533,148 @@ class Response:
 
         return
 
+    def calcProjectiveSpinHallConductor_CDLL(self,
+            hr,mainDir:str=None,kgrid=[20,20,20],
+            atomicOrbIndexList=[], # give the correspondence of atom id to wannier id
+            proj_op=[[[],[]]], # proj_op[iproj][0,1] give the atom id for source and target projection 
+            scatter_route=[[0,0,0]], # scatter_route[iroute][istage=0,1,2] gives the id of projection  
+            fermiList=[],erange=[-1000.,1000.],
+            ndivide=1,nthreads=1,show=True):
+        time0=time.time()
+        assert mainDir!=None,'mainDir is required in projective BPVE calc.'
+        # prepare input parameters for cdll
+        kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
+        kyaxis=np.linspace(0,1,kgrid[1],endpoint=False)
+        kzaxis=np.linspace(0,1,kgrid[2],endpoint=False)
+        kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
+
+        print("lattice:")
+        print("a1=(%11.6f %11.6f %11.6f)"%(*pR.lat[0],))
+        print("a2=(%11.6f %11.6f %11.6f)"%(*pR.lat[1],))
+        print("a3=(%11.6f %11.6f %11.6f)"%(*pR.lat[2],))
+
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
+
+        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+            for L in atom:
+                for iorb in L: orbCorrList[iorb]=pos
+        #assert sum(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        c_orbCorrList=(c_double*(3*hr.norb))()
+        for i in range(hr.norb):
+            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
+            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
+            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
+
+        # construct the orbital weights for projection
+        nProj=len(proj_op)
+        c_orbProj1WeightList=(c_int*(nProj*hr.norb))()
+        c_orbProj2WeightList=(c_int*(nProj*hr.norb))()
+        for iproj, proj in enumerate(proj_op):
+            orbProj1WeightList=[0]*hr.norb
+            for atomID in proj[0]:
+                for L in atomicOrbIndexList[atomID]:
+                    for iorb in L: orbProj1WeightList[iorb]=1
+            orbProj2WeightList=[0]*hr.norb
+            for atomID in proj[1]:
+                for L in atomicOrbIndexList[atomID]:
+                    for iorb in L: orbProj2WeightList[iorb]=1
+            for i in range(hr.norb):
+                c_orbProj1WeightList[iproj*hr.norb+i]=c_int(orbProj1WeightList[i])
+                c_orbProj2WeightList[iproj*hr.norb+i]=c_int(orbProj2WeightList[i])
+        # construct scatter routes
+        nScatter=len(scatter_route)
+        c_scatterRoute=(c_int*(nScatter*3))()
+        for iscatter, scatter in enumerate(scatter_route):
+            for i in range(3):c_scatterRoute[iscatter*3+i]=scatter[i]
+
+        nkpts=len(kmesh)
+        c_kmesh=(c_double*(nkpts*3))()
+        for ikpt, kpt in enumerate(kmesh):
+            k1,k2,k3=kpt
+            c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
+
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        for ibond, bond in enumerate(hr.bondList):
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        assert len(fermiList)>=1, 'omegaList is not defined or empty'
+        c_fermi_list=(c_double*len(fermiList))()
+        for ifermi, fermi in enumerate(fermiList):
+            c_fermi_list[ifermi]=c_double(fermi)
+        
+        c_erange=(c_double*2)()
+        c_erange[0]=c_double(erange[0])
+        c_erange[1]=c_double(erange[1])
+        #exit()
+        hamDLL=CDLL("./ham.dll")
+        time0=time.time()
+
+        hamDLL.calcSpinHallCond_memoryReduce.restype=py_object
+        result=hamDLL.calcSpinHallCond_memoryReduce(
+                        c_int(nkpts), c_kmesh,
+                        c_int(hr.norb), c_int(nhoppings),
+                        c_sourceID, c_targetID, c_overLat,
+                        c_hopping_real, c_hopping_imag,
+
+                        c_int(len(fermiList)), c_fermi_list,
+                        c_lat,
+                        c_orbCorrList,
+                        c_erange,
+
+                        c_int(nProj), c_orbProj1WeightList, c_orbProj2WeightList,
+                        c_int(nScatter),c_scatterRoute,
+
+                        c_int(ndivide),
+                        c_int(nthreads))
+                        
+        condFull_scatter_sx,condFull_scatter_sy,condFull_scatter_sz=np.array(result).reshape(3,nScatter,9,len(fermiList))
+        for condFull_scatter, sname in zip([condFull_scatter_sx,condFull_scatter_sy,condFull_scatter_sz],['sx','sy','sz']):
+            for iscatter in range(nScatter):
+                cxx,cyx,czx,cxy,cyy,czy,cxz,cyz,czz=condFull_scatter[iscatter]
+                with open(mainDir+'spinHallConductanceVsFermi_proj%d_%s.txt'%(iscatter,sname),'w') as fout:
+                    fout.write("Fermi Sx_x Sy_x Sz_x Sx_y Sy_y Sz_y Sx_z Sy_z Sz_z\n")
+                    for omega, _cxx,_cyx,_czx,_cxy,_cyy,_czy,_cxz,_cyz,_czz in zip(fermiList,cxx,cyx,czx,cxy,cyy,czy,cxz,cyz,czz):
+                        fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                            omega,_cxx,_cyx,_czx,_cxy,_cyy,_czy,_cxz,_cyz,_czz))
+
+            
+            if not show: continue
+            #plt.figure()
+            fig,ax=plt.subplots(3,3,sharey=True)
+            ax[0,0].scatter(fermiList,cxx,label=r'$\sigma^{x,S}_{x}$')
+            ax[0,1].scatter(fermiList,cyx,label=r'$\sigma^{y,S}_{x}$')
+            ax[0,2].scatter(fermiList,czx,label=r'$\sigma^{z,S}_{x}$')
+            ax[1,0].scatter(fermiList,cxx,label=r'$\sigma^{x,S}_{y}$')
+            ax[1,1].scatter(fermiList,cyx,label=r'$\sigma^{y,S}_{y}$')
+            ax[1,2].scatter(fermiList,czx,label=r'$\sigma^{z,S}_{y}$')
+            ax[2,0].scatter(fermiList,cxx,label=r'$\sigma^{x,S}_{z}$')
+            ax[2,1].scatter(fermiList,cyx,label=r'$\sigma^{y,S}_{z}$')
+            ax[2,2].scatter(fermiList,czx,label=r'$\sigma^{z,S}_{z}$')
+            for row in ax:
+                for _ax in row:
+                    _ax.legend()
+                    _ax.plot([fermiList[0],fermiList[-1]],[0,0],'--',linewidth=1)
+            plt.savefig(mainDir+'spin_%s_hallconductance.png'%sname,dpi=300)
+            plt.show()
+        print('Projective spin hall conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
+        return
+
     def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],ndivide=1,nthreads=1,show=True):
         time0=time.time()
         # prepare input parameters for cdll
