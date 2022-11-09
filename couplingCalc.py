@@ -13,29 +13,26 @@ import posReader as pR
 import auxiliary as aux
 import shutil
 import numpy as np
+from scipy.special.orthogonal import p_roots
 import time
 #import WannierKit
 import hrReader as reader
 import ham as hamilton
 import fileio
 import matplotlib.pyplot as plt
-from multiprocessing import Pool, freeze_support
 
 global bondList, supercellSize
 
-def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True):
+def classifyBonds(mainDir, source_list, wann_list, ini_S):
     global bondList, supercellSize
     pR.clean()
     ini_mag=[S*2 for S in ini_S]
-    pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S)
+    pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S,wann_ID=wann_list)
     
-    # loop to find the proper supercell size
-    sizeL,sizeW,sizeH=param.MINCELL,param.MINCELL,param.MINCELL
-    if param.PBC==2: sizeH=1
-    if param.PBC==1: sizeW=1
-    if param.PBC==0: sizeL=1
+    '''
     phase=0
     while(True):
+        if not checkSupercell: break
         print("check if the supercell %d x %d x %d is sufficiently large"%(sizeL,sizeW,sizeH))
         pR.clean()
         pR.readPOS(mainDir+'POSCAR')
@@ -150,28 +147,47 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S, completelyConfine=True
         print('>>>>>> All bonds are well confined in supercell %d x %d x %d<<<<<<'%(sizeL,sizeW,sizeH))
         aux.rm(mainDir+'POSCAR.tmp')
         break
-    
+    '''
     # construct representative orbitals and bonds
-    pR.clean()
-    pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S,wann_ID=wann_list)
+    #pR.clean()
+    #pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S,wann_ID=wann_list)
+    # loop to find the proper supercell size
+    def quenchNonperiodicPBC(sizeL,sizeW,sizeH):
+        if param.PBC==2: sizeH=1
+        if param.PBC==1: sizeW=1
+        if param.PBC==0: sizeL=1
+        return sizeL,sizeW,sizeH
+    sizeL,sizeW,sizeH=quenchNonperiodicPBC(param.MINCELL,param.MINCELL,param.MINCELL)
     bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list,maxRange=np.max([sizeL,sizeW,sizeH]),tolerance=param.SYMPREC)
+    for iserch in range(param.MAXCELL):
+        if len(bondListWithClassification)>0: break
+        sizeL,sizeW,sizeH=quenchNonperiodicPBC(sizeL+1,sizeW+1,sizeH+1)
+        bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list,maxRange=np.max([sizeL,sizeW,sizeH]),tolerance=param.SYMPREC)
+    else:
+        print("Error: cannot found enough bond within supercell size below MAXCELL=%d"%param.MAXCELL)
+        exit()
+    
     print('following bonds are to be evaluated')
     for ibondType, bondType in enumerate(bondListWithClassification):
         if ibondType>=param.CALRANGE:
             break
         bond=bondType[0]
-        print('bond%d, linking orb%d (%s-%s) and orb%d (%s-%s) over (%d %d %d)'%(
-            bond.id,bond.sourceOrb.id,bond.sourceOrb.label,bond.sourceOrb.wyckoffs,
-            bond.targetOrb.id,bond.targetOrb.label,bond.targetOrb.wyckoffs,
-            bond.overLat[0],bond.overLat[1],bond.overLat[2]
-        ))
+        #if checkSupercell:
+        #    print('bond%d, linking orb%d (%s-%s) and orb%d (%s-%s) over (%d %d %d)'%(
+        #    bond.id,bond.sourceOrb.id,bond.sourceOrb.label,bond.sourceOrb.wyckoffs,
+        #    bond.targetOrb.id,bond.targetOrb.label,bond.targetOrb.wyckoffs,
+        #    bond.overLat[0],bond.overLat[1],bond.overLat[2]
+        #    ))
+        #else:
+        #    bond.report(short=True)
+        bond.report(short=True)
     
     bondList=bondListWithClassification
     supercellSize=[sizeL,sizeW,sizeH]
     #if param.MAGTYPE=='ISING':
     #    calcIsotropicJ(mainDir,bondList=bondListWithClassification,supercellSize=[sizeL,sizeW,sizeH])
 
-def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,erange=(-500,500),emptySpace=5,autoFixFermi=False,spinList=[], MAE=0, hrcutoff=-0.01):
+def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.0001,erange=(-500,500),emptySpace=5,autoFixFermi=False,spinList=[], MAE=0, hrcutoff=-0.01):
     '''
     mainDir: the position of Hr file
     fermi: assumed Fermi level
@@ -230,12 +246,152 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.01,erange=(-500,500),empty
         bond.exchangeEnergy=J
         bond.broadCastExchange(type='Ising')
     gr.freeKMeshAndHk(c_kmesh_addr,c_Hk_addr)
-    
     fileio.writeJ(mainDir, bondList, sc)
     writeMCSolverIsingFile(mainDir)
     #calcSpinWaveSpectra(mainDir,spinList,MAE)
     #calcSpinWaveDOS(mainDir,spinList,MAE)
+
+def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
+      fermi=0,eta=0.0001,erange=(-500,500),hrcutoff=-0.01,Jcvg=1e-3,
+      lowOrder=5,highOrder=20,nthreads=param.NCORE):
+    '''
+    mainDir: the position of Hr file
+    sc : k-grid used for BZ integration
+    fermi: assumed Fermi level
+    eta: eta of retarded Green's function
+    Jcvg: convergence criterial for J, no convergence check if Jcvg<0 
+    lowOrder, highOrder: the order used for Gaussian quadrature
+    '''
+    global bondList, supercellSize
+    def semiCirle(p1,p2,pathPoints:np.ndarray):
+        '''
+        Generate semi-cirle path on upper half complex plane
+        p1, p2: the two points on real-axis
+        pathPoints: the positions on path, should be in range -1~1
+        '''
+        p_right=max([p1,p2])
+        p_left=min([p1,p2])
+        r=(p_right-p_left)/2
+        o=(p_right+p_left)/2
+        thetaPath=(pathPoints+1)/2*np.pi
+        return r*np.exp(1j*thetaPath)+o, r*1j*np.exp(1j*thetaPath)
+    # read in Hr
+    hr=reader.Hr()
+    fileList=aux.ls(mainDir)
+
+    # Try to read existed J.txt
+    if fileio.readJ(mainDir,bondList):
+        print('%sJ.txt has been read succesfully'%mainDir)
+        for bondType in bondList:
+            bondType[0].broadCastExchange(verbose=True)
+        writeMCSolverIsingFile(mainDir)
+        #calcSpinWaveSpectra(mainDir,spinList,MAE)
+        #calcSpinWaveDOS(mainDir,spinList,MAE)
+        return
     
+    hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
+    if len(hrFileList)==2:
+        hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=True,cutoff=hrcutoff)
+    elif len(hrFileList)==1:
+        hr.readSingleFile(hrFileList[0],ignoreImagPart=True,cutoff=hrcutoff)
+    elif len(hrFileList)==0:
+        print("Error: cannot find Hr file in %s, pls. provide Hr file with name hr(.up or .dn) in %s"%(mainDir,mainDir))
+        exit()
+    else:
+        print("Error: found more than two hr file in %s, pls. clean up tge directory"%mainDir)
+        exit()
+        
+    # create Green's function
+    # firstly, obtain all overLat
+    overLat_set={(0,0,0)}
+    for bondType in bondList: 
+        overLat_set.add(tuple(bondType[0].overLat))
+        overLat_set.add(tuple(-bondType[0].overLat))
+    
+    overLat_id_dic={}
+    iOverLat, overlat_list=0, []
+    for item in overLat_set:
+        overLat_id_dic[item]=iOverLat
+        overlat_list.append(item)
+        iOverLat+=1
+    gr=hamilton.Green()
+    # obtain kmesh and Hk 
+    #nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2],GammaMode=1,nthreads=param.NCORE)
+    emin=erange[0]
+    emax=np.min([erange[1],fermi])
+    print("Energy window: [%f, %f]"%(emin,emax))
+    #for orb in pR.orbList:
+    #    print(orb.label,orb.wannIDList)
+    #exit()
+    J_list_old=np.zeros(len(bondList))
+    J_list_new=np.zeros(len(bondList))
+    iteration_num=0
+    for gaussianOrder in range(lowOrder,highOrder):
+        points, weights=p_roots(gaussianOrder)
+        npoints=len(points)
+        print("----- Iteration %d -----"%iteration_num)
+        z,dz=semiCirle(emin,emax,points)
+        rG_w_lat=gr.calcLatticeGreenFunction_CDLL(hr,kmesh=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,nthreads=nthreads)
+        # calc. charge density and spin density of each orb.
+        diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
+        rho_of_each_orb=sum(diag_list)
+        for orb in pR.orbList:
+            wann_id_up=orb.wannIDList
+            wann_id_dn=list(np.array(orb.wannIDList)+hr.norb//2)
+            rho_up=sum(rho_of_each_orb[wann_id_up])
+            rho_dn=sum(rho_of_each_orb[wann_id_dn])
+            print("%3s--> charge: %.6f, mag.: %.6f"%(orb.label,rho_up+rho_dn,rho_up-rho_dn))
+        print("total charge: %.6f"%sum(rho_of_each_orb))
+        print("total mag.mom: %.6f"%(
+            sum(rho_of_each_orb[np.arange(hr.norb//2,dtype=int)])-
+            sum(rho_of_each_orb[hr.norb//2+np.arange(hr.norb//2,dtype=int)])))
+        
+        #print(len(bondList))
+        for ibondType, bondType in enumerate(bondList):
+            bond=bondType[0]
+            i_overlat_p=overLat_id_dic[tuple(bond.overLat)]
+            i_overlat_n=overLat_id_dic[tuple(-bond.overLat)]
+            orbID,doubleCenter,center1,center2=gr.getFourStateScatterMatrix(hr,
+                sourceOrbList=bond.sourceOrb.wannIDList,targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
+                Lx=sc[0],Ly=sc[1],Lz=sc[2])
+            J=np.zeros(len(orbID),dtype=complex)
+            for iw in range(npoints):
+                rG_w_p=rG_w_lat[iw][i_overlat_p][orbID][:,orbID]
+                rG_w_n=rG_w_lat[iw][i_overlat_n][orbID][:,orbID]
+                contr_double=np.diag(doubleCenter@rG_w_p@doubleCenter@rG_w_n)
+                contr_single1=np.diag(center1@rG_w_p@center1@rG_w_n)
+                contr_single2=np.diag(center2@rG_w_p@center2@rG_w_n)
+                J+=(contr_double-contr_single1-contr_single2)*dz[iw]*weights[iw]
+            bond.exchangeEnergy=sum(J).imag/4
+            #bond.broadCastExchange(type='Ising')
+            print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J=%.6f"%(
+                ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy))
+            J_list_new[ibondType]=bond.exchangeEnergy
+        
+        # check convergence
+        if Jcvg<0:
+            print("Warning: no convergence check. At your own risk!") 
+            break
+        dJ=J_list_new-J_list_old
+        dJ_max=abs(dJ).max()
+        print("Max dJ= %.6f"%dJ_max)
+        if iteration_num>0 and dJ_max<Jcvg:
+            print("----- Accuracy reached -----")
+            J_list_old=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
+            break
+        J_list_old=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
+        iteration_num+=1
+    else:
+        print("Warning: Accuracy is not reached. At your own risk!")
+    
+    for J, bondType in zip(J_list_old,bondList):
+        bondType[0].exchangeEnergy=J
+        bondType[0].broadCastExchange(type='Ising')
+    fileio.writeJ(mainDir, bondList, sc)
+    writeMCSolverIsingFile(mainDir)
+    #calcSpinWaveSpectra(mainDir,spinList,MAE)
+    #calcSpinWaveDOS(mainDir,spinList,MAE)
+
 def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5, ini_S=[], MAE=0.1):
     '''
     mainDir: the position of Hr file

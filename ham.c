@@ -6,6 +6,8 @@
 #define TwoPI 6.28318530717958647692
 #define PI 3.14159265358979323846
 
+int omp_get_thread_num();
+
 // style==0 conventional Monkhorst-Pack algorithm, otherwise GAMMA
 long long getKMesh(int style, int Lx, int Ly, int Lz){
     double * kmesh=(double*)malloc((Lx*Ly*Lz*3)*sizeof(double));
@@ -244,19 +246,19 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
     int nthreads;
     nthreads=_nthreads;
     if(nkpt<_nthreads*10)nthreads=1;
-    printf("use %d cores in ham.dll\n",nthreads);
+    printf("use %d cores in ham.dll::calcFullBandsAndVecs\n",nthreads);
     // calculate matrix elements
     int index;
     #pragma omp parallel num_threads(nthreads)
     {
+        lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk
+        lapack_complex_double * Dhk=(lapack_complex_double*)malloc(norbs*norbs*3*sizeof(lapack_complex_double)); // init DHk
+        double * eigs=(double*)malloc(norbs*sizeof(double)); // output eigenvalues of Hk
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //int kBaseIndex=ikpt*norbs*norbs;
-            lapack_complex_double hk[norbs][norbs]; // init Hk
-            lapack_complex_double Dhk[norbs][norbs][3]; // init DHk
-            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++){hk[i][j]=0;for(int k=0;k<3;k++)Dhk[i][j][k]=0;}
-            double eigs[norbs]; // output eigenvalues of Hk
+            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++){hk[i*norbs+j]=0;for(int k=0;k<3;k++)Dhk[i*3*norbs+j*3+k]=0;}
             //printf("hoppings\n");
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 double phase=0;
@@ -268,67 +270,37 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                 //for (int i=0;i<3;i++) phase_tmp+=overLat[ihopping][i]*kmesh[ikpt][i];
                 //printf(" phase: %.4f 2pi t: %.4f %.4f\n",phase_tmp,hopping_real[ihopping],hopping_imag[ihopping]);
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
-                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
-                Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
-                Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
+                hk[sourceID[ihopping]*norbs+targetID[ihopping]]+=tk;
+                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
+                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
+                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
             }
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
                     index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    Hk_r_tmp[index]=creal(hk[iorb][jorb]);
-                    Hk_i_tmp[index]=cimag(hk[iorb][jorb]);
-                    Hk_dk1_r_tmp[index]=creal(Dhk[iorb][jorb][0]);
-                    Hk_dk1_i_tmp[index]=cimag(Dhk[iorb][jorb][0]);
-                    Hk_dk2_r_tmp[index]=creal(Dhk[iorb][jorb][1]);
-                    Hk_dk2_i_tmp[index]=cimag(Dhk[iorb][jorb][1]);
-                    Hk_dk3_r_tmp[index]=creal(Dhk[iorb][jorb][2]);
-                    Hk_dk3_i_tmp[index]=cimag(Dhk[iorb][jorb][2]);
+                    Hk_r_tmp[index]=creal(hk[iorb*norbs+jorb]);
+                    Hk_i_tmp[index]=cimag(hk[iorb*norbs+jorb]);
+                    Hk_dk1_r_tmp[index]=creal(Dhk[iorb*norbs*3+jorb*3+0]);
+                    Hk_dk1_i_tmp[index]=cimag(Dhk[iorb*norbs*3+jorb*3+0]);
+                    Hk_dk2_r_tmp[index]=creal(Dhk[iorb*norbs*3+jorb*3+1]);
+                    Hk_dk2_i_tmp[index]=cimag(Dhk[iorb*norbs*3+jorb*3+1]);
+                    Hk_dk3_r_tmp[index]=creal(Dhk[iorb*norbs*3+jorb*3+2]);
+                    Hk_dk3_i_tmp[index]=cimag(Dhk[iorb*norbs*3+jorb*3+2]);
                 }
             }
-            /*
-            //printf("%.4f %.4f\n",creal(hk[0][1]*hk[1][0]),3+2*cos(TwoPI*kmesh[ikpt][0])+2*cos(TwoPI*kmesh[ikpt][1])+2*cos(TwoPI*(kmesh[ikpt][0]+kmesh[ikpt][1])));
-            // t*(1 + exp(-i 2pi k1) + exp(-i 2pi k2) )
-            lapack_complex_double hk_ele_trial=-1*(1+cexp(-TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][1]));
-            printf("trial elements: %.4f %.4f\n",creal(hk_ele_trial),cimag(hk_ele_trial));
-            // t*(1 + exp( i 2pi k1) + exp( i 2pi k2) )
-            lapack_complex_double hk_ele_trial_conj=-1*(1+cexp(TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(TwoPI*_Complex_I*kmesh[ikpt][1]));
-            lapack_complex_double hk_ele_trial_square=hk_ele_trial*conj(hk_ele_trial);
-            lapack_complex_double hk_ele_trial_square2=hk_ele_trial*hk_ele_trial_conj;
-            lapack_complex_double hk_ele_trial_square3=(1+cexp(-TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][1]))*(1+cexp(TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(TwoPI*_Complex_I*kmesh[ikpt][1]));
-            hk_ele_trial_square3=3+cexp(TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][0])+cexp(TwoPI*_Complex_I*kmesh[ikpt][1])+cexp(-TwoPI*_Complex_I*kmesh[ikpt][1])+cexp(TwoPI*_Complex_I*(kmesh[ikpt][0]-kmesh[ikpt][1]))+cexp(-TwoPI*_Complex_I*(kmesh[ikpt][0]-kmesh[ikpt][1]));
-            //t^2*(3 + 2cos k1 + 2cos k2 + 2cos(k1-k2))
-            hk_ele_trial_square3=3+2*cos(TwoPI*kmesh[ikpt][0])+2*cos(TwoPI*kmesh[ikpt][1])+2*cos(TwoPI*(kmesh[ikpt][0]-kmesh[ikpt][1]));
-            
-            printf("|f(k)|^2: %.4f %.4f, %.4f %.4f, %.4f %.4f\n",creal(hk_ele_trial_square),cimag(hk_ele_trial_square),creal(hk_ele_trial_square2),cimag(hk_ele_trial_square2),creal(hk_ele_trial_square3),cimag(hk_ele_trial_square3));
-            */
-            //printf("Hk:\n");
-            for(int iorb=0;iorb<norbs;iorb++){
-                for(int jorb=0;jorb<norbs;jorb++){
-                    //printf("(%.4f %.4f) ",creal(hk[iorb][jorb]),cimag(hk[iorb][jorb]));
-                    /*
-                    Hk_dk1_r_tmp[index]=creal(Dhk[iorb][jorb][0]);
-                    Hk_dk1_i_tmp[index]=cimag(Dhk[iorb][jorb][0]);
-                    Hk_dk2_r_tmp[index]=creal(Dhk[iorb][jorb][1]);
-                    Hk_dk2_i_tmp[index]=cimag(Dhk[iorb][jorb][1]);
-                    Hk_dk3_r_tmp[index]=creal(Dhk[iorb][jorb][2]);
-                    Hk_dk3_i_tmp[index]=cimag(Dhk[iorb][jorb][2]);
-                    */
-                }
-                //printf("\n");
-            }
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,hk,norbs,eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
             //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
             for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
                     index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    Vector_r_tmp[index]=creal(hk[iorb][jorb]);
-                    Vector_i_tmp[index]=cimag(hk[iorb][jorb]);
+                    Vector_r_tmp[index]=creal(hk[iorb*norbs+jorb]);
+                    Vector_i_tmp[index]=cimag(hk[iorb*norbs+jorb]);
                 }
             }
         }
+        free(hk);free(Dhk);free(eigs);
     }
 
     PyObject * Spectra=PyTuple_New(nkpt*norbs);
@@ -363,6 +335,122 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
         }
     }
     return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i);
+}
+
+PyObject * calcRetardedLatticeGreensFunction(
+                       // below are for real-space Hamiltonian
+                       int nkpt, double kmesh[nkpt][3],
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       int overLat[nhoppings][3], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings], 
+                       // below are part of Green's function
+                       int nOmegaPoints,
+                       double omega_real[nOmegaPoints],
+                       double omega_imag[nOmegaPoints],
+                       double eta,
+                       int nLatticeVectors,
+                       int latVec[nLatticeVectors][3],
+                       int _nthreads){
+    lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc(nOmegaPoints*nLatticeVectors*norbs*norbs*sizeof(lapack_complex_double));
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("use %d cores in ham.dll::calcFullBandsAndVecs\n",nthreads);
+    int latVec_len=norbs*norbs;
+    int omega_len=nLatticeVectors*latVec_len;
+    int thread_len=nOmegaPoints*omega_len;
+    lapack_complex_double * _G_w_lat=(lapack_complex_double*)malloc(nthreads*thread_len*sizeof(lapack_complex_double));
+    int totalDataGrids=nthreads*thread_len;
+    //printf("latVec_len %d omega_len %d thread_len %d\n",latVec_len,omega_len,thread_len);
+    // calculate matrix elements
+    int index;
+    #pragma omp parallel num_threads(nthreads)
+    {
+        lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk
+        lapack_complex_double * Dhk=(lapack_complex_double*)malloc(norbs*norbs*3*sizeof(lapack_complex_double)); // init DHk
+        double * eigs=(double*)malloc(norbs*sizeof(double)); // output eigenvalues of Hk
+        int my_rank=omp_get_thread_num();
+        int iomega, ilat, ieig, iorb, jorb, i, j;
+        // initial my G_w_lat
+        for(iomega=0;iomega<nOmegaPoints;iomega++){
+            for(ilat=0;ilat<nLatticeVectors;ilat++){
+                for(iorb=0;iorb<norbs;iorb++){
+                    for(jorb=0;jorb<norbs;jorb++){
+                        _G_w_lat[my_rank*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]=0;
+                    }
+                }
+            }
+        }
+        //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
+            //int kBaseIndex=ikpt*norbs*norbs;
+            for(i=0;i<norbs;i++)for(j=0;j<norbs;j++){hk[i*norbs+j]=0;for(int k=0;k<3;k++)Dhk[i*3*norbs+j*3+k]=0;}
+            //printf("hoppings\n");
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                double phase=0;
+                for (i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                hk[sourceID[ihopping]*norbs+targetID[ihopping]]+=tk;
+                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
+                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
+                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
+            }
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,hk,norbs,eigs);
+            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+            //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
+            for(iomega=0;iomega<nOmegaPoints;iomega++){
+                lapack_complex_double omega=omega_real[iomega]+_Complex_I*omega_imag[iomega];
+                for(ilat=0;ilat<nLatticeVectors;ilat++){
+                    double phase=0;
+                    for(i=0;i<3;i++)phase+=latVec[ilat][i]*kmesh[ikpt][i];
+                    lapack_complex_double factor=cexp(TwoPI*_Complex_I*phase);
+                    for(iorb=0;iorb<norbs;iorb++){
+                        for(jorb=0;jorb<norbs;jorb++){
+                            for(ieig=0;ieig<norbs;ieig++){
+                                _G_w_lat[my_rank*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]+=\
+                                factor/(omega-eigs[ieig]+_Complex_I*eta)*hk[iorb*norbs+ieig]*conj(hk[jorb*norbs+ieig]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        free(hk);free(Dhk);free(eigs);
+    }
+    
+    for(int iomega=0;iomega<nOmegaPoints;iomega++){
+        for(int ilat=0;ilat<nLatticeVectors;ilat++){
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    int id_of_combine=iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb;
+                    G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]=0;
+                    for(int ithread=0;ithread<nthreads;ithread++){
+                        int id_of_sub_thread=ithread*thread_len+id_of_combine;
+                        G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]+=_G_w_lat[ithread*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb];
+                    }
+                }
+            }
+        }
+    }
+    free(_G_w_lat);
+    
+    PyObject * GreenFunc=PyTuple_New(2*thread_len);
+    for(int iomega=0;iomega<nOmegaPoints;iomega++){
+        for(int ilat=0;ilat<nLatticeVectors;ilat++){
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    PyTuple_SetItem(GreenFunc, 0*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb, PyFloat_FromDouble(creal(G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]/nkpt)));
+                    PyTuple_SetItem(GreenFunc, 1*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb, PyFloat_FromDouble(cimag(G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]/nkpt)));
+                }
+            }
+        }
+    }
+    free(G_w_lat);
+    return Py_BuildValue("(O)",GreenFunc);
 }
 
 PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
