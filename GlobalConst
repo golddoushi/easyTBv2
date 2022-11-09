@@ -3,7 +3,7 @@ OVERIDE=1
 PBSMODE=0       # 0: SMP mode; 1: cluster mode
 VERBOSE=F       # output detail log
 
-PBC=3           # dimension of system
+PBC=2           # dimension of system
 ENMAX_aug=100
 METAGGA=F
 NCORE=8        # total cores in resource pool

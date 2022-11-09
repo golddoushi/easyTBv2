@@ -1384,6 +1384,26 @@ class Bond:
                 self.symmetryParityList.append(parity)
         self.findIndividualComponents()
 
+    def defineBondType_fast(self,bondCandidateList):
+        '''
+        Find out the bonds with the same type, using wyckoff rep. of source/target orb
+        Only bonds with the same length with me would presented in bondCandidateList to reduce computations
+        '''
+        self.sameTypeBondList=[]
+        for bondCandidate in bondCandidateList:
+            if self.sourceOrb.wyckoffs==bondCandidate.sourceOrb.wyckoffs and self.targetOrb.wyckoffs==bondCandidate.targetOrb.wyckoffs:
+                self.sameTypeBondList.append(bondCandidate)
+            elif self.sourceOrb.wyckoffs==bondCandidate.targetOrb.wyckoffs and self.targetOrb.wyckoffs==bondCandidate.sourceOrb.wyckoffs:
+                self.sameTypeBondList.append(bondCandidate)
+
+    def checkIfTheBondHasSameTypeWithMe(self,inquir_bond) -> bool:
+        '''
+        Check if the inquire_bond is in my sameTypeBondList
+        '''
+        for mySameKind in self.sameTypeBondList:
+            if mySameKind.id==inquir_bond.id: return True
+        return False
+
     def haveSameTypeWithMe(self,bond_ref):
         for bond in self.sameTypeBondList:
             if bond.id==bond_ref.id:
@@ -1538,8 +1558,9 @@ def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.0
             id+=1
         aux.showElapsedTime(extraInfo='construct bonds with %dth length'%iBondLength);aux.showElapsedTime(offset=True)
         for bond in bondListWithSameLength:
-            bond.sameTypeBondList=bondListWithSameLength
+        #    bond.sameTypeBondList=bondListWithSameLength
         #    bond.defineBondTypeAndTrans(bondListWithSameLength, rotations, translations)
+            bond.defineBondType_fast(bondListWithSameLength)
         aux.showElapsedTime(extraInfo='classify bonds with %dth length'%iBondLength);aux.showElapsedTime(offset=True)
     
     bondListWithClassification=[]
@@ -1548,10 +1569,10 @@ def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.0
         for ibondType in range(startID,totType):
             bondType=bondListWithClassification[ibondType]
             for bond in bondType:
-                if abs(bond.bondLen-inquir_bond.bondLen)<param.SYMPREC:
-                    return ibondType
-                #if bond.checkIfTheBondHasSameTypeWithMe(inquir_bond,rotations,translations):
+                #if abs(bond.bondLen-inquir_bond.bondLen)<param.SYMPREC:
                 #    return ibondType
+                if bond.checkIfTheBondHasSameTypeWithMe(inquir_bond):
+                    return ibondType
         #print(inquir_bond.bondLen,inquir_bond.sourceOrb.label,inquir_bond.targetOrb.label)
         return -1 # <0 means this is a new type of bond
     # generate classified list
@@ -1565,10 +1586,11 @@ def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.0
             bondListWithClassification.append([bond])
     # check the bond type
     #for bond in bondList_flat:
-    #    print(bond.id,bond.bondType,bond.bondLen)
+    #    print("Bond%d (orb%d-orb%d [%d %d %d]) kind %d, len %.6f"%(
+    #        bond.id,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondType,bond.bondLen))
     #exit()
     aux.showElapsedTime(extraInfo='sort bonds into type-hierarchy');aux.showElapsedTime(offset=True)
-    print("--->>> bonds are successfully classified according to bond length <<<---")
+    print("--->>> bonds are successfully classified according to bond length and Wyckoffs <<<---")
     bondList=bondList_flat
     return bondListWithClassification
 

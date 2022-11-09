@@ -1769,9 +1769,9 @@ PyObject * calcSpinHallCond_memoryReduce(
         fclose(fp);
     }
     free(velocity);free(velocity_sx);free(velocity_sy);free(velocity_sz);free(energy);
-    printf("All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    printf("All calc. done! pls. times (-1/2)*24341.5 and divide by volume(A^3) to get spin Hall conductance in unit (S/cm \\hbar/e)\n");
     fp=fopen("./c_log","a");
-    fprintf(fp,"All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
+    fprintf(fp,"All calc. done! pls. times (-1/2)*24341.5 and divide by volume(A^3) to get spin Hall conductance in unit (S/cm \\hbar/e)\n");
     fclose(fp);
     
     PyObject * conductance=PyTuple_New(3*_nScatterRoute*_nfermi*9);
