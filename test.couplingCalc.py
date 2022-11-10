@@ -55,4 +55,4 @@ cc.classifyBonds(mainDir='./mcalc/Fe3GeTe2/', source_list=[0,1,2,],
            ini_S=[1.5,1.5,1.0,0,0,0])
 
 cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
-    sc=[32,32,1],fermi=0.04758627,eta=0.0001,erange=(-8,10),lowOrder=20,highOrder=50,Jcvg=1e-3)
+    sc=[32,32,1],fermi=0.04758627,eta=0.0001,erange=(-8,10),lowOrder=20,highOrder=50,Jcvg=-1e-3)
