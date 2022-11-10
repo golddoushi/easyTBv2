@@ -314,18 +314,34 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
         overLat_id_dic[item]=iOverLat
         overlat_list.append(item)
         iOverLat+=1
+    # then, search all relevant orbs
+    relevantOrb_set=set()
+    for bondType in bondList:
+        for iorb in bondType[0].sourceOrb.wannIDList:
+            relevantOrb_set.add(iorb)
+            relevantOrb_set.add(iorb+hr.norb//2)
+        for iorb in bondType[0].targetOrb.wannIDList:
+            relevantOrb_set.add(iorb)
+            relevantOrb_set.add(iorb+hr.norb//2)
+    relevantOrbID_list=[item for item in relevantOrb_set]
+    sorted_relevantOrbID=np.sort(relevantOrbID_list)
+    orbIDMapFromStandardToRelevant=np.zeros(hr.norb,dtype=int)-1
+    for iRelevantOrb, orbID in enumerate(sorted_relevantOrbID):
+        orbIDMapFromStandardToRelevant[orbID]=iRelevantOrb
+    #print(orbIDMapFromStandardToRelevant)
+    #exit()
     gr=hamilton.Green()
-    # obtain kmesh and Hk 
-    emin=erange[0]
-    emax=np.min([erange[1],fermi])
-    print("Energy window: [%f, %f]"%(emin,emax))
     
     print("Diagnolizing Hamiltonian")
     eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemory_simple(hr,kgrid=sc,nthreads=nthreads)
     res=hamilton.Response()
     eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=1,kmesh=sc,data_type='double')
-    print("Bands energy range: %.6f ~ %.6f"%(eigs.min(),eigs.max()))
-    #exit()
+    bandEnergyMin, bandEnergyMax= eigs.min(), eigs.max()
+    print("Bands energy range: %.6f ~ %.6f"%(bandEnergyMin,bandEnergyMax))
+    emin=np.max([erange[0],bandEnergyMin])
+    emax=np.min([erange[1],fermi])
+    print("Energy window: [%f, %f]"%(emin,emax))
+
     print("Main loop for exchange calculation")
     J_list_old=np.zeros(len(bondList))
     J_list_new=np.zeros(len(bondList))
@@ -336,22 +352,17 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
         print("----- Iteration %d -----"%iteration_num)
         z,dz=semiCirle(emin,emax,points)
         rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
-            hr,eigs_addr,vecs_addr,
+            hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
             kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=False,
             nthreads=nthreads)
-        # calc. charge density and spin density of each orb.
+        
+        # calc. charge density and spin density
         diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
         rho_of_each_orb=sum(diag_list)
-        for orb in pR.orbList:
-            wann_id_up=orb.wannIDList
-            wann_id_dn=list(np.array(orb.wannIDList)+hr.norb//2)
-            rho_up=sum(rho_of_each_orb[wann_id_up])
-            rho_dn=sum(rho_of_each_orb[wann_id_dn])
-            print("%3s--> charge: %.6f, mag.: %.6f"%(orb.label,rho_up+rho_dn,rho_up-rho_dn))
-        print("total charge: %.6f"%sum(rho_of_each_orb))
-        print("total mag.mom: %.6f"%(
-            sum(rho_of_each_orb[np.arange(hr.norb//2,dtype=int)])-
-            sum(rho_of_each_orb[hr.norb//2+np.arange(hr.norb//2,dtype=int)])))
+        print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
+        print("Mag.mom of source atoms: %.6f"%(
+            sum(rho_of_each_orb[np.arange(len(relevantOrbID_list)//2,dtype=int)])-
+            sum(rho_of_each_orb[len(relevantOrbID_list)//2+np.arange(len(relevantOrbID_list)//2,dtype=int)])))
         
         # calc. exchange coupling energies for each bond
         for ibondType, bondType in enumerate(bondList):
@@ -361,6 +372,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
             orbID,doubleCenter,center1,center2=gr.getFourStateScatterMatrix(hr,
                 sourceOrbList=bond.sourceOrb.wannIDList,targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
                 Lx=sc[0],Ly=sc[1],Lz=sc[2])
+            orbID=orbIDMapFromStandardToRelevant[orbID]
             J=np.zeros(len(orbID),dtype=complex)
             for iw in range(npoints):
                 rG_w_p=rG_w_lat[iw][i_overlat_p][orbID][:,orbID]

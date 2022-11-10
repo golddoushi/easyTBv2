@@ -2531,14 +2531,19 @@ class Green:
         #exit()
         return eig_addr, vec_addr
 
-    def calcLatticeGreenFunction_CDLL(self,hr,eigs_addr,vecs_addr,
+    def calcLatticeGreenFunction_CDLL(self,hr,eigs_addr,vecs_addr,relevantOrbIDList,
                     kgrid:list=[1,1,1],eta=1e-4,
                     omega_list=np.zeros(1,dtype=complex),lat_vecs=np.zeros((1,3),dtype=int),
                     spinor=False,
                     nthreads=1):
         # prepare input parameters for cdll
         time0=time.time()
-        
+
+        nOrbInG_w=len(relevantOrbIDList)
+        c_orbID_map=(c_int*nOrbInG_w)()
+        for iOrbID, orbID in enumerate(relevantOrbIDList):
+            c_orbID_map[iOrbID]=c_int(orbID)
+            
         c_kgrid=(c_int*3)()
         for i in range(3):c_kgrid[i]=kgrid[i]
         
@@ -2562,14 +2567,14 @@ class Green:
         result=hamDLL.calcRetardedLatticeGreensFunction(
                         c_longlong(eigs_addr),c_longlong(vecs_addr),
                         c_kgrid, 
-                        c_int(hr.norb),
+                        c_int(hr.norb),c_int(nOrbInG_w),c_orbID_map,
                         c_int(nOmega),c_omega_real,c_omega_imag,
                         c_double(eta),
                         c_int(nLatVec),c_latVec,
                         spinor_tag,
                         c_int(nthreads))
         #exit()
-        rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,nOmega,nLatVec,hr.norb,hr.norb)
+        rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,nOmega,nLatVec,nOrbInG_w,nOrbInG_w)
         rG_w_lat=rG_w_lat_real+1j*rG_w_lat_imag
         print('Retarded lattice Greens\' s function solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         return rG_w_lat

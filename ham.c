@@ -409,6 +409,16 @@ PyObject * calcHam_simple(
         int my_nkpt_portion=nkpt/nthreads/50;
         int my_icnt=0;
         if(my_nkpt_portion==0)my_nkpt_portion=1;
+        if(my_rank==0){
+            fp=fopen("./c_log","a");
+            for(int i=0;i<51;i++){
+                printf("-");
+                fprintf(fp,"_");
+            }
+            printf("\n");
+            fprintf(fp,"\n");
+            fclose(fp);
+        }
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
@@ -456,7 +466,7 @@ PyObject * calcHam_simple(
 PyObject * calcRetardedLatticeGreensFunction(
                        long long eigs_addr, long long vecs_addr,
                        int kgrid[3],
-                       int norbs,
+                       int nTotalOrbs, int norbs, int orbIDMap[norbs],
                        int nOmegaPoints,
                        double omega_real[nOmegaPoints],
                        double omega_imag[nOmegaPoints],
@@ -497,7 +507,7 @@ PyObject * calcRetardedLatticeGreensFunction(
     int totalDataGrids=nthreads*thread_len;
     
     // calculate inversed h
-    lapack_complex_double *inversed_hks=(lapack_complex_double*)malloc(nkpt*nOmegaPoints*norbs*sizeof(lapack_complex_double));
+    lapack_complex_double *inversed_hks=(lapack_complex_double*)malloc(nkpt*nOmegaPoints*nTotalOrbs*sizeof(lapack_complex_double));
     lapack_complex_double *lat_factors=(lapack_complex_double*)malloc(nkpt*nLatticeVectors*sizeof(lapack_complex_double));
     #pragma omp parallel num_threads(nthreads)
     {
@@ -532,20 +542,20 @@ PyObject * calcRetardedLatticeGreensFunction(
                                             *k3_axis[mod(-ik3*latVec[ilat][2],kgrid[2])];
             }
             // compute inversed hks
-            i_eig_k=ikpt*norbs;
-            i_kpt_base=ikpt*nOmegaPoints*norbs;
+            i_eig_k=ikpt*nTotalOrbs;
+            i_kpt_base=ikpt*nOmegaPoints*nTotalOrbs;
             for(iomega=0;iomega<nOmegaPoints;iomega++){
                 lapack_complex_double omega=omega_real[iomega]+_Complex_I*omega_imag[iomega];
-                i_omega_k=iomega*norbs;
-                for(ieig=0;ieig<norbs;ieig++){
+                i_omega_k=iomega*nTotalOrbs;
+                for(ieig=0;ieig<nTotalOrbs;ieig++){
                     inversed_hks[i_kpt_base+i_omega_k+ieig]=1/(omega-eigs[i_eig_k+ieig]+_Complex_I*eta);
                 }
             }
         }
     }
-    printf("inversed hk and lattice Fourier basis constructed in %.3fs\n",(clock()-time0)/1000.);
+    printf("inversed hk and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
     fp=fopen("./c_log","a");
-    fprintf(fp,"inversed hk and lattice Fourier basis constructed in %.3fs\n",(clock()-time0)/1000.);
+    fprintf(fp,"inversed hk and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
     fclose(fp);
     time0=clock();
     // calculate matrix elements
@@ -561,36 +571,46 @@ PyObject * calcRetardedLatticeGreensFunction(
         int my_nkpt_portion=nkpt/nthreads/50;
         int my_icnt=0;
         if(my_nkpt_portion==0)my_nkpt_portion=1;
+        if(my_rank==0){
+            fp=fopen("./c_log","a");
+            for(int i=0;i<51;i++){
+                printf("-");
+                fprintf(fp,"_");
+            }
+            printf("\n");
+            fprintf(fp,"\n");
+            fclose(fp);
+        }
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
-            i_eig_k=ikpt*norbs;
-            i_vec_k=ikpt*norbs*norbs;
+            //i_eig_k=ikpt*norbs;
+            i_vec_k=ikpt*nTotalOrbs*nTotalOrbs;
             for(ilat=0;ilat<nLatticeVectors;ilat++){
                 factor=lat_factors[ikpt*nLatticeVectors+ilat];
                 i_lat_k=ilat*latVec_len;
                 for(iomega=0;iomega<nOmegaPoints;iomega++){
                     i_omega_k=iomega*omega_len;
-                    for(ieig=0;ieig<norbs;ieig++){
-                        inverse_h=inversed_hks[ikpt*nOmegaPoints*norbs+iomega*norbs+ieig];
+                    for(ieig=0;ieig<nTotalOrbs;ieig++){
+                        inverse_h=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig];
                         if(spinor_tag==0){
                             for(iorb=0;iorb<norbs/2;iorb++){
                                 for(jorb=0;jorb<norbs/2;jorb++){
                                     _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                                    factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                                    factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
                                 }
                             }
                             for(iorb=norbs/2;iorb<norbs;iorb++){
                                 for(jorb=norbs/2;jorb<norbs;jorb++){
                                     _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                                    factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                                    factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
                                 }
                             }
                         }else{
                             for(iorb=0;iorb<norbs;iorb++){
                                 for(jorb=0;jorb<norbs;jorb++){
                                     _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                                    factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                                    factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
                                 }
                             }
                         }
@@ -606,9 +626,9 @@ PyObject * calcRetardedLatticeGreensFunction(
             }
         }
     }
-    printf("\nLattice G constructed in %.3fs\n",(clock()-time0)/1000.);
+    printf("\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
     fp=fopen("./c_log","a");
-    fprintf(fp,"\nLattice G constructed in %.3fs\n",(clock()-time0)/1000.);
+    fprintf(fp,"\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
     fclose(fp);
     
     for(int iomega=0;iomega<nOmegaPoints;iomega++){
@@ -641,6 +661,7 @@ PyObject * calcRetardedLatticeGreensFunction(
     free(G_w_lat);
     return Py_BuildValue("(O)",GreenFunc);
 }
+/*  End of Lattice Green's Function  */
 
 PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
                        int norbs, int nhoppings,
