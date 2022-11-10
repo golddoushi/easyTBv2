@@ -2496,22 +2496,9 @@ class Green:
         plt.show()
         plt.close()
     
-    def calcLatticeGreenFunction_CDLL(self,hr,kgrid:list=[1,1,1],eta=1e-4,
-                    omega_list=np.zeros(1,dtype=complex),lat_vecs=np.zeros((1,3),dtype=int),
-                    nthreads=1):
+    def calcEigsAndVecsInMemory_simple(self,hr,kgrid:list=[1,1,1],nthreads=1):
         # prepare input parameters for cdll
         time0=time.time()
-        #'''
-        nkpts=kgrid[0]*kgrid[1]*kgrid[2]
-        c_kmesh=(c_double*(nkpts*3))()
-        ikpt=0
-        # k3 run fastest
-        for k1 in np.linspace(0,1,kgrid[0],endpoint=False):
-            for k2 in np.linspace(0,1,kgrid[1],endpoint=False):
-                for k3 in np.linspace(0,1,kgrid[2],endpoint=False):
-                    c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
-                    ikpt+=1
-        #'''
         c_kgrid=(c_int*3)()
         for i in range(3):c_kgrid[i]=kgrid[i]
         nhoppings=len(hr.bondList)
@@ -2528,7 +2515,32 @@ class Green:
                 c_overLat[ibond*3+i]=c_int(bond.overlat[i])
             c_hopping_real[ibond]=c_double(bond.t.real)
             c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcHam_simple.restype=py_object
+        result=hamDLL.calcHam_simple(
+                        # Hamilton part
+                        c_kgrid, 
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_int(nthreads)
+                        )
+        eig_addr, vec_addr=result
+        print('Hk constructed in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
         #exit()
+        return eig_addr, vec_addr
+
+    def calcLatticeGreenFunction_CDLL(self,hr,eigs_addr,vecs_addr,
+                    kgrid:list=[1,1,1],eta=1e-4,
+                    omega_list=np.zeros(1,dtype=complex),lat_vecs=np.zeros((1,3),dtype=int),
+                    nthreads=1):
+        # prepare input parameters for cdll
+        time0=time.time()
+        
+        c_kgrid=(c_int*3)()
+        for i in range(3):c_kgrid[i]=kgrid[i]
+        
         nOmega=len(omega_list)
         c_omega_real=(c_double*nOmega)()
         c_omega_imag=(c_double*nOmega)()
@@ -2542,21 +2554,21 @@ class Green:
             for i in range(3): c_latVec[ivec*3+i]=vec[i]
         hamDLL=CDLL("./ham.dll")
         hamDLL.calcRetardedLatticeGreensFunction.restype=py_object
+        #print(hex(eigs_addr),hex(vecs_addr),nthreads)
+        #exit()
         result=hamDLL.calcRetardedLatticeGreensFunction(
-                        # Hamilton part
+                        c_longlong(eigs_addr),c_longlong(vecs_addr),
                         c_kgrid, 
-                        c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
-                        # Green part
+                        c_int(hr.norb),
                         c_int(nOmega),c_omega_real,c_omega_imag,
                         c_double(eta),
                         c_int(nLatVec),c_latVec,
                         c_int(nthreads))
+        #exit()
         rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,nOmega,nLatVec,hr.norb,hr.norb)
         rG_w_lat=rG_w_lat_real+1j*rG_w_lat_imag
         print('Retarded lattice Greens\' s function solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         return rG_w_lat
-        
 
     def testG(self,hr,orbList=[0],fermi=0,eta=0.1):
         norb=hr.norb
@@ -3730,7 +3742,7 @@ class Green:
         
         J=E_coupling#/(-2*(np.cos(theta)-1))
         return J
-    
+
     def getFourStateScatterMatrix(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],Lx=5,Ly=5,Lz=1):
         '''Linear response approximation
            using Gaussian integration along semi-circle in upper complex plane

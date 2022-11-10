@@ -385,6 +385,8 @@ PyObject * calcHam_simple(
     lapack_complex_double *k2_axis=(lapack_complex_double*)malloc(kgrid[1]*sizeof(lapack_complex_double));
     lapack_complex_double *k3_axis=(lapack_complex_double*)malloc(kgrid[2]*sizeof(lapack_complex_double));
     constructKAxis(kgrid,k1_axis,k2_axis,k3_axis);
+    double * spectra=(double*)malloc(nkpt*norbs*sizeof(double));
+    lapack_complex_double * vecs=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
     
     int nthreads;
     nthreads=_nthreads;
@@ -395,7 +397,7 @@ PyObject * calcHam_simple(
         lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk
         double * eigs=(double*)malloc(norbs*sizeof(double)); // output eigenvalues of Hk
         int my_rank=omp_get_thread_num();
-        int iomega, ilat, ieig, iorb, jorb, i, j;
+        int iorb, jorb, i, j;
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
@@ -416,15 +418,138 @@ PyObject * calcHam_simple(
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,hk,norbs,eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
             //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
+            for(iorb=0;iorb<norbs;iorb++) spectra[ikpt*norbs+iorb]=eigs[iorb];
+            for(iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    int index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    vecs[index]=hk[iorb*norbs+jorb];
+                }
+            }
         }
         free(hk);free(eigs);
     }
     free(k1_axis);free(k2_axis);free(k3_axis);
     
-    
-    return 0;// Py_BuildValue("(O)",GreenFunc);
+    long long eigs_addr=(long long)spectra;
+    long long vecs_addr=(long long)vecs;
+    printf("in ham.dll the addr. of eigs and vecs are %p, %p\n",eigs_addr,vecs_addr);
+    return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
 }
+
 PyObject * calcRetardedLatticeGreensFunction(
+                       long long eigs_addr, long long vecs_addr,
+                       int kgrid[3],
+                       int norbs,
+                       int nOmegaPoints,
+                       double omega_real[nOmegaPoints],
+                       double omega_imag[nOmegaPoints],
+                       double eta,
+                       int nLatticeVectors,
+                       int latVec[nLatticeVectors][3],
+                       int _nthreads){
+    printf("Obtain eigs and vecs @ %p, %p\n",eigs_addr,vecs_addr);
+    double*eigs=(double*)eigs_addr;
+    lapack_complex_double*vecs=(lapack_complex_double*)vecs_addr;
+    
+    int nkpt=kgrid[0]*kgrid[1]*kgrid[2];
+    int kxy=kgrid[0]*kgrid[1];
+    lapack_complex_double *k1_axis=(lapack_complex_double*)malloc(kgrid[0]*sizeof(lapack_complex_double));
+    lapack_complex_double *k2_axis=(lapack_complex_double*)malloc(kgrid[1]*sizeof(lapack_complex_double));
+    lapack_complex_double *k3_axis=(lapack_complex_double*)malloc(kgrid[2]*sizeof(lapack_complex_double));
+    constructKAxis(kgrid,k1_axis,k2_axis,k3_axis);
+    
+    lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc(nOmegaPoints*nLatticeVectors*norbs*norbs*sizeof(lapack_complex_double));
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*10)nthreads=1;
+    printf("use %d cores in ham.dll::calcRetardedLatticeGreensFunction\n",nthreads);
+    int latVec_len=norbs*norbs;
+    int omega_len=nLatticeVectors*latVec_len;
+    int thread_len=nOmegaPoints*omega_len;
+    lapack_complex_double * _G_w_lat=(lapack_complex_double*)malloc(nthreads*thread_len*sizeof(lapack_complex_double));
+    int totalDataGrids=nthreads*thread_len;
+    // calculate matrix elements
+    //int index;
+    #pragma omp parallel num_threads(nthreads)
+    {
+        int my_rank=omp_get_thread_num();
+        int i_rank=my_rank*thread_len;
+        int iomega, ilat, ieig, iorb, jorb, i, j;
+        int i_omega_k, i_lat_k;
+        int ik1, ik2, ik3, i_eig_k, i_vec_k;
+        // initial my G_w_lat
+        for(iomega=0;iomega<nOmegaPoints;iomega++){
+            for(ilat=0;ilat<nLatticeVectors;ilat++){
+                for(iorb=0;iorb<norbs;iorb++){
+                    for(jorb=0;jorb<norbs;jorb++){
+                        _G_w_lat[i_rank+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]=0;
+                    }
+                }
+            }
+        }
+        //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            // ikpt = ik1 + ik2*kgrid[0] + ik3*kgrid[0]*kgrid[1]
+            ik1=ikpt%kgrid[0];
+            ik2=(ikpt-ik1)%kxy/kgrid[0];
+            ik3=ikpt/kxy;
+            i_eig_k=ikpt*norbs;
+            i_vec_k=ikpt*norbs*norbs;
+            for(ilat=0;ilat<nLatticeVectors;ilat++){
+                lapack_complex_double factor=k1_axis[mod(-ik1*latVec[ilat][0],kgrid[0])]
+                                            *k2_axis[mod(-ik2*latVec[ilat][1],kgrid[1])]
+                                            *k3_axis[mod(-ik3*latVec[ilat][2],kgrid[2])];
+                i_lat_k=ilat*latVec_len;
+                for(iomega=0;iomega<nOmegaPoints;iomega++){
+                    lapack_complex_double omega=omega_real[iomega]+_Complex_I*omega_imag[iomega];
+                    i_omega_k=iomega*omega_len;
+                    for(ieig=0;ieig<norbs;ieig++){
+                        lapack_complex_double inverse_h=1/(omega-eigs[i_eig_k+ieig]+_Complex_I*eta);
+                        for(iorb=0;iorb<norbs;iorb++){
+                            for(jorb=0;jorb<norbs;jorb++){
+                                _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
+                                factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    for(int iomega=0;iomega<nOmegaPoints;iomega++){
+        for(int ilat=0;ilat<nLatticeVectors;ilat++){
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    int id_of_combine=iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb;
+                    G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]=0;
+                    for(int ithread=0;ithread<nthreads;ithread++){
+                        int id_of_sub_thread=ithread*thread_len+id_of_combine;
+                        G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]+=_G_w_lat[ithread*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb];
+                    }
+                }
+            }
+        }
+    }
+    free(_G_w_lat);free(k1_axis);free(k2_axis);free(k3_axis);
+    
+    PyObject * GreenFunc=PyTuple_New(2*thread_len);
+    for(int iomega=0;iomega<nOmegaPoints;iomega++){
+        for(int ilat=0;ilat<nLatticeVectors;ilat++){
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    PyTuple_SetItem(GreenFunc, 0*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb, PyFloat_FromDouble(creal(G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]/nkpt)));
+                    PyTuple_SetItem(GreenFunc, 1*thread_len+iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb, PyFloat_FromDouble(cimag(G_w_lat[iomega*omega_len+ilat*latVec_len+iorb*norbs+jorb]/nkpt)));
+                }
+            }
+        }
+    }
+    free(G_w_lat);
+    return Py_BuildValue("(O)",GreenFunc);
+}
+/*
+PyObject * calcRetardedLatticeGreensFunction_OneShot(
                        // below are for real-space Hamiltonian
                        int kgrid[3],
                        int norbs, int nhoppings,
@@ -553,7 +678,7 @@ PyObject * calcRetardedLatticeGreensFunction(
     }
     free(G_w_lat);
     return Py_BuildValue("(O)",GreenFunc);
-}
+}*/
 // --------------- end of Green's function part
 
 PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
