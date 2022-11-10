@@ -2496,21 +2496,24 @@ class Green:
         plt.show()
         plt.close()
     
-    def calcLatticeGreenFunction_CDLL(self,hr,kmesh:list=[1,1,1],eta=1e-4,
+    def calcLatticeGreenFunction_CDLL(self,hr,kgrid:list=[1,1,1],eta=1e-4,
                     omega_list=np.zeros(1,dtype=complex),lat_vecs=np.zeros((1,3),dtype=int),
                     nthreads=1):
         # prepare input parameters for cdll
         time0=time.time()
-        nkpts=kmesh[0]*kmesh[1]*kmesh[2]
+        #'''
+        nkpts=kgrid[0]*kgrid[1]*kgrid[2]
         c_kmesh=(c_double*(nkpts*3))()
         ikpt=0
         # k3 run fastest
-        for k1 in np.linspace(0,1,kmesh[0],endpoint=False):
-            for k2 in np.linspace(0,1,kmesh[1],endpoint=False):
-                for k3 in np.linspace(0,1,kmesh[2],endpoint=False):
+        for k1 in np.linspace(0,1,kgrid[0],endpoint=False):
+            for k2 in np.linspace(0,1,kgrid[1],endpoint=False):
+                for k3 in np.linspace(0,1,kgrid[2],endpoint=False):
                     c_kmesh[ikpt*3+0],c_kmesh[ikpt*3+1],c_kmesh[ikpt*3+2]=c_double(k1),c_double(k2),c_double(k3)
                     ikpt+=1
-        
+        #'''
+        c_kgrid=(c_int*3)()
+        for i in range(3):c_kgrid[i]=kgrid[i]
         nhoppings=len(hr.bondList)
         c_sourceID=(c_int*nhoppings)()
         c_targetID=(c_int*nhoppings)()
@@ -2541,7 +2544,7 @@ class Green:
         hamDLL.calcRetardedLatticeGreensFunction.restype=py_object
         result=hamDLL.calcRetardedLatticeGreensFunction(
                         # Hamilton part
-                        c_int(nkpts),c_kmesh,
+                        c_kgrid, 
                         c_int(hr.norb),c_int(nhoppings),
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         # Green part
@@ -3333,7 +3336,7 @@ class Green:
         E_diff, E_diff_err =integrate.quad_vec(getEOnCircle,a=np.pi,b=0.,epsabs=paramReader.EDIFF)
         print(E_diff,E_diff_err)
         #print("Energy difference obtained in %.3fs ===> E^0: %.6f E^1: %.6f E^2: %.6f +- %.6f %.6f %.6f"%(time.time()-time0,*E_diff,*E_diff_err))
-        exit()
+        #exit()
         #J=E_plus/2.#/(S**2)
         #return J
 
