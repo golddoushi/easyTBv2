@@ -316,13 +316,17 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
         iOverLat+=1
     gr=hamilton.Green()
     # obtain kmesh and Hk 
-    #nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=sc[0],Ly=sc[1],Lz=sc[2],GammaMode=1,nthreads=param.NCORE)
     emin=erange[0]
     emax=np.min([erange[1],fermi])
     print("Energy window: [%f, %f]"%(emin,emax))
-    #for orb in pR.orbList:
-    #    print(orb.label,orb.wannIDList)
+    
+    print("Diagnolizing Hamiltonian")
+    eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemory_simple(hr,kgrid=sc,nthreads=nthreads)
+    res=hamilton.Response()
+    eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=1,kmesh=sc,data_type='double')
+    print("Bands energy range: %.6f ~ %.6f"%(eigs.min(),eigs.max()))
     #exit()
+    print("Main loop for exchange calculation")
     J_list_old=np.zeros(len(bondList))
     J_list_new=np.zeros(len(bondList))
     iteration_num=0
@@ -331,7 +335,10 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
         npoints=len(points)
         print("----- Iteration %d -----"%iteration_num)
         z,dz=semiCirle(emin,emax,points)
-        rG_w_lat=gr.calcLatticeGreenFunction_CDLL(hr,kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,nthreads=nthreads)
+        rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
+            hr,eigs_addr,vecs_addr,
+            kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,
+            nthreads=nthreads)
         # calc. charge density and spin density of each orb.
         diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
         rho_of_each_orb=sum(diag_list)
@@ -346,7 +353,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
             sum(rho_of_each_orb[np.arange(hr.norb//2,dtype=int)])-
             sum(rho_of_each_orb[hr.norb//2+np.arange(hr.norb//2,dtype=int)])))
         
-        #print(len(bondList))
+        # calc. exchange coupling energies for each bond
         for ibondType, bondType in enumerate(bondList):
             bond=bondType[0]
             i_overlat_p=overLat_id_dic[tuple(bond.overLat)]
@@ -368,24 +375,25 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
                 ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy))
             J_list_new[ibondType]=bond.exchangeEnergy
         
+        # compute averaged J_list_new
+        J_list_new=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
         # check convergence
         if Jcvg<0:
-            print("Warning: no convergence check. At your own risk!")
+            print("Warning: no convergence check. Use the results at your own risk!")
             break
         dJ=J_list_new-J_list_old
         dJ_max=abs(dJ).max()
         print("Max dJ= %.6f"%dJ_max)
         if iteration_num>0 and dJ_max<Jcvg:
             print("----- Accuracy reached -----")
-            #J_list_old=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
             break
-        J_list_old=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
+        J_list_old=J_list_new.copy()
         iteration_num+=1
     else:
-        print("Warning: Accuracy is not reached. At your own risk!")
-    J_list_old=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
+        print("Warning: Accuracy is not reached. Use the results at your own risk!")
+    #J_list_old=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
     
-    for J, bondType in zip(J_list_old,bondList):
+    for J, bondType in zip(J_list_new,bondList):
         bondType[0].exchangeEnergy=J
         bondType[0].broadCastExchange(type='Ising')
     fileio.writeJ(mainDir, bondList, sc)

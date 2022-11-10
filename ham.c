@@ -380,6 +380,10 @@ PyObject * calcHam_simple(
                        double hopping_real[nhoppings],
                        double hopping_imag[nhoppings],
                        int _nthreads){
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    fclose(fp);
     int nkpt=kgrid[0]*kgrid[1]*kgrid[2];
     int kxy=kgrid[0]*kgrid[1];
     lapack_complex_double *k1_axis=(lapack_complex_double*)malloc(kgrid[0]*sizeof(lapack_complex_double));
@@ -393,12 +397,18 @@ PyObject * calcHam_simple(
     nthreads=_nthreads;
     if(nkpt<_nthreads*10)nthreads=1;
     printf("use %d cores in ham.dll::calcHam_simple\n",nthreads);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"use %d cores in ham.dll::calcHam_simple\n",nthreads);
+    fclose(fp);
     #pragma omp parallel num_threads(nthreads)
     {
         lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk
         double * eigs=(double*)malloc(norbs*sizeof(double)); // output eigenvalues of Hk
         int my_rank=omp_get_thread_num();
         int iorb, jorb, i, j;
+        int my_nkpt_portion=nkpt/nthreads/50;
+        int my_icnt=0;
+        if(my_nkpt_portion==0)my_nkpt_portion=1;
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
@@ -426,14 +436,20 @@ PyObject * calcHam_simple(
                     vecs[index]=hk[iorb*norbs+jorb];
                 }
             }
+            my_icnt+=1;
+            if(my_rank==0 & my_icnt%my_nkpt_portion==0){
+                printf(">");
+                fp=fopen("./c_log","a");
+                fprintf(fp,">");
+                fclose(fp);
+            }
         }
         free(hk);free(eigs);
     }
     free(k1_axis);free(k2_axis);free(k3_axis);
-    
     long long eigs_addr=(long long)spectra;
     long long vecs_addr=(long long)vecs;
-    printf("in ham.dll the addr. of eigs and vecs are %p, %p\n",eigs_addr,vecs_addr);
+    printf("\nin ham.dll the addr. of eigs and vecs are %p, %p\n",eigs_addr,vecs_addr);
     return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
 }
 
@@ -449,7 +465,12 @@ PyObject * calcRetardedLatticeGreensFunction(
                        int latVec[nLatticeVectors][3],
                        int _nthreads){
     clock_t time0=clock();
+    FILE*fp;
     printf("Obtain eigs and vecs @ %p, %p\n",eigs_addr,vecs_addr);
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    fprintf(fp,"Obtain eigs and vecs @ %p, %p\n",eigs_addr,vecs_addr);
+    fclose(fp);
     double*eigs=(double*)eigs_addr;
     lapack_complex_double*vecs=(lapack_complex_double*)vecs_addr;
     
@@ -465,6 +486,9 @@ PyObject * calcRetardedLatticeGreensFunction(
     nthreads=_nthreads;
     if(nkpt<_nthreads*10)nthreads=1;
     printf("use %d cores in ham.dll::calcRetardedLatticeGreensFunction\n",nthreads);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"use %d cores in ham.dll::calcRetardedLatticeGreensFunction\n",nthreads);
+    fclose(fp);
     int latVec_len=norbs*norbs;
     int omega_len=nLatticeVectors*latVec_len;
     int thread_len=nOmegaPoints*omega_len;
@@ -519,6 +543,9 @@ PyObject * calcRetardedLatticeGreensFunction(
         }
     }
     printf("inversed hk and lattice Fourier basis constructed in %.3fs\n",(clock()-time0)/1000.);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"inversed hk and lattice Fourier basis constructed in %.3fs\n",(clock()-time0)/1000.);
+    fclose(fp);
     time0=clock();
     // calculate matrix elements
     //int index;
@@ -530,7 +557,8 @@ PyObject * calcRetardedLatticeGreensFunction(
         int i_omega_k, i_lat_k;
         int i_eig_k, i_vec_k;
         lapack_complex_double factor, inverse_h;
-        int my_nkpt_portion=nkpt/nthreads/100;
+        int my_nkpt_portion=nkpt/nthreads/50;
+        int my_icnt=0;
         if(my_nkpt_portion==0)my_nkpt_portion=1;
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         #pragma omp for
@@ -553,10 +581,19 @@ PyObject * calcRetardedLatticeGreensFunction(
                     }
                 }
             }
-            if(my_rank==0 & ikpt%my_nkpt_portion==0)printf(">");
+            my_icnt+=1;
+            if(my_rank==0 & my_icnt%my_nkpt_portion==0){
+                printf(">");
+                fp=fopen("./c_log","a");
+                fprintf(fp,">");
+                fclose(fp);
+            }
         }
     }
     printf("\nLattice G constructed in %.3fs\n",(clock()-time0)/1000.);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"\nLattice G constructed in %.3fs\n",(clock()-time0)/1000.);
+    fclose(fp);
     
     for(int iomega=0;iomega<nOmegaPoints;iomega++){
         for(int ilat=0;ilat<nLatticeVectors;ilat++){
