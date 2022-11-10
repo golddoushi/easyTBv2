@@ -337,7 +337,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
         z,dz=semiCirle(emin,emax,points)
         rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
             hr,eigs_addr,vecs_addr,
-            kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,
+            kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=False,
             nthreads=nthreads)
         # calc. charge density and spin density of each orb.
         diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2

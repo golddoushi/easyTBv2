@@ -2534,6 +2534,7 @@ class Green:
     def calcLatticeGreenFunction_CDLL(self,hr,eigs_addr,vecs_addr,
                     kgrid:list=[1,1,1],eta=1e-4,
                     omega_list=np.zeros(1,dtype=complex),lat_vecs=np.zeros((1,3),dtype=int),
+                    spinor=False,
                     nthreads=1):
         # prepare input parameters for cdll
         time0=time.time()
@@ -2552,6 +2553,8 @@ class Green:
         c_latVec=(c_int*(nLatVec*3))()
         for ivec, vec in enumerate(lat_vecs):
             for i in range(3): c_latVec[ivec*3+i]=vec[i]
+        spinor_tag=c_int(0)
+        if spinor: spinor_tag=c_int(1)
         hamDLL=CDLL("./ham.dll")
         hamDLL.calcRetardedLatticeGreensFunction.restype=py_object
         #print(hex(eigs_addr),hex(vecs_addr),nthreads)
@@ -2563,6 +2566,7 @@ class Green:
                         c_int(nOmega),c_omega_real,c_omega_imag,
                         c_double(eta),
                         c_int(nLatVec),c_latVec,
+                        spinor_tag,
                         c_int(nthreads))
         #exit()
         rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,nOmega,nLatVec,hr.norb,hr.norb)

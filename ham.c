@@ -463,6 +463,7 @@ PyObject * calcRetardedLatticeGreensFunction(
                        double eta,
                        int nLatticeVectors,
                        int latVec[nLatticeVectors][3],
+                       int spinor_tag,
                        int _nthreads){
     clock_t time0=clock();
     FILE*fp;
@@ -572,10 +573,25 @@ PyObject * calcRetardedLatticeGreensFunction(
                     i_omega_k=iomega*omega_len;
                     for(ieig=0;ieig<norbs;ieig++){
                         inverse_h=inversed_hks[ikpt*nOmegaPoints*norbs+iomega*norbs+ieig];
-                        for(iorb=0;iorb<norbs;iorb++){
-                            for(jorb=0;jorb<norbs;jorb++){
-                                _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                                factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                        if(spinor_tag==0){
+                            for(iorb=0;iorb<norbs/2;iorb++){
+                                for(jorb=0;jorb<norbs/2;jorb++){
+                                    _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
+                                    factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                                }
+                            }
+                            for(iorb=norbs/2;iorb<norbs;iorb++){
+                                for(jorb=norbs/2;jorb<norbs;jorb++){
+                                    _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
+                                    factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                                }
+                            }
+                        }else{
+                            for(iorb=0;iorb<norbs;iorb++){
+                                for(jorb=0;jorb<norbs;jorb++){
+                                    _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
+                                    factor*inverse_h*vecs[i_vec_k+iorb*norbs+ieig]*conj(vecs[i_vec_k+jorb*norbs+ieig]);
+                                }
                             }
                         }
                     }
