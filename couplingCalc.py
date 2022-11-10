@@ -509,7 +509,7 @@ def writeMCSolverIsingFile(path):
         f.write('%d\n'%len(magOrbList))
         f.write('Positions, initial spin states and onsite-anisotropy of every orbital:\n')
         for orb in magOrbList:
-            factor=param.EV2K/abs(orb.spin)
+            factor=param.EV2K/abs(orb.spin)**2
             f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dz: %.9f Dx: %.9f Dy: %.9f\n'%(
                 orb.index_tmp,orb.type,abs(orb.spin)*orb.magmom/abs(orb.magmom),*orb.pos,orb.D[2]*factor,orb.D[0]*factor,orb.D[1]*factor
             ))
