@@ -146,12 +146,12 @@ hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
 #atomicOrbIndexList=hr.make_supercell([1,0,0],[1,2,0],[0,0,1],atomicOrbIndexList=atomicOrbIndexList,soc=False)
 #hr.adjustSOCStrength(socFactor=1.0)
 # NOTE check the fermi in GlobalConst first
-#res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,1.2,29),tau=0.02,erange=[-5,0],ndivide=4,nthreads=4)
+res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,1.2,29),tau=0.02,erange=[-5,0],ndivide=4,nthreads=4,full_mat=True)
 #res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/Cr2P2Se6/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.3,1.2,20),tau=0.01,erange=[-80,80],nthreads=4)
 #res.calcSpinProjectiveBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,proj_atomID=[[0,1,2],[0,1,2]],kgrid=[50,50,1],omegaList=np.linspace(0.5,1.2,20),tau=0.02,erange=[-80,80],nthreads=4)
 #res.calcShiftPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/MoTe2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.8,2.0,20),tau=0.02,erange=[-80,80],nthreads=4)
 #res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/BN/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,1],omegaList=np.linspace(0.5,2.5,29),tau=0.02,erange=[-80,80],ndivide=1,nthreads=4)
-#exit()
+exit()
 
 #'''
 res.calcModernOrbitalProjectiveBulkPhotovoltaicConductor_CDLL(hr,

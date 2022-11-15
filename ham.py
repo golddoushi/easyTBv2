@@ -675,7 +675,10 @@ class Response:
         print('Projective spin hall conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
         return
 
-    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,erange=[-1000.,1000.],ndivide=1,nthreads=1,show=True):
+    def calcBulkPhotovoltaicConductor_CDLL(self,hr,mainDir=None,
+            kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,
+            erange=[-1000.,1000.],ndivide=1,nthreads=1,show=True,
+            full_mat=False):
         time0=time.time()
         # prepare input parameters for cdll
         kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
@@ -746,49 +749,102 @@ class Response:
         c_erange[1]=c_double(erange[1])
         #exit()
         hamDLL=CDLL("./ham.dll")
-        hamDLL.calcBulkPhotovoltaicCond_memoryReduce.restype=py_object
+        myFunc=hamDLL.calcBulkPhotovoltaicCond_memoryReduce
+        if full_mat:myFunc=hamDLL.calcBulkPhotovoltaicCond_FullMatrices_memoryReduce
+        myFunc.restype=py_object
 
         #tau=0.05
-        result=hamDLL.calcBulkPhotovoltaicCond_memoryReduce(c_int(nkpts),c_kmesh,
-                        c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
-                        c_int(len(omegaList)),
-                        c_omega_list,
-                        c_double(paramReader.FERMI),
-                        c_lat,
-                        c_orbCorrList,
-                        c_double(tau),
-                        c_erange,
-                        c_int(ndivide),
-                        c_int(nthreads))
+        result=myFunc(c_int(nkpts),c_kmesh,
+                    c_int(hr.norb),c_int(nhoppings),
+                    c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                    c_int(len(omegaList)),
+                    c_omega_list,
+                    c_double(paramReader.FERMI),
+                    c_lat,
+                    c_orbCorrList,
+                    c_double(tau),
+                    c_erange,
+                    c_int(ndivide),
+                    c_int(nthreads))
                         
-        condFull=(np.array(result[0])+1j*np.array(result[1]))#.reshape(8,len(omegaList)*nkpts)
+        condFull=(np.array(result[0])+1j*np.array(result[1]))
         if mainDir!=None:
             if len(omegaList)==1:
-                cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy=condFull.reshape(8,nkpts)
+                if full_mat:
+                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy, czxx,czxy,czyx,czyy, cxzx,cxzy,cyzx,cyzy, cxxz,cxyz,cyxz,cyyz, czzx,czzy,czxz,czyz,cxzz,cyzz, czzz=condFull.reshape(27,nkpts)
+                else:
+                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy=condFull.reshape(8,nkpts)
                 with open(mainDir+'photoCondTensor.txt','w') as fout:
                     for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
                         fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
                 return
             else:
-                cxxx,cyxx,cxyy,cyyy,cxxy,cyxy,cxyx,cyyx=condFull.reshape(8,len(omegaList),nkpts)
-                with open(mainDir+'photoCondTensorVsOmega.txt','w') as fout:
-                    fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
-                    for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
-                        fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
-                            omega,
-                            sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
-                            sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
-                            sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
-                            sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
-                            sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
-                            sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
-                            sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
-                            sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag))
-                for iomega, omega in enumerate(omegaList):
-                    with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
-                        for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
-                            fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+                if full_mat:
+                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy, czxx,czxy,czyx,czyy, cxzx,cxzy,cyzx,cyzy, cxxz,cxyz,cyxz,cyyz, czzx,czzy,czxz,czyz,cxzz,cyzz, czzz=condFull.reshape(27,len(omegaList),nkpts)
+                    with open(mainDir+'photoCondTensorVsOmega.txt','w') as fout:
+                        fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i Szx_x_r Szx_x_i Szx_y_r Szx_y_i Szy_x_r Szy_x_i Szy_y_r Szy_y_i Sxz_x_r Sxz_x_i Sxz_y_r Sxz_y_i Syz_x_r Syz_x_i Syz_y_r Syz_y_i Sxx_z_r Sxx_z_i Sxy_z_r Sxy_z_i Syx_z_r Syx_z_i Syy_z_r Syy_z_i Szz_x_r Szz_x_i Szz_y_r Szz_y_i Szx_z_r Szx_z_i Szy_z_r Szy_z_i Sxz_z_r Sxz_z_i Syz_z_r Syz_z_i Szz_z_r Szz_z_i\n")
+                        for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy,_czxx,_czxy,_czyx,_czyy, _cxzx,_cxzy,_cyzx,_cyzy, _cxxz,_cxyz,_cyxz,_cyyz, _czzx,_czzy,_czxz,_czyz,_cxzz,_cyzz, _czzz in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy,czxx,czxy,czyx,czyy, cxzx,cxzy,cyzx,cyzy, cxxz,cxyz,cyxz,cyyz, czzx,czzy,czxz,czyz,cxzz,cyzz, czzz):
+                            fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                                omega,
+                                sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
+                                sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
+                                sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
+                                sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
+                                sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
+                                sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
+                                sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
+                                sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag,
+
+                                sum(_czxx/nkpts).real,sum(_czxx/nkpts).imag,
+                                sum(_czxy/nkpts).real,sum(_czxy/nkpts).imag,
+                                sum(_czyx/nkpts).real,sum(_czyx/nkpts).imag,
+                                sum(_czyy/nkpts).real,sum(_czyy/nkpts).imag,
+
+                                sum(_cxzx/nkpts).real,sum(_cxzx/nkpts).imag,
+                                sum(_cxzy/nkpts).real,sum(_cxzy/nkpts).imag,
+                                sum(_cyzx/nkpts).real,sum(_cyzx/nkpts).imag,
+                                sum(_cyzy/nkpts).real,sum(_cyzy/nkpts).imag,
+
+                                sum(_cxxz/nkpts).real,sum(_cxxz/nkpts).imag,
+                                sum(_cxyz/nkpts).real,sum(_cxyz/nkpts).imag,
+                                sum(_cyxz/nkpts).real,sum(_cyxz/nkpts).imag,
+                                sum(_cyyz/nkpts).real,sum(_cyyz/nkpts).imag,
+
+                                sum(_czzx/nkpts).real,sum(_czzx/nkpts).imag,
+                                sum(_czzy/nkpts).real,sum(_czzy/nkpts).imag,
+                                sum(_czxz/nkpts).real,sum(_czxz/nkpts).imag,
+                                sum(_czyz/nkpts).real,sum(_czyz/nkpts).imag,
+                                sum(_cxzz/nkpts).real,sum(_cxzz/nkpts).imag,
+                                sum(_cyzz/nkpts).real,sum(_cyzz/nkpts).imag,
+
+                                sum(_czzz/nkpts).real,sum(_czzz/nkpts).imag,
+                                ))
+                    for iomega, omega in enumerate(omegaList):
+                        with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
+                            for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy,_czxx,_czxy,_czyx,_czyy, _cxzx,_cxzy,_cyzx,_cyzy, _cxxz,_cxyz,_cyxz,_cyyz, _czzx,_czzy,_czxz,_czyz,_cxzz,_cyzz, _czzz in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega],czxx[iomega],czxy[iomega],czyx[iomega],czyy[iomega], cxzx[iomega],cxzy[iomega],cyzx[iomega],cyzy[iomega], cxxz[iomega],cxyz[iomega],cyxz[iomega],cyyz[iomega], czzx[iomega],czzy[iomega],czxz[iomega],czyz[iomega],cxzz[iomega],cyzz[iomega], czzz[iomega]):
+                                fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                                    *kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag,
+                                    _czxx.real,_czxx.imag,_czxy.real,_czxy.imag,_czyx.real,_czyx.imag,_czyy.real,_czyy.imag,_cxzx.real,_cxzx.imag,_cxzy.real,_cxzy.imag,_cyzx.real,_cyzx.imag,_cyzy.real,_cyzy.imag,_cxxz.real,_cxxz.imag,_cxyz.real,_cxyz.imag,_cyxz.real,_cyxz.imag,_cyyz.real,_cyyz.imag,_czzx.real,_czzx.imag,_czzy.real,_czzy.imag,_czxz.real,_czxz.imag,_czyz.real,_czyz.imag,_cxzz.real,_cxzz.imag,_cyzz.real,_cyzz.imag,_czzz.real,_czzz.imag,
+                                    ))
+                else:
+                    cxxx,cyxx,cxyy,cyyy,cxxy,cyxy,cxyx,cyyx=condFull.reshape(8,len(omegaList),nkpts)
+                    with open(mainDir+'photoCondTensorVsOmega.txt','w') as fout:
+                        fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
+                        for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
+                            fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                                omega,
+                                sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
+                                sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
+                                sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
+                                sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
+                                sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
+                                sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
+                                sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
+                                sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag))
+                    for iomega, omega in enumerate(omegaList):
+                        with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
+                            for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
+                                fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
         if not show:
             return
         condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
