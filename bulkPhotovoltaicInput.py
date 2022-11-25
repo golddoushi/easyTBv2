@@ -62,9 +62,9 @@ atomicOrbIndexList=[[[],[],[0,1,2,3,4,11,12,13,14,15]],
                     [[],[5,6,7,16,17,18]],
                     [[],[8,9,10,19,20,21]],
                    ]
-atomicMagMomList=[[1,0], # in z direction
-                  [0,0], # 0 mag.mom.
-                  [0,0]  # 0 mag.mom.
+atomicMagMomList=[np.array([0,0,1]), # in z direction
+                  np.zeros(3),       # 0 mag.mom.
+                  np.zeros(3)        # 0 mag.mom.
                  ]
 #'''
 '''

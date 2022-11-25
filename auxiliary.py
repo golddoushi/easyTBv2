@@ -9,6 +9,7 @@ import os
 import shutil
 import time
 import paramReader
+from math import acos
 global time0
 time0=0
 
@@ -298,3 +299,95 @@ def crossProduct(vec1:np.ndarray,vec2:np.ndarray) -> np.ndarray:
         vec1[2]*vec2[0]-vec1[0]*vec2[2],
         vec1[0]*vec2[1]-vec1[1]*vec2[0],
         ])
+
+def SO3_SU2(rotate_xyz):
+    '''
+    Transform SO3 rotation matrix into SU2 rotation
+    rotate_xyz is the column-wise SO3 rotation matrix, that is,
+    each column is one of the basic vector of rotated frame
+    And the rotation operation should be: rotate_xyz @ vec
+
+    Return the SU2 rotation matrix rotate_su2
+    the rotation should be: rotate_su2 @ spinor_vec
+    '''
+    x,y,z=rotate_xyz.T
+    _z=np.array([x[1]*y[2]-x[2]*y[1],x[2]*y[0]-x[0]*y[2],x[0]*y[1]-x[1]*y[0]])
+    if np.dot(z,_z)<0: # improper rotation
+        x,y,z=-x,-y,-z # implement symmetric spin orbs
+
+    beta=acos(z[2])
+    sin_beta=np.sin(beta)
+    if sin_beta>1e-4:
+        cos_alpha=z[0]/sin_beta
+        sin_alpha=z[1]/sin_beta
+        alpha=acos(cos_alpha) if sin_alpha>=0 else acos(-cos_alpha)+np.pi
+
+        sin_gamma=y[2]/sin_beta
+        cos_gamma=-x[2]/sin_beta
+        gamma=acos(cos_gamma) if sin_gamma>=0 else acos(-cos_gamma)+np.pi
+    else:
+        gamma=0
+        beta=0 if z[2]>0 else np.pi
+
+        cos_alpha=y[1]
+        sin_alpha=-y[0]
+        alpha=acos(cos_alpha) if sin_alpha>=0 else acos(-cos_alpha)+np.pi
+
+    return np.array([
+            [np.exp(-1j/2*(alpha+gamma))*np.cos(beta/2),-np.exp(-1j/2*(alpha-gamma))*np.sin(beta/2)],
+            [np.exp( 1j/2*(alpha-gamma))*np.sin(beta/2), np.exp( 1j/2*(alpha+gamma))*np.cos(beta/2)]
+            ])#.T.conjugate()
+
+def spinorToR(spinor):
+    sigmax=np.array([[0,1],[1,0]])
+    sigmay=np.array([[0,-1j],[1j,0]])
+    sigmaz=np.array([[1,0],[0,-1]])
+    return np.array([
+        spinor.conjugate()@sigmax@spinor,
+        spinor.conjugate()@sigmay@spinor,
+        spinor.conjugate()@sigmaz@spinor
+    ]).real
+
+def RToSpinor(R):
+    if R@R<1e-4: return np.array([0,0],dtype=complex)
+    Rn=R/np.sqrt(R@R)
+    x,y,z=Rn
+    if abs(z-1)<1e-2: return np.array([1,0])
+    if abs(z+1)<1e-2: return np.array([0,1])
+    theta=acos(z)
+    phi=acos(x/np.sin(theta))
+    if y>0: phi*=-1
+    #print(theta/np.pi*180,phi/np.pi*180)
+    so3=np.array([
+        [ np.cos(phi)*np.cos(theta),-np.sin(phi),np.cos(phi)*np.sin(theta)],
+        [ np.sin(phi)*np.cos(theta), np.cos(phi),np.sin(phi)*np.sin(theta)],
+        [            -np.sin(theta),           0,            np.cos(theta)]
+    ])
+    #print(so3)
+    su2=SO3_SU2(so3)
+    return su2@np.array([1,0])
+
+def pseudoRotation(rotate,axial):
+    '''
+    Rotate an axial vector, which should be represented by cartesian coor.
+    '''
+    axial_len=np.sqrt(axial@axial)
+    if axial_len<1e-6: return np.zeros(3,dtype=float)
+    #print(axial)
+    basis=np.identity(3)
+    e_cross_list=[np.cross(basis[i],axial) for i in range(3)]
+    e_cross_len=[np.sqrt(e_cross@e_cross) for e_cross in e_cross_list]
+    sort_index=np.argsort(e_cross_len)
+    n1=basis[sort_index[-1]]
+    n2=np.cross(n1,axial)
+    n3=np.cross(n2,axial)
+    
+    reconstructed_axial=np.cross(n3,n2)
+    reconstructed_axial_len=np.sqrt(reconstructed_axial@reconstructed_axial)
+    assert reconstructed_axial_len>1e-6, "Failed to convert psuedo vector into cross form"
+    #reconstructed_axial*=axial_len/reconstructed_axial_len
+    #print(reconstructed_axial)
+
+    n2_trans=rotate@n2
+    n3_trans=rotate@n3
+    return np.cross(n3_trans,n2_trans)*axial_len/reconstructed_axial_len
