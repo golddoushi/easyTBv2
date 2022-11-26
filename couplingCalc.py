@@ -263,18 +263,6 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
     lowOrder, highOrder: the order used for Gaussian quadrature
     '''
     global bondList, supercellSize
-    def semiCirle(p1,p2,pathPoints:np.ndarray):
-        '''
-        Generate semi-cirle path on upper half complex plane
-        p1, p2: the two points on real-axis
-        pathPoints: the positions on path, should be in range -1~1
-        '''
-        p_right=max([p1,p2])
-        p_left=min([p1,p2])
-        r=(p_right-p_left)/2
-        o=(p_right+p_left)/2
-        thetaPath=(pathPoints+1)/2*np.pi
-        return r*np.exp(1j*thetaPath)+o, r*1j*np.exp(1j*thetaPath)
     # read in Hr
     hr=reader.Hr()
     fileList=aux.ls(mainDir)
@@ -350,7 +338,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
         points, weights=p_roots(gaussianOrder)
         npoints=len(points)
         print("----- Iteration %d -----"%iteration_num)
-        z,dz=semiCirle(emin,emax,points)
+        z,dz=aux.semiCirle(emin,emax,points)
         rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
             hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
             kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=False,

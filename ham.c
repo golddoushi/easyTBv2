@@ -498,7 +498,7 @@ PyObject * calcRetardedLatticeGreensFunction(
     lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc((long)nOmegaPoints*(long)nLatticeVectors*(long)norbs*(long)norbs*sizeof(lapack_complex_double));
     int nthreads;
     nthreads=_nthreads;
-    if(nkpt<_nthreads*10)nthreads=1;
+    if(nkpt<_nthreads)nthreads=nkpt;
     printf("use %d cores in ham.dll::calcRetardedLatticeGreensFunction\n",nthreads);
     fp=fopen("./c_log","a");
     fprintf(fp,"use %d cores in ham.dll::calcRetardedLatticeGreensFunction\n",nthreads);

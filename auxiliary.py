@@ -391,3 +391,16 @@ def pseudoRotation(rotate,axial):
     n2_trans=rotate@n2
     n3_trans=rotate@n3
     return np.cross(n3_trans,n2_trans)*axial_len/reconstructed_axial_len
+
+def semiCirle(p1:float,p2:float,pathPoints:np.ndarray):
+    '''
+    Generate semi-cirle path on upper half complex plane
+    p1, p2: the two points on real-axis
+    pathPoints: the positions on path, should be in range -1~1
+    '''
+    p_right=max([p1,p2])
+    p_left=min([p1,p2])
+    r=(p_right-p_left)/2
+    o=(p_right+p_left)/2
+    thetaPath=(pathPoints+1)/2*np.pi
+    return r*np.exp(1j*thetaPath)+o, r*1j*np.exp(1j*thetaPath)
