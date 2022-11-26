@@ -346,25 +346,25 @@ int mod(int a, int b){
     return result;
 }
 // generate k-axis in 3 directions, with convention exp(-1j*2pi*dk)
-int constructKAxis(int kgrid[3], lapack_complex_double k1_axis[], lapack_complex_double k2_axis[], lapack_complex_double k3_axis[]){
-    int nkpt=kgrid[0]*kgrid[1]*kgrid[2];
-    double dk[3]={1./kgrid[0],1./kgrid[1],1./kgrid[2]};
-    int kxy=kgrid[0]*kgrid[1];
+int constructKAxis(int nk1, int nk2, int nk3, lapack_complex_double k1_axis[nk1], lapack_complex_double k2_axis[nk2], lapack_complex_double k3_axis[nk3]){
+    int nkpt=nk1*nk2*nk3;//kgrid[0]*kgrid[1]*kgrid[2];
+    double dk[3]={1./nk1,1./nk2,1./nk3};
+    //int kxy=nk1*nk2;
     lapack_complex_double k1_a=cexp(-TwoPI*_Complex_I*dk[0]);
     lapack_complex_double k2_a=cexp(-TwoPI*_Complex_I*dk[1]);
     lapack_complex_double k3_a=cexp(-TwoPI*_Complex_I*dk[2]);
     lapack_complex_double base=1.0;
-    for(int ik=0;ik<kgrid[0];ik++){
+    for(int ik=0;ik<nk1;ik++){
         k1_axis[ik]=base;
         base*=k1_a;
     }
     base=1.0;
-    for(int ik=0;ik<kgrid[1];ik++){
+    for(int ik=0;ik<nk2;ik++){
         k2_axis[ik]=base;
         base*=k2_a;
     }
     base=1.0;
-    for(int ik=0;ik<kgrid[2];ik++){
+    for(int ik=0;ik<nk3;ik++){
         k3_axis[ik]=base;
         base*=k3_a;
     }
@@ -389,9 +389,9 @@ PyObject * calcHam_simple(
     lapack_complex_double *k1_axis=(lapack_complex_double*)malloc((long)kgrid[0]*sizeof(lapack_complex_double));
     lapack_complex_double *k2_axis=(lapack_complex_double*)malloc((long)kgrid[1]*sizeof(lapack_complex_double));
     lapack_complex_double *k3_axis=(lapack_complex_double*)malloc((long)kgrid[2]*sizeof(lapack_complex_double));
-    constructKAxis(kgrid,k1_axis,k2_axis,k3_axis);
-    double * spectra=(double*)malloc((long)nkpt*(long)norbs*sizeof(double));
-    lapack_complex_double * vecs=(lapack_complex_double*)malloc((long)nkpt*(long)norbs*(long)norbs*sizeof(lapack_complex_double));
+    constructKAxis(kgrid[0],kgrid[1],kgrid[2],k1_axis,k2_axis,k3_axis);
+    double * spectra=(double*)malloc(nkpt*norbs*sizeof(double));
+    lapack_complex_double * vecs=(lapack_complex_double*)malloc(nkpt*norbs*norbs*sizeof(lapack_complex_double));
     
     int nthreads;
     nthreads=_nthreads;
@@ -402,7 +402,7 @@ PyObject * calcHam_simple(
     fclose(fp);
     #pragma omp parallel num_threads(nthreads)
     {
-        lapack_complex_double * hk=(lapack_complex_double*)malloc((long)norbs*(long)norbs*sizeof(lapack_complex_double)); // init Hk
+        lapack_complex_double * hk=(lapack_complex_double*)malloc((long)norbs*norbs*sizeof(lapack_complex_double)); // init Hk
         double * eigs=(double*)malloc((long)norbs*sizeof(double)); // output eigenvalues of Hk
         long my_rank=omp_get_thread_num();
         long ikpt, ihopping, iorb, jorb, i, j, index;
@@ -439,7 +439,10 @@ PyObject * calcHam_simple(
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,hk,norbs,eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
             //printf("rank%d kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",my_rank,ikpt,ik1,ik2,ik3,eigs[0],eigs[1],eigs[2]);
-            for(iorb=0;iorb<norbs;iorb++) spectra[ikpt*norbs+iorb]=eigs[iorb];
+            for(iorb=0;iorb<norbs;iorb++){
+                spectra[ikpt*norbs+iorb]=eigs[iorb];
+                //printf("%f\n",eigs[iorb]);
+            }
             for(iorb=0;iorb<norbs;iorb++){
                 for(jorb=0;jorb<norbs;jorb++){
                     index=ikpt*norbs*norbs+iorb*norbs+jorb;
@@ -490,7 +493,7 @@ PyObject * calcRetardedLatticeGreensFunction(
     lapack_complex_double *k1_axis=(lapack_complex_double*)malloc((long)kgrid[0]*sizeof(lapack_complex_double));
     lapack_complex_double *k2_axis=(lapack_complex_double*)malloc((long)kgrid[1]*sizeof(lapack_complex_double));
     lapack_complex_double *k3_axis=(lapack_complex_double*)malloc((long)kgrid[2]*sizeof(lapack_complex_double));
-    constructKAxis(kgrid,k1_axis,k2_axis,k3_axis);
+    constructKAxis(kgrid[0],kgrid[1],kgrid[2],k1_axis,k2_axis,k3_axis);
     
     lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc((long)nOmegaPoints*(long)nLatticeVectors*(long)norbs*(long)norbs*sizeof(lapack_complex_double));
     int nthreads;
@@ -1268,12 +1271,18 @@ PyObject* readOutGridDataOnKMesh_double(long long data_addr, int dataDim, int km
 
     int nkpt=kmesh[0]*kmesh[1]*kmesh[2];
     printf("kmesh, dim: %dx%dx%d x%d, data dim run fastest, then ik3, ik2, ik1\n",kmesh[0],kmesh[1],kmesh[2],dataDim);
-
-    PyObject * outData=PyTuple_New(nkpt*dataDim);
-    for(int ikpt=0;ikpt<nkpt;ikpt++)
-    for(int idata=0;idata<dataDim;idata++)
-    PyTuple_SET_ITEM(outData,ikpt*dataDim+idata,PyFloat_FromDouble(gridData[ikpt*dataDim+idata]));
     
+    PyGILState_STATE gstate;
+    gstate = PyGILState_Ensure();
+    PyObject * outData=PyTuple_New(nkpt*dataDim);
+    for(int ikpt=0;ikpt<nkpt;ikpt++){
+        for(int idata=0;idata<dataDim;idata++){
+            PyTuple_SET_ITEM(outData,ikpt*dataDim+idata,PyFloat_FromDouble(gridData[ikpt*dataDim+idata]));
+            //printf("%f\n",gridData[ikpt*dataDim+idata]);
+        }
+    }
+    //exit(1);
+    PyGILState_Release(gstate);
     return Py_BuildValue("O",outData);
 }
 

@@ -335,13 +335,13 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
     print("Diagnolizing Hamiltonian")
     eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemory_simple(hr,kgrid=sc,nthreads=nthreads)
     res=hamilton.Response()
-    eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=1,kmesh=sc,data_type='double')
-    bandEnergyMin, bandEnergyMax= eigs.min(), eigs.max()
+    eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=hr.norb,kmesh=sc,data_type='double')
+    bandEnergyMin, bandEnergyMax= eigs.flatten().min(), eigs.flatten().max()
     print("Bands energy range: %.6f ~ %.6f"%(bandEnergyMin,bandEnergyMax))
     emin=np.max([erange[0],bandEnergyMin])
     emax=np.min([erange[1],fermi])
     print("Energy window: [%f, %f]"%(emin,emax))
-
+    
     print("Main loop for exchange calculation")
     J_list_old=np.zeros(len(bondList))
     J_list_new=np.zeros(len(bondList))
