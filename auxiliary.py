@@ -1,4 +1,7 @@
 '''
+Log 2022/11/27
+Appended lots of functions to achieve many miscs
+
 Created on 2019 7 6
 Main purpose: redefine the system-operations, such as cp, mkdir, etc.,
               so that I can get more D.O.F, i.e., error wrapping, reporting, debugging
@@ -15,6 +18,7 @@ time0=0
 
 def getMSD(input,overavg=True,bestChoice=True,verbose=False):
     '''
+    SHOULD BE ABANDONED, use np.std rather
     '''
     #check the shape
     shape=input.shape
@@ -163,6 +167,7 @@ def getCombinationLoop(input_list=[],ncomb=1,maxComb=-1):
 
 def quicksort(input_list=[]):
     '''
+    THIS SHOULD BE ABANDONED, use np.sort rather
     Sort the input list and return a sort index list
     e.g. we want to sort input_list = [1, 3, 2, 5, 0]
     then the function will return the sorted INDEX:
@@ -241,11 +246,6 @@ def cp(file_src, file_des):
     except IOError as err:
         print(err, '--> copy file %s to %s failed, stop'%(file_src,file_des))
         exit()
-    #except FileNotFoundError as err:
-    #    print(err, '--> cannot find %s, stop'%file_src)
-    #    exit()
-    #except shutil.SameFileError as err:
-    #    print(err, '--> %s and %s are the same file, skip'%(file_src,file_des))
 
 def rm(path,quiet=False):
     try:
@@ -294,6 +294,9 @@ def integeralizeVec(vec:np.ndarray, cvg=paramReader.SYMPREC) -> np.ndarray:
     return np.array(inteVec)
 
 def crossProduct(vec1:np.ndarray,vec2:np.ndarray) -> np.ndarray:
+    '''
+    This should be abandoned, and use np.cross
+    '''
     return np.array([
         vec1[1]*vec2[2]-vec1[2]*vec2[1],
         vec1[2]*vec2[0]-vec1[0]*vec2[2],
@@ -339,6 +342,9 @@ def SO3_SU2(rotate_xyz):
             ])#.T.conjugate()
 
 def spinorToR(spinor):
+    '''
+    Convert a 2-component spinor into vector, via the expectations on Pauli matrices
+    '''
     sigmax=np.array([[0,1],[1,0]])
     sigmay=np.array([[0,-1j],[1j,0]])
     sigmaz=np.array([[1,0],[0,-1]])
@@ -349,6 +355,10 @@ def spinorToR(spinor):
     ]).real
 
 def RToSpinor(R):
+    '''
+    Convert an (supposed) axial vector into spinor. 
+    Not satisfacted by now, since it's not one to one map
+    '''
     if R@R<1e-4: return np.array([0,0],dtype=complex)
     Rn=R/np.sqrt(R@R)
     x,y,z=Rn
@@ -404,3 +414,74 @@ def semiCirle(p1:float,p2:float,pathPoints:np.ndarray):
     o=(p_right+p_left)/2
     thetaPath=(pathPoints+1)/2*np.pi
     return r*np.exp(1j*thetaPath)+o, r*1j*np.exp(1j*thetaPath)
+
+def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False):
+    '''
+    Produce the structured atomic orb. ids based on the projections given by Wannier90-style strings
+    Useful when i need to construct the atomicOrbList for many interfaces such as velocity calcs.
+    This is better than read atomic orbs. from output files of Wannier90, since we may not have these files.
+    NOTE: only standard atomic orb s, p, d, f are supported by now.
+    '''
+    # 1. obtain information of composite
+    with open(filePathOfPOSCAR,'r') as fin:
+        data=fin.read().split("\n")
+    ele_name_list=data[5].split()
+    ele_num_list=[int(x) for x in data[6].split()]
+    #print(ele_name_list)
+    #print(ele_num_list)
+    atom_index_dic={}  # index of each atom
+    cnt=0
+    for name, num in zip(ele_name_list,ele_num_list):
+        sub_list=[]
+        for i in range(num):
+            sub_list.append(cnt)
+            cnt+=1
+        atom_index_dic[name]={"atom id":sub_list,"s":False,"p":False,"d":False,"f":False}
+    #print(atom_index_dic)
+    #exit()
+    # 2. analyz the strings in projections, add them into dictionary
+    label_to_L_dic={
+        's':0,
+        'p':1,
+        'd':2,
+        'f':3}
+    for projection in projections:
+        ele, orbs = [x.strip() for x in projection.split(':')]
+        for orb in [x.strip() for x in orbs.split(";")]:
+            if orb in label_to_L_dic.keys():
+                atom_index_dic[ele][orb]=True
+            else:
+                print("Error, not supported orb. type: %s, only s, p, d, f are supported by now"%orb)
+                exit()    
+    #print(atom_index_dic)
+    # 3. now let's construct the atomicOrbList
+    checking_label_order=['s','p','d','f']
+    checking_label_inversed_order=['f','d','p','s']
+    all_atoms_orb_list=[]
+    orb_id=0
+    for ele in ele_name_list:
+        for iatom in atom_index_dic[ele]['atom id']:
+            for ilabel, label in enumerate(checking_label_inversed_order):
+               if atom_index_dic[ele][label]:
+                    atom_orb_list=[[] for i in range(4-ilabel)]
+                    break
+            else:
+                print("Error, neither s, p, d, or f orb is founded for %s"%ele)
+                exit()
+            for ilabel, L_orb_list in enumerate(atom_orb_list):
+                if not atom_index_dic[ele][checking_label_order[ilabel]]:continue
+                for l in range(2*label_to_L_dic[checking_label_order[ilabel]]+1):
+                    L_orb_list.append(orb_id)
+                    orb_id+=1
+            all_atoms_orb_list.append(atom_orb_list)
+    
+    if ispin==2 or soc:
+        for ele in ele_name_list:
+            for iatom in atom_index_dic[ele]['atom id']:
+                for ilabel, L_orb_list in enumerate(all_atoms_orb_list[iatom]):
+                    if not atom_index_dic[ele][checking_label_order[ilabel]]:continue
+                    for l in range(2*label_to_L_dic[checking_label_order[ilabel]]+1):
+                        L_orb_list.append(orb_id)
+                        orb_id+=1
+    
+    return all_atoms_orb_list

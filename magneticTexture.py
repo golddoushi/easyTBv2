@@ -7,13 +7,13 @@ import hrReader as reader
 from ham import Green, Response
 import numpy as np
 from scipy.special.orthogonal import p_roots
-from auxiliary import semiCirle
+from auxiliary import semiCirle, obtainProjections
 import matplotlib.pyplot as plt
 
 def calcAtomicMagmom(hr:reader.Hr,atomicOrbIndexList:list,
         kgrid=[1,1,1],fermi=0.0,nGaussian=20,eta=0.0001,nthreads=1):
     '''
-    Calculate the atomic charges and magnetization, using lattice Green's function
+    Calculate the atomic charges and magnetization, using retarded lattice Green's function
     '''
     gr=Green()
     print("Diagnolizing Hamiltonian")
@@ -30,7 +30,7 @@ def calcAtomicMagmom(hr:reader.Hr,atomicOrbIndexList:list,
 
     rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
         hr,eigs_addr,vecs_addr,np.arange(hr.norb),
-        kgrid=kgrid,omega_list=z,lat_vecs=[(0,0,0)],eta=0.0001,spinor=True,
+        kgrid=kgrid,omega_list=z,lat_vecs=[(0,0,0)],eta=eta,spinor=True,
         nthreads=nthreads)
 
     diag_list=np.array([np.diag(rG_w_lat[iw][0])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
@@ -65,29 +65,24 @@ def calcAtomicMagmom(hr:reader.Hr,atomicOrbIndexList:list,
 
 pR.readPOS('./mcalc/CrI3Tube/POSCAR')
 
+projections=[
+    "Cr:d",
+    "I:p"
+]
+atomicOrbIndexList=obtainProjections("./mcalc/CrI3Tube/POSCAR",projections=projections,soc=True)
 nCr, nI= pR.nions
-atomicOrbIndexList=[]
-iorb, norb= 0, 224
-for iCr in range(nCr):
-    atomicOrbIndexList.append([[],[],[iorb,iorb+1,iorb+2,iorb+3,iorb+4,iorb+norb,iorb+1+norb,iorb+2+norb,iorb+3+norb,iorb+4+norb]])
-    iorb+=5
-for iI in range(nI):
-    atomicOrbIndexList.append([[],[iorb,iorb+1,iorb+2,iorb+norb,iorb+1+norb,iorb+2+norb]])
-    iorb+=3
-
 atomicMagMomList=[]
 for iCr in range(nCr):
     pos_relative = pR.pos_ions[iCr][:2]-np.array([0.5,0.5])
     pos_n=pos_relative/np.sqrt(pos_relative@pos_relative)
     mag=np.array([pos_n[1],-pos_n[0],0])
     atomicMagMomList.append(mag)
-
 atomicMagMomList+=[np.zeros(3) for iI in range(nI)]
 
 hr=reader.Hr()
 hr.readSingleFile('./mcalc/CrI3Tube/wannier90_hr.m_theta.dat',ignoreImagPart=False,cutoff=-0.1)
-#hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
-#                  spinor=True,saxis=np.array([0,0,-1]),atomicMagMomList=atomicMagMomList)
+hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
+                  spinor=True,saxis=np.array([0,0,-1]),atomicMagMomList=atomicMagMomList)
 
 rho_list,mx_list,my_list,mz_list=calcAtomicMagmom(hr,atomicOrbIndexList,
             kgrid=[1,1,4],fermi=-2.5,nGaussian=20,eta=0.0001,nthreads=4)
