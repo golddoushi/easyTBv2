@@ -165,7 +165,9 @@ class Response:
     def __init__(self) -> None:
         pass
 
-    def calcBerryCurvBands_CDLL(self,hr,mainDir=None,fermi=0,saveFig=True,kplane=[[1,0,0],[0,1,0]],nthreads=1):
+    def calcBerryCurvBands_CDLL(
+        self,hr,atomicOrbIndexList:list,
+        mainDir=None,fermi=0,saveFig=True,kplane=[[1,0,0],[0,1,0]],nthreads=1):
         # prepare input parameters for cdll
         kaxis=[]
         time0=time.time()
@@ -204,15 +206,33 @@ class Response:
             c_hopping_real[ibond]=c_double(bond.t.real)
             c_hopping_imag[ibond]=c_double(bond.t.imag)
         
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
+
+        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+            for L in atom:
+                for iorb in L: orbCorrList[iorb]=pos
+        #assert len(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        c_orbCorrList=(c_double*(3*hr.norb))()
+        for i in range(hr.norb):
+            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
+            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
+            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
+        
         hamDLL=CDLL("./ham.dll")
-        print("Error: we should rewrite this part")
-        print(" the function calcFullBandsAndVecs is not proper")
-        exit()
-        hamDLL.calcFullBandsAndVecs.restype=py_object
-        result=hamDLL.calcFullBandsAndVecs(c_int(nkpts),c_kmesh,
-                        c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
-                        c_int(nthreads))
+        print("Warning: test is not enough, be cautious!")
+        hamDLL.calcBandsVecsVelocityOps.restype=py_object
+        result=hamDLL.calcBandsVecsVelocityOps(
+            c_int(nkpts),c_kmesh,
+            c_int(hr.norb),c_int(nhoppings),
+            c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+            c_lat,c_orbCorrList,
+            c_int(nthreads))
         #print(result.shape)
         _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i=result
         
@@ -280,7 +300,7 @@ class Response:
             #plt.scatter(ikpt,c_xyz,c='black')
             berryCurv.append(c_xyz)
         #plt.plot([paramReader.FERMI-paramReader.DFERMI,paramReader.FERMI+paramReader.DFERMI],[0,0],'--',linewidth=3)
-        
+        if not saveFig: return
         plt.figure()
         plt.plot([ikpt for ikpt in range(nkpts)],berryCurv)
         plt.xlim(0,nkpts-1)
@@ -1873,7 +1893,8 @@ class Response:
         hamDLL.calcBandsVecsVelocityOps.restype=py_object
         result=hamDLL.calcBandsVecsVelocityOps(c_int(nkpts),c_kmesh,
                         c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,c_lat,c_orbCorrList,
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_lat,c_orbCorrList,
                         c_int(nthreads))
         #print(result.shape)
         _eigList,_vec_r,_vec_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i=result
