@@ -63,13 +63,14 @@ def calcAtomicMagmom(hr:reader.Hr,atomicOrbIndexList:list,
         mz_list.append(sum(sz_of_atom))
     return rho_list,mx_list,my_list,mz_list
 
-pR.readPOS('./mcalc/CrI3Tube/POSCAR')
+mainDir='./mcalc/CrI3Tube/'
+pR.readPOS(mainDir+'POSCAR')
 
 projections=[
     "Cr:d",
     "I:p"
 ]
-atomicOrbIndexList=obtainProjections("./mcalc/CrI3Tube/POSCAR",projections=projections,soc=True)
+atomicOrbIndexList=obtainProjections(mainDir+"POSCAR",projections=projections,soc=True)
 nCr, nI= pR.nions
 atomicMagMomList=[]
 for iCr in range(nCr):
@@ -80,7 +81,7 @@ for iCr in range(nCr):
 atomicMagMomList+=[np.zeros(3) for iI in range(nI)]
 
 hr=reader.Hr()
-hr.readSingleFile('./mcalc/CrI3Tube/wannier90_hr.m_theta.dat',ignoreImagPart=False,cutoff=-0.1)
+hr.readSingleFile(mainDir+'wannier90_hr.m_theta.dat',ignoreImagPart=False,cutoff=-0.1)
 hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
                   spinor=True,saxis=np.array([0,0,-1]),atomicMagMomList=atomicMagMomList)
 

@@ -9,7 +9,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from auxiliary import RToSpinor
 
-pR.readPOS('./mcalc/CrI3Tube/POSCAR')
+mainDir='./mcalc/CrI3Tube/'
+pR.readPOS(mainDir+'POSCAR')
 
 res=Response()
 # data structure atomicOrbIndexList[atom index][Lz][orb index]: give the orb. index corr. to hr.dat
@@ -40,24 +41,24 @@ for iCr in range(nCr):
 atomicMagMomList+=[np.zeros(3) for iI in range(nI)]
 
 hr=reader.Hr()
-hr.readSingleFile('./mcalc/CrI3Tube/wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
+hr.readSingleFile(mainDir+'wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1)
 hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
                   spinor=True,saxis=np.array([0,0,-1]),atomicMagMomList=atomicMagMomList)
 #exit()
 gr=Green()
-gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/CrI3Tube/',saveFig=True,redBands=[1,2])
+gr.calcFullBands_CDLL(hr,fermi=0,mainDir=mainDir,saveFig=True,redBands=[1,2])
 exit()
 #atomicOrbIndexList=hr.make_supercell([2,0,0],[0,2,0],[0,0,1],atomicOrbIndexList=atomicOrbIndexList,soc=True)
 #hr.adjustSOCStrength(socFactor=1.0)
 # NOTE check the fermi in GlobalConst first
-res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir='./mcalc/CrI3Tube/',
+res.calcBulkPhotovoltaicConductor_CDLL(hr,mainDir=mainDir,
         atomicOrbIndexList=atomicOrbIndexList,
         kgrid=[1,1,800],omegaList=np.linspace(0.5,3.5,101),tau=0.003,erange=[-8,3],
         show=False,ndivide=5,nthreads=16,full_mat=True)
 exit()
 '''
 res.calcProjectiveBulkPhotovoltaicConductor_CDLL(hr,
-    mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[1600,1600,1],omegaList=np.linspace(1.5,3.5,100),tau=0.001,erange=[-8,3],
+    mainDir=mainDir,atomicOrbIndexList=atomicOrbIndexList,kgrid=[1600,1600,1],omegaList=np.linspace(1.5,3.5,100),tau=0.001,erange=[-8,3],
     proj_op=[
         [[0,1,2],[0,1,2]], # full vel
         ],
@@ -69,7 +70,7 @@ exit()
 '''
 '''
 res.calcOrbitalProjectiveBulkPhotovoltaicConductor_CDLL(hr,
-    mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[1600,1600,1],omegaList=np.linspace(1.5,3.5,100),tau=0.001,erange=[-8,3],
+    mainDir=mainDir,atomicOrbIndexList=atomicOrbIndexList,kgrid=[1600,1600,1],omegaList=np.linspace(1.5,3.5,100),tau=0.001,erange=[-8,3],
     proj_op=[
         [[0,1,2],[0,1,2]], # full vel
         ],
@@ -80,7 +81,7 @@ res.calcOrbitalProjectiveBulkPhotovoltaicConductor_CDLL(hr,
 exit()
 '''
 res.calcSpinProjectiveBulkPhotovoltaicConductor_CDLL(hr,
-    mainDir='./mcalc/FeCl2/',atomicOrbIndexList=atomicOrbIndexList,kgrid=[1600,1600,1],omegaList=np.linspace(1.5,3.5,100),tau=0.001,erange=[-8,3],
+    mainDir=mainDir,atomicOrbIndexList=atomicOrbIndexList,kgrid=[1600,1600,1],omegaList=np.linspace(1.5,3.5,100),tau=0.001,erange=[-8,3],
     proj_op=[
         [[0,1,2],[0,1,2]], # full vel
         ],
