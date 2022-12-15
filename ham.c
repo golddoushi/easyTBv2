@@ -234,61 +234,32 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                        double hopping_imag[nhoppings],
                        int _nthreads){
     double * Spectra_tmp=(double*)malloc(nkpt*norbs*sizeof(double));
-    double * Hk_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dk1_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dk1_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dk2_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dk2_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dk3_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dk3_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
     double * Vector_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
     double * Vector_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
     int nthreads;
     nthreads=_nthreads;
-    if(nkpt<_nthreads*10)nthreads=1;
+    if(nkpt<_nthreads*3)nthreads=1;
     printf("use %d cores in ham.dll::calcFullBandsAndVecs\n",nthreads);
     // calculate matrix elements
     int index;
     #pragma omp parallel num_threads(nthreads)
     {
         lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk
-        lapack_complex_double * Dhk=(lapack_complex_double*)malloc(norbs*norbs*3*sizeof(lapack_complex_double)); // init DHk
         double * eigs=(double*)malloc(norbs*sizeof(double)); // output eigenvalues of Hk
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
             //int kBaseIndex=ikpt*norbs*norbs;
-            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++){hk[i*norbs+j]=0;for(int k=0;k<3;k++)Dhk[i*3*norbs+j*3+k]=0;}
+            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++)hk[i*norbs+j]=0;
             //printf("hoppings\n");
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 double phase=0;
                 for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
-                //printf("bond%d [",ihopping);
-                //for (int i=0;i<3;i++) printf("%d ",overLat[ihopping][i]);
-                //printf("] %d ~ %d",sourceID[ihopping],targetID[ihopping]);
-                //double phase_tmp=0;
-                //for (int i=0;i<3;i++) phase_tmp+=overLat[ihopping][i]*kmesh[ikpt][i];
-                //printf(" phase: %.4f 2pi t: %.4f %.4f\n",phase_tmp,hopping_real[ihopping],hopping_imag[ihopping]);
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*_Complex_I*phase);
                 hk[sourceID[ihopping]*norbs+targetID[ihopping]]+=tk;
-                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
-                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
-                Dhk[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
             }
-            for(int iorb=0;iorb<norbs;iorb++){
-                for(int jorb=0;jorb<norbs;jorb++){
-                    index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    Hk_r_tmp[index]=creal(hk[iorb*norbs+jorb]);
-                    Hk_i_tmp[index]=cimag(hk[iorb*norbs+jorb]);
-                    Hk_dk1_r_tmp[index]=creal(Dhk[iorb*norbs*3+jorb*3+0]);
-                    Hk_dk1_i_tmp[index]=cimag(Dhk[iorb*norbs*3+jorb*3+0]);
-                    Hk_dk2_r_tmp[index]=creal(Dhk[iorb*norbs*3+jorb*3+1]);
-                    Hk_dk2_i_tmp[index]=cimag(Dhk[iorb*norbs*3+jorb*3+1]);
-                    Hk_dk3_r_tmp[index]=creal(Dhk[iorb*norbs*3+jorb*3+2]);
-                    Hk_dk3_i_tmp[index]=cimag(Dhk[iorb*norbs*3+jorb*3+2]);
-                }
-            }
+            
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,hk,norbs,eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
             //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
@@ -301,18 +272,10 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
                 }
             }
         }
-        free(hk);free(Dhk);free(eigs);
+        free(hk);free(eigs);
     }
 
     PyObject * Spectra=PyTuple_New(nkpt*norbs);
-    PyObject * Hk_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk1_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk1_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk2_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk2_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk3_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dk3_i=PyTuple_New(nkpt*norbs*norbs);
     PyObject * Vector_r=PyTuple_New(nkpt*norbs*norbs);
     PyObject * Vector_i=PyTuple_New(nkpt*norbs*norbs);
 
@@ -321,24 +284,140 @@ PyObject * calcFullBandsAndVecs(int nkpt, double kmesh[nkpt][3],
         for(int iorb=0;iorb<norbs;iorb++){
             for(int jorb=0;jorb<norbs;jorb++){
                 index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(Hk_r_tmp[index]));
-                PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(Hk_i_tmp[index]));
-                PyTuple_SetItem(Hk_dk1_r, index, PyFloat_FromDouble(Hk_dk1_r_tmp[index]));
-                PyTuple_SetItem(Hk_dk1_i, index, PyFloat_FromDouble(Hk_dk1_i_tmp[index]));
-                PyTuple_SetItem(Hk_dk2_r, index, PyFloat_FromDouble(Hk_dk2_r_tmp[index]));
-                PyTuple_SetItem(Hk_dk2_i, index, PyFloat_FromDouble(Hk_dk2_i_tmp[index]));
-                PyTuple_SetItem(Hk_dk3_r, index, PyFloat_FromDouble(Hk_dk3_r_tmp[index]));
-                PyTuple_SetItem(Hk_dk3_i, index, PyFloat_FromDouble(Hk_dk3_i_tmp[index]));
                 PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(Vector_r_tmp[index]));
                 PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(Vector_i_tmp[index]));
                 //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
             }
         }
     }
-    return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dk1_r,Hk_dk1_i,Hk_dk2_r,Hk_dk2_i,Hk_dk3_r,Hk_dk3_i);
+    return Py_BuildValue("(OOO)",Spectra,Vector_r,Vector_i);
 }
 
-// ******** Green's function part
+PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       int overLat[nhoppings][3], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings],
+                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
+                       double orbCorr[norbs][3], // fractional corrdinates of orbs
+                       int _nthreads){
+    double * Spectra_tmp=(double*)malloc(nkpt*norbs*sizeof(double));
+    double * Hk_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAx_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAx_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAy_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAy_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAz_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Hk_dAz_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Vector_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    double * Vector_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
+    int nthreads;
+    nthreads=_nthreads;
+    if(nkpt<_nthreads*3)nthreads=1;
+    printf("use %d cores in ham.dll\n",nthreads);
+    // calculate matrix elements
+    #pragma omp parallel num_threads(nthreads)
+    {
+        #pragma omp for
+        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+            lapack_complex_double hk[norbs][norbs]; // init Hk
+            lapack_complex_double Vk[norbs][norbs][3]; // init DHkDk_1,2,3
+            lapack_complex_double Vxyz[norbs][norbs][3]; // init DHkDk_1,2,3
+            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++){
+                hk[i][j]=0;
+                for(int k=0;k<3;k++){
+                    Vk[i][j][k]=0;
+                    Vxyz[i][j][k]=0;
+                }
+            }
+            double eigs[norbs]; // output eigenvalues of Hk
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                double phase=0;
+                for (int i=0;i<3;i++) phase+=(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i])*kmesh[ikpt][i];
+                //for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
+                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*_Complex_I*phase);
+                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
+                Vk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(TwoPI*_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
+                Vk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(TwoPI*_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
+                Vk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(TwoPI*_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
+            }
+            // unitary transform into real space partial
+            for(int i=0;i<norbs;i++){
+                for(int j=0;j<norbs;j++){
+                    for(int k=0;k<3;k++){
+                        Vxyz[i][j][0]+=Vk[i][j][k]*lattice[k][0];
+                        Vxyz[i][j][1]+=Vk[i][j][k]*lattice[k][1];
+                        Vxyz[i][j][2]+=Vk[i][j][k]*lattice[k][2];
+                    }
+                }
+            }
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    int index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    Hk_r_tmp[index]=creal(hk[iorb][jorb]);
+                    Hk_i_tmp[index]=cimag(hk[iorb][jorb]);
+                    Hk_dAx_r_tmp[index]=creal(Vxyz[iorb][jorb][0]);
+                    Hk_dAx_i_tmp[index]=cimag(Vxyz[iorb][jorb][0]);
+                    Hk_dAy_r_tmp[index]=creal(Vxyz[iorb][jorb][1]);
+                    Hk_dAy_i_tmp[index]=cimag(Vxyz[iorb][jorb][1]);
+                    Hk_dAz_r_tmp[index]=creal(Vxyz[iorb][jorb][2]);
+                    Hk_dAz_i_tmp[index]=cimag(Vxyz[iorb][jorb][2]);
+                }
+            }
+            
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
+            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
+            //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
+            for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    int index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                    Vector_r_tmp[index]=creal(hk[iorb][jorb]);
+                    Vector_i_tmp[index]=cimag(hk[iorb][jorb]);
+                }
+            }
+        }
+    }
+
+    PyObject * Spectra=PyTuple_New(nkpt*norbs);
+    PyObject * Hk_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAx_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAx_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAy_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAy_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAz_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Hk_dAz_i=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Vector_r=PyTuple_New(nkpt*norbs*norbs);
+    PyObject * Vector_i=PyTuple_New(nkpt*norbs*norbs);
+
+    for(int ikpt=0;ikpt<nkpt;ikpt++){
+        for(int iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(Spectra_tmp[ikpt*norbs+iorb]));
+        for(int iorb=0;iorb<norbs;iorb++){
+            for(int jorb=0;jorb<norbs;jorb++){
+                int index=ikpt*norbs*norbs+iorb*norbs+jorb;
+                PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(Hk_r_tmp[index]));
+                PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(Hk_i_tmp[index]));
+                PyTuple_SetItem(Hk_dAx_r, index, PyFloat_FromDouble(Hk_dAx_r_tmp[index]));
+                PyTuple_SetItem(Hk_dAx_i, index, PyFloat_FromDouble(Hk_dAx_i_tmp[index]));
+                PyTuple_SetItem(Hk_dAy_r, index, PyFloat_FromDouble(Hk_dAy_r_tmp[index]));
+                PyTuple_SetItem(Hk_dAy_i, index, PyFloat_FromDouble(Hk_dAy_i_tmp[index]));
+                PyTuple_SetItem(Hk_dAz_r, index, PyFloat_FromDouble(Hk_dAz_r_tmp[index]));
+                PyTuple_SetItem(Hk_dAz_i, index, PyFloat_FromDouble(Hk_dAz_i_tmp[index]));
+                PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(Vector_r_tmp[index]));
+                PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(Vector_i_tmp[index]));
+                //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
+            }
+        }
+    }
+    return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i);
+}
+
+//***************************************************//
+//             Green's function part                 //
+//***************************************************//
 // Auxiliary func, mod, especially for negative mod
 int mod(int a, int b){
     int result=a%b;
@@ -350,9 +429,9 @@ int constructKAxis(int nk1, int nk2, int nk3, lapack_complex_double k1_axis[nk1]
     int nkpt=nk1*nk2*nk3;//kgrid[0]*kgrid[1]*kgrid[2];
     double dk[3]={1./nk1,1./nk2,1./nk3};
     //int kxy=nk1*nk2;
-    lapack_complex_double k1_a=cexp(-TwoPI*_Complex_I*dk[0]);
-    lapack_complex_double k2_a=cexp(-TwoPI*_Complex_I*dk[1]);
-    lapack_complex_double k3_a=cexp(-TwoPI*_Complex_I*dk[2]);
+    lapack_complex_double k1_a=cexp(TwoPI*_Complex_I*dk[0]);
+    lapack_complex_double k2_a=cexp(TwoPI*_Complex_I*dk[1]);
+    lapack_complex_double k3_a=cexp(TwoPI*_Complex_I*dk[2]);
     lapack_complex_double base=1.0;
     for(int ik=0;ik<nk1;ik++){
         k1_axis[ik]=base;
@@ -666,128 +745,6 @@ PyObject * calcRetardedLatticeGreensFunction(
 }
 /*  End of Lattice Green's Function  */
 
-PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
-                       int norbs, int nhoppings,
-                       int sourceID[nhoppings], int targetID[nhoppings], 
-                       int overLat[nhoppings][3], 
-                       double hopping_real[nhoppings],
-                       double hopping_imag[nhoppings],
-                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
-                       double orbCorr[norbs][3], // fractional corrdinates of orbs
-                       int _nthreads){
-    double * Spectra_tmp=(double*)malloc(nkpt*norbs*sizeof(double));
-    double * Hk_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dAx_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dAx_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dAy_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dAy_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dAz_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Hk_dAz_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Vector_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    double * Vector_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
-    int nthreads;
-    nthreads=_nthreads;
-    if(nkpt<_nthreads*10)nthreads=1;
-    printf("use %d cores in ham.dll\n",nthreads);
-    // calculate matrix elements
-    #pragma omp parallel num_threads(nthreads)
-    {
-        #pragma omp for
-        for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
-            lapack_complex_double hk[norbs][norbs]; // init Hk
-            lapack_complex_double Vk[norbs][norbs][3]; // init DHkDk_1,2,3
-            lapack_complex_double Vxyz[norbs][norbs][3]; // init DHkDk_1,2,3
-            for(int i=0;i<norbs;i++)for(int j=0;j<norbs;j++){
-                hk[i][j]=0;
-                for(int k=0;k<3;k++){
-                    Vk[i][j][k]=0;
-                    Vxyz[i][j][k]=0;
-                }
-            }
-            double eigs[norbs]; // output eigenvalues of Hk
-            for(int ihopping=0;ihopping<nhoppings;ihopping++){
-                double phase=0;
-                for (int i=0;i<3;i++) phase+=(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i])*kmesh[ikpt][i];
-                //for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh[ikpt][i];
-                lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
-                hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                Vk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I)*(overLat[ihopping][0]+orbCorr[targetID[ihopping]][0]-orbCorr[sourceID[ihopping]][0]);
-                Vk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I)*(overLat[ihopping][1]+orbCorr[targetID[ihopping]][1]-orbCorr[sourceID[ihopping]][1]);
-                Vk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I)*(overLat[ihopping][2]+orbCorr[targetID[ihopping]][2]-orbCorr[sourceID[ihopping]][2]);
-            }
-            // unitary transform into real space partial
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    for(int k=0;k<3;k++){
-                        Vxyz[i][j][0]+=Vk[i][j][k]*lattice[k][0];
-                        Vxyz[i][j][1]+=Vk[i][j][k]*lattice[k][1];
-                        Vxyz[i][j][2]+=Vk[i][j][k]*lattice[k][2];
-                    }
-                }
-            }
-            for(int iorb=0;iorb<norbs;iorb++){
-                for(int jorb=0;jorb<norbs;jorb++){
-                    int index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    Hk_r_tmp[index]=creal(hk[iorb][jorb]);
-                    Hk_i_tmp[index]=cimag(hk[iorb][jorb]);
-                    Hk_dAx_r_tmp[index]=creal(Vxyz[iorb][jorb][0]);
-                    Hk_dAx_i_tmp[index]=cimag(Vxyz[iorb][jorb][0]);
-                    Hk_dAy_r_tmp[index]=creal(Vxyz[iorb][jorb][1]);
-                    Hk_dAy_i_tmp[index]=cimag(Vxyz[iorb][jorb][1]);
-                    Hk_dAz_r_tmp[index]=creal(Vxyz[iorb][jorb][2]);
-                    Hk_dAz_i_tmp[index]=cimag(Vxyz[iorb][jorb][2]);
-                }
-            }
-            
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
-            if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-            //printf("kpt%d %.3f %.3f %.3f eigs: %.4f %.4f %.4f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2],eigs[0],eigs[1],eigs[2]);
-            for(int iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
-            for(int iorb=0;iorb<norbs;iorb++){
-                for(int jorb=0;jorb<norbs;jorb++){
-                    int index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                    Vector_r_tmp[index]=creal(hk[iorb][jorb]);
-                    Vector_i_tmp[index]=cimag(hk[iorb][jorb]);
-                }
-            }
-        }
-    }
-
-    PyObject * Spectra=PyTuple_New(nkpt*norbs);
-    PyObject * Hk_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dAx_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dAx_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dAy_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dAy_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dAz_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Hk_dAz_i=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Vector_r=PyTuple_New(nkpt*norbs*norbs);
-    PyObject * Vector_i=PyTuple_New(nkpt*norbs*norbs);
-
-    for(int ikpt=0;ikpt<nkpt;ikpt++){
-        for(int iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(Spectra_tmp[ikpt*norbs+iorb]));
-        for(int iorb=0;iorb<norbs;iorb++){
-            for(int jorb=0;jorb<norbs;jorb++){
-                int index=ikpt*norbs*norbs+iorb*norbs+jorb;
-                PyTuple_SetItem(Hk_r, index, PyFloat_FromDouble(Hk_r_tmp[index]));
-                PyTuple_SetItem(Hk_i, index, PyFloat_FromDouble(Hk_i_tmp[index]));
-                PyTuple_SetItem(Hk_dAx_r, index, PyFloat_FromDouble(Hk_dAx_r_tmp[index]));
-                PyTuple_SetItem(Hk_dAx_i, index, PyFloat_FromDouble(Hk_dAx_i_tmp[index]));
-                PyTuple_SetItem(Hk_dAy_r, index, PyFloat_FromDouble(Hk_dAy_r_tmp[index]));
-                PyTuple_SetItem(Hk_dAy_i, index, PyFloat_FromDouble(Hk_dAy_i_tmp[index]));
-                PyTuple_SetItem(Hk_dAz_r, index, PyFloat_FromDouble(Hk_dAz_r_tmp[index]));
-                PyTuple_SetItem(Hk_dAz_i, index, PyFloat_FromDouble(Hk_dAz_i_tmp[index]));
-                PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(Vector_r_tmp[index]));
-                PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(Vector_i_tmp[index]));
-                //if(ikpt==0)printf("%.6e %.6e, ",creal(Dhk[iorb][jorb][0]),cimag(Dhk[iorb][jorb][0]));
-            }
-        }
-    }
-    return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i);
-}
-
 PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
                        int norbs, int nhoppings,
                        int sourceID[nhoppings], int targetID[nhoppings], 
@@ -808,7 +765,7 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
     printf("estimated memory: %d MB\n",(nkpt*norbs*(sizeof(double)+7*norbs*sizeof(lapack_complex_double)))/1024/1024);
     int nthreads;
     nthreads=_nthreads;
-    if(nkpt<_nthreads*10)nthreads=1;
+    if(nkpt<_nthreads*3)nthreads=1;
     printf("use %d cores in ham.dll\n",nthreads);
     #pragma omp parallel num_threads(nthreads)
     {
@@ -818,10 +775,6 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
-            //int kBaseIndex=ikpt*norbs*norbs;
-            //lapack_complex_double _hk[norbs][norbs]; // init Hk
-            //lapack_complex_double _dhkdkxyz[norbs][norbs][3];
-            //lapack_complex_double _dhkdkxdky[norbs][norbs][3][3];
             for(int i=0;i<norbs;i++){
                 for(int j=0;j<norbs;j++){
                     _hk[i*norbs+j]=0;
@@ -834,7 +787,7 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
             //printf("hoppings\n");
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 lapack_complex_double hopping_R[3];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
                 
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
@@ -849,20 +802,8 @@ PyObject * calcFullBandsAndVecsInMemory(int nkpt, double kmesh[nkpt][3],
                 for(int i=0;i<2;i++) _dhkdkxyz[sourceID[ihopping]*3*norbs+targetID[ihopping]*3+i]+=tk*hopping_R_c[i];
                 for(int i=0;i<2;i++)for(int j=0;j<2;j++)_dhkdkxdky[sourceID[ihopping]*9*norbs+targetID[ihopping]*9+i*3+j]+=tk*hopping_R_c[i]*hopping_R_c[j];
             }
-            //printf("kpt%d %.3f %.3f %.3f hamk:\n",ikpt,kmesh[ikpt][0],kmesh[ikpt][1],kmesh[ikpt][2]);
-            //for(int i=0;i<norbs;i++){
-            //    for(int j=0;j<norbs;j++)printf("%f %f,",creal(_hk[i][j]),cimag(_hk[i][j]));
-            //    printf("\n");
-            //}
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','U',norbs,_hk,norbs,_eigs);
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
-            //printf("eigs:");
-            //for(int i=0;i<norbs;i++)printf(" %.4f",_eigs[i]);
-            //printf(" vec:\n");
-            //for(int i=0;i<norbs;i++){
-            //    for(int j=0;j<norbs;j++)printf("%f %f,",creal(_hk[i][j]),cimag(_hk[i][j]));
-            //    printf("\n");
-            //}
             for(int iorb=0;iorb<norbs;iorb++) eigs[ikpt*norbs+iorb]=_eigs[iorb];
             for(int iorb=0;iorb<norbs;iorb++){
                 for(int jorb=0;jorb<norbs;jorb++){
@@ -1488,11 +1429,11 @@ PyObject * calcSpinHallCond(int nkpt, double kmesh[nkpt][3], double dk[3], int n
                             double phase=0;
                             //for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*subkmesh[isubkpt][i];
                             for (int i=0;i<3;i++) phase+=overLat[ihopping][i]*kmesh_for_process[ikpt*3+i];
-                            lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(-TwoPI*_Complex_I*phase);
+                            lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*_Complex_I*phase);
                             hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
-                            Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][0]);
-                            Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][1]);
-                            Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(-TwoPI*_Complex_I*overLat[ihopping][2]);
+                            Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*(TwoPI*_Complex_I*overLat[ihopping][0]);
+                            Dhk[sourceID[ihopping]][targetID[ihopping]][1]+=tk*(TwoPI*_Complex_I*overLat[ihopping][1]);
+                            Dhk[sourceID[ihopping]][targetID[ihopping]][2]+=tk*(TwoPI*_Complex_I*overLat[ihopping][2]);
                         }
                         // construct DHk/Dx,Dy
                         for(int i=0;i<norbs;i++){
@@ -1782,7 +1723,7 @@ int _calcSpinBandsAndProjectedVelocities_Full(
                 lapack_complex_double hopping_R[3];
                 isource=sourceID[ihopping];
                 itarget=targetID[ihopping];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=(_Complex_I)*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
 
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt*3+i];
@@ -2155,7 +2096,7 @@ PyObject * calcJointDOS(int nkpt, double kmesh[nkpt][3],
             double eigs[norbs]; // output eigenvalues of Hk
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 lapack_complex_double hopping_R[3];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=(_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
                 lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
@@ -2268,21 +2209,13 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
             lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double));
             lapack_complex_double * DhkDkf=(lapack_complex_double*)malloc(norbs*norbs*3*sizeof(lapack_complex_double));
             lapack_complex_double * DhkDkc=(lapack_complex_double*)malloc(norbs*norbs*2*sizeof(lapack_complex_double));
-            int ipos,ipos1,ipos2,ipos3,ipos4,ipos1_s,ipos2_s,ipos3_s,ipos4_s;
+            unsigned long long ipos;
             #pragma omp for
             for(int ikpt=0;ikpt<nkpt_part;ikpt++){// loop over kmesh
-                //lapack_complex_double hk[norbs][norbs]; // init Hk
-                //lapack_complex_double Dhk[norbs][norbs][3]; // init DHk/Dk1,Dk2
-                //lapack_complex_double DhkDkxy[norbs][norbs][2]; // init DHk/Dkx,Dky
                 double Em, En;
                 for(int i=0;i<norbs;i++){
                     for(int j=0;j<norbs;j++){
                         hk[i*norbs+j]=0;
-                        //Dhk[i][j][0]=0;
-                        //Dhk[i][j][1]=0;
-                        //Dhk[i][j][2]=0;
-                        //DhkDkxy[i][j][0]=0;
-                        //DhkDkxy[i][j][1]=0;
                         DhkDkf[i*norbs*3+j*3+0]=0;
                         DhkDkf[i*norbs*3+j*3+1]=0;
                         DhkDkf[i*norbs*3+j*3+2]=0;
@@ -2294,15 +2227,13 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
                 double eigs[norbs]; // output eigenvalues of Hk
                 for(int ihopping=0;ihopping<nhoppings;ihopping++){
                     lapack_complex_double hopping_R[3];
-                    for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                    for(int i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
                 
                     lapack_complex_double phase=0;
                     for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt_head+ikpt][i];
                 
                     lapack_complex_double tk=(hopping_real[ihopping]+hopping_imag[ihopping]*_Complex_I)*cexp(TwoPI*phase);
-                    //hk[sourceID[ihopping]][targetID[ihopping]]+=tk;
                     hk[sourceID[ihopping]*norbs+targetID[ihopping]]+=tk;
-                    //for(int i=0;i<3;i++)Dhk[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R[i];
                     for(int i=0;i<3;i++)DhkDkf[sourceID[ihopping]*norbs*3+targetID[ihopping]*3+i]+=tk*hopping_R[i];
                 }
             
@@ -2310,8 +2241,6 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
                 for(int i=0;i<norbs;i++){
                     for(int j=0;j<norbs;j++){
                         for(int k=0;k<3;k++){
-                            //DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
-                            //DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
                             DhkDkc[i*norbs*2+j*2+0]+=DhkDkf[i*norbs*3+j*3+k]*lattice[k][0];
                             DhkDkc[i*norbs*2+j*2+1]+=DhkDkf[i*norbs*3+j*3+k]*lattice[k][1];
                         }
@@ -2334,7 +2263,6 @@ PyObject * calcBulkPhotovoltaicCond_memoryReduce(int nkpt, double kmesh[nkpt][3]
                             velocity[ipos]=0;
                             for(int icontract=0;icontract<norbs;icontract++){
                                 for(int jcontract=0;jcontract<norbs;jcontract++){
-                                    //velocity[ipos]+=conj(hk[icontract*norbs+bandm])*DhkDkxy[icontract][jcontract][idir]*hk[jcontract*norbs+bandn];
                                     velocity[ipos]+=conj(hk[icontract*norbs+bandm])*DhkDkc[icontract*norbs*2+jcontract*2+idir]*hk[jcontract*norbs+bandn];
                                 }
                             }
@@ -2508,7 +2436,7 @@ PyObject * calcBulkPhotovoltaicCond_FullMatrices_memoryReduce(
                 double eigs[norbs]; // output eigenvalues of Hk
                 for(ihopping=0;ihopping<nhoppings;ihopping++){
                     lapack_complex_double hopping_R[3];
-                    for(i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                    for(i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
                 
                     lapack_complex_double phase=0;
                     for (i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt_head+ikpt][i];
@@ -2730,7 +2658,7 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
             double eigs[norbs]; // output eigenvalues of Hk
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 lapack_complex_double hopping_R[3];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
 
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
@@ -2749,7 +2677,7 @@ PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
             // vec[i]=hk[:][i]
             if(info!=0)printf("LAPACKE failed, info: %d\n",info);
 
-            int ipos;
+            unsigned long long ipos;
             for(int bandm=0;bandm<norbs;bandm++){
                 energy[ikpt*norbs+bandm]=eigs[bandm];
                 for(int bandn=0;bandn<norbs;bandn++){
@@ -2980,7 +2908,7 @@ PyObject * calcInjectCond(int nkpt, double kmesh[nkpt][3], double dk[3],
             double eigs[norbs]; // output eigenvalues of Hk
             for(int ihopping=0;ihopping<nhoppings;ihopping++){
                 lapack_complex_double hopping_R[3];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[targetID[ihopping]][i]-orbCorr[sourceID[ihopping]][i]);
 
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt][i];
@@ -2994,22 +2922,6 @@ PyObject * calcInjectCond(int nkpt, double kmesh[nkpt][3], double dk[3],
                 //for(int i=0;i<3;i++) Dhk[sourceID[ihopping]][targetID[ihopping]][0]+=tk*hopping_R[i];
                 for(int i=0;i<2;i++) DhkDkxy[sourceID[ihopping]][targetID[ihopping]][i]+=tk*hopping_R_c[i];
             }
-            // unitary transform into real space partial, note each lattice[k] represent one crystal vector with three xyz components
-            /*
-            for(int i=0;i<norbs;i++){
-                for(int j=0;j<norbs;j++){
-                    for(int k=0;k<3;k++){
-                        DhkDkxy[i][j][0]+=Dhk[i][j][k]*lattice[k][0];
-                        DhkDkxy[i][j][1]+=Dhk[i][j][k]*lattice[k][1];
-                        for(int p=0;p<3;p++){
-                            DhkDk1xyDk2xy[i][j][0][0]+=Dhk1k2[i][j][k][p]*lattice[k][0]*lattice[k][0];
-                            DhkDk1xyDk2xy[i][j][0][1]+=Dhk1k2[i][j][k][p]*lattice[k][0]*lattice[k][1];
-                            DhkDk1xyDk2xy[i][j][1][0]+=Dhk1k2[i][j][k][p]*lattice[k][1]*lattice[k][0];
-                            DhkDk1xyDk2xy[i][j][1][1]+=Dhk1k2[i][j][k][p]*lattice[k][1]*lattice[k][1];
-                        }
-                    }
-                }
-            }*/
 
             int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,*hk,norbs,eigs);
             // vec[i]=hk[:][i]
@@ -3146,7 +3058,7 @@ int _calcBandsAndProjectedVelocities(
         lapack_complex_double * hk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double));
         lapack_complex_double * DhkDkf=(lapack_complex_double*)malloc(nProj*norbs*norbs*3*sizeof(lapack_complex_double));
         lapack_complex_double * DhkDkc=(lapack_complex_double*)malloc(nProj*norbs*norbs*2*sizeof(lapack_complex_double));
-        int ipos;
+        unsigned long long ipos;
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //lapack_complex_double hk[norbs][norbs]; // init Hk
@@ -3170,7 +3082,7 @@ int _calcBandsAndProjectedVelocities(
                 lapack_complex_double hopping_R[3];
                 isource=sourceID[ihopping];
                 itarget=targetID[ihopping];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
 
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt*3+i];
@@ -3188,8 +3100,6 @@ int _calcBandsAndProjectedVelocities(
                 for(int i=0;i<norbs;i++){
                     for(int j=0;j<norbs;j++){
                         for(int k=0;k<3;k++){
-                            //DhkDkc[iproj][i][j][0]+=DhkDkf[iproj][i][j][k]*lattice[k][0];
-                            //DhkDkc[iproj][i][j][1]+=DhkDkf[iproj][i][j][k]*lattice[k][1];
                             DhkDkc[iproj*norbs*norbs*2+i*norbs*2+j*2+0]+=DhkDkf[iproj*norbs*norbs*3+i*norbs*3+j*3+k]*lattice[k][0];
                             DhkDkc[iproj*norbs*norbs*2+i*norbs*2+j*2+1]+=DhkDkf[iproj*norbs*norbs*3+i*norbs*3+j*3+k]*lattice[k][1];
                         }
@@ -3226,9 +3136,6 @@ int _calcBandsAndProjectedVelocities(
         }
         free(hk);free(DhkDkf);free(DhkDkc);
     }
-    //fp=fopen("./c_log","a");
-    //fprintf(fp,"projective velocity completed\n");
-    //fclose(fp);
     return 0;
 }
 
@@ -3407,23 +3314,6 @@ PyObject * calcProjectiveBulkPhotovoltaicCond_memoryReduce(
     fprintf(fp,"All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
     fclose(fp);
     
-    
-    /*
-    PyObject * conductance_real=PyTuple_New((unsigned long long)nScatterRoute*_nphoton*8*_nkpt);
-    PyObject * conductance_imag=PyTuple_New((unsigned long long)nScatterRoute*_nphoton*8*_nkpt);
-    printf("memory allocated\n");
-     
-    for(unsigned long long iscatter=0;iscatter<nScatterRoute;iscatter++){
-        for(unsigned long long iphoton=0;iphoton<nphoton;iphoton++){
-            for(unsigned long long ikpt=0;ikpt<nkpt;ikpt++){
-                for(unsigned long long icomp=0;icomp<8;icomp++){
-                    PyTuple_SetItem(conductance_real, iscatter*sca_width+icomp*_nphoton*_nkpt+iphoton*_nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp])));
-                    PyTuple_SetItem(conductance_imag, iscatter*sca_width+icomp*_nphoton*_nkpt+iphoton*_nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp])));
-                }
-            }
-        }
-    }
-    */
     PyObject * conductance_real=PyTuple_New(_nScatterRoute*_nphoton*8);
     PyObject * conductance_imag=PyTuple_New(_nScatterRoute*_nphoton*8);
     printf("memory allocated\n");
@@ -3685,23 +3575,6 @@ PyObject * calcModernOrbitalProjectiveBulkPhotovoltaicCond_memoryReduce(
     fprintf(fp,"All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
     fclose(fp);
     
-    
-    /*
-    PyObject * conductance_real=PyTuple_New((unsigned long long)nScatterRoute*_nphoton*8*_nkpt);
-    PyObject * conductance_imag=PyTuple_New((unsigned long long)nScatterRoute*_nphoton*8*_nkpt);
-    printf("memory allocated\n");
-     
-    for(unsigned long long iscatter=0;iscatter<nScatterRoute;iscatter++){
-        for(unsigned long long iphoton=0;iphoton<nphoton;iphoton++){
-            for(unsigned long long ikpt=0;ikpt<nkpt;ikpt++){
-                for(unsigned long long icomp=0;icomp<8;icomp++){
-                    PyTuple_SetItem(conductance_real, iscatter*sca_width+icomp*_nphoton*_nkpt+iphoton*_nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp])));
-                    PyTuple_SetItem(conductance_imag, iscatter*sca_width+icomp*_nphoton*_nkpt+iphoton*_nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp])));
-                }
-            }
-        }
-    }
-    */
     PyObject * conductance_real=PyTuple_New(2*_nScatterRoute*_nphoton*8);
     PyObject * conductance_imag=PyTuple_New(2*_nScatterRoute*_nphoton*8);
     printf("memory allocated\n");
@@ -3750,8 +3623,8 @@ int _calcSpinBandsAndProjectedVelocities(
     printf("projective spinful velocity calc. in cdll\n");
 
     int kpt_width_g=norbs*norbs;
-    int dir_width_g=nkpt*kpt_width_g;
-    int proj_width_g=2*dir_width_g;
+    unsigned long long dir_width_g=nkpt*kpt_width_g;
+    unsigned long long proj_width_g=2*dir_width_g;
 
     int nthreads;
     nthreads=_nthreads;
@@ -3766,7 +3639,7 @@ int _calcSpinBandsAndProjectedVelocities(
         lapack_complex_double * DhkDkc_sx=(lapack_complex_double*)malloc(nProj*norbs*norbs*2*sizeof(lapack_complex_double));
         lapack_complex_double * DhkDkc_sy=(lapack_complex_double*)malloc(nProj*norbs*norbs*2*sizeof(lapack_complex_double));
         lapack_complex_double * DhkDkc_sz=(lapack_complex_double*)malloc(nProj*norbs*norbs*2*sizeof(lapack_complex_double));
-        int ipos;
+        unsigned long long ipos;
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             for(int i=0;i<norbs;i++){
@@ -3793,7 +3666,7 @@ int _calcSpinBandsAndProjectedVelocities(
                 lapack_complex_double hopping_R[3];
                 isource=sourceID[ihopping];
                 itarget=targetID[ihopping];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
 
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt*3+i];
@@ -4147,8 +4020,8 @@ int _calcOrbitalBandsAndProjectedVelocities(
     printf("projective orbital velocity calc. in cdll\n");
 
     int kpt_width_g=norbs*norbs;
-    int dir_width_g=nkpt*kpt_width_g;
-    int proj_width_g=2*dir_width_g;
+    unsigned long long dir_width_g=nkpt*kpt_width_g;
+    unsigned long long proj_width_g=2*dir_width_g;
 
     int nthreads;
     nthreads=_nthreads;
@@ -4163,7 +4036,7 @@ int _calcOrbitalBandsAndProjectedVelocities(
         lapack_complex_double * DhkDkc_Lz=(lapack_complex_double*)malloc(nProj*norbs*norbs*2*sizeof(lapack_complex_double));
         lapack_complex_double * DhkDkc_tmp1=(lapack_complex_double*)malloc(norbs*norbs*2*sizeof(lapack_complex_double));
         lapack_complex_double * DhkDkc_tmp2=(lapack_complex_double*)malloc(norbs*norbs*2*sizeof(lapack_complex_double));
-        int ipos;
+        unsigned long long ipos;
         #pragma omp for
         for(int ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             for(int i=0;i<norbs;i++){
@@ -4186,7 +4059,7 @@ int _calcOrbitalBandsAndProjectedVelocities(
                 lapack_complex_double hopping_R[3];
                 isource=sourceID[ihopping];
                 itarget=targetID[ihopping];
-                for(int i=0;i<3;i++)hopping_R[i]=(-_Complex_I)*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
+                for(int i=0;i<3;i++)hopping_R[i]=_Complex_I*(overLat[ihopping][i]+orbCorr[itarget][i]-orbCorr[isource][i]);
 
                 lapack_complex_double phase=0;
                 for (int i=0;i<3;i++) phase+=hopping_R[i]*kmesh[ikpt*3+i];
@@ -4332,13 +4205,6 @@ PyObject * calcOrbitalProjectiveBulkPhotovoltaicCond_memoryReduce(
             S_star[i][j] =tTBLz_real[i][j]-_Complex_I*tTBLz_imag[i][j];
         }
     }
-    /*lapack_complex_double tmp;
-    for(int i=0;i<norbs;i++){
-        tmp=0;
-        for(int j=0;j<norbs;j++) tmp+=S_T[i][j]*S_star[j][i];
-        printf("%f %f\n",creal(tmp),cimag(tmp));
-    }
-    exit(1);*/
 
     int nkpt_part=nkpt/ndivide;
     unsigned long long kpt_width=norbs*norbs;
