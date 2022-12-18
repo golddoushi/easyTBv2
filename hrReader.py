@@ -646,7 +646,7 @@ class Hr:
                         #mz=m_su2.conjugate().dot(sz).dot(m_su2)
                         #magmom_rotated_list.append(np.array([mx,my,mz]).real)
                         #magmom_rotated_list.append(spinorToR(m_su2))
-                        magmom_rotated_list.append(pseudoRotation(rotate_r,m))
+                        magmom_rotated_list.append(pseudoRotation(rotate_r,pR.lat,m))
                     #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
                     diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(pR.nions))]
                     if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
@@ -661,7 +661,7 @@ class Hr:
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
-                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*magmom_rotated_list[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
                                     *dmag))
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
@@ -678,7 +678,7 @@ class Hr:
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
-                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*magmom_rotated_list[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
                                     *dmag))
                     #continue
                     # check time reversal symmetry
@@ -695,7 +695,7 @@ class Hr:
                         #    print(m)
                         #    print(spinorToR(m),spinorToR(m_su2))
                         #magmom_rotated_list.append(spinorToR(m_su2))
-                        magmom_rotated_list.append(-pseudoRotation(rotate_r,m))
+                        magmom_rotated_list.append(-pseudoRotation(rotate_r,pR.lat,m))
                     #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
                     diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(pR.nions))]
                     if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
@@ -710,7 +710,7 @@ class Hr:
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
-                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*magmom_rotated_list[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
                                     *dmag))
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
@@ -727,7 +727,7 @@ class Hr:
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
-                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*magmom_rotated_list[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
                                     *dmag))
                 symRotateList, symTranslateList, symIonMap, spinRotateList=new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList
                 return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':new_timeReversalList}

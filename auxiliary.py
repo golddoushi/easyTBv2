@@ -377,7 +377,7 @@ def RToSpinor(R):
     su2=SO3_SU2(so3)
     return su2@np.array([1,0])
 
-def pseudoRotation(rotate,axial):
+def pseudoRotation(rotate,lat,axial):
     '''
     Rotate an axial vector, which should be represented by cartesian coor.
     '''
@@ -397,9 +397,11 @@ def pseudoRotation(rotate,axial):
     assert reconstructed_axial_len>1e-6, "Failed to convert psuedo vector into cross form"
     #reconstructed_axial*=axial_len/reconstructed_axial_len
     #print(reconstructed_axial)
-
-    n2_trans=rotate@n2
-    n3_trans=rotate@n3
+    #print('before rotat:',n2,n3)
+    rotate_xyz=(lat.T)@rotate@(np.linalg.inv(lat.T))
+    n2_trans=rotate_xyz@n2
+    n3_trans=rotate_xyz@n3
+    #print('after rotat:',n2_trans,n3_trans)
     return np.cross(n3_trans,n2_trans)*axial_len/reconstructed_axial_len
 
 def semiCirle(p1:float,p2:float,pathPoints:np.ndarray):
