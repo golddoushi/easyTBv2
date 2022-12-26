@@ -1,10 +1,10 @@
 import sys
+import paramReader
+paramReader.readGlobalConst()
 import hrReader as reader
 import ham as hamilton
 import numpy as np
 import posReader as pR
-import paramReader
-paramReader.readGlobalConst()
 import couplingCalc as cc
 import matplotlib.pyplot as plt
 class Logger(object):
@@ -25,23 +25,23 @@ class Logger(object):
         self.log.close()
 sys.stdout = Logger('log')
 
-cc.classifyBonds(mainDir='./mcalc/Co5Gd/', source_list=[0,1,2,3,4,5], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
+#cc.classifyBonds(mainDir='./mcalc/Co5Gd/', source_list=[0,1,2,3,4,5], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
 #cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.00U3K80/',sc=[100,100,1],fermi=-0.72909361,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.0007215)
 #exit()
 
-'''
-pR.readPOS('./mcalc/FeTeI/a_0.05U3/POSCAR')
+#'''
+pR.readPOS('./mcalc/spinchain/POSCAR')
 hr=reader.Hr()
-hr.readDoubleFiles('./mcalc/FeTeI/a_0.05U3/wannier90.up_hr.dat','./mcalc/FeTeI/a_0.05U3/wannier90.dn_hr.dat')
+hr.readDoubleFiles('./mcalc/spinchain/hr.up.dat','./mcalc/spinchain/hr.dn.dat',ignoreImagPart=False)
 gr=hamilton.Green()
-Lx,Ly,Lz,GammaMode=10,10,1,1
+Lx,Ly,Lz,GammaMode=30,1,1,1
 #J=gr.calcJFourState(hr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi/20,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=10,Ly=10,Lz=1)
 nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=Lx,Ly=Ly,Lz=Lz,GammaMode=GammaMode)
-J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=Lx,Ly=Ly,Lz=Lz,nthreads=8)
-#J=gr.calcJFourState_Numba(hr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=10,Ly=10,Lz=1)
-#print(J)
+J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,
+    sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[1],targetR=[0,0,0],
+    eta=0.0001,energyRange=(-10,0),Lx=Lx,Ly=Ly,Lz=Lz,nthreads=1)
 exit()
-'''
+#'''
 
 pR.readPOS('./mcalc/graphene/POSCAR')
 hr_g=reader.Hr()
