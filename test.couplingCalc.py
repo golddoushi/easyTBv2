@@ -4,11 +4,9 @@ import sys
 import paramReader
 paramReader.readGlobalConst()
 import hrReader as reader
-import ham as hamilton
-import numpy as np
+from ham import Green
 import posReader as pR
 import couplingCalc as cc
-import matplotlib.pyplot as plt
 class Logger(object):
     def __init__(self, filename="Default.log"):
         self.terminal = sys.stdout
@@ -26,6 +24,28 @@ class Logger(object):
         self.log=open(self.filename,'w')
         self.log.close()
 sys.stdout = Logger('log')
+
+'''
+# check the band structures
+pR.readPOS('./mcalc/spinchain/POSCAR')
+hr=reader.Hr()
+hr.readDoubleFiles('./mcalc/spinchain/hr.up.dat','./mcalc/spinchain/hr.dn.dat',cutoff=-0.01)
+gr=Green()
+gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/spinchain/',saveFig=True,redBands=[0,1])
+exit()
+'''
+#'''
+cc.classifyBonds(mainDir='./mcalc/spinchain/', source_list=[0,1], 
+           wann_list=[
+                      [ 0,],
+                      [ 1,],
+                     ], 
+           ini_S=[1,1])
+
+cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/spinchain/',hrcutoff=-1,nthreads=4,
+    sc=[30,1,1],fermi=0,eta=0.0001,erange=(-10,5),lowOrder=20,highOrder=50,Jcvg=-1e-4)
+exit()
+#'''
 '''
 cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,], 
            wann_list=[
@@ -36,11 +56,9 @@ cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,],
            ini_S=[2,0,0])
 
 cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
-    sc=[10,10,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=12,highOrder=50,Jcvg=-1e-4)
+    sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=12,highOrder=50,Jcvg=-1e-4)
 #cc.calcIsotropicJ(mainDir='./mcalc/FeCl2/',hrcutoff=-1,sc=[10,10,1],fermi=-2,eta=0.0001,
 #    erange=(-12,10), emptySpace=0)
-
-
 exit()
 '''
 cc.classifyBonds(mainDir='./mcalc/Fe3GeTe2/', source_list=[0,1,2,], 

@@ -168,6 +168,7 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S):
         exit()
     
     print('following bonds are to be evaluated')
+    bondList=[]
     for ibondType, bondType in enumerate(bondListWithClassification):
         if ibondType>=param.CALRANGE:
             break
@@ -181,8 +182,9 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S):
         #else:
         #    bond.report(short=True)
         bond.report(short=True)
+        bondList.append(bondType)
     
-    bondList=bondListWithClassification
+    #bondList=bondListWithClassification
     supercellSize=[sizeL,sizeW,sizeH]
     #if param.MAGTYPE=='ISING':
     #    calcIsotropicJ(mainDir,bondList=bondListWithClassification,supercellSize=[sizeL,sizeW,sizeH])
@@ -252,7 +254,7 @@ def calcIsotropicJ(mainDir,sc=[10,10,1],fermi=0,eta=0.0001,erange=(-500,500),emp
     #calcSpinWaveDOS(mainDir,spinList,MAE)
 
 def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
-      fermi=0,eta=0.0001,erange=(-500,500),hrcutoff=-0.01,Jcvg=1e-3,
+      fermi=0,eta=0.0001,erange=(-500,500),extraEnergyEmpty=5.,hrcutoff=-0.01,Jcvg=1e-3,
       lowOrder=5,highOrder=20,nthreads=param.NCORE):
     '''
     mainDir: the position of Hr file
@@ -268,7 +270,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
     fileList=aux.ls(mainDir)
 
     # Try to read existed J.txt
-    if fileio.readJ(mainDir,bondList):
+    if False and fileio.readJ(mainDir,bondList):
         print('%sJ.txt has been read succesfully'%mainDir)
         for bondType in bondList:
             bondType[0].broadCastExchange(verbose=True)
@@ -326,7 +328,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
     eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=hr.norb,kmesh=sc,data_type='double')
     bandEnergyMin, bandEnergyMax= eigs.flatten().min(), eigs.flatten().max()
     print("Bands energy range: %.6f ~ %.6f"%(bandEnergyMin,bandEnergyMax))
-    emin=np.max([erange[0],bandEnergyMin])
+    emin=np.max([erange[0],bandEnergyMin])-extraEnergyEmpty
     emax=np.min([erange[1],fermi])
     print("Energy window: [%f, %f]"%(emin,emax))
     
@@ -343,7 +345,8 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
             hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
             kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=False,
             nthreads=nthreads)
-        
+        #print(rG_w_lat[-1,overLat_id_dic[(-2,0,0)]])
+        #exit()
         # calc. charge density and spin density
         diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
         rho_of_each_orb=sum(diag_list)
@@ -361,19 +364,33 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
                 sourceOrbList=bond.sourceOrb.wannIDList,targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
                 Lx=sc[0],Ly=sc[1],Lz=sc[2])
             orbID=orbIDMapFromStandardToRelevant[orbID]
+            #print('overlat')
+            #print(bond.overLat)
+            #print("scatter matrices")
+            #print(center1)
+            #print(center2)
+            #print(doubleCenter)
+            #print('orbID:',orbID)
+            #print("G_lat:")
+            #print(rG_w_lat[-1][i_overlat_p])
+            #print(rG_w_lat[-1][i_overlat_n])
+            #exit()
             J=np.zeros(len(orbID),dtype=complex)
             for iw in range(npoints):
                 rG_w_p=rG_w_lat[iw][i_overlat_p][orbID][:,orbID]
                 rG_w_n=rG_w_lat[iw][i_overlat_n][orbID][:,orbID]
-                contr_double=np.diag(doubleCenter@rG_w_p@doubleCenter@rG_w_n)
-                contr_single1=np.diag(center1@rG_w_p@center1@rG_w_n)
-                contr_single2=np.diag(center2@rG_w_p@center2@rG_w_n)
-                J+=(contr_double-contr_single1-contr_single2)*dz[iw]*weights[iw]
+                #contr_double=np.diag(doubleCenter@rG_w_p@doubleCenter@rG_w_n)
+                #contr_single1=np.diag(center1@rG_w_p@center1@rG_w_n)
+                #contr_single2=np.diag(center2@rG_w_p@center2@rG_w_n)
+                contr=np.diag(center1@rG_w_p@center2@rG_w_n)
+                #J+=(contr_double-contr_single1-contr_single2)*dz[iw]*weights[iw]
+                J+=2*contr*dz[iw]*weights[iw]
             bond.exchangeEnergy=sum(J).imag/4
             #bond.broadCastExchange(type='Ising')
             print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J=%.6f"%(
                 ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy))
             J_list_new[ibondType]=bond.exchangeEnergy
+            #exit()
         
         # compute averaged J_list_new
         J_list_new=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
