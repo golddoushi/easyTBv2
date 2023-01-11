@@ -1204,6 +1204,9 @@ class Bond:
         #self.exchangeEnergy_DMI=np.array([[0,0,0],
         #                                  [0,0,0],
         #                                  [0,0,0]])      # fully anisotropic exchange involving non-diagonal elements
+        self.exchangeEnergyMatrix=np.zeros((3,3))
+        self.Jani=np.zeros((2,2))
+        self.DMI=np.zeros(2)
         self.E0=0
         self.calcStatue=[] # store some info. in DFT calc.
         self.DNALabels=[]
@@ -1256,6 +1259,8 @@ class Bond:
             bond.E0=self.E0
             if type=='Ising':
                 bond.exchangeEnergy=self.exchangeEnergy
+            elif type=='Full':
+                bond.exchangeEnergyMatrix=self.exchangeEnergyMatrix
 
     def showLocalFrameInFrac(self):
         print("local frame of bond%d:"%self.id)

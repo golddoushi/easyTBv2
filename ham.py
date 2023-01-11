@@ -3676,9 +3676,9 @@ class Green:
         J=E_coupling#/(-2*(np.cos(theta)-1))
         return J
 
-    def getFourStateScatterMatrix(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],Lx=5,Ly=5,Lz=1):
-        '''Linear response approximation
-           using Gaussian integration along semi-circle in upper complex plane
+    def getFourStateScatterMatrix_x(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],Lx=5,Ly=5,Lz=1):
+        '''
+        Construct scatter matrix due to spin derivate to x-direction
         '''
         #assert len(sourceOrbList)==len(targetOrbList), 'Now, the coupling ions is assumed to be symmtric to each other'
         #S=1#len(sourceOrbList)/2.
@@ -3696,15 +3696,15 @@ class Green:
         scatterSingle1List=[]
         scatterSingle2List=[]
         for iorb in sourceOrbList:
-            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])#deltaList[iorb]*(np.cos(theta)-1)])
-            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])#-deltaList[iorb]*(np.cos(theta)-1)])
+            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])
+            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])
 
-            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])#deltaList[iorb]*(np.cos(theta)-1)])
-            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])#-deltaList[iorb]*(np.cos(theta)-1)])
+            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],deltaList[iorb]/2.])
+            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],deltaList[iorb]/2.])
+            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])
+            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])
 
             scatterSingle2List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],0])
             scatterSingle2List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],0])
@@ -3712,20 +3712,112 @@ class Green:
             scatterSingle2List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])
         
         for iorb in targetOrbList:
-            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])#deltaList[iorb]*(np.cos(theta)-1)])
-            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])#-deltaList[iorb]*(np.cos(theta)-1)])
+            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
+            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
 
             scatterSingle1List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],0])
             scatterSingle1List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],0])
             scatterSingle1List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
             scatterSingle1List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
 
-            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.])#*np.sin(theta)])
-            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])#deltaList[iorb]*(np.cos(theta)-1)])
-            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])#-deltaList[iorb]*(np.cos(theta)-1)])
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],deltaList[iorb]/2.])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],deltaList[iorb]/2.])
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
+        
+        # analyze scattering list
+        # construct scattering matrix with all irrelevant zeros suppressed
+        relevantOrbList=[]
+        scSize=np.array([Lx,Ly,Lz])
+        def findOrbIndexInRecordList(orb):
+            for iexistedOrb, existedOrb in enumerate(relevantOrbList):
+                if (existedOrb[0]==orb[0]%scSize).all() and existedOrb[1]==orb[1]:
+                    return iexistedOrb
+            return -1
+        # build double scattering basis
+        for scatter in scatterDoubleList:
+            # standarize Bravais vectors
+            scatter[0][0]%=scSize
+            scatter[1][0]%=scSize
+            if findOrbIndexInRecordList(scatter[0])<0:
+                relevantOrbList.append(scatter[0])
+            if findOrbIndexInRecordList(scatter[1])<0:
+                relevantOrbList.append(scatter[1])
+        scatteringOrder=len(relevantOrbList)
+        #print('find scattering region with %d-dimension, basis consist of'%scatteringOrder)
+        relevantOrbIdList=[]
+        for basis in relevantOrbList:
+            relevantOrbIdList.append(basis[1])
+            #print('orb%d at [%d %d %d]'%(basis[1],*basis[0]))
+        # build scattering matrix
+        scatteringDoubleCenter=np.zeros((scatteringOrder,scatteringOrder),dtype=np.complex128)
+        for scatter in scatterDoubleList:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringDoubleCenter[sourceID,targetID]=scatter[2]
+        
+        scatteringSingle1Center=np.zeros((scatteringOrder,scatteringOrder),dtype=np.complex128)
+        for scatter in scatterSingle1List:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringSingle1Center[sourceID,targetID]=scatter[2]
+        
+        scatteringSingle2Center=np.zeros((scatteringOrder,scatteringOrder),dtype=np.complex128)
+        for scatter in scatterSingle2List:
+            sourceID=findOrbIndexInRecordList(scatter[0])
+            targetID=findOrbIndexInRecordList(scatter[1])
+            scatteringSingle2Center[sourceID,targetID]=scatter[2]
+        #print('scattering matrix is:')
+        #print(scatteringDoubleCenter)
+        return relevantOrbIdList, scatteringDoubleCenter, scatteringSingle1Center, scatteringSingle2Center
+
+    def getFourStateScatterMatrix_y(self,hr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],Lx=5,Ly=5,Lz=1):
+        '''
+        Construct scatter matrix due to spin derivate to y-direction
+        '''
+        assert hr.norb%2==0, 'spin hr must have even orbs'
+        norb=hr.norb
+        halfNOrb=int(norb/2)
+        onsite=np.array(hr.onsite)
+        deltaList=onsite[:halfNOrb]-onsite[halfNOrb:]
+        
+        # create scattering route
+        scatterDoubleList=[]
+        scatterSingle1List=[]
+        scatterSingle2List=[]
+        for iorb in sourceOrbList:
+            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],-1j*deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],1j*deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])
+            scatterDoubleList.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])
+
+            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],-1j*deltaList[iorb]/2.])
+            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],1j*deltaList[iorb]/2.])
+            scatterSingle1List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])
+            scatterSingle1List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])
+
+            scatterSingle2List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb+halfNOrb],0])
+            scatterSingle2List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb],0])
+            scatterSingle2List.append([[np.array(sourceR),iorb],[np.array(sourceR),iorb],0])
+            scatterSingle2List.append([[np.array(sourceR),iorb+halfNOrb],[np.array(sourceR),iorb+halfNOrb],0])
+        
+        for iorb in targetOrbList:
+            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],-1j*deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],1j*deltaList[iorb]/2.])
+            scatterDoubleList.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
+            scatterDoubleList.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
+
+            scatterSingle1List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],0])
+            scatterSingle1List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],0])
+            scatterSingle1List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
+            scatterSingle1List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
+
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb+halfNOrb],-1j*deltaList[iorb]/2.])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb],1j*deltaList[iorb]/2.])
+            scatterSingle2List.append([[np.array(targetR),iorb],[np.array(targetR),iorb],0])
+            scatterSingle2List.append([[np.array(targetR),iorb+halfNOrb],[np.array(targetR),iorb+halfNOrb],0])
         
         # analyze scattering list
         # construct scattering matrix with all irrelevant zeros suppressed

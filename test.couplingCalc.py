@@ -34,7 +34,7 @@ gr=Green()
 gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/spinchain/',saveFig=True,redBands=[0,1])
 exit()
 '''
-#'''
+'''
 cc.classifyBonds(mainDir='./mcalc/spinchain/', source_list=[0,1], 
            wann_list=[
                       [ 0,],
@@ -45,8 +45,8 @@ cc.classifyBonds(mainDir='./mcalc/spinchain/', source_list=[0,1],
 cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/spinchain/',hrcutoff=-1,nthreads=4,
     sc=[30,1,1],fermi=0,eta=0.0001,erange=(-10,5),lowOrder=20,highOrder=50,Jcvg=-1e-4)
 exit()
-#'''
 '''
+#'''
 cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,], 
            wann_list=[
                       [ 0, 1, 2, 3, 4],
@@ -55,13 +55,13 @@ cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,],
                      ], 
            ini_S=[2,0,0])
 
-cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
-    sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=12,highOrder=50,Jcvg=-1e-4)
-#cc.calcIsotropicJ(mainDir='./mcalc/FeCl2/',hrcutoff=-1,sc=[10,10,1],fermi=-2,eta=0.0001,
-#    erange=(-12,10), emptySpace=0)
+#cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
+#    sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=20,highOrder=50,Jcvg=-1e-4)
+cc.calcJFull_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
+    sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=20,highOrder=50,Jcvg=-1e-4)
 exit()
-'''
-cc.classifyBonds(mainDir='./mcalc/Fe3GeTe2/', source_list=[0,1,2,], 
+#'''
+cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,], 
            wann_list=[
                       [ 0, 1, 2, 3, 4],
                       [ 5, 6, 7, 8, 9],

@@ -360,7 +360,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
             bond=bondType[0]
             i_overlat_p=overLat_id_dic[tuple(bond.overLat)]
             i_overlat_n=overLat_id_dic[tuple(-bond.overLat)]
-            orbID,doubleCenter,center1,center2=gr.getFourStateScatterMatrix(hr,
+            orbID,doubleCenter,center1,center2=gr.getFourStateScatterMatrix_x(hr,
                 sourceOrbList=bond.sourceOrb.wannIDList,targetOrbList=bond.targetOrb.wannIDList,targetR=bond.overLat,
                 Lx=sc[0],Ly=sc[1],Lz=sc[2])
             orbID=orbIDMapFromStandardToRelevant[orbID]
@@ -386,9 +386,10 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
                 #J+=(contr_double-contr_single1-contr_single2)*dz[iw]*weights[iw]
                 J+=2*contr*dz[iw]*weights[iw]
             bond.exchangeEnergy=sum(J).imag/4
+            dmi=sum(J).real/4
             #bond.broadCastExchange(type='Ising')
-            print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J=%.6f"%(
-                ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy))
+            print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J=%.6f (%.6f)"%(
+                ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy,dmi))
             J_list_new[ibondType]=bond.exchangeEnergy
             #exit()
         
@@ -417,6 +418,185 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
     writeMCSolverIsingFile(mainDir)
     #calcSpinWaveSpectra(mainDir,spinList,MAE)
     #calcSpinWaveDOS(mainDir,spinList,MAE)
+
+def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
+      fermi=0,eta=0.0001,erange=(-500,500),extraEnergyEmpty=5.,hrcutoff=-0.01,Jcvg=1e-3,
+      lowOrder=5,highOrder=20,nthreads=param.NCORE):
+    '''
+    mainDir: the position of Hr file
+    sc : k-grid used for BZ integration
+    fermi: assumed Fermi level
+    eta: eta of retarded Green's function
+    Jcvg: convergence criterial for J, no convergence check if Jcvg<0 
+    lowOrder, highOrder: the order used for Gaussian quadrature
+    '''
+    global bondList, supercellSize
+    # read in Hr
+    hr=reader.Hr()
+    fileList=aux.ls(mainDir)
+
+    # Try to read existed J.txt
+    if False and fileio.readJ(mainDir,bondList):
+        print('%sJ.txt has been read succesfully'%mainDir)
+        for bondType in bondList:
+            bondType[0].broadCastExchange(verbose=True)
+        writeMCSolverIsingFile(mainDir)
+        return
+    
+    hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
+    if len(hrFileList)==2:
+        hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=False,cutoff=hrcutoff)
+    elif len(hrFileList)==1:
+        hr.readSingleFile(hrFileList[0],ignoreImagPart=False,cutoff=hrcutoff)
+    elif len(hrFileList)==0:
+        print("Error: cannot find Hr file in %s, pls. provide Hr file with name hr(.up or .dn) in %s"%(mainDir,mainDir))
+        exit()
+    else:
+        print("Error: found more than two hr file in %s, pls. clean up tge directory"%mainDir)
+        exit()
+        
+    # create Green's function
+    # firstly, obtain all overLat
+    overLat_set={(0,0,0)}
+    for bondType in bondList:
+        # since we are to calc. DMI which depends on bond orientation, 
+        # we have to include all overlat
+        for bond in bondType:
+            overLat_set.add(tuple(bond.overLat))
+            overLat_set.add(tuple(-bond.overLat))
+    
+    overLat_id_dic={}
+    iOverLat, overlat_list=0, []
+    for item in overLat_set:
+        overLat_id_dic[item]=iOverLat
+        overlat_list.append(item)
+        iOverLat+=1
+        
+    # then, search all relevant orbs
+    relevantOrb_set=set()
+    for bondType in bondList:
+        for bond in bondType:
+            for iorb in bond.sourceOrb.wannIDList:
+                relevantOrb_set.add(iorb)
+                relevantOrb_set.add(iorb+hr.norb//2)
+            for iorb in bondType[0].targetOrb.wannIDList:
+                relevantOrb_set.add(iorb)
+                relevantOrb_set.add(iorb+hr.norb//2)
+    relevantOrbID_list=[item for item in relevantOrb_set]
+    sorted_relevantOrbID=np.sort(relevantOrbID_list)
+    orbIDMapFromStandardToRelevant=np.zeros(hr.norb,dtype=int)-1
+    for iRelevantOrb, orbID in enumerate(sorted_relevantOrbID):
+        orbIDMapFromStandardToRelevant[orbID]=iRelevantOrb
+        
+    gr=hamilton.Green()
+    
+    print("Diagnolizing Hamiltonian")
+    eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemory_simple(hr,kgrid=sc,nthreads=nthreads)
+    res=hamilton.Response()
+    eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=hr.norb,kmesh=sc,data_type='double')
+    bandEnergyMin, bandEnergyMax= eigs.flatten().min(), eigs.flatten().max()
+    print("Bands energy range: %.6f ~ %.6f"%(bandEnergyMin,bandEnergyMax))
+    emin=np.max([erange[0],bandEnergyMin])-extraEnergyEmpty
+    emax=np.min([erange[1],fermi])
+    print("Energy window: [%f, %f]"%(emin,emax))
+    
+    print("Main loop for exchange calculation")
+    J_list_old=np.zeros((len(bondList),3,3))
+    J_list_new=np.zeros((len(bondList),3,3))
+    iteration_num=0
+    for gaussianOrder in range(lowOrder,highOrder):
+        points, weights=p_roots(gaussianOrder)
+        npoints=len(points)
+        print("----- Iteration %d -----"%iteration_num)
+        z,dz=aux.semiCirle(emin,emax,points)
+        rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
+            hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
+            kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=True,
+            nthreads=nthreads)
+        
+        # calc. charge density and spin density
+        diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
+        rho_of_each_orb=sum(diag_list)
+        print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
+        print("Mag.mom of source atoms: %.6f"%(
+            sum(rho_of_each_orb[np.arange(len(relevantOrbID_list)//2,dtype=int)])-
+            sum(rho_of_each_orb[len(relevantOrbID_list)//2+np.arange(len(relevantOrbID_list)//2,dtype=int)])))
+        
+        # calc. exchange coupling energies for each bond
+        for ibondType, bondType in enumerate(bondList):
+            for bond in bondType:
+                i_overlat_p=overLat_id_dic[tuple(bond.overLat)]
+                i_overlat_n=overLat_id_dic[tuple(-bond.overLat)]
+            
+                sourceOrbList=bond.sourceOrb.wannIDList
+                targetOrbList=bond.targetOrb.wannIDList
+                p_source=hr.getAtomicSelfEnergy(sourceOrbList)
+                p_target=hr.getAtomicSelfEnergy(targetOrbList)
+            
+                orbID_source_up=list(orbIDMapFromStandardToRelevant[sourceOrbList])
+                orbID_source_dn=list(orbIDMapFromStandardToRelevant[[i+hr.norb//2 for i in sourceOrbList]])
+                orbID_target_up=list(orbIDMapFromStandardToRelevant[targetOrbList])
+                orbID_target_dn=list(orbIDMapFromStandardToRelevant[[i+hr.norb//2 for i in targetOrbList]])
+                orbID_source=orbID_source_up+orbID_source_dn
+                orbID_target=orbID_target_up+orbID_target_dn
+                
+                J=0j
+                J_a_xx=0j
+                J_a_yy=0j
+                J_a_xy=0j
+                DMI=np.zeros(3,dtype=complex)
+                for iw in range(npoints):
+                    rG_w_p=rG_w_lat[iw][i_overlat_p][orbID_source][:,orbID_target]
+                    rG_w_p_pauli_block =aux.PauliBlock(rG_w_p)
+
+                    rG_w_n=rG_w_lat[iw][i_overlat_n][orbID_target][:,orbID_source]
+                    rG_w_n_pauli_block =aux.PauliBlock(rG_w_n)
+
+                    AMat=np.zeros((4,4),dtype=complex)
+                    for i in range(4):
+                        for j in range(4):
+                            AMat[i,j]=np.trace(p_source@rG_w_p_pauli_block[i]@p_target@rG_w_n_pauli_block[j])
+                
+                    J+=2*(AMat[0,0]-AMat[1,1]-AMat[2,2]-AMat[3,3])*dz[iw]*weights[iw]
+                    J_a_xx+=2*(AMat[1,1]+AMat[1,1])*dz[iw]*weights[iw]
+                    J_a_yy+=2*(AMat[2,2]+AMat[2,2])*dz[iw]*weights[iw]
+                    J_a_xy+=2*(AMat[1,2]+AMat[2,1])*dz[iw]*weights[iw]
+                    DMI[0]+=2j*(AMat[0,1]-AMat[1,0])*dz[iw]*weights[iw]
+                    DMI[1]+=2j*(AMat[0,2]-AMat[2,0])*dz[iw]*weights[iw]
+                    #DMI[2]+=2j*(a0z-az0)*dz[iw]*weights[iw]
+
+                bond.exchangeEnergy=J.imag/2
+                bond.Jani=np.array([[J_a_xx,J_a_xy],[J_a_xy,J_a_yy]]).imag/2
+                bond.DMI=DMI[:2].imag/2
+                
+                print("bondType%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f"%(
+                    ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
+                    J.imag/4*1000,J_a_xx.imag/4*1000,
+                    J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
+            J_list_new[ibondType,:,:]=bond.exchangeEnergyMatrix
+        
+        # compute averaged J_list_new
+        J_list_new=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
+        # check convergence
+        if Jcvg<0:
+            print("Warning: no convergence check. Use the results at your own risk!")
+            break
+        dJ=J_list_new-J_list_old
+        dJ_max=abs(dJ).max()
+        print("Max dJ= %.6f"%dJ_max)
+        if iteration_num>0 and dJ_max<Jcvg:
+            print("----- Accuracy reached -----")
+            break
+        J_list_old=J_list_new.copy()
+        iteration_num+=1
+    else:
+        print("Warning: Accuracy is not reached. Use the results at your own risk!")
+    
+    #for Jmat, bondType in zip(J_list_new,bondList):
+    #    bondType[0].exchangeEnergyMatrix=Jmat
+    #    bondType[0].broadCastExchange(type='Full')
+    fileio.writeJmat(mainDir, bondList, sc)
+    #writeMCSolverIsingFile(mainDir)
 
 def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5, ini_S=[], MAE=0.1):
     '''

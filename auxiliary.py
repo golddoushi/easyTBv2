@@ -547,3 +547,31 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False):
                         orb_id+=1
     
     return all_atoms_orb_list
+
+def PauliBlock(p_full:np.ndarray):
+    shape=p_full.shape
+    assert len(shape)==2, 'Only 2-rank matrix can be decomposed into Pauli Blocks'
+    nrow, ncol = shape
+    assert nrow//2*2==nrow and ncol//2*2==ncol, 'Only matrix with even order can be decomposed now %dx%d'%(nrow,ncol)
+    uu=p_full[:nrow//2,:ncol//2]
+    ud=p_full[:nrow//2,ncol//2:]
+    du=p_full[nrow//2:,:ncol//2]
+    dd=p_full[nrow//2:,ncol//2:]
+
+    p0=(uu+dd)/2
+    pz=(uu-dd)/2
+    px=(ud+du)/2
+    py=(du-ud)/2j
+    return p0,px,py,pz
+
+def PauliBlockSigmaNorm(p_full:np.ndarray):
+    """
+    M= MI * I + \vec{P} dot \vec{sigma}
+    = MI*I + p * \vec{e} dot \vec{sigma}
+    where p is the norm of P.
+    """
+    p0, px, py, pz = PauliBlock(p_full)
+    ex, ey, ez = np.trace(px), np.trace(py), np.trace(pz)
+    evec = np.array((ex, ey, ez))
+    evec = evec / np.linalg.norm(evec)
+    return px * evec[0] + py * evec[1] + pz * evec[2]

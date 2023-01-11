@@ -51,3 +51,16 @@ def writeJ(mainDir, bondList, supercellSize):
             bond=bondType[0]
             fJ.write('%3d%12.6f%3d%3d%3d%3d%3d%3d%12.6f\n'%(
                 (ibondType+1), bond.bondLen, bond.sourceOrb.id, bond.targetOrb.id, *bond.overLat, len(bondType), bond.exchangeEnergy))
+
+def writeJmat(mainDir, bondList, supercellSize):
+    global version
+    with open(mainDir+'J.txt','w') as fJ:
+        fJ.write('Anisotropic exchange energy J*S^2 up to %dNN calculated by Greens function. version: %s\n'%(param.CALRANGE,version))
+        fJ.write('evaluated in %dx%dx%d supercell\n'%(*supercellSize,))
+        fJ.write('#NN   dis.  is  it  Rx  Ry  Rz             J          Ja_x          Ja_y         Ja_yx            Dx            Dy\n')
+
+        for ibondType, bondType in enumerate(bondList):
+            for bond in bondType:
+                fJ.write('%3d%7.3f%4d%4d%4d%4d%4d%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e\n'%(
+                    (ibondType+1), bond.bondLen, bond.sourceOrb.id, bond.targetOrb.id, *bond.overLat,  
+                    bond.exchangeEnergy,bond.Jani[0,0],bond.Jani[1,1],bond.Jani[0,1],bond.DMI[0],bond.DMI[1]))

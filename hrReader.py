@@ -2,7 +2,7 @@ import time
 import Lattice as lat
 import numpy as np
 from math import acos, cos, asin, sin, sqrt
-from auxiliary import quicksort, renormVec, integeralizeVec, crossProduct, spinorToR, pseudoRotation
+from auxiliary import quicksort, renormVec, integeralizeVec, crossProduct, spinorToR, pseudoRotation, PauliBlockSigmaNorm, PauliBlock
 import paramReader
 import posReader as pR
 
@@ -207,6 +207,13 @@ class Hr:
             for bond in self.bondList:
                 self.bondInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.t
             print('file %s (spin-dn) has been successfully read in %.3fms, %d/%d skipped'%(filepath2,1000*(time.time()-time0),nSkip,nTotal))
+
+    def getAtomicSelfEnergy(self,wannSpinUpIDList:list):
+        wannSpinDnIDList=[iorb + self.norb//2 for iorb in wannSpinUpIDList]
+        wannIDList=wannSpinUpIDList+wannSpinDnIDList
+        p_full=self.bondInVecForm[0,0,0][wannIDList][:,wannIDList]
+        #print("Try to decompose site energy matrix into Pauli Block, assuming that the spinor orders are in wannier90-form")
+        return PauliBlockSigmaNorm(p_full)
 
     # transform Hr data of cell into Hr of supercell
     def make_supercell(self,sc_dir0=[1.,1.,0.],sc_dir1=[1.,-1.,0.],sc_dir2=[0.,0.,1.],atomicOrbIndexList=[],soc=False):
