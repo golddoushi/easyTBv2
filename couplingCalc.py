@@ -388,8 +388,8 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
             bond.exchangeEnergy=sum(J).imag/4
             dmi=sum(J).real/4
             #bond.broadCastExchange(type='Ising')
-            print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J=%.6f (%.6f)"%(
-                ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy,dmi))
+            print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J/2=%.6f"%(
+                ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy/2*1000))
             J_list_new[ibondType]=bond.exchangeEnergy
             #exit()
         
@@ -571,8 +571,8 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
                 
                 print("bondType%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f"%(
                     ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
-                    J.imag/2*1000,J_a_xx.imag/2*1000,
-                    J_a_yy.imag/2*1000,J_a_xy.imag/2*1000,DMI[0].imag/2*1000,DMI[1].imag/2*1000))
+                    J.imag/4*1000,J_a_xx.imag/4*1000,
+                    J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
             J_list_new[ibondType,:,:]=bond.exchangeEnergyMatrix
         
         # compute averaged J_list_new

@@ -46,7 +46,7 @@ cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/spinchain/',hrcutoff=-1,nt
     sc=[30,1,1],fermi=0,eta=0.0001,erange=(-10,5),lowOrder=20,highOrder=50,Jcvg=-1e-4)
 exit()
 '''
-#'''
+'''
 cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,], 
            wann_list=[
                       [ 0, 1, 2, 3, 4],
@@ -60,8 +60,8 @@ cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,],
 cc.calcJFull_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
     sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=20,highOrder=50,Jcvg=-1e-4)
 exit()
-#'''
-cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,], 
+'''
+cc.classifyBonds(mainDir='./mcalc/Fe3GeTe2/', source_list=[0,1,2], 
            wann_list=[
                       [ 0, 1, 2, 3, 4],
                       [ 5, 6, 7, 8, 9],
@@ -75,3 +75,6 @@ cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,],
 cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
     sc=[32,32,1],fermi=0.04758627,eta=0.0001,erange=(-8,10),
     lowOrder=20,highOrder=50,Jcvg=-1e-3)
+#cc.calcJFull_GaussianQuadrature(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
+#    sc=[32,32,1],fermi=0.04758627,eta=0.0001,erange=(-8,10),
+#    lowOrder=20,highOrder=50,Jcvg=-1e-4)
