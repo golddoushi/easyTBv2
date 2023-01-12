@@ -1391,14 +1391,18 @@ class Bond:
 
     def defineBondType_fast(self,bondCandidateList):
         '''
-        Find out the bonds with the same type, using wyckoff rep. of source/target orb
+        Find out the bonds with the same type, using ele. label and wyckoff rep. of source/target orb
         Only bonds with the same length with me would presented in bondCandidateList to reduce computations
         '''
         self.sameTypeBondList=[]
+        mySourceInfo=(self.sourceOrb.wyckoffs,self.sourceOrb.label)
+        myTargetInfo=(self.targetOrb.wyckoffs,self.targetOrb.label)
         for bondCandidate in bondCandidateList:
-            if self.sourceOrb.wyckoffs==bondCandidate.sourceOrb.wyckoffs and self.targetOrb.wyckoffs==bondCandidate.targetOrb.wyckoffs:
+            urSourceInfo=(bondCandidate.sourceOrb.wyckoffs,bondCandidate.sourceOrb.label)
+            urTargetInfo=(bondCandidate.targetOrb.wyckoffs,bondCandidate.targetOrb.label)
+            if mySourceInfo==urSourceInfo and myTargetInfo==urTargetInfo:
                 self.sameTypeBondList.append(bondCandidate)
-            elif self.sourceOrb.wyckoffs==bondCandidate.targetOrb.wyckoffs and self.targetOrb.wyckoffs==bondCandidate.sourceOrb.wyckoffs:
+            elif mySourceInfo==urTargetInfo and myTargetInfo==urSourceInfo:
                 self.sameTypeBondList.append(bondCandidate)
 
     def checkIfTheBondHasSameTypeWithMe(self,inquir_bond) -> bool:
