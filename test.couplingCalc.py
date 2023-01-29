@@ -3,10 +3,9 @@ matplotlib.use('Agg')
 import sys
 import paramReader
 paramReader.readGlobalConst()
-import hrReader as reader
-from ham import Green
-import posReader as pR
 import couplingCalc as cc
+from auxiliary import obtainProjectionsPlain
+
 class Logger(object):
     def __init__(self, filename="Default.log"):
         self.terminal = sys.stdout
@@ -61,15 +60,15 @@ cc.calcJFull_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
     sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=20,highOrder=50,Jcvg=-1e-4)
 exit()
 '''
-cc.classifyBonds(mainDir='./mcalc/Fe3GeTe2/', source_list=[0,1,2], 
-           wann_list=[
-                      [ 0, 1, 2, 3, 4],
-                      [ 5, 6, 7, 8, 9],
-                      [10,11,12,13,14],
-                      [15,16,17],
-                      [18,19,20],
-                      [21,22,23],
-                     ], 
+mainDir='./mcalc/Fe3GeTe2/'
+projections=[
+    "Fe:d",
+    "Ge:p",
+    "Te:p"
+]
+wann_list=obtainProjectionsPlain(mainDir+'POSCAR',projections)
+cc.classifyBonds(mainDir, source_list=[0,1,2], 
+           wann_list=wann_list,
            ini_S=[1.5,1.5,1.0,0,0,0])
 
 cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,

@@ -548,6 +548,17 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False):
     
     return all_atoms_orb_list
 
+def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[]):
+    structured_orb_list=obtainProjections(filePathOfPOSCAR,projections,ispin=1,soc=False)
+    plain_orb_list=[]
+    for atom in structured_orb_list:
+        atom_orb=[]
+        for L in atom:
+            atom_orb+=L
+        plain_orb_list.append(atom_orb)
+    return plain_orb_list
+    
+
 def PauliBlock(p_full:np.ndarray):
     shape=p_full.shape
     assert len(shape)==2, 'Only 2-rank matrix can be decomposed into Pauli Blocks'
