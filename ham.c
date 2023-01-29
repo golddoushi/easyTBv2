@@ -74,13 +74,6 @@ long long getHk(int nkpt, long long kmesh_address,
     printf("in the current system, size of long long: %d, size of pointer %d\n",sizeof(long long),sizeof(lapack_complex_double *));
     printf("pls. see if they are identical. Otherwise the calc. results with cdll are seriously wrong!\n");
     printf("in ham.dll the addr. of Hk is %p\n",Hk);
-    /*printf("c Hk at %d th kpt:\n",ikpt_print);
-    for(int i=0;i<norbs;i++){
-        for(int j=0;j<norbs;j++){
-            printf("(%.3f, %.3f) ",creal(*(Hk+ikpt_print*norbs*norbs+i*norbs+j)),cimag(*(Hk+ikpt_print*norbs*norbs+i*norbs+j)));
-        }
-        printf("\n");
-    }*/
     return Hk_address;
 }
 
@@ -101,33 +94,47 @@ void quickSort(double* input_list, int low, int high){
         
     while(l<h){
         while(*(input_list+h)>split) h-=1;
-                
         if(l<h){
             *(input_list+l)=*(input_list+h);
             *(input_list+h)=split;
-                
-            //int sort_tmp=sort_list[l];
-            //sort_list[l]=sort_list[h];
-            //sort_list[h]=sort_tmp;
-                
             l+=1;
         }
             
         while(*(input_list+l)<split) l+=1;
-            
         if(l<h){
             *(input_list+h)=*(input_list+l);
             *(input_list+l)=split;
-                
-            //int sort_tmp=sort_list[l];
-            //sort_list[l]=sort_list[h];
-            //sort_list[h]=sort_tmp;
-                
             h-=1;
         }
     }
     if(l>low) quickSort(input_list,low,h-1);
     if(h<high) quickSort(input_list,l+1,high);
+    return;
+}
+
+double z_module(lapack_complex_double z){return creal(z)*creal(z)+cimag(z)*cimag(z);}
+void quickSort_cmplx(lapack_complex_double* input_list, unsigned long long low, unsigned long long high){
+    unsigned long long l=low;
+    unsigned long long h=high;
+    lapack_complex_double split=*(input_list+low);
+    double split_len=z_module(split);
+    while(l<h){
+        while(z_module(*(input_list+h))>split_len)h-=1;
+        if(l<h){
+            *(input_list+l)=*(input_list+h);
+            *(input_list+h)=split;
+            l+=1;
+        }
+            
+        while(z_module(*(input_list+l))<split_len)l+=1;
+        if(l<h){
+            *(input_list+h)=*(input_list+l);
+            *(input_list+l)=split;
+            h-=1;
+        }
+    }
+    if(l>low) quickSort_cmplx(input_list,low,h-1);
+    if(h<high) quickSort_cmplx(input_list,l+1,high);
     return;
 }
 
@@ -1831,10 +1838,10 @@ PyObject * calcSpinHallCond_memoryReduce(
     fprintf(fp,"#Log file of ham.dll\n");
     // verification
     fprintf(fp,"nkpt: %d, norbs: %d, nhoppings: %d, nfermi: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nfermi,erange[0],erange[1]);
-    fprintf(fp,"memory estimation: %.3f MB\n",(nfermi*(double)nkpt/1024/1024*16+(double)(8*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
+    fprintf(fp,"memory estimation: %.3f MB\n",(nfermi*(double)nkpt/1024/1024*16+(double)(9*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
     fclose(fp);
     printf("nkpt: %d, norbs: %d, nhoppings: %d, nfermi: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nfermi,erange[0],erange[1]);
-    printf("memory estimation: %.4f MB\n",(nfermi*(double)nkpt/1024/1024*16+(double)(8*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
+    printf("memory estimation: %.4f MB\n",(nfermi*(double)nkpt/1024/1024*16+(double)(9*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
     //exit(1);
     
     double sx[norbs][norbs];
@@ -1863,14 +1870,14 @@ PyObject * calcSpinHallCond_memoryReduce(
 
     unsigned long long _nfermi=nfermi;
     unsigned long long _nkpt=nkpt;
-    unsigned long long sca_width=_nkpt*_nfermi*8;
+    unsigned long long sca_width=_nkpt*_nfermi*9;
 
     unsigned long long _nScatterRoute=nScatterRoute;
 
-    double * conductance_on_kmesh_on_omega_sx=(double*)malloc(_nScatterRoute*_nfermi*_nkpt*(unsigned long long)9*sizeof(double));
-    double * conductance_on_kmesh_on_omega_sy=(double*)malloc(_nScatterRoute*_nfermi*_nkpt*(unsigned long long)9*sizeof(double));
-    double * conductance_on_kmesh_on_omega_sz=(double*)malloc(_nScatterRoute*_nfermi*_nkpt*(unsigned long long)9*sizeof(double));
-    for(unsigned long long i=0;i<_nScatterRoute*_nfermi*_nkpt*(unsigned long long)8;i++){
+    double * conductance_on_kmesh_on_omega_sx=(double*)malloc(_nScatterRoute*_nfermi*_nkpt*9*sizeof(double));
+    double * conductance_on_kmesh_on_omega_sy=(double*)malloc(_nScatterRoute*_nfermi*_nkpt*9*sizeof(double));
+    double * conductance_on_kmesh_on_omega_sz=(double*)malloc(_nScatterRoute*_nfermi*_nkpt*9*sizeof(double));
+    for(unsigned long long i=0;i<_nScatterRoute*_nfermi*_nkpt*9;i++){
         conductance_on_kmesh_on_omega_sx[i]=0;
         conductance_on_kmesh_on_omega_sy[i]=0;
         conductance_on_kmesh_on_omega_sz[i]=0;
@@ -1925,9 +1932,9 @@ PyObject * calcSpinHallCond_memoryReduce(
             exit(1);
         }
         fp=fopen("./c_log","a");
-        fprintf(fp,"velocities part%d completed\ncalc BPVE...\n",ipart+1);
+        fprintf(fp,"velocities part%d completed\ncalc conductance...\n",ipart+1);
         fclose(fp);
-        printf("velocities part%d completed\nnow calc BPVE use %d cores in ham.dll\n",ipart+1,nthreads);
+        printf("velocities part%d completed\nnow calc conductance use %d cores in ham.dll\n",ipart+1,nthreads);
 
         #pragma omp parallel num_threads(nthreads)
         {
@@ -2011,30 +2018,45 @@ PyObject * calcSpinHallCond_memoryReduce(
                 }
             }
         }
-        printf("SHC part%d done\n",ipart+1);
+        printf("Conductance part%d done\n",ipart+1);
         fp=fopen("./c_log","a");
-        fprintf(fp,"SHC part%d done\n",ipart+1);
+        fprintf(fp,"Conductance part%d done\n",ipart+1);
         fclose(fp);
     }
     free(velocity);free(velocity_sx);free(velocity_sy);free(velocity_sz);free(energy);
-    printf("All calc. done! pls. times (-1/2)*24341.5 and divide by volume(A^3) to get spin Hall conductance in unit (S/cm \\hbar/e)\n");
+    printf("All calc. done! pls. times -24341.5/2 and divide by volume(A^3) to get spin Hall conductance in unit (S/cm \\hbar/2e)\n");
     fp=fopen("./c_log","a");
-    fprintf(fp,"All calc. done! pls. times (-1/2)*24341.5 and divide by volume(A^3) to get spin Hall conductance in unit (S/cm \\hbar/e)\n");
+    fprintf(fp,"All calc. done! pls. times -24341.5/2 and divide by volume(A^3) to get spin Hall conductance in unit (S/cm \\hbar/2e)\n");
     fclose(fp);
     
     PyObject * conductance=PyTuple_New(3*_nScatterRoute*_nfermi*9);
+    double * conductance_on_kmesh_sx=(double*)malloc(_nkpt*sizeof(double));
+    double * conductance_on_kmesh_sy=(double*)malloc(_nkpt*sizeof(double));
+    double * conductance_on_kmesh_sz=(double*)malloc(_nkpt*sizeof(double));
     printf("memory allocated\n");
     double bzIntegration_sx,bzIntegration_sy,bzIntegration_sz;
     unsigned long long pos;
     for(unsigned long long iscatter=0;iscatter<nScatterRoute;iscatter++){
         for(unsigned long long ifermi=0;ifermi<nfermi;ifermi++){
             for(unsigned long long icomp=0;icomp<9;icomp++){
-                bzIntegration_sx=0;bzIntegration_sy=0;bzIntegration_sz=0;
-                for(unsigned long long ikpt=0;ikpt<nkpt;ikpt++){
+                //bzIntegration_sx=0;bzIntegration_sy=0;bzIntegration_sz=0;
+                for(unsigned long long ikpt=0;ikpt<_nkpt;ikpt++){
                     pos=iscatter*sca_width+ikpt*_nfermi*9+ifermi*9+icomp;
-                    bzIntegration_sx+=conductance_on_kmesh_on_omega_sx[pos];
-                    bzIntegration_sy+=conductance_on_kmesh_on_omega_sy[pos];
-                    bzIntegration_sz+=conductance_on_kmesh_on_omega_sz[pos];
+                    conductance_on_kmesh_sx[ikpt]=conductance_on_kmesh_on_omega_sx[pos];
+                    conductance_on_kmesh_sy[ikpt]=conductance_on_kmesh_on_omega_sy[pos];
+                    conductance_on_kmesh_sz[ikpt]=conductance_on_kmesh_on_omega_sz[pos];
+                    //bzIntegration_sx+=conductance_on_kmesh_on_omega_sx[pos];
+                    //bzIntegration_sy+=conductance_on_kmesh_on_omega_sy[pos];
+                    //bzIntegration_sz+=conductance_on_kmesh_on_omega_sz[pos];
+                }
+                quickSort(conductance_on_kmesh_sx,0,_nkpt-1);
+                quickSort(conductance_on_kmesh_sy,0,_nkpt-1);
+                quickSort(conductance_on_kmesh_sz,0,_nkpt-1);
+                bzIntegration_sx=0;bzIntegration_sy=0;bzIntegration_sz=0;
+                for(unsigned long long ikpt=0;ikpt<_nkpt;ikpt++){
+                    bzIntegration_sx+=conductance_on_kmesh_sx[ikpt];
+                    bzIntegration_sy+=conductance_on_kmesh_sy[ikpt];
+                    bzIntegration_sz+=conductance_on_kmesh_sz[ikpt];
                 }
                 PyTuple_SetItem(conductance, 0*nScatterRoute*_nfermi*9+iscatter*_nfermi*9+icomp*_nfermi+ifermi, PyFloat_FromDouble(bzIntegration_sx/nkpt));
                 PyTuple_SetItem(conductance, 1*nScatterRoute*_nfermi*9+iscatter*_nfermi*9+icomp*_nfermi+ifermi, PyFloat_FromDouble(bzIntegration_sy/nkpt));
@@ -3770,10 +3792,10 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond_memoryReduce(
     fprintf(fp,"#Log file of ham.dll\n");
     // verification
     fprintf(fp,"nkpt: %d, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nphoton,erange[0],erange[1]);
-    fprintf(fp,"memory estimation: %.3f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(8*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
+    fprintf(fp,"memory estimation: %.3f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(8*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*(sizeof(lapack_complex_double)+0));
     fclose(fp);
     printf("nkpt: %d, norbs: %d, nhoppings: %d, nphotons: %d, erange: %.4f ~ %.4f\n",nkpt,norbs,nhoppings,nphoton,erange[0],erange[1]);
-    printf("memory estimation: %.4f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(8*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*sizeof(lapack_complex_double));
+    printf("memory estimation: %.4f MB\n",(nphoton*(double)nkpt/1024/1024*16+(double)(8*norbs*norbs+norbs)/1024/1024*nkpt)/ndivide*nProj*(sizeof(lapack_complex_double)+0));
     //exit(1);
     
     double sx[norbs][norbs];
@@ -3807,9 +3829,9 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond_memoryReduce(
     unsigned long long _nScatterRoute=nScatterRoute;
 
     lapack_complex_double itau=tau*_Complex_I;
-    lapack_complex_double * conductance_on_kmesh_on_omega_sx=(lapack_complex_double*)malloc(_nScatterRoute*_nphoton*_nkpt*(unsigned long long)8*sizeof(lapack_complex_double));
-    lapack_complex_double * conductance_on_kmesh_on_omega_sy=(lapack_complex_double*)malloc(_nScatterRoute*_nphoton*_nkpt*(unsigned long long)8*sizeof(lapack_complex_double));
-    lapack_complex_double * conductance_on_kmesh_on_omega_sz=(lapack_complex_double*)malloc(_nScatterRoute*_nphoton*_nkpt*(unsigned long long)8*sizeof(lapack_complex_double));
+    lapack_complex_double * conductance_on_kmesh_on_omega_sx=(lapack_complex_double*)malloc(_nScatterRoute*_nphoton*_nkpt*8*sizeof(lapack_complex_double));
+    lapack_complex_double * conductance_on_kmesh_on_omega_sy=(lapack_complex_double*)malloc(_nScatterRoute*_nphoton*_nkpt*8*sizeof(lapack_complex_double));
+    lapack_complex_double * conductance_on_kmesh_on_omega_sz=(lapack_complex_double*)malloc(_nScatterRoute*_nphoton*_nkpt*8*sizeof(lapack_complex_double));
     for(unsigned long long i=0;i<_nScatterRoute*_nphoton*_nkpt*(unsigned long long)8;i++){
         conductance_on_kmesh_on_omega_sx[i]=0;
         conductance_on_kmesh_on_omega_sy[i]=0;
@@ -3970,18 +3992,32 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond_memoryReduce(
     
     PyObject * conductance_real=PyTuple_New(3*_nScatterRoute*_nphoton*8);
     PyObject * conductance_imag=PyTuple_New(3*_nScatterRoute*_nphoton*8);
+    lapack_complex_double * conductance_on_kmesh_sx=(lapack_complex_double*)malloc(_nkpt*sizeof(lapack_complex_double));
+    lapack_complex_double * conductance_on_kmesh_sy=(lapack_complex_double*)malloc(_nkpt*sizeof(lapack_complex_double));
+    lapack_complex_double * conductance_on_kmesh_sz=(lapack_complex_double*)malloc(_nkpt*sizeof(lapack_complex_double));
     printf("memory allocated\n");
     lapack_complex_double bzIntegration_sx,bzIntegration_sy,bzIntegration_sz;
     unsigned long long pos;
     for(unsigned long long iscatter=0;iscatter<nScatterRoute;iscatter++){
         for(unsigned long long iphoton=0;iphoton<nphoton;iphoton++){
             for(unsigned long long icomp=0;icomp<8;icomp++){
-                bzIntegration_sx=0;bzIntegration_sy=0;bzIntegration_sz=0;
-                for(unsigned long long ikpt=0;ikpt<nkpt;ikpt++){
+                for(unsigned long long ikpt=0;ikpt<_nkpt;ikpt++){
                     pos=iscatter*sca_width+ikpt*_nphoton*8+iphoton*8+icomp;
-                    bzIntegration_sx+=conductance_on_kmesh_on_omega_sx[pos];
-                    bzIntegration_sy+=conductance_on_kmesh_on_omega_sy[pos];
-                    bzIntegration_sz+=conductance_on_kmesh_on_omega_sz[pos];
+                    conductance_on_kmesh_sx[ikpt]=conductance_on_kmesh_on_omega_sx[pos];
+                    conductance_on_kmesh_sy[ikpt]=conductance_on_kmesh_on_omega_sy[pos];
+                    conductance_on_kmesh_sz[ikpt]=conductance_on_kmesh_on_omega_sz[pos];
+                    //bzIntegration_sx+=conductance_on_kmesh_on_omega_sx[pos];
+                    //bzIntegration_sy+=conductance_on_kmesh_on_omega_sy[pos];
+                    //bzIntegration_sz+=conductance_on_kmesh_on_omega_sz[pos];
+                }
+                quickSort_cmplx(conductance_on_kmesh_sx,0,_nkpt-1);
+                quickSort_cmplx(conductance_on_kmesh_sy,0,_nkpt-1);
+                quickSort_cmplx(conductance_on_kmesh_sz,0,_nkpt-1);
+                bzIntegration_sx=0;bzIntegration_sy=0;bzIntegration_sz=0;
+                for(unsigned long long ikpt=0;ikpt<_nkpt;ikpt++){
+                    bzIntegration_sx+=conductance_on_kmesh_sx[ikpt];
+                    bzIntegration_sy+=conductance_on_kmesh_sy[ikpt];
+                    bzIntegration_sz+=conductance_on_kmesh_sz[ikpt];
                 }
                 PyTuple_SetItem(conductance_real, 0*nScatterRoute*_nphoton*8+iscatter*_nphoton*8+icomp*_nphoton+iphoton, PyFloat_FromDouble(creal(bzIntegration_sx/nkpt)));
                 PyTuple_SetItem(conductance_imag, 0*nScatterRoute*_nphoton*8+iscatter*_nphoton*8+icomp*_nphoton+iphoton, PyFloat_FromDouble(cimag(bzIntegration_sx/nkpt)));
@@ -3995,6 +4031,7 @@ PyObject * calcSpinProjectiveBulkPhotovoltaicCond_memoryReduce(
 
     printf("py data setted\n");
     free(conductance_on_kmesh_on_omega_sx);free(conductance_on_kmesh_on_omega_sy);free(conductance_on_kmesh_on_omega_sz);
+    free(conductance_on_kmesh_sx);free(conductance_on_kmesh_sy);free(conductance_on_kmesh_sz);
     return Py_BuildValue("(OO)",conductance_real,conductance_imag);
 }
 
