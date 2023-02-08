@@ -3,6 +3,7 @@
 #include<Python.h>
 #include<lapacke.h>
 #include<time.h>
+#include<fftw3.h>
 
 #define TwoPI 6.28318530717958647692
 #define PI 3.14159265358979323846
@@ -421,7 +422,175 @@ PyObject * calcBandsVecsVelocityOps(int nkpt, double kmesh[nkpt][3],
     }
     return Py_BuildValue("(OOOOOOOOOOO)",Spectra,Vector_r,Vector_i,Hk_r,Hk_i,Hk_dAx_r,Hk_dAx_i,Hk_dAy_r,Hk_dAy_i,Hk_dAz_r,Hk_dAz_i);
 }
+// calc eigvalues and eigvectors of Ham in k-space
+PyObject * calcHam_mixFFT(
+                       int kgrid[3],int rgrid[3],int qgrid[3],
+                       int norbs, int nhoppings,
+                       int sourceID[nhoppings], int targetID[nhoppings], 
+                       int overLat[nhoppings][3], 
+                       double hopping_real[nhoppings],
+                       double hopping_imag[nhoppings],
+                       double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
+                       double orbCorr[norbs][3], // fractional corrdinates of orbs
+                       int _nthreads){
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    fclose(fp);
+    //printf("Rgrid: %d %d %d, Qgrid: %d %d %d\n",rgrid[0],rgrid[1],rgrid[2],qgrid[0],qgrid[1],qgrid[2]);
+    long nKgrid=kgrid[0]*kgrid[1]*kgrid[2];
+    long nRgrid=rgrid[0]*rgrid[1]*rgrid[2];
+    long nQgrid=qgrid[0]*qgrid[1]*qgrid[2];
+    int nthreads=_nthreads;
+    if(2*nQgrid<nthreads)nthreads=1;
 
+    // create hopping on slow grids
+    clock_t time0=clock();
+    lapack_complex_double *tq_list=(lapack_complex_double*)malloc((long)nQgrid*norbs*norbs*nRgrid*sizeof(lapack_complex_double));
+    lapack_complex_double *tk_list=(lapack_complex_double*)malloc((long)nKgrid*norbs*norbs*sizeof(lapack_complex_double));
+    //lapack_complex_double *Rtq_list=(lapack_complex_double*)malloc((long)3*nQgrid*norbs*norbs*nRgrid*sizeof(lapack_complex_double));
+    //lapack_complex_double *Rtk_list=(lapack_complex_double*)malloc((long)3*nKgrid*norbs*norbs*sizeof(lapack_complex_double));
+
+    // fftw_plan use global variables. So, we should create them outside the parallel
+    fftw_complex *tR=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    fftw_complex *tk=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    //fftw_complex *R1tR=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    //fftw_complex *R1tk=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    //fftw_complex *R2tR=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    //fftw_complex *R2tk=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    //fftw_complex *R3tR=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    //fftw_complex *R3tk=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    fftw_plan*p_list  =(fftw_plan*)malloc(nthreads*sizeof(fftw_plan));
+    //fftw_plan*pR1_list=(fftw_plan*)malloc(nthreads*sizeof(fftw_plan));
+    //fftw_plan*pR2_list=(fftw_plan*)malloc(nthreads*sizeof(fftw_plan));
+    //fftw_plan*pR3_list=(fftw_plan*)malloc(nthreads*sizeof(fftw_plan));
+    for(int ithread=0;ithread<nthreads;ithread++){
+        p_list[ithread]=fftw_plan_dft_3d(rgrid[0],rgrid[1],rgrid[2],tR+ithread*nRgrid,tk+ithread*nRgrid,FFTW_FORWARD,FFTW_MEASURE);
+        //pR1_list[ithread]=fftw_plan_dft_3d(rgrid[0],rgrid[1],rgrid[2],R1tR+ithread*nRgrid,R1tk+ithread*nRgrid,FFTW_FORWARD,FFTW_MEASURE);
+        //pR2_list[ithread]=fftw_plan_dft_3d(rgrid[0],rgrid[1],rgrid[2],R2tR+ithread*nRgrid,R2tk+ithread*nRgrid,FFTW_FORWARD,FFTW_MEASURE);
+        //pR3_list[ithread]=fftw_plan_dft_3d(rgrid[0],rgrid[1],rgrid[2],R3tR+ithread*nRgrid,R3tk+ithread*nRgrid,FFTW_FORWARD,FFTW_MEASURE);
+    }
+
+    #pragma omp parallel num_threads(nthreads)
+    {
+        lapack_complex_double _tq;
+        lapack_complex_double phase;
+        int isource, itarget, Rvec0, Rvec1, Rvec2;
+        double d0, d1, d2;
+        long iOrbPair, iR, iq, iq1, iq2, iq3;
+        #pragma omp for
+        for(iq=0;iq<nQgrid;iq++){
+            iq3=iq%qgrid[2];
+            iq2=((iq-iq3)/qgrid[2])%qgrid[1];
+            iq1=iq/qgrid[1]/qgrid[2];
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                //printf("hopping%d\n",ihopping);
+                isource=sourceID[ihopping];
+                itarget=targetID[ihopping];
+                Rvec0=overLat[ihopping][0];
+                Rvec1=overLat[ihopping][1];
+                Rvec2=overLat[ihopping][2];
+                //d0=Rvec0+orbCorr[itarget][0]-orbCorr[isource][0];
+                //d1=Rvec1+orbCorr[itarget][1]-orbCorr[isource][1];
+                //d2=Rvec2+orbCorr[itarget][2]-orbCorr[isource][2];
+                //printf("Rvec: %d %d %d\n",Rvec0,Rvec1,Rvec2);
+                iOrbPair=isource*norbs+itarget;
+                if(Rvec0<0) Rvec0+=rgrid[0];
+                if(Rvec1<0) Rvec1+=rgrid[1];
+                if(Rvec2<0) Rvec2+=rgrid[2];
+                iR=Rvec0*rgrid[1]*rgrid[2]+Rvec1*rgrid[2]+Rvec2;
+                
+                phase=-_Complex_I*TwoPI*((double)iq1/kgrid[0]*overLat[ihopping][0]+(double)iq2/kgrid[1]*overLat[ihopping][1]+(double)iq3/kgrid[2]*overLat[ihopping][2]);
+                //printf("phase: %.3f+%.3fi\n",creal(phase),cimag(phase));
+                _tq=cexp(phase)*(hopping_real[ihopping]+_Complex_I*hopping_imag[ihopping]);
+                tq_list[iq*norbs*norbs*nRgrid+iOrbPair*nRgrid+iR]=_tq;
+                //Rtq_list[                     iq*norbs*norbs*nRgrid+iOrbPair*nRgrid+iR]=_tq*(-_Complex_I*d0);
+                //Rtq_list[1*nQgrid*norbs*norbs+iq*norbs*norbs*nRgrid+iOrbPair*nRgrid+iR]=_tq*(-_Complex_I*d1);
+                //Rtq_list[2*nQgrid*norbs*norbs+iq*norbs*norbs*nRgrid+iOrbPair*nRgrid+iR]=_tq*(-_Complex_I*d2);
+            }
+        }
+    }
+    
+    #pragma omp parallel num_threads(nthreads)
+    {
+        int myrank=omp_get_thread_num();
+        //exit(1);    
+        long ipos0;
+        int ik1,ik2,ik3,ik,iq,iq1,iq2,iq3,iOrbPair,iR;
+        //printf("rank%d start\n",myrank);
+        #pragma omp for
+        for(iq=0;iq<nQgrid;iq++){
+            iq3=iq%qgrid[2];
+            iq2=((iq-iq3)/qgrid[2])%qgrid[1];
+            iq1=iq/qgrid[1]/qgrid[2];
+            //printf("iq %d %d %d -> %d\n",iq1,iq2,iq3,iq);
+            for(int iorb=0;iorb<norbs;iorb++){
+                for(int jorb=0;jorb<norbs;jorb++){
+                    iOrbPair=iorb*norbs+jorb;
+                    ipos0=iq*norbs*norbs*nRgrid+iOrbPair*nRgrid;
+                    //printf("orb%d-%d\n",iorb,jorb);
+                    for(iR=0;iR<nRgrid;iR++){
+                        tR[iR+myrank*nRgrid]=tq_list[ipos0+iR];
+                        //printf("%.3f+%.3fi ",creal(tR[iR]),cimag(tR[iR]));
+                        //R1tR[iR+myrank*nRgrid]=Rtq_list[                     ipos0+iR];
+                        //R2tR[iR+myrank*nRgrid]=Rtq_list[1*nQgrid*norbs*norbs+ipos0+iR];
+                        //R3tR[iR+myrank*nRgrid]=Rtq_list[2*nQgrid*norbs*norbs+ipos0+iR];
+                    }
+                    //printf("\n");
+                    fftw_execute(p_list[myrank]);
+                    //fftw_execute(pR1_list[myrank]);
+                    //fftw_execute(pR2_list[myrank]);
+                    //fftw_execute(pR3_list[myrank]);
+                    for(int iR1=0;iR1<rgrid[0];iR1++){
+                    for(int iR2=0;iR2<rgrid[1];iR2++){
+                    for(int iR3=0;iR3<rgrid[2];iR3++){
+                        ik1=iR1*qgrid[0]+iq1;
+                        ik2=iR2*qgrid[1]+iq2;
+                        ik3=iR3*qgrid[2]+iq3;
+                        ik=ik1*kgrid[1]*kgrid[2]+ik2*kgrid[2]+ik3;
+                        iR=iR1*rgrid[1]*rgrid[2]+iR2*rgrid[2]+iR3;
+                        //if(myrank==0)printf("iq: %d %d %d iR: %d %d %d ik: %d %d %d\n",iq1,iq2,iq3,iR1,iR2,iR3,ik1,ik2,ik3);
+                        tk_list[ik*norbs*norbs+iOrbPair]=tk[iR+myrank*nRgrid];
+                        //Rtk_list[0*nKgrid*norbs*norbs+ik*norbs*norbs+iOrbPair]=R1tk[iR+myrank*nRgrid];
+                        //Rtk_list[1*nKgrid*norbs*norbs+ik*norbs*norbs+iOrbPair]=R2tk[iR+myrank*nRgrid];
+                        //Rtk_list[2*nKgrid*norbs*norbs+ik*norbs*norbs+iOrbPair]=R3tk[iR+myrank*nRgrid];
+                    }
+                    }
+                    }
+                }
+            }
+        }
+    }
+    for(int ithread=0;ithread<nthreads;ithread++){
+        fftw_destroy_plan(p_list[ithread]);
+        //fftw_destroy_plan(pR1_list[ithread]);
+        //fftw_destroy_plan(pR2_list[ithread]);
+        //fftw_destroy_plan(pR3_list[ithread]);
+    }
+    //free(p_list);free(pR1_list);free(pR2_list);free(pR3_list);free(tq_list);free(Rtq_list);
+    //free(tk);free(tR);free(R1tk);free(R1tR);free(R2tk);free(R2tR);free(R3tk);free(R3tR);
+    printf("Hk constructed in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);
+    time0=clock();
+
+    // diagnolization
+    double * spectra=(double*)malloc(nKgrid*norbs*sizeof(double));
+    #pragma omp parallel num_threads(nthreads)
+    {
+        double * eigs=(double*)malloc(norbs*sizeof(double));
+        #pragma omp for
+        for(int ik=0;ik<nKgrid;ik++){
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,tk_list+ik*norbs*norbs,norbs,eigs);
+            for(int iorb=0;iorb<norbs;iorb++) spectra[ik*norbs+iorb]=eigs[iorb];
+        }
+        free(eigs);
+    }
+    printf("Diagonalization in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);
+    long long eigs_addr=(long long)spectra;
+    long long vecs_addr=(long long)tk_list;
+    //printf("in ham.dll the addr. of eigs and vecs are %p, %p\n",eigs_addr,vecs_addr);
+    return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
+    
+}
 //***************************************************//
 //             Green's function part                 //
 //***************************************************//

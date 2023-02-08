@@ -1268,68 +1268,6 @@ class Response:
         plt.savefig(mainDir+'projPhotoconductance.png',dpi=300)
         plt.show()
         return
-        '''
-        if mainDir!=None:
-            if len(omegaList)==1:
-                condFull_scatter=condFull.reshape(nScatter,8,nkpts)
-                for iscatter in range(nScatter):
-                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy=condFull_scatter[iscatter]#condFull.reshape(nScatter,8,nkpts)
-                    with open(mainDir+'photoCondTensor_proj%d.txt'%iscatter,'w') as fout:
-                        for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
-                            fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
-                return
-            else:
-                condFull_scatter=condFull.reshape(nScatter,8,len(omegaList),nkpts)
-                for iscatter in range(nScatter):
-                    cxxx,cyxx,cxyy,cyyy,cxxy,cyxy,cxyx,cyyx=condFull_scatter[iscatter]
-                    with open(mainDir+'photoCondTensorVsOmega_proj%d.txt'%iscatter,'w') as fout:
-                        fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
-                        for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
-                            fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
-                                omega,
-                                sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
-                                sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
-                                sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
-                                sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
-                                sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
-                                sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
-                                sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
-                                sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag))
-                    for iomega, omega in enumerate(omegaList):
-                        with open(mainDir+'photoCondTensor%d_E%.3f_proj%d.txt'%(iomega,omega,iscatter),'w') as fout:
-                            for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
-                                fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
-
-        print('Projective Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
-        if not show:
-            return
-        
-        condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
-        condcxxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxy])
-        condcyyxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyyx])
-        condcyyyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyyy])
-        condcxyxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxyx])
-        condcxyyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxyy])
-        condcyxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxx])
-        condcyxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxy])
-        #exit()
-        fig,ax=plt.subplots(2,4,sharey=True)
-        ax[0,0].scatter(omegaList,condcxxxList.real,label=r'$Re\ \sigma^x_{xx}$')
-        ax[0,1].scatter(omegaList,condcxxyList.real,label=r'$Re\ \sigma^y_{xx}$')
-        ax[0,2].scatter(omegaList,condcyyxList.real,label=r'$Re\ \sigma^x_{yy}$')
-        ax[0,3].scatter(omegaList,condcyyyList.real,label=r'$Re\ \sigma^y_{yy}$')
-        ax[1,0].scatter(omegaList,condcxyxList.real,label=r'$Re\ \sigma^x_{xy}$')
-        ax[1,1].scatter(omegaList,condcxyyList.real,label=r'$Re\ \sigma^y_{xy}$')
-        ax[1,2].scatter(omegaList,condcyxxList.real,label=r'$Re\ \sigma^x_{yx}$')
-        ax[1,3].scatter(omegaList,condcyxyList.real,label=r'$Re\ \sigma^y_{yx}$')
-        for row in ax:
-            for _ax in row:
-                _ax.legend()
-                _ax.plot([omegaList[0],omegaList[-1]],[0,0],'--',linewidth=1)
-        if mainDir!=None: plt.savefig(mainDir+'projPhotoconductance.png',dpi=300)
-        plt.show()
-        return
-        '''
 
     def calcModernOrbitalProjectiveBulkPhotovoltaicConductor_CDLL(self,
             hr,mainDir:str=None,kgrid=[20,20,1],
@@ -2449,6 +2387,82 @@ class Green:
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(nthreads)
                         )
+        eig_addr, vec_addr=result
+        print('Hk constructed in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
+        #exit()
+        return eig_addr, vec_addr
+
+    def calcEigsAndVecsInMemory_mixedFourier(self,hr,kgrid:list=[1,1,1],
+            atomicOrbIndexList=[], # give the correspondence of atom id to wannier id
+            nthreads=1):
+        # prepare input parameters for cdll
+        time0=time.time()
+        
+        nhoppings=len(hr.bondList)
+        c_sourceID=(c_int*nhoppings)()
+        c_targetID=(c_int*nhoppings)()
+        c_overLat=(c_int*(nhoppings*3))()
+        c_hopping_real=(c_double*nhoppings)()
+        c_hopping_imag=(c_double*nhoppings)()
+        R_max,R_min=np.zeros(3,dtype=int),np.zeros(3,dtype=int)
+        for ibond, bond in enumerate(hr.bondList):
+            #print("%3d %3d %3d %3d %3d %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
+            c_sourceID[ibond]=c_int(bond.source)
+            c_targetID[ibond]=c_int(bond.target)
+            for i in range(3):
+                c_overLat[ibond*3+i]=c_int(bond.overlat[i])
+                if bond.overlat[i]>R_max[i]: R_max[i]=bond.overlat[i]
+                if bond.overlat[i]<R_min[i]: R_min[i]=bond.overlat[i]
+            c_hopping_real[ibond]=c_double(bond.t.real)
+            c_hopping_imag[ibond]=c_double(bond.t.imag)
+        
+        # calc real-space grid
+        Rgrid=R_max+abs(R_min)+np.ones(3,dtype=int)
+        assert (np.array(kgrid)>=Rgrid).all(), "k-grid %dx%dx%d is smaller than Rgrid %dx%dx%d, mix FFT cannot be done"%(*np.array(kgrid),*Rgrid)
+        
+        for icomp in range(3):
+            while(kgrid[icomp]%Rgrid[icomp]!=0): Rgrid[icomp]+=1
+        Qgrid=np.array(kgrid)//Rgrid
+        assert (Rgrid*Qgrid==np.array(kgrid)).all()
+        print(f"Fast (ab inito) Rgrid:{Rgrid}, Slow Qgrid:{Qgrid}")
+        
+        c_kgrid,c_rgrid,c_qgrid=(c_int*3)(),(c_int*3)(),(c_int*3)()
+        for i in range(3):
+            c_kgrid[i]=kgrid[i]
+            c_rgrid[i]=Rgrid[i]
+            c_qgrid[i]=Qgrid[i]
+        
+        c_lat=(c_double*9)()
+        for i in range(3):
+            c_lat[i]=c_double(pR.lat[0][i])
+            c_lat[i+3]=c_double(pR.lat[1][i])
+            c_lat[i+6]=c_double(pR.lat[2][i])
+
+        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+            for L in atom:
+                for iorb in L: orbCorrList[iorb]=pos
+        #assert sum(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+        c_orbCorrList=(c_double*(3*hr.norb))()
+        for i in range(hr.norb):
+            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
+            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
+            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
+        
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcHam_mixFFT.restype=py_object
+        result=hamDLL.calcHam_mixFFT(
+                        # Hamilton part
+                        c_kgrid,c_rgrid,c_qgrid,
+                        c_int(hr.norb),c_int(nhoppings),
+                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                        c_lat,c_orbCorrList,
+                        c_int(nthreads)
+                        )
+        #print(result)
+        #exit()
         eig_addr, vec_addr=result
         print('Hk constructed in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
         print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
