@@ -569,14 +569,6 @@ class Response:
         kzaxis=np.linspace(0,1,kgrid[2],endpoint=False)
         kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
 
-        # transform DHk_dk to xyz coordinates
-        print("lattice:")
-        print("a1=(%11.6f %11.6f %11.6f)"%(*pR.lat[0],))
-        print("a2=(%11.6f %11.6f %11.6f)"%(*pR.lat[1],))
-        print("a3=(%11.6f %11.6f %11.6f)"%(*pR.lat[2],))
-
-        Vbz=np.linalg.det(np.linalg.inv(pR.lat))
-
         c_lat=(c_double*9)()
         for i in range(3):
             c_lat[i]=c_double(pR.lat[0][i])
@@ -649,7 +641,8 @@ class Response:
                     c_erange,
                     c_int(ndivide),
                     c_int(nthreads))
-                        
+        print('Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
+        
         condFull=(np.array(result[0])+1j*np.array(result[1]))
         if mainDir!=None:
             if len(omegaList)==1:
@@ -738,7 +731,158 @@ class Response:
         condcxyyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxyy])
         condcyxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxx])
         condcyxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxy])
+        
+        #exit()
+        fig,ax=plt.subplots(2,4,sharey=True)
+        ax[0,0].scatter(omegaList,condcxxxList.real,label=r'$Re\ \sigma^x_{xx}$')
+        ax[0,1].scatter(omegaList,condcxxyList.real,label=r'$Re\ \sigma^y_{xx}$')
+        ax[0,2].scatter(omegaList,condcyyxList.real,label=r'$Re\ \sigma^x_{yy}$')
+        ax[0,3].scatter(omegaList,condcyyyList.real,label=r'$Re\ \sigma^y_{yy}$')
+        ax[1,0].scatter(omegaList,condcxyxList.real,label=r'$Re\ \sigma^x_{xy}$')
+        ax[1,1].scatter(omegaList,condcxyyList.real,label=r'$Re\ \sigma^y_{xy}$')
+        ax[1,2].scatter(omegaList,condcyxxList.real,label=r'$Re\ \sigma^x_{yx}$')
+        ax[1,3].scatter(omegaList,condcyxyList.real,label=r'$Re\ \sigma^y_{yx}$')
+        for row in ax:
+            #row.legend()
+            #row.plot([omegaList[0],omegaList[-1]],[0,0],'--',linewidth=1)
+            for _ax in row:
+                _ax.legend()
+                _ax.plot([omegaList[0],omegaList[-1]],[0,0],'--',linewidth=1)
+        if mainDir!=None: plt.savefig(mainDir+'photoconductance.png',dpi=300)
+        plt.show()
+        return
+    
+    def calcBulkPhotovoltaicConductor_mixFFT(self,hr,mainDir=None,
+            kgrid=[20,20,1],atomicOrbIndexList=[],omegaList=[],tau=0.01,
+            erange=[-1000.,1000.],ndivide=1,nthreads=1,show=True,
+            full_mat=False):
+        
+        time0=time.time()
+        gr=Green()
+        eig_addr, vec_addr, velo_addr=gr.calcEigsAndVecsInMemory_mixedFourier(hr,kgrid,atomicOrbIndexList,nthreads)
+        print("velocity finished in %.3f"%(time.time()-time0))
+
+        #time0=time.time()
+        kxaxis=np.linspace(0,1,kgrid[0],endpoint=False)
+        kyaxis=np.linspace(0,1,kgrid[1],endpoint=False)
+        kzaxis=np.linspace(0,1,kgrid[2],endpoint=False)
+        kmesh=np.array([[k1,k2,k3] for k3 in kzaxis for k2 in kyaxis for k1 in kxaxis])
+
+        # prepare input parameters for cdll
+        nkpts=np.prod(kgrid)
+        assert len(omegaList)>=1, 'omegaList is not defined or empty'
+        c_omega_list=(c_double*len(omegaList))()
+        for iomega, omega in enumerate(omegaList):
+            c_omega_list[iomega]=c_double(omega)
+        
+        c_erange=(c_double*2)()
+        c_erange[0]=c_double(erange[0])
+        c_erange[1]=c_double(erange[1])
+        #exit()
+        hamDLL=CDLL("./ham.dll")
+        myFunc=hamDLL.calcBulkPhotovoltaicCond_FullMatrices_mixFFT
+        if full_mat:myFunc=hamDLL.calcBulkPhotovoltaicCond_FullMatrices_mixFFT
+        myFunc.restype=py_object
+
+        #tau=0.05
+        result=myFunc(c_longlong(eig_addr), c_longlong(velo_addr),
+                    c_int(nkpts),c_int(hr.norb),
+                    c_int(len(omegaList)),
+                    c_omega_list,
+                    c_double(paramReader.FERMI),
+                    c_double(tau),
+                    c_erange,
+                    c_int(nthreads))
         print('Bulk photovoltaic conductance solved in %.3fs with %d thread(s)'%(time.time()-time0,nthreads))
+
+        condFull=(np.array(result[0])+1j*np.array(result[1]))
+        if mainDir!=None:
+            if len(omegaList)==1:
+                if full_mat:
+                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy, czxx,czxy,czyx,czyy, cxzx,cxzy,cyzx,cyzy, cxxz,cxyz,cyxz,cyyz, czzx,czzy,czxz,czyz,cxzz,cyzz, czzz=condFull.reshape(27,nkpts)
+                else:
+                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy=condFull.reshape(8,nkpts)
+                with open(mainDir+'photoCondTensor.txt','w') as fout:
+                    for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
+                        fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+                return
+            else:
+                if full_mat:
+                    cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy, czxx,czxy,czyx,czyy, cxzx,cxzy,cyzx,cyzy, cxxz,cxyz,cyxz,cyyz, czzx,czzy,czxz,czyz,cxzz,cyzz, czzz=condFull.reshape(27,len(omegaList),nkpts)
+                    with open(mainDir+'photoCondTensorVsOmega.txt','w') as fout:
+                        fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i Szx_x_r Szx_x_i Szx_y_r Szx_y_i Szy_x_r Szy_x_i Szy_y_r Szy_y_i Sxz_x_r Sxz_x_i Sxz_y_r Sxz_y_i Syz_x_r Syz_x_i Syz_y_r Syz_y_i Sxx_z_r Sxx_z_i Sxy_z_r Sxy_z_i Syx_z_r Syx_z_i Syy_z_r Syy_z_i Szz_x_r Szz_x_i Szz_y_r Szz_y_i Szx_z_r Szx_z_i Szy_z_r Szy_z_i Sxz_z_r Sxz_z_i Syz_z_r Syz_z_i Szz_z_r Szz_z_i\n")
+                        for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy,_czxx,_czxy,_czyx,_czyy, _cxzx,_cxzy,_cyzx,_cyzy, _cxxz,_cxyz,_cyxz,_cyyz, _czzx,_czzy,_czxz,_czyz,_cxzz,_cyzz, _czzz in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy,czxx,czxy,czyx,czyy, cxzx,cxzy,cyzx,cyzy, cxxz,cxyz,cyxz,cyyz, czzx,czzy,czxz,czyz,cxzz,cyzz, czzz):
+                            fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                                omega,
+                                sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
+                                sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
+                                sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
+                                sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
+                                sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
+                                sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
+                                sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
+                                sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag,
+
+                                sum(_czxx/nkpts).real,sum(_czxx/nkpts).imag,
+                                sum(_czxy/nkpts).real,sum(_czxy/nkpts).imag,
+                                sum(_czyx/nkpts).real,sum(_czyx/nkpts).imag,
+                                sum(_czyy/nkpts).real,sum(_czyy/nkpts).imag,
+
+                                sum(_cxzx/nkpts).real,sum(_cxzx/nkpts).imag,
+                                sum(_cxzy/nkpts).real,sum(_cxzy/nkpts).imag,
+                                sum(_cyzx/nkpts).real,sum(_cyzx/nkpts).imag,
+                                sum(_cyzy/nkpts).real,sum(_cyzy/nkpts).imag,
+
+                                sum(_cxxz/nkpts).real,sum(_cxxz/nkpts).imag,
+                                sum(_cxyz/nkpts).real,sum(_cxyz/nkpts).imag,
+                                sum(_cyxz/nkpts).real,sum(_cyxz/nkpts).imag,
+                                sum(_cyyz/nkpts).real,sum(_cyyz/nkpts).imag,
+
+                                sum(_czzx/nkpts).real,sum(_czzx/nkpts).imag,
+                                sum(_czzy/nkpts).real,sum(_czzy/nkpts).imag,
+                                sum(_czxz/nkpts).real,sum(_czxz/nkpts).imag,
+                                sum(_czyz/nkpts).real,sum(_czyz/nkpts).imag,
+                                sum(_cxzz/nkpts).real,sum(_cxzz/nkpts).imag,
+                                sum(_cyzz/nkpts).real,sum(_cyzz/nkpts).imag,
+
+                                sum(_czzz/nkpts).real,sum(_czzz/nkpts).imag,
+                                ))
+                    for iomega, omega in enumerate(omegaList):
+                        with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
+                            for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy,_czxx,_czxy,_czyx,_czyy, _cxzx,_cxzy,_cyzx,_cyzy, _cxxz,_cxyz,_cyxz,_cyyz, _czzx,_czzy,_czxz,_czyz,_cxzz,_cyzz, _czzz in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega],czxx[iomega],czxy[iomega],czyx[iomega],czyy[iomega], cxzx[iomega],cxzy[iomega],cyzx[iomega],cyzy[iomega], cxxz[iomega],cxyz[iomega],cyxz[iomega],cyyz[iomega], czzx[iomega],czzy[iomega],czxz[iomega],czyz[iomega],cxzz[iomega],cyzz[iomega], czzz[iomega]):
+                                fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                                    *kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag,
+                                    _czxx.real,_czxx.imag,_czxy.real,_czxy.imag,_czyx.real,_czyx.imag,_czyy.real,_czyy.imag,_cxzx.real,_cxzx.imag,_cxzy.real,_cxzy.imag,_cyzx.real,_cyzx.imag,_cyzy.real,_cyzy.imag,_cxxz.real,_cxxz.imag,_cxyz.real,_cxyz.imag,_cyxz.real,_cyxz.imag,_cyyz.real,_cyyz.imag,_czzx.real,_czzx.imag,_czzy.real,_czzy.imag,_czxz.real,_czxz.imag,_czyz.real,_czyz.imag,_cxzz.real,_cxzz.imag,_cyzz.real,_cyzz.imag,_czzz.real,_czzz.imag,
+                                    ))
+                else:
+                    cxxx,cyxx,cxyy,cyyy,cxxy,cyxy,cxyx,cyyx=condFull.reshape(8,len(omegaList),nkpts)
+                    with open(mainDir+'photoCondTensorVsOmega.txt','w') as fout:
+                        fout.write("Omega Sxx_x_r Sxx_x_i Sxx_y_r Sxx_y_i Syy_x_r Syy_x_i Syy_y_r Syy_y_i Sxy_x_r Sxy_x_i Sxy_y_r Sxy_y_i Syx_x_r Syx_x_i Syx_y_r Syx_y_i\n")
+                        for omega, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(omegaList,cxxx,cxxy,cyyx,cyyy,cxyx,cxyy,cyxx,cyxy):
+                            fout.write(" %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(
+                                omega,
+                                sum(_cxxx/nkpts).real,sum(_cxxx/nkpts).imag,
+                                sum(_cxxy/nkpts).real,sum(_cxxy/nkpts).imag,
+                                sum(_cyyx/nkpts).real,sum(_cyyx/nkpts).imag,
+                                sum(_cyyy/nkpts).real,sum(_cyyy/nkpts).imag,
+                                sum(_cxyx/nkpts).real,sum(_cxyx/nkpts).imag,
+                                sum(_cxyy/nkpts).real,sum(_cxyy/nkpts).imag,
+                                sum(_cyxx/nkpts).real,sum(_cyxx/nkpts).imag,
+                                sum(_cyxy/nkpts).real,sum(_cyxy/nkpts).imag))
+                    for iomega, omega in enumerate(omegaList):
+                        with open(mainDir+'photoCondTensor%d_E%.3f.txt'%(iomega,omega),'w') as fout:
+                            for kpt, _cxxx,_cxxy,_cyyx,_cyyy,_cxyx,_cxyy,_cyxx,_cyxy in zip(kmesh,cxxx[iomega],cxxy[iomega],cyyx[iomega],cyyy[iomega],cxyx[iomega],cxyy[iomega],cyxx[iomega],cyxy[iomega]):
+                                fout.write(" %.4f %.4f %.4f %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E %13.6E\n"%(*kpt,_cxxx.real,_cxxx.imag,_cyxx.real,_cyxx.imag,_cxyy.real,_cxyy.imag,_cyyy.real,_cyyy.imag,_cxxy.real,_cxxy.imag,_cyxy.real,_cyxy.imag,_cxyx.real,_cxyx.imag,_cyyx.real,_cyyx.imag))
+        if not show:
+            return
+        condcxxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxx])
+        condcxxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxxy])
+        condcyyxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyyx])
+        condcyyyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyyy])
+        condcxyxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxyx])
+        condcxyyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cxyy])
+        condcyxxList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxx])
+        condcyxyList=np.array([np.sum(cond_on_omega/nkpts) for cond_on_omega in cyxy])
         #exit()
         fig,ax=plt.subplots(2,4,sharey=True)
         ax[0,0].scatter(omegaList,condcxxxList.real,label=r'$Re\ \sigma^x_{xx}$')
@@ -2463,11 +2607,11 @@ class Green:
                         )
         #print(result)
         #exit()
-        eig_addr, vec_addr=result
-        print('Hk constructed in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        eig_addr, vec_addr, velo_addr=result
+        print('Hk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
         print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
         #exit()
-        return eig_addr, vec_addr
+        return eig_addr, vec_addr, velo_addr
 
     def calcLatticeGreenFunction_CDLL(self,hr,eigs_addr,vecs_addr,relevantOrbIDList,
                     kgrid:list=[1,1,1],eta=1e-4,
