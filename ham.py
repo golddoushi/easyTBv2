@@ -2537,9 +2537,10 @@ class Green:
         #exit()
         return eig_addr, vec_addr
 
-    def calcEigsAndVecsInMemory_mixedFourier(self,hr,kgrid:list=[1,1,1],
+    def calcEigsAndVecsInMemory_mixedFourier(self,hr,kgrid:list=[1,1,1],nthreads=1,
+            calcVelocity=False,    # tag to identify if we should calc velocities
             atomicOrbIndexList=[], # give the correspondence of atom id to wannier id
-            nthreads=1):
+            ):
         # prepare input parameters for cdll
         time0=time.time()
         
@@ -2569,7 +2570,7 @@ class Green:
             while(kgrid[icomp]%Rgrid[icomp]!=0): Rgrid[icomp]+=1
         Qgrid=np.array(kgrid)//Rgrid
         assert (Rgrid*Qgrid==np.array(kgrid)).all()
-        print(f"Fast (ab inito) Rgrid:{Rgrid}, Slow Qgrid:{Qgrid}")
+        print(f"Rmax:{R_max}, Rmin:{R_min}, Fast (ab inito) Rgrid:{Rgrid}, Slow Qgrid:{Qgrid}")
         
         c_kgrid,c_rgrid,c_qgrid=(c_int*3)(),(c_int*3)(),(c_int*3)()
         for i in range(3):
@@ -2577,41 +2578,53 @@ class Green:
             c_rgrid[i]=Rgrid[i]
             c_qgrid[i]=Qgrid[i]
         
-        c_lat=(c_double*9)()
-        for i in range(3):
-            c_lat[i]=c_double(pR.lat[0][i])
-            c_lat[i+3]=c_double(pR.lat[1][i])
-            c_lat[i+6]=c_double(pR.lat[2][i])
+        if calcVelocity:
+            c_lat=(c_double*9)()
+            for i in range(3):
+                c_lat[i]=c_double(pR.lat[0][i])
+                c_lat[i+3]=c_double(pR.lat[1][i])
+                c_lat[i+6]=c_double(pR.lat[2][i])
 
-        assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
-        orbCorrList=[np.zeros(3) for i in range(hr.norb)]
-        for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
-            for L in atom:
-                for iorb in L: orbCorrList[iorb]=pos
-        #assert sum(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
-        c_orbCorrList=(c_double*(3*hr.norb))()
-        for i in range(hr.norb):
-            c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
-            c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
-            c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
+            assert len(atomicOrbIndexList)==sum(pR.nions), 'pls. provide correctly formatted atomicOrbIndexList[i_atom][i_L]:orb index'
+            orbCorrList=[np.zeros(3) for i in range(hr.norb)]
+            for atom, pos in zip(atomicOrbIndexList,pR.pos_ions):
+                for L in atom:
+                    for iorb in L: orbCorrList[iorb]=pos
+            #assert sum(orbCorrList)==hr.norb, "number of wannier centers: %d inconsistent with %d orbs in hr.dat"%(len(orbCorrList),hr.norb)
+            c_orbCorrList=(c_double*(3*hr.norb))()
+            for i in range(hr.norb):
+                c_orbCorrList[3*i+0]=c_double(orbCorrList[i][0])
+                c_orbCorrList[3*i+1]=c_double(orbCorrList[i][1])
+                c_orbCorrList[3*i+2]=c_double(orbCorrList[i][2])
         
         hamDLL=CDLL("./ham.dll")
-        hamDLL.calcHam_mixFFT.restype=py_object
-        result=hamDLL.calcHam_mixFFT(
-                        # Hamilton part
-                        c_kgrid,c_rgrid,c_qgrid,
-                        c_int(hr.norb),c_int(nhoppings),
-                        c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
-                        c_lat,c_orbCorrList,
-                        c_int(nthreads)
-                        )
-        #print(result)
-        #exit()
-        eig_addr, vec_addr, velo_addr=result
-        print('Hk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
-        print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
-        #exit()
-        return eig_addr, vec_addr, velo_addr
+        if calcVelocity:
+            hamDLL.calcHam_mixFFT.restype=py_object
+            result=hamDLL.calcHam_mixFFT(
+                            # Hamilton part
+                            c_kgrid,c_rgrid,c_qgrid,
+                            c_int(hr.norb),c_int(nhoppings),
+                            c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                            c_lat,c_orbCorrList,
+                            c_int(nthreads)
+                            )
+            eig_addr, vec_addr, velo_addr=result
+            print('Hk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+            print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
+            return eig_addr, vec_addr, velo_addr
+        else:
+            hamDLL.calcHamSimple_mixFFT.restype=py_object
+            result=hamDLL.calcHamSimple_mixFFT(
+                            # Hamilton part
+                            c_kgrid,c_rgrid,c_qgrid,
+                            c_int(hr.norb),c_int(nhoppings),
+                            c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
+                            c_int(nthreads)
+                            )
+            eig_addr, vec_addr, hk_addr=result
+            print('Hk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+            print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
+            return eig_addr, vec_addr, hk_addr
 
     def calcLatticeGreenFunction_CDLL(self,hr,eigs_addr,vecs_addr,relevantOrbIDList,
                     kgrid:list=[1,1,1],eta=1e-4,
@@ -2648,6 +2661,72 @@ class Green:
         #exit()
         result=hamDLL.calcRetardedLatticeGreensFunction(
                         c_longlong(eigs_addr),c_longlong(vecs_addr),
+                        c_kgrid, 
+                        c_int(hr.norb),c_int(nOrbInG_w),c_orbID_map,
+                        c_int(nOmega),c_omega_real,c_omega_imag,
+                        c_double(eta),
+                        c_int(nLatVec),c_latVec,
+                        spinor_tag,
+                        c_int(nthreads))
+        #exit()
+        rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,nOmega,nLatVec,nOrbInG_w,nOrbInG_w)
+        rG_w_lat=rG_w_lat_real+1j*rG_w_lat_imag
+        print('Retarded lattice Greens\' s function solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
+        return rG_w_lat
+
+    def calcLatticeGreenFunction_mixedFourier(self,hr,eigs_addr,vecs_addr,hk_addr,relevantOrbIDList,
+                    kgrid:list=[1,1,1],eta=1e-4,
+                    omega_list=np.zeros(1,dtype=complex),lat_vecs=np.zeros((1,3),dtype=int),
+                    spinor=False,
+                    nthreads=1):
+        # prepare input parameters for cdll
+        time0=time.time()
+
+        nOrbInG_w=len(relevantOrbIDList)
+        c_orbID_map=(c_int*nOrbInG_w)()
+        for iOrbID, orbID in enumerate(relevantOrbIDList):
+            c_orbID_map[iOrbID]=c_int(orbID)
+            
+        c_kgrid=(c_int*3)()
+        for i in range(3):c_kgrid[i]=kgrid[i]
+        
+        nOmega=len(omega_list)
+        c_omega_real=(c_double*nOmega)()
+        c_omega_imag=(c_double*nOmega)()
+        for iomega, omega in enumerate(omega_list):
+            c_omega_real[iomega]=c_double(omega.real)
+            c_omega_imag[iomega]=c_double(omega.imag)
+        
+        
+        R_max,R_min=np.zeros(3,dtype=int),np.zeros(3,dtype=int)
+        nLatVec=len(lat_vecs)
+        c_latVec=(c_int*(nLatVec*3))()
+        for ivec, vec in enumerate(lat_vecs):
+            for i in range(3): 
+                c_latVec[ivec*3+i]=vec[i]
+                if vec[i]>R_max[i]: R_max[i]=vec[i]
+                if vec[i]<R_min[i]: R_min[i]=vec[i]
+        
+        #print(R_max,R_min)
+        # compute R_grid
+        Rgrid=R_max+abs(R_min)+np.ones(3,dtype=int)
+        assert (np.array(kgrid)>=Rgrid).all(), "k-grid %dx%dx%d is smaller than Rgrid %dx%dx%d, mix FFT cannot be done"%(*np.array(kgrid),*Rgrid)
+        
+        for icomp in range(3):
+            while(kgrid[icomp]%Rgrid[icomp]!=0): Rgrid[icomp]+=1
+        Qgrid=np.array(kgrid)//Rgrid
+        assert (Rgrid*Qgrid==np.array(kgrid)).all()
+        print(f"Fast (coupling) Rgrid:{Rgrid}, Slow (phase) Qgrid:{Qgrid}")
+
+        spinor_tag=c_int(0)
+        if spinor: spinor_tag=c_int(1)
+        #exit()
+        hamDLL=CDLL("./ham.dll")
+        hamDLL.calcRetardedLatticeGreensFunction_mixFFT.restype=py_object
+        #print(hex(eigs_addr),hex(vecs_addr),nthreads)
+        #exit()
+        result=hamDLL.calcRetardedLatticeGreensFunction_mixFFT(
+                        c_longlong(eigs_addr),c_longlong(vecs_addr),c_longlong(hk_addr),
                         c_kgrid, 
                         c_int(hr.norb),c_int(nOrbInG_w),c_orbID_map,
                         c_int(nOmega),c_omega_real,c_omega_imag,

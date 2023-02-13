@@ -41,7 +41,7 @@ cc.classifyBonds(mainDir='./mcalc/spinchain/', source_list=[0,1],
                      ], 
            ini_S=[1,1])
 
-cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/spinchain/',hrcutoff=-1,nthreads=4,
+cc.calcIsotropicJ_GaussianQuadrature_V2(mainDir='./mcalc/spinchain/',hrcutoff=-1,nthreads=4,
     sc=[30,1,1],fermi=0,eta=0.0001,erange=(-10,5),lowOrder=20,highOrder=50,Jcvg=-1e-4)
 exit()
 '''
@@ -71,7 +71,7 @@ cc.classifyBonds(mainDir, source_list=[0,1,2],
            wann_list=wann_list,
            ini_S=[1.5,1.5,1.0,0,0,0])
 
-cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
+cc.calcIsotropicJ_GaussianQuadrature_V2(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
     sc=[32,32,1],fermi=0.04758627,eta=0.0001,erange=(-8,10),
     lowOrder=20,highOrder=50,Jcvg=-1e-3)
 #cc.calcJFull_GaussianQuadrature(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
