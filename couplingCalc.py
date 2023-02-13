@@ -859,13 +859,15 @@ def writeMCSolverIsingFile(path):
         f.write('Orbitals in cell:\n')
         f.write('%d\n'%len(magOrbList))
         f.write('Positions, initial spin states and onsite-anisotropy of every orbital:\n')
+        antiOrbIndex=0
         for orb in magOrbList:
             factor=param.EV2K/abs(orb.spin)**2
             f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dz: %.9f Dx: %.9f Dy: %.9f\n'%(
                 orb.index_tmp,orb.type,abs(orb.spin)*orb.magmom/abs(orb.magmom),*orb.pos,orb.D[2]*factor,orb.D[0]*factor,orb.D[1]*factor
             ))
+            if orb.magmom*magOrbList[0].magmom<0: antiOrbIndex=orb.index_tmp
         f.write('Bonds:\n')
-        f.write('%d\n'%len(bondList))
+        f.write('%d\n'%sum([len(bondType) for bondType in bondList]))
         f.write('id, source, target, overLat, Jz, Jx, Jy of each bond:\n')
         for bondType in bondList:
             for bond in bondType:
@@ -879,16 +881,16 @@ def writeMCSolverIsingFile(path):
         f.write('Dipole long range correction:\n')
         f.write('alpha 0.0\n')
         f.write('Temperature scanning region:\n')
-        f.write('Tmin 100 Tmax 500 nT 8\n')
+        f.write('Tmin 100 Tmax 500 nT 16\n')
         f.write('Field scanning region:\n')
         f.write('Hmin 0 Hmax 0.1 nH 1\n')
         f.write('Measurement:\n')
-        f.write('measure the correlation function between orb0 and orb0 over [0 0 0]\n')
+        f.write('measure the correlation function between orb0 and orb%d over [0 0 0]\n'%antiOrbIndex)
         f.write('OrbGroup: 1\n')
         f.write('Supergroup\n')
         f.write('group0 orb0-orb0\n')
         f.write('Sweeps for thermalization and statistics, and relaxiation step for each sweep:\n')
-        f.write('80000 640000 0\n')
+        f.write('40000 80000 0\n')
         f.write('Model type:\n')
         f.write('Ising\n')
         f.write('Algorithm:\n')
