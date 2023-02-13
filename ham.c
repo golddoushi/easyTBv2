@@ -743,12 +743,12 @@ PyObject * calcRetardedLatticeGreensFunction(
     
     long nkpt=kgrid[0]*kgrid[1]*kgrid[2];
     long kxy=kgrid[0]*kgrid[1];
-    lapack_complex_double *k1_axis=(lapack_complex_double*)malloc((long)kgrid[0]*sizeof(lapack_complex_double));
-    lapack_complex_double *k2_axis=(lapack_complex_double*)malloc((long)kgrid[1]*sizeof(lapack_complex_double));
-    lapack_complex_double *k3_axis=(lapack_complex_double*)malloc((long)kgrid[2]*sizeof(lapack_complex_double));
+    lapack_complex_double *k1_axis=(lapack_complex_double*)malloc(kgrid[0]*sizeof(lapack_complex_double));
+    lapack_complex_double *k2_axis=(lapack_complex_double*)malloc(kgrid[1]*sizeof(lapack_complex_double));
+    lapack_complex_double *k3_axis=(lapack_complex_double*)malloc(kgrid[2]*sizeof(lapack_complex_double));
     constructKAxis(kgrid[0],kgrid[1],kgrid[2],k1_axis,k2_axis,k3_axis);
     
-    lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc((long)nOmegaPoints*(long)nLatticeVectors*(long)norbs*(long)norbs*sizeof(lapack_complex_double));
+    lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc(nOmegaPoints*nLatticeVectors*norbs*norbs*sizeof(lapack_complex_double));
     int nthreads;
     nthreads=_nthreads;
     if(nkpt<_nthreads)nthreads=nkpt;
@@ -759,12 +759,12 @@ PyObject * calcRetardedLatticeGreensFunction(
     long latVec_len=norbs*norbs;
     long omega_len=nLatticeVectors*latVec_len;
     long thread_len=nOmegaPoints*omega_len;
-    lapack_complex_double * _G_w_lat=(lapack_complex_double*)malloc((long)nthreads*(long)thread_len*sizeof(lapack_complex_double));
+    lapack_complex_double * _G_w_lat=(lapack_complex_double*)malloc(nthreads*thread_len*sizeof(lapack_complex_double));
     long totalDataGrids=nthreads*thread_len;
     
     // calculate inversed h
-    lapack_complex_double *inversed_hks=(lapack_complex_double*)malloc((long)nkpt*(long)nOmegaPoints*(long)nTotalOrbs*sizeof(lapack_complex_double));
-    lapack_complex_double *lat_factors=(lapack_complex_double*)malloc((long)nkpt*(long)nLatticeVectors*sizeof(lapack_complex_double));
+    lapack_complex_double *inversed_hks=(lapack_complex_double*)malloc(nkpt*nOmegaPoints*(long)nTotalOrbs*sizeof(lapack_complex_double));
+    lapack_complex_double *lat_factors=(lapack_complex_double*)malloc(nkpt*nLatticeVectors*sizeof(lapack_complex_double));
     #pragma omp parallel num_threads(nthreads)
     {
         long my_rank=omp_get_thread_num();
@@ -2906,122 +2906,6 @@ PyObject * calcBulkPhotovoltaicCond_FullMatrices_mixFFT(
     }
     free(conductance_on_kmesh_on_omega);
     return Py_BuildValue("(OO)",conductance_real,conductance_imag);
-    /*
-    
-        lapack_complex_double *velocity=(lapack_complex_double*)malloc(3*nkpt_part*norbs*norbs*sizeof(lapack_complex_double));
-        double *energy=(double*)malloc(nkpt_part*norbs*sizeof(double));
-
-        unsigned long kpt_width=norbs*norbs;
-        unsigned long dir_width=nkpt_part*kpt_width;
-
-        int nthreads;
-        nthreads=_nthreads;
-        if(nkpt_part<_nthreads*10)nthreads=1;
-        
-        #pragma omp parallel num_threads(nthreads)
-        {
-            unsigned long ikpt, ikpt_true, writing_k_index, writing_ph_index;
-            int bandl, bandm, bandn, iphoton;
-            int fl, fn, fln;
-            #pragma omp for
-            for(ikpt=0;ikpt<nkpt_part;ikpt++){// loop over kmesh
-                ikpt_true=ikpt_head+ikpt;
-                writing_k_index=ikpt_true*nphoton*27;
-                for(bandl=0;bandl<norbs;bandl++){ // loop over band_l
-                    double El=energy[ikpt*norbs+bandl];
-                    if(El<erange[0] | El>erange[1]) continue;
-                    fl=0;
-                    if(El<=fermi)fl=1;
-                    for(bandn=0;bandn<norbs;bandn++){ // loop over band_m
-                        double En=energy[ikpt*norbs+bandn];
-                        if(En<erange[0] | En>erange[1]) continue;
-                        fn=0;
-                        if(En<=fermi)fn=1;
-                        fln=fl-fn;
-                        if (fln==0) continue;
-
-                        // calc overlap
-                        lapack_complex_double px_nl=velocity[            ikpt*kpt_width+bandn*norbs+bandl];
-                        lapack_complex_double py_nl=velocity[  dir_width+ikpt*kpt_width+bandn*norbs+bandl];
-                        lapack_complex_double pz_nl=velocity[2*dir_width+ikpt*kpt_width+bandn*norbs+bandl];
-                        //printf("band%d-%d, px_nl %f %f, py_nl %f %f\n",bandn,bandl,creal(px_nl),cimag(px_nl),creal(py_nl),cimag(py_nl));
-                        for(bandm=0;bandm<norbs;bandm++){ // loop over band_n
-                            //if(bandn!=bandl)continue; // switch for bandn
-                            double Em=energy[ikpt*norbs+bandm];
-                            if(Em<erange[0] | Em>erange[1]) continue;
-                            // calc overlap
-                            lapack_complex_double px_lm=velocity[            ikpt*kpt_width+bandl*norbs+bandm];
-                            lapack_complex_double py_lm=velocity[  dir_width+ikpt*kpt_width+bandl*norbs+bandm];
-                            lapack_complex_double pz_lm=velocity[2*dir_width+ikpt*kpt_width+bandl*norbs+bandm];
-                            lapack_complex_double px_mn=velocity[            ikpt*kpt_width+bandm*norbs+bandn];
-                            lapack_complex_double py_mn=velocity[  dir_width+ikpt*kpt_width+bandm*norbs+bandn];
-                            lapack_complex_double pz_mn=velocity[2*dir_width+ikpt*kpt_width+bandm*norbs+bandn];
-
-                            for(iphoton=0;iphoton<nphoton;iphoton++){ // loop over photon
-                                writing_ph_index=writing_k_index+iphoton*27;
-                                double omega=omegaList[iphoton];
-                            
-                                lapack_complex_double factor_global=0;
-                                factor_global=fln/(omega*omega)/(En-Em-itau)*(1/(En-El+omega+itau)+1/(En-El-omega-itau));
-                                conductance_on_kmesh_on_omega[writing_ph_index   ]+=px_nl*px_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 1]+=px_nl*px_lm*py_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 2]+=py_nl*py_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 3]+=py_nl*py_lm*py_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 4]+=px_nl*py_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 5]+=px_nl*py_lm*py_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 6]+=py_nl*px_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 7]+=py_nl*px_lm*py_mn*factor_global;
-
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 8]+=pz_nl*px_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+ 9]+=pz_nl*px_lm*py_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+10]+=pz_nl*py_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+11]+=pz_nl*py_lm*py_mn*factor_global;
-
-                                conductance_on_kmesh_on_omega[writing_ph_index+12]+=px_nl*pz_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+13]+=px_nl*pz_lm*py_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+14]+=py_nl*pz_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+15]+=py_nl*pz_lm*py_mn*factor_global;
-
-                                conductance_on_kmesh_on_omega[writing_ph_index+16]+=px_nl*px_lm*pz_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+17]+=px_nl*py_lm*pz_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+18]+=py_nl*px_lm*pz_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+19]+=py_nl*py_lm*pz_mn*factor_global;
-
-                                conductance_on_kmesh_on_omega[writing_ph_index+20]+=pz_nl*pz_lm*px_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+21]+=pz_nl*pz_lm*py_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+22]+=pz_nl*px_lm*pz_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+23]+=pz_nl*py_lm*pz_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+24]+=px_nl*pz_lm*pz_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+25]+=py_nl*pz_lm*pz_mn*factor_global;
-                                conductance_on_kmesh_on_omega[writing_ph_index+26]+=pz_nl*pz_lm*pz_mn*factor_global;
-                            }
-                        } 
-                    }
-                }
-            }
-        }
-        
-    //}
-
-    printf("All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
-    fp=fopen("./c_log","a");
-    fprintf(fp,"All calc. done! pls. times 3.6981286E-19 (C m/s) (m/V)^2 to get the current (Ampere) per 1V/m field per one cell\n");
-    fclose(fp);
-
-    PyObject * conductance_real=PyTuple_New((unsigned long)nphoton*nkpt*27);
-    PyObject * conductance_imag=PyTuple_New((unsigned long)nphoton*nkpt*27);
-
-    for(int iphoton=0;iphoton<nphoton;iphoton++){
-        for(unsigned long ikpt=0;ikpt<nkpt;ikpt++){
-            for(int icomp=0;icomp<27;icomp++){
-                PyTuple_SetItem(conductance_real, icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(creal(conductance_on_kmesh_on_omega[ikpt*nphoton*27+iphoton*27+icomp])));
-                PyTuple_SetItem(conductance_imag, icomp*nphoton*nkpt+iphoton*nkpt+ikpt, PyFloat_FromDouble(cimag(conductance_on_kmesh_on_omega[ikpt*nphoton*27+iphoton*27+icomp])));
-            }
-        }
-    }
-    free(conductance_on_kmesh_on_omega);
-    return Py_BuildValue("(OO)",conductance_real,conductance_imag);
-    */
 }
 
 PyObject * calcShiftCond(int nkpt, double kmesh[nkpt][3], double dk[3],
