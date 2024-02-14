@@ -28,11 +28,11 @@ hr.symmerizeBonds(atomicOrbIndexList=atomicOrbIndexList,symOpSelection=[],
 paramReader.FERMI=10.96914665
 res=Response()
 res.calcProjectiveSpinHallConductor_CDLL(hr,
-    mainDir=mainDir,atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,50],fermiList=np.linspace(8.9469,12.9469,21),erange=[-100,100],
+    mainDir=mainDir,atomicOrbIndexList=atomicOrbIndexList,kgrid=[50,50,50],fermiList=np.linspace(8.9469,12.9469,21),erange=[-100,100],eta=0.005,
     proj_op=[
         [[0],[0]], # full vel
         ],
     scatter_route=[
         [0,0,0],
         ],
-    ndivide=40,nthreads=4)
+    ndivide=40,nthreads=14)

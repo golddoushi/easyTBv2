@@ -1,3 +1,4 @@
+#define PY_SSIZE_T_CLEAN
 #include<stdio.h>
 #include<complex.h>
 #include<Python.h>
@@ -2385,6 +2386,7 @@ PyObject * calcSpinHallCond_memoryReduce(
                        double hopping_imag[nhoppings],
                        int nfermi,
                        double fermiList[nfermi],
+                       double eta,
                        double lattice[3][3], // lattice vectors: [a_1,a_2,a_3]
                        double orbCorr[norbs][3], // fractional corrdinates of orbs
                        double erange[2],
@@ -2546,7 +2548,7 @@ PyObject * calcSpinHallCond_memoryReduce(
                             lapack_complex_double pz_ln_sz=velocity_sz[iv1*proj_width+2*dir_width+ikpt*kpt_width+bandl*norbs+bandn];
 
                             unsigned long long writing_ph_index=writing_scatter_index+writing_k_index+ifermi*9;
-                            double factor_global=-2/(El-En)/(El-En);
+                            double factor_global=-2/(El-En+eta*_Complex_I)/(El-En+eta*_Complex_I);
                             conductance_on_kmesh_on_omega_sx[writing_ph_index  ]+=cimag(px_ln_sx*px_nl)*factor_global;
                             conductance_on_kmesh_on_omega_sx[writing_ph_index+1]+=cimag(py_ln_sx*px_nl)*factor_global;
                             conductance_on_kmesh_on_omega_sx[writing_ph_index+2]+=cimag(pz_ln_sx*px_nl)*factor_global;

@@ -421,7 +421,7 @@ class Response:
             atomicOrbIndexList=[], # give the correspondence of atom id to wannier id
             proj_op=[[[],[]]], # proj_op[iproj][0,1] give the atom id for source and target projection 
             scatter_route=[[0,0,0]], # scatter_route[iroute][istage=0,1,2] gives the id of projection  
-            fermiList=[],erange=[-1000.,1000.],
+            fermiList=[],erange=[-1000.,1000.],eta=0.005,
             ndivide=1,nthreads=1,show=True):
         time0=time.time()
         assert mainDir!=None,'mainDir is required in projective BPVE calc.'
@@ -515,7 +515,7 @@ class Response:
                         c_sourceID, c_targetID, c_overLat,
                         c_hopping_real, c_hopping_imag,
 
-                        c_int(len(fermiList)), c_fermi_list,
+                        c_int(len(fermiList)), c_fermi_list, c_double(eta),
                         c_lat,
                         c_orbCorrList,
                         c_erange,
@@ -2424,7 +2424,9 @@ class Green:
         plt.show()
         plt.close()
 
-    def calcFullBands_CDLL(self,hr,fermi=0,erange=(0,0),optimalFermi=-100,mainDir=None,saveFig=True,nthreads=1,redBands=[]):
+    def calcFullBands_CDLL(self,hr,fermi=0,erange=(0,0),optimalFermi=-100,
+                           mainDir=None,saveFig=True,nthreads=1,
+                           spinComponentForColor="s0",redBands=[]):
         # prepare input parameters for cdll
         kaxis=[]
         time0=time.time()
@@ -2471,23 +2473,39 @@ class Green:
                         c_sourceID,c_targetID,c_overLat,c_hopping_real,c_hopping_imag,
                         c_int(nthreads))
         _eigList,_vec_r,_vec_i=result
-        eigList=np.array(_eigList).reshape(nkpts,hr.norb)
+        eigList=np.array(_eigList).reshape((nkpts,hr.norb))
+        vecList=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape((nkpts,hr.norb,hr.norb))
         print('Spectra solved in %.3fs with %d threads band range: [%.6f,%.6f]'%(time.time()-time0,nthreads,np.max(eigList),np.min(eigList)))
-        #nbands=eigList.shape[1]
+        if spinComponentForColor=='s0':
+            color=[[1.0 for ikpt in range(nkpts)]  for ibands in range(hr.norb)]
+        else:
+            Soperator=np.zeros((hr.norb,hr.norb),dtype=complex)
+            for i in range(hr.norb//2):
+                if spinComponentForColor=='sz':
+                    Soperator[i,i],Soperator[i+hr.norb//2,i+hr.norb//2]=1,-1
+                elif spinComponentForColor=='sx':
+                    Soperator[i,i+hr.norb//2],Soperator[i+hr.norb//2,i]=1,1
+                elif spinComponentForColor=='sy':
+                    Soperator[i,i+hr.norb//2],Soperator[i+hr.norb//2,i]=-1j,1j
+                else:
+                    print("Error: ham.py::calcFullBands_CDLL, spinComponentForColor should be sx | sy | sz | s0 either.")
+                    exit()
+            color=[[(vecList[ikpt,:,ibands].conj()@Soperator@vecList[ikpt,:,ibands]).real for ikpt in range(nkpts)]  for ibands in range(hr.norb)]
+        
         plt.figure()
         for ibands in range(hr.norb):
-            plt.plot(kaxis,eigList[:,ibands],'-',c='blue')
-        for ibands in redBands:
-            plt.plot(kaxis,eigList[:,ibands],'-',c='red')
+            plt.scatter(kaxis,eigList[:,ibands],s=2,c=color[ibands],vmin=-1,vmax=1,cmap='Spectral')
+        #for ibands in redBands:
+        #    plt.plot(kaxis,eigList[:,ibands],'-',c='red')
         plt.plot([0,ikpt],[fermi,fermi],'--',c='orange')
         if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
         plt.xlim(0,ikpt)
         if erange[1]!=erange[0]:
             plt.ylim(fermi+erange[0],fermi+erange[1])
-        else:    
-            plt.ylim(fermi-paramReader.DFERMI,fermi+paramReader.DFERMI)
+        #else:    
+        #    plt.ylim(fermi-paramReader.DFERMI,fermi+paramReader.DFERMI)
         plt.xticks([])
-        plt.xlabel('K')
+        #plt.xlabel('K')
         plt.ylabel('Energy')
         if saveFig:
             assert mainDir!=None, 'We need path or directory to save the figure'
@@ -2502,6 +2520,129 @@ class Green:
         plt.show()
         plt.close()
     
+    def calcFullBandsWithOverlap_DoubelSpin(self,hr,fermi=0,erange=(0,0),optimalFermi=-100,
+                           mainDir=None,saveFig=True,nthreads=1,
+                           spinComponentForColor="s0"):
+        '''
+        Calculate the eigen-vals. and eigen-vecs. in the LCAO formalism.
+        For the case with double spin-tunnels, including the case of noncolinear. The overlap is only defined for spin-up (or the first spinor)
+        \nReturn the .png and txt files for band-structure
+        '''
+        def callback(k):
+            print("callbak function of python is reporting, recived parameter is:")
+            print(k)
+            return
+        # prepare input parameters for cdll
+        time0=time.time()
+        if mainDir!=None: # read in kpath
+            kmeshArray=np.loadtxt(mainDir+"KPOINTS",skiprows=3)[:,:3]
+            nkpts=kmeshArray.shape[0]
+        else:
+            kmeshArray=pR.autoGenerateKpath2D(onlyGetKPTList=True)
+            nkpts=len(kmeshArray)
+        kmesh=[]
+        for kpt in kmeshArray: kmesh+=list(kpt)
+        nhoppings=len(hr.bondList)
+        sourceID, targetID, overLat, t_real, t_imag, overlap_real, overlap_imag  =[],[],[],[],[],[],[]
+        for bond in hr.bondList:
+            #print("%3d %3d %3d %3d %3d %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
+            sourceID.append(bond.source)
+            targetID.append(bond.target)
+            overLat.append(bond.overlat[0]);overLat.append(bond.overlat[1]);overLat.append(bond.overlat[2])
+            t_real.append(bond.t.real)
+            t_imag.append(bond.t.imag)
+            overlap_real.append(bond.overlap.real)
+            overlap_imag.append(bond.overlap.imag)
+        #exit()
+        from eig import calcFullBandsAndVecs_OVLCorrection_DoubelSpin
+        result=calcFullBandsAndVecs_OVLCorrection_DoubelSpin(nkpts,kmesh,
+                        hr.norb,nhoppings,
+                        sourceID,targetID,overLat,
+                        t_real, t_imag, overlap_real, overlap_imag,
+                        nthreads,callback)
+        _eigList,_vec_r,_vec_i=result
+        eigList=np.array(_eigList).reshape((nkpts,hr.norb))
+        vecList=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape((nkpts,hr.norb,hr.norb))
+        print('Spectra solved in %.3fs with %d threads band range: [%.6f,%.6f]'%(time.time()-time0,nthreads,np.max(eigList),np.min(eigList)))
+        if spinComponentForColor=='s0':
+            color=[[1.0 for ikpt in range(nkpts)]  for ibands in range(hr.norb)]
+        else:
+            Soperator=np.zeros((hr.norb,hr.norb),dtype=complex)
+            for i in range(hr.norb//2):
+                if spinComponentForColor=='sz':
+                    Soperator[i,i],Soperator[i+hr.norb//2,i+hr.norb//2]=1,-1
+                elif spinComponentForColor=='sx':
+                    Soperator[i,i+hr.norb//2],Soperator[i+hr.norb//2,i]=1,1
+                elif spinComponentForColor=='sy':
+                    Soperator[i,i+hr.norb//2],Soperator[i+hr.norb//2,i]=-1j,1j
+                else:
+                    print("Error: ham.py::calcFullBands_CDLL, spinComponentForColor should be sx | sy | sz | s0 either.")
+                    exit()
+            color=[[(vecList[ikpt,:,ibands].conj()@Soperator@vecList[ikpt,:,ibands]).real for ikpt in range(nkpts)]  for ibands in range(hr.norb)]
+        
+        plt.figure()
+        kaxis=np.arange(nkpts)
+        for ibands in range(hr.norb):
+            plt.scatter(kaxis,eigList[:,ibands],s=2,c=color[ibands],vmin=-1,vmax=1,cmap='Spectral')
+        #for ibands in redBands:
+        #    plt.plot(kaxis,eigList[:,ibands],'-',c='red')
+        plt.plot([0,nkpts-1],[fermi,fermi],'--',c='orange')
+        if(optimalFermi>-100): plt.plot([0,ikpt],[optimalFermi,optimalFermi],'--',c='green')
+        plt.xlim(0,nkpts-1)
+        if erange[1]!=erange[0]:
+            plt.ylim(fermi+erange[0],fermi+erange[1])
+        #else:    
+        #    plt.ylim(fermi-paramReader.DFERMI,fermi+paramReader.DFERMI)
+        plt.xticks([])
+        #plt.xlabel('K')
+        plt.ylabel('Energy')
+        if saveFig:
+            assert mainDir!=None, 'We need path or directory to save the figure'
+            plt.savefig(mainDir+'Bands.png')
+
+            with open(mainDir+'tbBands.txt','w') as fout:
+                fout.write('#k energy\n')
+                for ibands in range(hr.norb):
+                    for ikpt in range(nkpts):
+                        fout.write('%d %.6f\n'%(ikpt,eigList[ikpt,ibands]))
+                    fout.write('\n')
+        plt.show()
+        plt.close()
+
+    def calcEigsAndVecsInMemoryWithOverlap_DoubelSpin(self,hr,kgrid:list=[1,1,1],nthreads:int=1,):
+        '''
+        Calculate the eigen-vals. and eigen-vecs. in the LCAO formalism.
+        For the case with double spin-tunnels, including the case of noncolinear. The overlap is only defined for spin-up (or the first spinor)
+        \nReturn the address of eigs. and vecs.
+        '''
+        def callback(k):
+            print("callbak function of python is reporting, recived parameter is:")
+            print(k)
+            return
+        # prepare input parameters for cdll
+        time0=time.time()
+        nhoppings=len(hr.bondList)
+        sourceID, targetID, overLat, t_real, t_imag, overlap  =[],[],[],[],[],[]
+        for bond in hr.bondList:
+            #print("%3d %3d %3d %3d %3d %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
+            sourceID.append(bond.source);targetID.append(bond.target)
+            overLat.append(bond.overlat[0]);overLat.append(bond.overlat[1]);overLat.append(bond.overlat[2])
+            t_real.append(bond.t.real);t_imag.append(bond.t.imag)
+            overlap.append(bond.overlap)
+        #exit()
+        from eig import calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin
+        result=calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin(kgrid,
+                        hr.norb,nhoppings,
+                        sourceID,targetID,overLat,
+                        t_real, t_imag, overlap,
+                        nthreads,callback)
+        eig_addr, vec_addr=result
+        print('Hk constructed in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
+        #exit()
+        return eig_addr, vec_addr
+        
+
     def calcEigsAndVecsInMemory_simple(self,hr,kgrid:list=[1,1,1],nthreads=1):
         # prepare input parameters for cdll
         time0=time.time()
