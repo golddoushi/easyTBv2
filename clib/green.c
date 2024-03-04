@@ -131,11 +131,11 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
     {
         uint my_rank=omp_get_thread_num();
         ulong i_rank=my_rank*thread_len;
-        uint iomega, ieig;
+        ulong iomega, ieig;
         ulong i_omega_k;
         ulong i_eig_k, i_kpt_base;
-        uint ikpt, ik1, ik2, ik3;
-        uint ilat, iorb, jorb;
+        ulong ikpt, ik1, ik2, ik3;
+        ulong ilat, iorb, jorb;
         int info;
         int *ipiv=(int*)malloc(nTotalOrbs*sizeof(int));
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
@@ -191,7 +191,7 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
     {
         uint my_rank=omp_get_thread_num();
         ulong i_rank=my_rank*thread_len;
-        uint iomega, ilat, ieig, iorb, jorb, ikpt;
+        ulong iomega, ilat, ieig, iorb, jorb, ikpt;
         ulong i_omega_k, i_lat_k;
         ulong i_eig_k, i_vec_k;
         lapack_complex_double factor, inverse_h;
@@ -215,14 +215,16 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
             //i_eig_k=ikpt*norbs;
             i_vec_k=ikpt*nTotalOrbs*nTotalOrbs;
             for(ilat=0;ilat<nLatticeVectors;ilat++){
+                //printf("rank%d, ikpt*nLatticeVectors+ilat %d\n",my_rank,ikpt*nLatticeVectors+ilat);
                 factor=lat_factors[ikpt*nLatticeVectors+ilat];
                 i_lat_k=ilat*latVec_len;
                 for(iomega=0;iomega<nOmegaPoints;iomega++){
                     i_omega_k=iomega*omega_len;
                     // Gw_k = veck^-1,dagger @ Gw_lam @ veck^-1
                     // 1. g0_inversed_vecs = Gw_lam @ veck^-1
-                    for(ieig=0;ieig<nTotalOrbs;ieig++)for(iorb=0;iorb<norbs;iorb++)
-                        g0_inversed_vecs[ieig*norbs+iorb]=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[jorb]];
+                    for(ieig=0;ieig<nTotalOrbs;ieig++)for(iorb=0;iorb<norbs;iorb++){
+                        //printf("rank%d %d/%d ivec_k %d ieig %d orbIDMap[%d] %d, nOmegaPoints %d, %d/%d\n",my_rank,ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig,nkpt*nOmegaPoints*nTotalOrbs,i_vec_k,ieig,orbIDMap[jorb],i_vec_k+ieig*nTotalOrbs+orbIDMap[jorb],nkpt*nTotalOrbs*nTotalOrbs);
+                        g0_inversed_vecs[ieig*norbs+iorb]=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]];}
                     // 2. Gw_k = veck^-1,dagger @ g0_inversed_vecs
                     for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)for(ieig=0;ieig<nTotalOrbs;ieig++)
                         _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
