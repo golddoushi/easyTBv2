@@ -3,6 +3,7 @@
 #include<complex.h>
 #include<Python.h>
 #include<lapacke.h>
+#include<cblas.h>
 #include<time.h>
 #include<fftw3.h>
 
@@ -642,16 +643,18 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
         lapack_complex_double phase;
         uint isource, itarget;
         int Rvec0, Rvec1, Rvec2; // Rvec can be negative!
-        double d0, d1, d2;
+        double d0, d1, d2, alpha, beta;
         uint iOrbPair, iR, iR1, iR2, iR3, iq, iq1, iq2, iq3, ik1, ik2, ik3, ik, iorb, jorb, icontract, jcontract;
         lapack_complex_double *tq=(lapack_complex_double*)malloc(norbs*norbs*nRgrid*sizeof(lapack_complex_double));
         lapack_complex_double *sq=(lapack_complex_double*)malloc(norbs*norbs*nRgrid*sizeof(lapack_complex_double));
+        lapack_complex_double * _HkWave =(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk wave the one can be solved
         lapack_complex_double * HkWave =(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk wave the one can be solved
         lapack_complex_double * Wk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init the eigen-vecs of Ok
         lapack_complex_double * WkHalf=(lapack_complex_double*)malloc((norbs/2)*(norbs/2)*sizeof(lapack_complex_double)); // one quarter the eigen-vecs of Ok for double spin case
         double * eigs=(double*)malloc(norbs*sizeof(double)); // eigenvalues of Hk
         double * Oklam=(double*)malloc(norbs*sizeof(double)); // eigenvalues of overlap
-        
+        alpha=1;beta=0; // for matrix multiply
+
         int myrank=omp_get_thread_num();
         uint my_nqpt_portion=nQgrid/nthreads;
         uint my_icnt=0;
@@ -775,6 +778,11 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                 }
                 
                 // HkWave= 1/sqrt(Olam) @ W^dagger @ Hk @ W @ 1/sqrt(Olam)
+                // 1. _HkWave = Hk @ W
+                cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, norbs, norbs, &alpha, tk_list+ik*norbs*norbs, norbs, Wk, norbs, &beta, _HkWave, norbs);
+                // 2. HkWave = W^dagger @ _HkWave
+                cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, _HkWave, norbs, &beta, HkWave, norbs);
+                /*
                 for(iorb=0;iorb<norbs;iorb++){
                    for(jorb=0;jorb<norbs;jorb++){
                         HkWave[iorb*norbs+jorb]=0;
@@ -782,7 +790,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                           for(jcontract=0;jcontract<norbs;jcontract++)
                             HkWave[iorb*norbs+jorb]+=conj(Wk[icontract*norbs+iorb])*tk_list[ik*norbs*norbs+icontract*norbs+jcontract]*Wk[jcontract*norbs+jorb];
                     }
-                }
+                }*/
                 
                 for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
                     HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb])/sqrt(Oklam[jorb]);
@@ -798,17 +806,22 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                     exit(1);
                 }
                 // Calc. the normalized eigen-vecs. V=W @ 1/sqrt(Olam) @ U
+                // 1. HkWave = 1/sqrt(Olam) @ U
                 for(iorb=0;iorb<norbs;iorb++){
                     spectra[ik*norbs+iorb]=eigs[iorb];
                     for(jorb=0;jorb<norbs;jorb++){
                        HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb]);
-                       tk_list[ik*norbs*norbs+iorb*norbs+jorb]=0;
+                       //tk_list[ik*norbs*norbs+iorb*norbs+jorb]=0;
                    }
                 }
+                // 2. V=W @ HkWave
+                cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, HkWave, norbs, &beta, tk_list+ik*norbs*norbs, norbs);
+                /*
                 for(iorb=0;iorb<norbs;iorb++)
                    for(jorb=0;jorb<norbs;jorb++)
                       for(icontract=0;icontract<norbs;icontract++)
                          tk_list[ik*norbs*norbs+iorb*norbs+jorb]+=Wk[iorb*norbs+icontract]*HkWave[icontract*norbs+jorb];
+                */
             }
             }
             }
@@ -821,8 +834,8 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
 
         }
         if(myrank==0)printf("\n");
-        printf("thread%d finished\n",myrank);
-        free(HkWave);free(tq);free(sq);free(Wk);free(WkHalf);free(eigs);free(Oklam);
+        //printf("thread%d finished\n",myrank);
+        free(HkWave);free(_HkWave);free(tq);free(sq);free(Wk);free(WkHalf);free(eigs);free(Oklam);
     }
     printf("free all inputs...\n");
     free(sourceID);free(targetID);free(overLat);free(hopping_real);free(hopping_imag);free(overlap);

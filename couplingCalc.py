@@ -565,13 +565,19 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],overlap=False,
         npoints=len(points)
         print("----- Iteration %d -----"%iteration_num)
         z,dz=aux.semiCirle(emin,emax,points)
-        rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
-            hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
-            kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=True,
-            nthreads=nthreads)
+        if overlap:
+            rG_w_lat=gr.calcLatticeGreenFunctionWithOverlap(
+                hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
+                kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=1,
+                nthreads=nthreads)
+        else:
+            rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
+                hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
+                kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=True,
+                nthreads=nthreads)
         
         # calc. charge density and spin density
-        diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
+        diag_list=np.array([np.diag(np.linalg.inv(hr.homeOverlap[relevantOrbID_list,:][:,relevantOrbID_list])@rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
         rho_of_each_orb=sum(diag_list)
         print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
         print("Mag.mom of source atoms: %.6f"%(

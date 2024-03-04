@@ -10,6 +10,8 @@ import paramReader
 import matplotlib.pyplot as plt
 import auxiliary
 from ctypes import c_double, c_int, CDLL, py_object, c_double, c_longlong
+import eig as eiglib
+import green as grlib
 
 class Ham:
     def __init__(self):
@@ -2630,8 +2632,7 @@ class Green:
             t_real.append(bond.t.real);t_imag.append(bond.t.imag)
             overlap.append(bond.overlap)
         #exit()
-        from eig import calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin
-        result=calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin(kgrid,
+        result=eiglib.calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin(kgrid,
                         hr.norb,nhoppings,
                         sourceID,targetID,overLat,
                         t_real, t_imag, overlap,
@@ -2865,6 +2866,31 @@ class Green:
                         c_int(nthreads))
         #exit()
         rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,nOmega,nLatVec,nOrbInG_w,nOrbInG_w)
+        rG_w_lat=rG_w_lat_real+1j*rG_w_lat_imag
+        print('Retarded lattice Greens\' s function solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
+        return rG_w_lat
+
+    def calcLatticeGreenFunctionWithOverlap(self,hr,eigs_addr,vecs_addr,relevantOrbIDList,
+                    kgrid:list=[1,1,1],eta=1e-4,
+                    omega_list:np.ndarray=np.zeros(1,dtype=complex),lat_vecs=np.zeros((1,3),dtype=int),
+                    spinor:int=1,
+                    nthreads:int=1):
+        # prepare input parameters for cdll
+        time0=time.time()
+        nLatVec=len(lat_vecs)
+        latVecList=[]
+        for vec in lat_vecs: latVecList+=list(vec)
+        result=grlib.calcRetardedLatticeGreensFunction(
+                        eigs_addr,vecs_addr,
+                        kgrid, 
+                        hr.norb,len(relevantOrbIDList),list(relevantOrbIDList),
+                        len(omega_list),list(omega_list.real),list(omega_list.imag),
+                        eta,
+                        nLatVec,latVecList,
+                        spinor,
+                        nthreads,lambda k: print("call back %s"%k))
+        #exit()
+        rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,len(omega_list),nLatVec,len(relevantOrbIDList),len(relevantOrbIDList))
         rG_w_lat=rG_w_lat_real+1j*rG_w_lat_imag
         print('Retarded lattice Greens\' s function solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         return rG_w_lat

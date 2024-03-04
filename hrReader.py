@@ -71,6 +71,7 @@ class Hr:
             self.norb=int(data[1])
             if format=="QE": assert self.norb%2==0, "format is set to QE, means we are doing soc case, but norb is odd"
             self.onsite=[0.]*self.norb
+            self.homeOverlap=np.eye(self.norb) # the overlap matrix for orbitals in one cell
 
             totWaveVectors=int(data[2])
             iline=3
@@ -99,7 +100,8 @@ class Hr:
                 _dRList.append(overlat)
                 if overlap:
                     self.bondList.append(lat.BondDigital(source, target,overlat=overlat,
-                                                         t=t,overlap=bondInfo[7]))    
+                                                         t=t,overlap=bondInfo[7]))
+                    if overlat==(0,0,0): self.homeOverlap[source,target]=bondInfo[7]
                 else:
                     self.bondList.append(lat.BondDigital(source, target,overlat=overlat,t=t))
                 
@@ -109,6 +111,10 @@ class Hr:
             self.bondInVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=complex)
             for bond in self.bondList:
                 self.bondInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.t
+            if overlap:
+                self.overlapInVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb))
+                for bond in self.bondList:
+                    self.overlapInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.overlap
             
             print('file %s has been successfully read in %.3fms, %d/%d skipped'%(filepath,1000*(time.time()-time0),data.shape[0]-nbonds,data.shape[0]))
             #exit()
