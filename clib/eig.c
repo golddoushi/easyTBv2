@@ -552,10 +552,301 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin(PyObject* self,
     return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
 }
 
+PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyObject* args){
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    fclose(fp);
+    // read in all parameters
+    PyObject* py_kgrid;
+    PyObject* py_rgrid;
+    PyObject* py_qgrid;
+    PyObject* py_norbs;
+    PyObject* py_nhoppings;
+    PyObject* py_sourceID;
+    PyObject* py_targetID;
+    PyObject* py_overLat;
+    PyObject* py_treal;
+    PyObject* py_timag;
+    PyObject* py_overlap;
+    PyObject* py_ispin;
+    PyObject* py_nthreads;
+    PyObject* callback;  // callback function
+    printf("start parsing...\n");
+    PyArg_ParseTuple(args,"OOOOOOOOOOOOOO",
+        &py_kgrid,&py_rgrid,&py_qgrid,&py_norbs,&py_nhoppings,&py_sourceID,&py_targetID,
+        &py_overLat,
+        &py_treal,&py_timag,&py_overlap,&py_ispin,
+        &py_nthreads,&callback);
+    uint ispin=(uint)PyLong_AS_LONG(py_ispin);
+    uint kgrid[3];
+    uint rgrid[3];
+    uint qgrid[3];
+    for(uint icomp=0;icomp<3;icomp++){
+        kgrid[icomp]=(uint)PyLong_AS_LONG(PyList_GetItem(py_kgrid,icomp));
+        rgrid[icomp]=(uint)PyLong_AS_LONG(PyList_GetItem(py_rgrid,icomp));
+        qgrid[icomp]=(uint)PyLong_AS_LONG(PyList_GetItem(py_qgrid,icomp));
+    }
+    uint nKgrid=kgrid[0]*kgrid[1]*kgrid[2];
+    uint nRgrid=rgrid[0]*rgrid[1]*rgrid[2];
+    uint nQgrid=qgrid[0]*qgrid[1]*qgrid[2];
+    uint norbs=(uint)PyLong_AS_LONG(py_norbs);
+    uint nhoppings=(uint)PyLong_AS_LONG(py_nhoppings);
+    printf("nkpt=%d nrpt=%d nqpt=%d norbs=%d ispin=%d nhoppings=%d\n",nKgrid,nRgrid,nQgrid,norbs,ispin,nhoppings);
+    uint nthreads=(uint)PyLong_AS_LONG(py_nthreads);
+    if(2*nQgrid<nthreads)nthreads=1;
+    printf("Solving %d slow girds, using %d threads\n",nQgrid,nthreads);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"use %d cores in eig.pyd::calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT\n",nthreads);
+    fclose(fp);
+
+    uint *sourceID=(uint*)malloc(nhoppings*sizeof(uint));
+    uint *targetID=(uint*)malloc(nhoppings*sizeof(uint));
+    int *overLat=(int*)malloc(nhoppings*3*sizeof(int));
+    double*hopping_real=(double*)malloc(nhoppings*sizeof(double));
+    double*hopping_imag=(double*)malloc(nhoppings*sizeof(double));
+    double*overlap=(double*)malloc(nhoppings*sizeof(double));
+    for(uint ihopping=0;ihopping<nhoppings;ihopping++){
+        sourceID[ihopping]=(uint)PyLong_AS_LONG(PyList_GetItem(py_sourceID,ihopping));
+        targetID[ihopping]=(uint)PyLong_AS_LONG(PyList_GetItem(py_targetID,ihopping));
+        for(uint idir=0;idir<3;idir++)
+            overLat[ihopping*3+idir]=PyLong_AS_LONG(PyList_GetItem(py_overLat,ihopping*3+idir));
+        hopping_real[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_treal,ihopping));
+        hopping_imag[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_timag,ihopping));
+        overlap[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_overlap,ihopping));
+    }
+    printf("Args. parsing finished.\n");
+    // create hopping on slow grids
+    clock_t time0=clock();
+    double * spectra=(double*)malloc((unsigned long long)nKgrid*norbs*sizeof(double));                    // eigen values
+    lapack_complex_double *tk_list=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));  // eigen vectors
+    lapack_complex_double *hk=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));         // energy matrix in k-space
+    lapack_complex_double *ok=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double)); // overlap matrix in k-space
+    
+    // fftw_plan use global variables. So, we should create them outside the parallel loop
+    fftw_complex *tR=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    fftw_complex *tk=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    fftw_plan*p_list  =(fftw_plan*)malloc(nthreads*sizeof(fftw_plan));
+    fftw_complex *sR=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    fftw_complex *sk=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
+    fftw_plan*ps_list  =(fftw_plan*)malloc(nthreads*sizeof(fftw_plan));
+    for(uint ithread=0;ithread<nthreads;ithread++){
+        p_list[ithread]=fftw_plan_dft_3d(rgrid[0],rgrid[1],rgrid[2],tR+ithread*nRgrid,tk+ithread*nRgrid,FFTW_BACKWARD,FFTW_MEASURE);
+        ps_list[ithread]=fftw_plan_dft_3d(rgrid[0],rgrid[1],rgrid[2],sR+ithread*nRgrid,sk+ithread*nRgrid,FFTW_BACKWARD,FFTW_MEASURE);
+    }
+    printf("FFTW ready.\n");
+    unsigned long long index; // the index for all states includes kpts and bands
+    #pragma omp parallel num_threads(nthreads)
+    {
+        lapack_complex_double _tq, _sq;
+        lapack_complex_double phase;
+        uint isource, itarget;
+        int Rvec0, Rvec1, Rvec2; // Rvec can be negative!
+        double d0, d1, d2;
+        uint iOrbPair, iR, iR1, iR2, iR3, iq, iq1, iq2, iq3, ik1, ik2, ik3, ik, iorb, jorb, icontract, jcontract;
+        lapack_complex_double *tq=(lapack_complex_double*)malloc(norbs*norbs*nRgrid*sizeof(lapack_complex_double));
+        lapack_complex_double *sq=(lapack_complex_double*)malloc(norbs*norbs*nRgrid*sizeof(lapack_complex_double));
+        lapack_complex_double * HkWave =(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk wave the one can be solved
+        lapack_complex_double * Wk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init the eigen-vecs of Ok
+        lapack_complex_double * WkHalf=(lapack_complex_double*)malloc((norbs/2)*(norbs/2)*sizeof(lapack_complex_double)); // one quarter the eigen-vecs of Ok for double spin case
+        double * eigs=(double*)malloc(norbs*sizeof(double)); // eigenvalues of Hk
+        double * Oklam=(double*)malloc(norbs*sizeof(double)); // eigenvalues of overlap
+        
+        int myrank=omp_get_thread_num();
+        uint my_nqpt_portion=nQgrid/nthreads;
+        uint my_icnt=0;
+        if(my_nqpt_portion==0)my_nqpt_portion=1;
+        if(myrank==0){
+            fp=fopen("./c_log","a");
+            for(iq=0;iq<my_nqpt_portion;iq++){
+                printf("_");
+                fprintf(fp,"_");
+            }
+            printf("\n");
+            fprintf(fp,"\n");
+            fclose(fp);
+        }
+        #pragma omp for
+        for(iq=0;iq<nQgrid;iq++){
+            iq3=iq%qgrid[2];
+            iq2=((iq-iq3)/qgrid[2])%qgrid[1];
+            iq1=iq/qgrid[1]/qgrid[2];
+            //if(myrank==0)printf("q=(%d %d %d)\n",iq1,iq2,iq3);
+            for(int ihopping=0;ihopping<nhoppings;ihopping++){
+                //if(myrank==0)printf("hopping%d\n",ihopping);
+                Rvec0=overLat[ihopping*3+0];
+                Rvec1=overLat[ihopping*3+1];
+                Rvec2=overLat[ihopping*3+2];
+                //if(abs(Rvec0)>=rgrid[0] | abs(Rvec1)>=rgrid[1] | abs(Rvec2)>=rgrid[2])continue; // skip redundant hopping
+                //if(myrank==0)printf("Original Rvec: %d %d %d in rgird (%d %d %d)\n",Rvec0,Rvec1,Rvec2,rgrid[0],rgrid[1],rgrid[2]);
+                if(Rvec0<0) Rvec0+=rgrid[0];
+                if(Rvec1<0) Rvec1+=rgrid[1];
+                if(Rvec2<0) Rvec2+=rgrid[2];
+                //if(Rvec0<0 | Rvec1<0 | Rvec2<0)continue; // skip redundant hopping
+                iR=Rvec0*rgrid[1]*rgrid[2]+Rvec1*rgrid[2]+Rvec2;
+
+                isource=sourceID[ihopping];
+                itarget=targetID[ihopping];
+                iOrbPair=isource*norbs+itarget;
+                //printf("Rvec: %d %d %d; iOrbPair: %d; iR: %d; index for tq and sq: %d\n",Rvec0,Rvec1,Rvec2,iOrbPair,iR,iOrbPair*nRgrid+iR);
+                phase=cexp(_Complex_I*TwoPI*((double)iq1/kgrid[0]*overLat[ihopping*3+0]+(double)iq2/kgrid[1]*overLat[ihopping*3+1]+(double)iq3/kgrid[2]*overLat[ihopping*3+2]));
+                //if(myrank==0)printf("phase: %.3f %.3f\n",creal(phase),cimag(phase));
+                //if(myrank==0)printf("hopping: %.3f %.3f\n",creal(hopping_real[ihopping]),cimag(hopping_real[ihopping]));
+                //if(myrank==0)printf("overlap: %.3f\n",overlap[ihopping]);
+                //exit(1);
+                /*
+                if(iOrbPair*nRgrid+iR>=norbs*norbs*nRgrid | iOrbPair*nRgrid+iR<0){
+                    printf("Error!\n");
+                    printf("Rvec: %d %d %d; isource,itarget,iOrbPair: %d %d %d; iR: %d; index for tq and sq: %d\n",Rvec0,Rvec1,Rvec2,isource,itarget,iOrbPair,iR,iOrbPair*nRgrid+iR);
+                    printf("norbs*norbs*nRgrid=%d\n",norbs*norbs*nRgrid);
+                    exit(1);
+                }*/
+                tq[iOrbPair*nRgrid+iR]=phase*(hopping_real[ihopping]+_Complex_I*hopping_imag[ihopping]);
+                sq[iOrbPair*nRgrid+iR]=phase*overlap[ihopping];
+            }
+            //printf("tq and sq ready\n");
+            //exit(1);
+            for(iorb=0;iorb<norbs;iorb++){
+                for(jorb=0;jorb<norbs;jorb++){
+                    iOrbPair=iorb*norbs+jorb;
+                    for(iR=0;iR<nRgrid;iR++){
+                        tR[myrank*nRgrid+iR]=tq[iOrbPair*nRgrid+iR];
+                        sR[myrank*nRgrid+iR]=sq[iOrbPair*nRgrid+iR];
+                    }
+                    //printf("\n");
+                    fftw_execute(p_list[myrank]);
+                    fftw_execute(ps_list[myrank]);
+                    for(iR1=0;iR1<rgrid[0];iR1++){
+                    for(iR2=0;iR2<rgrid[1];iR2++){
+                    for(iR3=0;iR3<rgrid[2];iR3++){
+                        ik1=iR1*qgrid[0]+iq1;
+                        ik2=iR2*qgrid[1]+iq2;
+                        ik3=iR3*qgrid[2]+iq3;
+                        ik=ik1+ik2*kgrid[0]+ik3*kgrid[0]*kgrid[1]; // ik1 run fastest
+                        iR=iR1*rgrid[1]*rgrid[2]+iR2*rgrid[2]+iR3;
+                        //if(myrank==0)printf("iq: %d %d %d iR: %d %d %d ik: %d %d %d\n",iq1,iq2,iq3,iR1,iR2,iR3,ik1,ik2,ik3);
+
+                        tk_list[ik*norbs*norbs+iOrbPair]=tk[myrank*nRgrid+iR];
+                        hk[ik*norbs*norbs+iOrbPair]=tk[myrank*nRgrid+iR];
+                        ok[ik*norbs*norbs+iOrbPair]=sk[myrank*nRgrid+iR];
+                    }
+                    }
+                    }
+                }
+            }
+            //printf("Hk and Ok for all sub kpts of iq=%d are set.\n",iq);
+            //exit(1);
+            for(iR1=0;iR1<rgrid[0];iR1++){
+            for(iR2=0;iR2<rgrid[1];iR2++){
+            for(iR3=0;iR3<rgrid[2];iR3++){
+                ik1=iR1*qgrid[0]+iq1;
+                ik2=iR2*qgrid[1]+iq2;
+                ik3=iR3*qgrid[2]+iq3;
+                ik=ik1+ik2*kgrid[0]+ik3*kgrid[0]*kgrid[1]; // ik1 run fastest
+                //printf("ik %d\n",ik);
+
+                if(ispin==2){ // only one quarter overlap will be solved, and copy to the other diagonal region
+                    for(iorb=0;iorb<norbs/2;iorb++)for(jorb=0;jorb<norbs/2;jorb++)
+                       WkHalf[iorb*(norbs/2)+jorb]=ok[ik*norbs*norbs+iorb*norbs+jorb];
+                    int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs/2,WkHalf,norbs/2,Oklam);
+                    if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
+                    // Set full ovlk
+                    for(iorb=0;iorb<norbs/2;iorb++){
+                        Oklam[norbs/2+iorb]=Oklam[iorb];
+                        for(jorb=0;jorb<norbs/2;jorb++){
+                            Wk[          iorb*norbs+          jorb]=WkHalf[iorb*(norbs/2)+jorb];
+                            Wk[(iorb+norbs/2)*norbs+(jorb+norbs/2)]=WkHalf[iorb*(norbs/2)+jorb];
+                            Wk[(iorb+norbs/2)*norbs          +jorb]=0;
+                            Wk[          iorb*norbs+(jorb+norbs/2)]=0;
+                        }
+                    }
+                }else{ // solve the whole overlap matrix
+                    for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
+                       Wk[iorb*norbs+jorb]=ok[ik*norbs*norbs+iorb*norbs+jorb];
+                    int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,Wk,norbs,Oklam);
+                    if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
+                }
+                //for(uint ieig=0;ieig<norbs;ieig++)printf(" %.3f",Oklam[ieig]);
+                if(Oklam[0]<=0){
+                    printf("Error, eigenvalues of overlap is not positive:");
+                    for(uint ieig=0;ieig<norbs;ieig++)printf(" %.3f",Oklam[ieig]);
+                    printf("\n");
+                    exit(1);
+                }
+                
+                // HkWave= 1/sqrt(Olam) @ W^dagger @ Hk @ W @ 1/sqrt(Olam)
+                for(iorb=0;iorb<norbs;iorb++){
+                   for(jorb=0;jorb<norbs;jorb++){
+                        HkWave[iorb*norbs+jorb]=0;
+                        for(icontract=0;icontract<norbs;icontract++)
+                          for(jcontract=0;jcontract<norbs;jcontract++)
+                            HkWave[iorb*norbs+jorb]+=conj(Wk[icontract*norbs+iorb])*tk_list[ik*norbs*norbs+icontract*norbs+jcontract]*Wk[jcontract*norbs+jorb];
+                    }
+                }
+                
+                for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
+                    HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb])/sqrt(Oklam[jorb]);
+
+                int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,HkWave,norbs,eigs);
+                //printf("k%d\n",ik);
+                //for(uint ieig=0;ieig<4;ieig++)printf(" %.3f",eigs[ieig]);
+                //for(uint ieig=33;ieig<37;ieig++)printf(" %.3f",eigs[ieig]);
+                //printf("\n");
+                //exit(1);
+                if(info!=0){
+                    printf("LAPACKE failed for the eigen. eq. for HkWave, info: %d\n",info);
+                    exit(1);
+                }
+                // Calc. the normalized eigen-vecs. V=W @ 1/sqrt(Olam) @ U
+                for(iorb=0;iorb<norbs;iorb++){
+                    spectra[ik*norbs+iorb]=eigs[iorb];
+                    for(jorb=0;jorb<norbs;jorb++){
+                       HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb]);
+                       tk_list[ik*norbs*norbs+iorb*norbs+jorb]=0;
+                   }
+                }
+                for(iorb=0;iorb<norbs;iorb++)
+                   for(jorb=0;jorb<norbs;jorb++)
+                      for(icontract=0;icontract<norbs;icontract++)
+                         tk_list[ik*norbs*norbs+iorb*norbs+jorb]+=Wk[iorb*norbs+icontract]*HkWave[icontract*norbs+jorb];
+            }
+            }
+            }
+            if(myrank==0){
+                printf(">");
+                fp=fopen("./c_log","a");
+                fprintf(fp,">");
+                fclose(fp);
+            }
+
+        }
+        if(myrank==0)printf("\n");
+        printf("thread%d finished\n",myrank);
+        free(HkWave);free(tq);free(sq);free(Wk);free(WkHalf);free(eigs);free(Oklam);
+    }
+    printf("free all inputs...\n");
+    free(sourceID);free(targetID);free(overLat);free(hopping_real);free(hopping_imag);free(overlap);
+    printf("stop FFTW...\n");
+    for(int ithread=0;ithread<nthreads;ithread++){
+        fftw_destroy_plan(p_list[ithread]);
+        fftw_destroy_plan(ps_list[ithread]);
+    }
+    free(p_list);free(ps_list);
+    free(tk);free(tR);
+    printf("Hk constructed in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);
+    long long eigs_addr=(long long)spectra;
+    long long vecs_addr=(long long)tk_list;
+    long long hk_addr=(long long)hk;
+    long long ok_addr=(long long)ok;
+    printf("\nin ham.dll the addr. of eigs, vecs, hk and ok are %p, %p, %p, %p\n",eigs_addr,vecs_addr,hk_addr,ok_addr);
+    return Py_BuildValue("(LLLL)",eigs_addr,vecs_addr,hk_addr,ok_addr);
+}
+
 static PyMethodDef module_methods[] = {
     {"calcFullBandsAndVecs", calcFullBandsAndVecs, METH_VARARGS, "calc. the band energy and eigenvectors via directly solving the eigen eq., using phase factor"},
     {"calcFullBandsAndVecs_OVLCorrection_DoubelSpin", calcFullBandsAndVecs_OVLCorrection_DoubelSpin, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
     {"calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin", calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
+    {"calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT", calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT, METH_VARARGS, "compute eigen-values, vectors, energy matrix and overlap matrix in reciprocal"},
     {NULL, NULL, 0, NULL} // neccessary to tell python compiler stop here
 };
 

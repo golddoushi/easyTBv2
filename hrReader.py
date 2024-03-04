@@ -82,7 +82,7 @@ class Hr:
                 if recordedWaveVectors>=totWaveVectors:break
             
             data=np.loadtxt(filepath,skiprows=iline)
-            
+            print("For now, the imaginary part of overlap are skiped in hrReader::readSingleFileV2")
             self.dRList, _dRList=set(), []
             self.bondList=[]
             nbonds=0
@@ -99,7 +99,7 @@ class Hr:
                 _dRList.append(overlat)
                 if overlap:
                     self.bondList.append(lat.BondDigital(source, target,overlat=overlat,
-                                                         t=t,overlap=bondInfo[7]+1j*bondInfo[8]))    
+                                                         t=t,overlap=bondInfo[7]))    
                 else:
                     self.bondList.append(lat.BondDigital(source, target,overlat=overlat,t=t))
                 
@@ -242,7 +242,7 @@ class Hr:
                     R1, R2, R3, sourceID, targetID, t_real, t_imag = int(lineinfo[0]),int(lineinfo[1]),int(lineinfo[2]),int(lineinfo[3])-1,int(lineinfo[4])-1,float(lineinfo[5]),float(lineinfo[6])
                     t=t_real if ignoreImagPart else t_real + 1j*t_imag
                     nTotal+=1
-                    if sourceID==targetID and sourceID==0: self.dRList.append(np.array([R1,R2,R3]))
+                    if sourceID==targetID and sourceID==0: self.dRList.add((R1,R2,R3))
                     if abs(t)>cutoff:
                         self.bondList.append(lat.BondDigital(sourceID+self.norb//2,targetID+self.norb//2,[R1,R2,R3],t))
                         RxList.append(R1)

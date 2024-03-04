@@ -23,131 +23,20 @@ import matplotlib.pyplot as plt
 
 global bondList, supercellSize
 
-def classifyBonds(mainDir, source_list, wann_list, ini_S):
+def classifyBonds(mainDir, source_list, wann_list, ini_S, includeAllBonds=False):
+    '''
+    To find and classify the bonds for proceeding calcs.
+    mainDir: the directory of POSCAR
+    source_list: the indexes of magnetic ions
+    wann_list: wann orb of each ion, either magnetic or nonmagnetic
+    ini_S: the formal spin number of each ion, either magnetic or nonmagnetic
+    includeAllBonds: set True to include the inversed bond pairs, e.g., simutaneously include 1 - 2[1 0 0] and 2 - 1[-1 0 0]
+    '''
     global bondList, supercellSize
     pR.clean()
     ini_mag=[S*2 for S in ini_S]
     pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S,wann_ID=wann_list)
     
-    '''
-    phase=0
-    while(True):
-        if not checkSupercell: break
-        print("check if the supercell %d x %d x %d is sufficiently large"%(sizeL,sizeW,sizeH))
-        pR.clean()
-        pR.readPOS(mainDir+'POSCAR')
-        pR.createSC(filename=mainDir+'POSCAR.tmp',size=[sizeL,sizeW,sizeH])#,source_list=source_list)
-        #rotations_sc, translations_sc=pR.createSymmetryOperatorsForSC(rotations, translations, size=[sizeL,sizeW,sizeH])
-        source_list_lo,ini_mag_lo,ini_S_lo=__updateSource(source_list,ini_mag,ini_S, sizeL*sizeW*sizeH)
-        #pR.readPOS(path=mainDir+'POSCAR.tmp',ini_mag=ini_mag_lo,ini_S=ini_S_lo,rotations=rotations_sc,translations=translations_sc)
-        pR.readPOS(path=mainDir+'POSCAR.tmp',ini_mag=ini_mag_lo,ini_S=ini_S_lo)
-        # analyse bonds
-        bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list_lo,maxRange=param.BONDSEARCHRANGE,tolerance=param.SYMPREC)
-        if len(bondListWithClassification)==0:
-            print(">>>>>> supercell is not large enough <<<<<<")
-            if param.PBC==1:
-                sizeL+=1
-            if param.PBC==2:
-                if param.SYMEXPAND:
-                    sizeL+=1;sizeW+=1
-                else:
-                    if phase%2==0:
-                        sizeL+=1
-                    else:
-                        sizeW+=1
-                    phase+=1
-            if param.PBC==3:
-                if param.SYMEXPAND:
-                    sizeL+=1;sizeW+=1;sizeH+=1
-                else:
-                    if phase%3==0:
-                        sizeL+=1
-                    elif phase%3==1:
-                        sizeW+=1
-                    else:
-                        sizeH+=1
-                    phase+=1
-            continue
-
-        bondLengthMax=np.max([bondType[0].bondLen for bondType in bondListWithClassification])
-        bondConfinedList=[]
-        print('>>>>>> information for bonds <<<<<<')
-        print('under the consideration up to %d NN, we hanve found %d types of bond'%(param.MAXRANGE,len(bondListWithClassification)))
-        print('the bond length is truncated at %.6f'%bondLengthMax)
-        for ibondType, bondType in enumerate(bondListWithClassification):
-            print('******Bond type%d stand out******'%ibondType)
-            bondType[0].report(short=True)
-            bondConfinedForEachType=[]
-            for ibond, bond in enumerate(bondType):
-                bondList, bondLength=pR.findBondList(source_list=[bond.sourceOrb.id,bond.targetOrb.id],dimmerMode=True,intraCell=True,
-                                                     maxRange=1,tolerance=param.SYMPREC,getBondLen=True)
-                #bond.couplingNumber=len(bondList[0])
-                bond.sameLinkList=bondList[0]
-                if len(bondLength)>1: # there is other possible link
-                    secondNNisOutOfConsideration=(bondLength[1]>bondLengthMax+param.SYMPREC)
-                    if ibond==0: 
-                        print('next linking overlat [%d %d %d] length: %.6f/%.6f'%(*bondList[1][0][1],bondLength[1],bondLengthMax))
-                        #print(bondList[1][0])
-                    #print("Round bonds are longer than %.3f"%bondLength[1])
-                    if secondNNisOutOfConsideration: # the other links are out of cutoff, this bond is well confined in SC
-                        bondConfinedForEachType.append(bond)
-                    if param.VERBOSE:
-                        print("bond%d is affected by %d - %d [%d %d %d] %.3f %s"%(
-                            bond.id,bondList[1][0][0][0],bondList[1][0][0][1],bondList[1][0][1][0],bondList[1][0][1][1],bondList[1][0][1][2],
-                            bondLength[1],secondNNisOutOfConsideration))
-                else:
-                    bondConfinedForEachType.append(bond) # there is not any other possible link, this bond thus is well confined in SC
-                    #print("No round bonds are possible")
-            print('There are %d links with the same length as bond%d in SC'%(len(bond.sameLinkList),bond.id))
-            bondConfinedList.append(bondConfinedForEachType)
-        # verify strategies
-        allBondTypesAreConfined=True
-        for ibondType, confineType in enumerate(bondConfinedList):
-            if len(confineType)==0:
-                allBondTypesAreConfined=False
-                print("All bonds in bondType%d are not confined in the supercell"%ibondType)
-                break
-        if completelyConfine:
-            for ibondType, bondType in enumerate(bondListWithClassification):
-                for ibond, bond in enumerate(bondType):
-                    if len(bond.sameLinkList)>1:
-                        allBondTypesAreConfined=False
-                        print("bond%d in bondType%d have %d>1 links in the supercell"%(bond.id,ibondType,len(bond.sameLinkList)))
-                        for sameLink in bond.sameLinkList:
-                            print('orb%d-orb%d over [%d %d %d]'%(*sameLink[0],*sameLink[1]))
-                        break
-                if not allBondTypesAreConfined:
-                    break
-        if not allBondTypesAreConfined:
-            print(">>>>>> supercell is not large enough <<<<<<")
-            if param.PBC==1:
-                sizeL+=1
-            if param.PBC==2:
-                if param.SYMEXPAND:
-                    sizeL+=1;sizeW+=1
-                else:
-                    if phase%2==0:
-                        sizeL+=1
-                    else:
-                        sizeW+=1
-                    phase+=1
-            if param.PBC==3:
-                if param.SYMEXPAND:
-                    sizeL+=1;sizeW+=1;sizeH+=1
-                else:
-                    if phase%3==0:
-                        sizeL+=1
-                    elif phase%3==1:
-                        sizeW+=1
-                    else:
-                        sizeH+=1
-                    phase+=1
-            continue
-
-        print('>>>>>> All bonds are well confined in supercell %d x %d x %d<<<<<<'%(sizeL,sizeW,sizeH))
-        aux.rm(mainDir+'POSCAR.tmp')
-        break
-    '''
     # construct representative orbitals and bonds
     #pR.clean()
     #pR.readPOS(mainDir+'POSCAR',ini_mag=ini_mag,ini_S=ini_S,wann_ID=wann_list)
@@ -158,11 +47,11 @@ def classifyBonds(mainDir, source_list, wann_list, ini_S):
         if param.PBC==0: sizeL=1
         return sizeL,sizeW,sizeH
     sizeL,sizeW,sizeH=quenchNonperiodicPBC(param.MINCELL,param.MINCELL,param.MINCELL)
-    bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list,maxRange=np.max([sizeL,sizeW,sizeH]),tolerance=param.SYMPREC)
+    bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list,maxRange=np.max([sizeL,sizeW,sizeH]),tolerance=param.SYMPREC,includeAllBonds=includeAllBonds)
     for iserch in range(param.MAXCELL):
         if len(bondListWithClassification)>0: break
         sizeL,sizeW,sizeH=quenchNonperiodicPBC(sizeL+1,sizeW+1,sizeH+1)
-        bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list,maxRange=np.max([sizeL,sizeW,sizeH]),tolerance=param.SYMPREC)
+        bondListWithClassification=pR.findBondListAndClassifyThemViaLength(source_list,maxRange=np.max([sizeL,sizeW,sizeH]),tolerance=param.SYMPREC,includeAllBonds=includeAllBonds)
     else:
         print("Error: cannot found enough bond within supercell size below MAXCELL=%d"%param.MAXCELL)
         exit()
@@ -503,7 +392,7 @@ def calcIsotropicJ_GaussianQuadrature_V2(mainDir,sc=[10,10,1],
     eigs_addr , vecs_addr, hk_addr=gr.calcEigsAndVecsInMemory_mixedFourier(hr,kgrid=sc,nthreads=nthreads,calcVelocity=False)
     res=hamilton.Response()
     eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=hr.norb,kmesh=sc,data_type='double')
-    bandEnergyMin, bandEnergyMax= eigs.flatten().min(), eigs.flatten().max()
+    bandEnergyMin, bandEnergyMax= eigs.min(), eigs.max()
     print("Bands energy range: %.6f ~ %.6f"%(bandEnergyMin,bandEnergyMax))
     emin=np.max([erange[0],bandEnergyMin])-extraEnergyEmpty
     emax=np.min([erange[1],fermi])
@@ -584,7 +473,7 @@ def calcIsotropicJ_GaussianQuadrature_V2(mainDir,sc=[10,10,1],
     #calcSpinWaveSpectra(mainDir,spinList,MAE)
     #calcSpinWaveDOS(mainDir,spinList,MAE)
 
-def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
+def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],overlap=False,
       fermi=0,eta=0.0001,erange=(-500,500),extraEnergyEmpty=5.,hrcutoff=-0.01,Jcvg=1e-3,
       lowOrder=5,highOrder=20,nthreads=param.NCORE):
     '''
@@ -603,16 +492,14 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
     # Try to read existed J.txt
     if False and fileio.readJ(mainDir,bondList):
         print('%sJ.txt has been read succesfully'%mainDir)
-        for bondType in bondList:
-            bondType[0].broadCastExchange(verbose=True)
-        writeMCSolverIsingFile(mainDir)
+        writeMCSolverIsingFile(mainDir,nonlinear=True)
         return
     
     hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
     if len(hrFileList)==2:
         hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=False,cutoff=hrcutoff)
     elif len(hrFileList)==1:
-        hr.readSingleFile(hrFileList[0],ignoreImagPart=False,cutoff=hrcutoff)
+        hr.readSingleFileV2(hrFileList[0],ignoreImagPart=False,cutoff=hrcutoff,overlap=overlap)
     elif len(hrFileList)==0:
         print("Error: cannot find Hr file in %s, pls. provide Hr file with name hr(.up or .dn) in %s"%(mainDir,mainDir))
         exit()
@@ -656,7 +543,10 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
     gr=hamilton.Green()
     
     print("Diagnolizing Hamiltonian")
-    eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemory_simple(hr,kgrid=sc,nthreads=nthreads)
+    if overlap:
+        eigs_addr, vecs_addr, hks_addr, oks_addr=gr.calcEigsAndVecsInMemoryWithOverlap_mixedFourier(hr,kgrid=sc,nthreads=nthreads,ispin=2)
+    else:
+        eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemory_simple(hr,kgrid=sc,nthreads=nthreads)
     res=hamilton.Response()
     eigs=res.redOutQuantitiesOnKGrid(eigs_addr,data_dim=hr.norb,kmesh=sc,data_type='double')
     bandEnergyMin, bandEnergyMax= eigs.flatten().min(), eigs.flatten().max()
@@ -668,7 +558,8 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
     print("Main loop for exchange calculation")
     J_list_old=np.zeros((len(bondList),3,3))
     J_list_new=np.zeros((len(bondList),3,3))
-    iteration_num=0
+    iteration_num=0 
+    fout=open("./mag.out","w")
     for gaussianOrder in range(lowOrder,highOrder):
         points, weights=p_roots(gaussianOrder)
         npoints=len(points)
@@ -706,10 +597,12 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
                 orbID_target=orbID_target_up+orbID_target_dn
                 
                 J=0j
+                J_orbDecomp=np.zeros((p_source.shape[0],p_target.shape[0]),dtype=complex)
                 J_a_xx=0j
                 J_a_yy=0j
                 J_a_xy=0j
                 DMI=np.zeros(3,dtype=complex)
+                DMI_orbDecomp=np.zeros((3,p_source.shape[0],p_target.shape[0]),dtype=complex)
                 for iw in range(npoints):
                     rG_w_p=rG_w_lat[iw][i_overlat_p][orbID_source][:,orbID_target]
                     rG_w_p_pauli_block =aux.PauliBlock(rG_w_p)
@@ -718,16 +611,27 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
                     rG_w_n_pauli_block =aux.PauliBlock(rG_w_n)
 
                     AMat=np.zeros((4,4),dtype=complex)
+                    AMat_orbDecomp=np.zeros((4,4,p_source.shape[0],p_target.shape[0]),dtype=complex)
                     for i in range(4):
                         for j in range(4):
-                            AMat[i,j]=np.trace(p_source@rG_w_p_pauli_block[i]@p_target@rG_w_n_pauli_block[j])
-                
+                            #print(p_source.shape,rG_w_p_pauli_block[i].shape,p_target.shape,rG_w_n_pauli_block[j].shape)
+                            route1=p_source@rG_w_p_pauli_block[i]
+                            route2=p_target@rG_w_n_pauli_block[j]
+                            for iorb_source in range(p_source.shape[0]):
+                                for iorb_target in range(p_target.shape[0]):
+                                    AMat_orbDecomp[i,j,iorb_source,iorb_target]=route1[iorb_source,iorb_target]*route2[iorb_target,iorb_source]
+                            AMat[i,j]=np.sum(AMat_orbDecomp[i,j])#np.trace(p_source@rG_w_p_pauli_block[i]@p_target@rG_w_n_pauli_block[j])
+
                     J+=2*(AMat[0,0]-AMat[1,1]-AMat[2,2]-AMat[3,3])*dz[iw]*weights[iw]
+                    J_orbDecomp+=2*(AMat_orbDecomp[0,0]-AMat_orbDecomp[1,1]-AMat_orbDecomp[2,2]-AMat_orbDecomp[3,3])*dz[iw]*weights[iw]
                     J_a_xx+=2*(AMat[1,1]+AMat[1,1])*dz[iw]*weights[iw]
                     J_a_yy+=2*(AMat[2,2]+AMat[2,2])*dz[iw]*weights[iw]
                     J_a_xy+=2*(AMat[1,2]+AMat[2,1])*dz[iw]*weights[iw]
                     DMI[0]+=2j*(AMat[0,1]-AMat[1,0])*dz[iw]*weights[iw]
                     DMI[1]+=2j*(AMat[0,2]-AMat[2,0])*dz[iw]*weights[iw]
+                    DMI_orbDecomp[0,...]+=2j*(AMat_orbDecomp[0,1]-AMat_orbDecomp[1,0])*dz[iw]*weights[iw]
+                    DMI_orbDecomp[1,...]+=2j*(AMat_orbDecomp[0,2]-AMat_orbDecomp[2,0])*dz[iw]*weights[iw]
+                    
                     #DMI[2]+=2j*(a0z-az0)*dz[iw]*weights[iw]
 
                 bond.exchangeEnergy=J.imag/2
@@ -738,14 +642,36 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
                     ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
                     J.imag/4*1000,J_a_xx.imag/4*1000,
                     J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
+                fout.write("bondType%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f\n"%(
+                    ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
+                    J.imag/4*1000,J_a_xx.imag/4*1000,
+                    J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
+                fout.write("J (meV) decomposed to orbital-paris\n")
+                for iorb_source in range(p_source.shape[0]):
+                    for iorb_target in range(p_target.shape[0]):
+                        fout.write(f"{J_orbDecomp.imag[iorb_source,iorb_target]/4*1000:10.3f}")
+                    fout.write("\n")
+                fout.write("Dx (meV) decomposed to orbital-paris\n")
+                for iorb_source in range(p_source.shape[0]):
+                    for iorb_target in range(p_target.shape[0]):
+                        fout.write(f"{DMI_orbDecomp.imag[0,iorb_source,iorb_target]/4*1000:10.3f}")
+                    fout.write("\n")
+                fout.write("Dy (meV) decomposed to orbital-paris\n")
+                for iorb_source in range(p_source.shape[0]):
+                    for iorb_target in range(p_target.shape[0]):
+                        fout.write(f"{DMI_orbDecomp.imag[1,iorb_source,iorb_target]/4*1000:10.3f}")
+                    fout.write("\n")
+            bond.exchangeEnergyMatrix=np.diag(np.array([bond.exchangeEnergy,bond.exchangeEnergy,bond.exchangeEnergy]))
             J_list_new[ibondType,:,:]=bond.exchangeEnergyMatrix
         
         # compute averaged J_list_new
-        J_list_new=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
+        #J_list_new=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
         # check convergence
         if Jcvg<0:
             print("Warning: no convergence check. Use the results at your own risk!")
             break
+        #print(J_list_new)
+        #print(J_list_old)
         dJ=J_list_new-J_list_old
         dJ_max=abs(dJ).max()
         print("Max dJ= %.6f"%dJ_max)
@@ -756,7 +682,7 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],
         iteration_num+=1
     else:
         print("Warning: Accuracy is not reached. Use the results at your own risk!")
-    
+    fout.close()
     #for Jmat, bondType in zip(J_list_new,bondList):
     #    bondType[0].exchangeEnergyMatrix=Jmat
     #    bondType[0].broadCastExchange(type='Full')
@@ -834,13 +760,13 @@ def __updateSource(source_list,ini_mag,ini_S,size=2):
             outS.append(S)
     return outSource,outMag,outS
           
-def writeMCSolverIsingFile(path):
+def writeMCSolverIsingFile(path,nonlinear=False):
     global bondList
     magOrbList=[orb for orb in pR.orbList if abs(orb.spin)>0]
     for iorb, orb in enumerate(magOrbList):
         orb.index_tmp=iorb
     with open(path+pR.getUniqueName()+'.txt','w') as f:
-        f.write("This is mcsolver's save file, version: 2.3\n")
+        f.write("This is mcsolver's save file, version: 3.0\n")
         f.write('Lattice:\n')
         for vec in pR.lat:
             f.write('%.9f %.9f %.9f\n'%(vec[0],vec[1],vec[2]))
@@ -873,11 +799,18 @@ def writeMCSolverIsingFile(path):
             for bond in bondType:
                 s1=bond.sourceOrb.spin
                 s2=bond.targetOrb.spin
-                factor=param.EV2K/s1/s2 # NOTE: exchange energy obtained from perturbation has sign dependence on spin already
-                f.write('bond %d: Jz %.9f Jx %.9f Jy %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
-                    bond.id, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, 0, 0, 0, 0, 0, 0,
-                    bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat
-                ))
+                factor=abs(param.EV2K/s1/s2) # NOTE: exchange energy obtained from perturbation has sign dependence on spin already
+                if not nonlinear:
+                    f.write('bond %d: Jz %.9f Jx %.9f Jy %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
+                        bond.id, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, 0, 0, 0, 0, 0, 0,
+                        bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat
+                    ))
+                else:
+                    f.write('bond %d: Jx %.9f Jy %.9f Jz %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
+                        bond.id, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, bond.exchangeEnergy*factor, 
+                        0, -bond.DMI[1]*factor, bond.DMI[0]*factor, 0, bond.DMI[1]*factor, -bond.DMI[0]*factor,
+                        bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat
+                    ))
         f.write('Dipole long range correction:\n')
         f.write('alpha 0.0\n')
         f.write('Temperature scanning region:\n')
@@ -889,6 +822,9 @@ def writeMCSolverIsingFile(path):
         f.write('OrbGroup: 1\n')
         f.write('Supergroup\n')
         f.write('group0 orb0-orb0\n')
+        f.write('>>>       Topological section      <<<\n')
+        f.write('LocalCircuit per cell: 0 (set to 0 to skip the calc. for topo. Q)\n')
+        f.write('>>>   End of Topological section   <<<\n')
         f.write('Sweeps for thermalization and statistics, and relaxiation step for each sweep:\n')
         f.write('40000 80000 0\n')
         f.write('Model type:\n')
