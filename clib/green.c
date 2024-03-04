@@ -195,6 +195,8 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
         ulong i_omega_k, i_lat_k;
         ulong i_eig_k, i_vec_k;
         lapack_complex_double factor, inverse_h;
+        double alpha, beta;
+        alpha=1;beta=0;
         uint my_nkpt_portion=nkpt/nthreads/50;
         uint my_icnt=0;
         if(my_nkpt_portion==0)my_nkpt_portion=1;
@@ -209,6 +211,7 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
             fclose(fp);
         }
         lapack_complex_double *g0_inversed_vecs=(lapack_complex_double*)malloc(nkpt*nTotalOrbs*norbs*sizeof(lapack_complex_double));
+        lapack_complex_double *Gw_k=(lapack_complex_double*)malloc(nTotalOrbs*norbs*sizeof(lapack_complex_double));
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         #pragma omp for
         for(ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
@@ -223,12 +226,14 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
                     // Gw_k = veck^-1,dagger @ Gw_lam @ veck^-1
                     // 1. g0_inversed_vecs = Gw_lam @ veck^-1
                     for(ieig=0;ieig<nTotalOrbs;ieig++)for(iorb=0;iorb<norbs;iorb++){
-                        //printf("rank%d %d/%d ivec_k %d ieig %d orbIDMap[%d] %d, nOmegaPoints %d, %d/%d\n",my_rank,ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig,nkpt*nOmegaPoints*nTotalOrbs,i_vec_k,ieig,orbIDMap[jorb],i_vec_k+ieig*nTotalOrbs+orbIDMap[jorb],nkpt*nTotalOrbs*nTotalOrbs);
-                        g0_inversed_vecs[ieig*norbs+iorb]=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]];}
+                        g0_inversed_vecs[ieig*norbs+iorb]=factor*inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]];
+                    }
                     // 2. Gw_k = veck^-1,dagger @ g0_inversed_vecs
+                    //cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, nTotalOrbs, &alpha, inversed_vecs+i_vec_k, nTotalOrbs, g0_inversed_vecs, norbs, &beta, Gw_k, norbs);
+                    //for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)_G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]=Gw_k[iorb*norbs+jorb];
                     for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)for(ieig=0;ieig<nTotalOrbs;ieig++)
                         _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                        factor*conj(inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]])*g0_inversed_vecs[ieig*norbs+jorb];
+                        conj(inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]])*g0_inversed_vecs[ieig*norbs+jorb];
                 }
             }
             my_icnt+=1;
@@ -239,6 +244,7 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
                 fclose(fp);
             }
         }
+        free(g0_inversed_vecs);
     }
     printf("\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
     fp=fopen("./c_log","a");
