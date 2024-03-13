@@ -619,10 +619,11 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
     printf("Args. parsing finished.\n");
     // create hopping on slow grids
     clock_t time0=clock();
-    double * spectra=(double*)malloc((unsigned long long)nKgrid*norbs*sizeof(double));                    // eigen values
-    lapack_complex_double *tk_list=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));  // eigen vectors
-    lapack_complex_double *hk=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));         // energy matrix in k-space
-    lapack_complex_double *ok=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double)); // overlap matrix in k-space
+    double * spectra=(double*)malloc((unsigned long long)nKgrid*norbs*sizeof(double));                               // eigen values
+    lapack_complex_double *tk_list=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double)); // eigen vectors
+    lapack_complex_double *hk=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));      // energy matrix in k-space
+    lapack_complex_double *hk_a=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));    // hamiltonian factor matrix in k-space
+    lapack_complex_double *ok=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));      // overlap matrix in k-space
     
     // fftw_plan use global variables. So, we should create them outside the parallel loop
     fftw_complex *tR=(fftw_complex*)malloc(nthreads*nRgrid*sizeof(fftw_complex));
@@ -709,6 +710,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
             }
             //printf("tq and sq ready\n");
             //exit(1);
+            // compute the reciprocal energy matrix and overlap matrix by FFT
             for(iorb=0;iorb<norbs;iorb++){
                 for(jorb=0;jorb<norbs;jorb++){
                     iOrbPair=iorb*norbs+jorb;
@@ -769,7 +771,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                     int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,Wk,norbs,Oklam);
                     if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
                 }
-                //for(uint ieig=0;ieig<norbs;ieig++)printf(" %.3f",Oklam[ieig]);
+                // to check the positivity of overlap eigenvals
                 if(Oklam[0]<=0){
                     printf("Error, eigenvalues of overlap is not positive:");
                     for(uint ieig=0;ieig<norbs;ieig++)printf(" %.3f",Oklam[ieig]);
@@ -782,29 +784,12 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                 cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, norbs, norbs, &alpha, tk_list+ik*norbs*norbs, norbs, Wk, norbs, &beta, _HkWave, norbs);
                 // 2. HkWave = W^dagger @ _HkWave
                 cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, _HkWave, norbs, &beta, HkWave, norbs);
-                /*
-                for(iorb=0;iorb<norbs;iorb++){
-                   for(jorb=0;jorb<norbs;jorb++){
-                        HkWave[iorb*norbs+jorb]=0;
-                        for(icontract=0;icontract<norbs;icontract++)
-                          for(jcontract=0;jcontract<norbs;jcontract++)
-                            HkWave[iorb*norbs+jorb]+=conj(Wk[icontract*norbs+iorb])*tk_list[ik*norbs*norbs+icontract*norbs+jcontract]*Wk[jcontract*norbs+jorb];
-                    }
-                }*/
                 
                 for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
                     HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb])/sqrt(Oklam[jorb]);
 
                 int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,HkWave,norbs,eigs);
-                //printf("k%d\n",ik);
-                //for(uint ieig=0;ieig<4;ieig++)printf(" %.3f",eigs[ieig]);
-                //for(uint ieig=33;ieig<37;ieig++)printf(" %.3f",eigs[ieig]);
-                //printf("\n");
-                //exit(1);
-                if(info!=0){
-                    printf("LAPACKE failed for the eigen. eq. for HkWave, info: %d\n",info);
-                    exit(1);
-                }
+                if(info!=0){printf("LAPACKE failed for the eigen. eq. for HkWave, info: %d\n",info);exit(1);}
                 // Calc. the normalized eigen-vecs. V=W @ 1/sqrt(Olam) @ U
                 // 1. HkWave = 1/sqrt(Olam) @ U
                 for(iorb=0;iorb<norbs;iorb++){
@@ -816,12 +801,6 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                 }
                 // 2. V=W @ HkWave
                 cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, HkWave, norbs, &beta, tk_list+ik*norbs*norbs, norbs);
-                /*
-                for(iorb=0;iorb<norbs;iorb++)
-                   for(jorb=0;jorb<norbs;jorb++)
-                      for(icontract=0;icontract<norbs;icontract++)
-                         tk_list[ik*norbs*norbs+iorb*norbs+jorb]+=Wk[iorb*norbs+icontract]*HkWave[icontract*norbs+jorb];
-                */
             }
             }
             }
