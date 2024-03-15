@@ -1,10 +1,15 @@
+import os
+os.add_dll_directory("C:/Program Files/mingw64/bin")
+import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import sys
 import paramReader
 paramReader.readGlobalConst()
+import posReader as pR
+import hrReader as reader
 import couplingCalc as cc
-from auxiliary import obtainProjectionsPlain
+from auxiliary import obtainProjectionsPlain, obtainProjections
 
 class Logger(object):
     def __init__(self, filename="Default.log"):
@@ -24,56 +29,34 @@ class Logger(object):
         self.log.close()
 sys.stdout = Logger('log')
 
-'''
-# check the band structures
-pR.readPOS('./mcalc/spinchain/POSCAR')
-hr=reader.Hr()
-hr.readDoubleFiles('./mcalc/spinchain/hr.up.dat','./mcalc/spinchain/hr.dn.dat',cutoff=-0.01)
-gr=Green()
-gr.calcFullBands_CDLL(hr,fermi=0,mainDir='./mcalc/spinchain/',saveFig=True,redBands=[0,1])
-exit()
-'''
-'''
-cc.classifyBonds(mainDir='./mcalc/spinchain/', source_list=[0,1], 
-           wann_list=[
-                      [ 0,],
-                      [ 1,],
-                     ], 
-           ini_S=[1,1])
-
-cc.calcIsotropicJ_GaussianQuadrature_V2(mainDir='./mcalc/spinchain/',hrcutoff=-1,nthreads=4,
-    sc=[30,1,1],fermi=0,eta=0.0001,erange=(-10,5),lowOrder=20,highOrder=50,Jcvg=-1e-4)
-exit()
-'''
-'''
-cc.classifyBonds(mainDir='./mcalc/FeCl2/', source_list=[0,], 
-           wann_list=[
-                      [ 0, 1, 2, 3, 4],
-                      [ 5, 6, 7],
-                      [ 8, 9,10],
-                     ], 
-           ini_S=[2,0,0])
-
-#cc.calcIsotropicJ_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
-#    sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=20,highOrder=50,Jcvg=-1e-4)
-cc.calcJFull_GaussianQuadrature(mainDir='./mcalc/FeCl2/',hrcutoff=-1,nthreads=4,
-    sc=[20,20,1],fermi=-2,eta=0.0001,erange=(-12,10),lowOrder=20,highOrder=50,Jcvg=-1e-4)
-exit()
-'''
-mainDir='./mcalc/Fe3GeTe2/'
+# 1. define the basic structure information
+mainDir='./mcalc/PtCoPtW/'
+pR.readPOS(mainDir+'POSCAR')
 projections=[
-    "Fe:d",
-    "Ge:p",
-    "Te:p"
+    "Pt:s;s;s;p;p;d;d;f",
+    "W:s;s;s;p;p;d;d",
+    "Co:s;s;p;p;d;d"
 ]
+atomicMagMomList=[np.zeros(3)]*10+[
+    np.array([0,0,1]),
+    np.array([0,0,1]),
+    np.array([0,0,1]),
+]
+# 2. read in Hamiltonian 
+hr=reader.Hr()
+hr.readSingleFileV2(mainDir+'wannier90_hr.dat',ignoreImagPart=False,cutoff=-0.1,overlap=True)
+# 3. (optional) symmerize Hamiltonian, saxis=(0,0,-1) for w90, saxis=(0,0,-1) for w90
+atomicOrbIndexList, atomicLList=obtainProjections(mainDir+'POSCAR',projections,soc=True,getLList=True)
+hr.symmerizeHamAndOverlap(atomicOrbIndexList=atomicOrbIndexList,atomicLList=atomicLList,atomicMagMomList=atomicMagMomList,
+                  symOpSelection=[],
+                  spinor=True,saxis=np.array([0,0,1]),format='openmx')
+# 4. assign the orbitals of spin-up tunnels to atoms (no need to change)
 wann_list=obtainProjectionsPlain(mainDir+'POSCAR',projections)
-cc.classifyBonds(mainDir, source_list=[0,1,2], 
-           wann_list=wann_list,
-           ini_S=[1.5,1.5,1.0,0,0,0])
-
-cc.calcIsotropicJ_GaussianQuadrature_V2(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
-    sc=[32,32,1],fermi=0.04758627,eta=0.0001,erange=(-8,10),
-    lowOrder=20,highOrder=50,Jcvg=-1e-3)
-#cc.calcJFull_GaussianQuadrature(mainDir='./mcalc/Fe3GeTe2/',hrcutoff=-1,nthreads=4,
-#    sc=[32,32,1],fermi=0.04758627,eta=0.0001,erange=(-8,10),
-#    lowOrder=20,highOrder=50,Jcvg=-1e-4)
+# 5. set the iatom of magnetic atoms to source_list, set ini_S for ALL atoms
+cc.classifyBonds(mainDir, source_list=[10,11,12,], 
+           wann_list=wann_list, 
+           ini_S=[0]*10+[1]*3,
+           includeAllBonds=False)
+# 5. set overlap, set supercell size, set fermi level, set erange, etc.
+cc.calcJFull_GaussianQuadrature(hr,mainDir,nthreads=8,overlap=True,
+    sc=[28,28,1],fermi=-0.188413227082*27.2113845,eta=0.0001,erange=(-100,100),lowOrder=60,highOrder=80,Jcvg=-1e-4)

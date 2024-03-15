@@ -113,9 +113,9 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
     uint nthreads;
     nthreads=_nthreads;
     if(nkpt<_nthreads)nthreads=nkpt;
-    printf("use %d cores in ham.dll::calcRetardedLatticeGreensFunction\n",nthreads);
+    printf("use %d cores in green.so::calcRetardedLatticeGreensFunction\n",nthreads);
     fp=fopen("./c_log","a");
-    fprintf(fp,"use %d cores in ham.dll::calcRetardedLatticeGreensFunction\n",nthreads);
+    fprintf(fp,"use %d cores in green.so::calcRetardedLatticeGreensFunction\n",nthreads);
     fclose(fp);
     ulong latVec_len=norbs*norbs;
     ulong omega_len=nLatticeVectors*latVec_len;

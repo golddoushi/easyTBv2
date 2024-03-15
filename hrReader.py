@@ -23,12 +23,14 @@ class BondInfo:
     NOTE: in the bond class, there will be many possibilities, cautions are suggested
     e.g., there might be the same bond in the class, and the conjugated bonds are also possible in the same class
     '''
-    def __init__(self) -> None:
+    def __init__(self,overlap=False) -> None:
         self.bondLengthList=[]
         self.atomPairList=[]
         self.dRList=[]
         self.bondSymList=[]
+        self.overlapSymList=[]
         self.bondSymIDList=[]
+        self.overlap=overlap
     
     def appendNewBond(self,bondLen,atomPair,dR,bondSym):
         self.bondLengthList.append(bondLen)
@@ -42,6 +44,20 @@ class BondInfo:
         self.dRList.insert(posix,dR)
         self.bondSymList.insert(posix,bondSym)
         self.bondSymIDList.insert(posix,len(self.bondSymIDList)-1)
+
+    def appendNewBondAndOverlap(self,bondLen,atomPair,dR,bondSym,overlapSym):
+        self.bondLengthList.append(bondLen)
+        sort_list=np.argsort(self.bondLengthList)
+        for posix, index in enumerate(sort_list):
+            if index==len(sort_list)-1: break
+        #posix=sort_list[-1]
+        self.bondLengthList.pop()
+        self.bondLengthList.insert(posix,bondLen)
+        self.atomPairList.insert(posix,atomPair)
+        self.dRList.insert(posix,dR)
+        self.bondSymList.insert(posix,bondSym)
+        self.overlapSymList.insert(posix,overlapSym)
+        self.bondSymIDList.insert(posix,len(self.bondSymIDList)-1)
     
     def checkIfOldBond(self,bondLen,atomPair,dR):
         for ibond, existedBondLen in enumerate(self.bondLengthList):
@@ -51,7 +67,6 @@ class BondInfo:
                     if existedAtomPair[0]!=atomPair[0] or existedAtomPair[1]!=atomPair[1]:continue
                     if existedDR[0]==dR[0] and existedDR[1]==dR[1] and existedDR[2]==dR[2]:return True
         return False
-
 
 class Hr:
     def __init__(self):
@@ -593,7 +608,7 @@ class Hr:
 
     def symmerizeBonds(self,atomicOrbIndexList:list,
                         spinor=False,saxis:np.ndarray=np.array([0,0,1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
-                        symOpSelection:list=[],atomicMagMomList:list=[]):
+                        symOpSelection:list=[],atomicMagMomList:list=[],format="w90"):
         def vecAround(vec):
             newVec=[]
             for x in vec:
@@ -796,7 +811,7 @@ class Hr:
             else:
                 return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':[False for sympos in symRotateList]}
         
-        def generateAtomicWFCSymOp(symRotateList):
+        def generateAtomicWFCSymOp(symRotateList,format="w90"):
             '''generate transformation matrix of cubic harmonics for each sym. Op
             output:
             data[0]:1x1 array: s; 
@@ -808,17 +823,27 @@ class Hr:
             def defineVecByAngles(theta,phi):
                 '''angular rep. to cartesian rep.'''
                 return np.array([sin(theta)*cos(phi),sin(theta)*sin(phi),cos(theta)])
-            def pOrb(vec):
+            def pOrb(vec,format="w90"):
                 '''p-orbitals defined in line with wannier90 v2.1
                    order: pz, px, py
                 '''
                 x,y,z=vec
+                if format=="openmx":
+                    return np.array([x,y,z])
                 return np.array([z,x,y]) # in order: pz, px, py, 
-            def dOrb(vec):
+            def dOrb(vec,format="w90"):
                 '''d-orbitals defined in line with wannier90 v2.1
                    order: dz2, dxz, dyz, dx2-y2, dxy
                 '''
                 x,y,z=vec
+                if format=="openmx":
+                    return np.array([
+                        sqrt(5/16)*(3*z*z-1),
+                        sqrt(15/16)*(x*x-y*y),
+                        sqrt(15/4)*x*y,
+                        sqrt(15/4)*x*z,
+                        sqrt(15/4)*y*z,
+                    ])
                 return np.array([
                     sqrt(5/16)*(3*z*z-1),
                     sqrt(15/4)*x*z,
@@ -826,7 +851,7 @@ class Hr:
                     sqrt(15/16)*(x*x-y*y),
                     sqrt(15/16)*x*y*2
                 ])
-            def fOrb(vec):
+            def fOrb(vec,format="w90"):
                 '''f-orbitals defined in line with wannier90 v2.1
                    order: fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
                 '''
@@ -843,7 +868,7 @@ class Hr:
             
             pn1,pn2,pn3=np.array([1,0,0]),np.array([0,1,0]),np.array([0,0,1])
             pNBasis=[pn1,pn2,pn3]
-            pList=np.array([pOrb(n_vec) for n_vec in pNBasis])
+            pList=np.array([pOrb(n_vec,format=format) for n_vec in pNBasis])
             ao_p_basis_std=np.linalg.inv(pList)
         
             theta1=acos(np.sqrt(1/3))
@@ -854,7 +879,7 @@ class Hr:
             dn4=defineVecByAngles(theta2,np.pi*0/6)
             dn5=defineVecByAngles(theta2,np.pi*(0/6+1/4))
             dNBasis=[dn1,dn2,dn3,dn4,dn5]
-            dList=np.array([dOrb(n_vec) for n_vec in dNBasis])
+            dList=np.array([dOrb(n_vec,format=format) for n_vec in dNBasis])
             print('determinals of d-orb basis:',np.linalg.det(dList))
             ao_d_basis_std=np.linalg.inv(dList)
             #exit()
@@ -869,7 +894,7 @@ class Hr:
             fn6=defineVecByAngles(np.pi/2,0)
             fn7=defineVecByAngles(np.pi/2,np.pi/6)
             fNBasis=[fn1,fn2,fn3,fn4,fn5,fn6,fn7]
-            fList=np.array([fOrb(n_vec) for n_vec in fNBasis])
+            fList=np.array([fOrb(n_vec,format=format) for n_vec in fNBasis])
             print('determinals of f-orb basis',np.linalg.det(fList))
             ao_f_basis_std=np.linalg.inv(fList)
 
@@ -879,13 +904,13 @@ class Hr:
             for rotate in symRotateList:
                 rotate_xyz=L_inv.dot(rotate.T).dot(L)
 
-                pTransList=np.array([pOrb(n_vec.dot(rotate_xyz)) for n_vec in pNBasis])
+                pTransList=np.array([pOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in pNBasis])
                 ao_p_basis_trans=pTransList.T
 
-                dTransList=np.array([dOrb(n_vec.dot(rotate_xyz)) for n_vec in dNBasis])
+                dTransList=np.array([dOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in dNBasis])
                 ao_d_basis_trans=dTransList.T
 
-                fTransList=np.array([fOrb(n_vec.dot(rotate_xyz)) for n_vec in fNBasis])
+                fTransList=np.array([fOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in fNBasis])
                 ao_f_basis_trans=fTransList.T
 
                 atomicWaveSymOpList.append([
@@ -919,7 +944,7 @@ class Hr:
             symSiteMapList=[symSiteMapList[isym] for isym in symOpSelection]
             symSpinRotateList=[symSpinRotateList[isym] for isym in symOpSelection]
             symTimeReversalList=[symTimeReversalList[isym] for isym in symOpSelection]
-        atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList)
+        atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,format=format)
         #print(atomicWaveSymOpList[0])
         #exit()
         
@@ -1331,7 +1356,774 @@ class Hr:
                         exit()
         #exit()
         print("verrification success in %.3fs"%(time.time()-time0))
-           
+    
+    def symmerizeHamAndOverlap(self,atomicOrbIndexList:list,atomicLList:list,
+                        spinor=False,saxis:np.ndarray=np.array([0,0,1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
+                        symOpSelection:list=[],atomicMagMomList:list=[],format="w90"):
+        def vecAround(vec):
+            newVec=[]
+            for x in vec:
+                x_int=int(np.around(x))
+                if abs(x-x_int)<paramReader.SYMPREC:
+                    newVec.append(x_int)
+                else:
+                    newVec.append(x)
+            return np.array(newVec)
+        def readSpinWFCSymOp(symRotateList):
+            spinRotateList=[]
+            L=pR.lat
+            L_inv=np.linalg.inv(L)
+            for rotate in symRotateList:
+                if not spinor:
+                    spinRotateList.append(np.eye(2))
+                    continue
+                rotate_xyz=L_inv.dot(rotate.T).dot(L)
+                x,y,z=[vecAround(vec) for vec in rotate_xyz]
+                _z=np.array([x[1]*y[2]-x[2]*y[1],x[2]*y[0]-x[0]*y[2],x[0]*y[1]-x[1]*y[0]])
+                if np.dot(z,_z)<0: # improper rotation
+                    x,y,z=-x,-y,-z # implement symmetric spin orbs
+
+                beta=acos(z[2])
+                sin_beta=sin(beta)
+                if sin_beta>paramReader.SYMPREC:
+                    cos_alpha=z[0]/sin_beta
+                    sin_alpha=z[1]/sin_beta
+                    alpha=acos(cos_alpha) if sin_alpha>=0 else acos(-cos_alpha)+np.pi
+
+                    sin_gamma=y[2]/sin_beta
+                    cos_gamma=-x[2]/sin_beta
+                    gamma=acos(cos_gamma) if sin_gamma>=0 else acos(-cos_gamma)+np.pi
+                else:
+                    gamma=0
+                    beta=0 if z[2]>0 else np.pi
+
+                    cos_alpha=y[1]
+                    sin_alpha=-y[0]
+                    alpha=acos(cos_alpha) if sin_alpha>=0 else acos(-cos_alpha)+np.pi
+
+                spinRotation=np.array([
+                    [np.exp(-1j/2*(alpha+gamma))*cos(beta/2),-np.exp(-1j/2*(alpha-gamma))*sin(beta/2)],
+                    [np.exp( 1j/2*(alpha-gamma))*sin(beta/2), np.exp( 1j/2*(alpha+gamma))*cos(beta/2)]
+                ])
+                spinRotateList.append(spinRotation)
+            return spinRotateList
+        
+        def getSymOpsAndSymSiteMap(atomicMagMomList=[]):
+            # constructe all sym. ops and fetch ion mapping under sym. ops
+            symRotateList=[]
+            symTranslateList=[]
+            symIonMap=[]
+            sym= pR.getWholeSymmetryOperator(getSymObj=True)
+            rotation, translation= sym['rotations'], sym['translations']
+            translation=[vecAround(translate)%1 for translate in translation]
+            print('Lattice symmetry group order: %d'%rotation.shape[0])
+            print('Warning: at present, pls. ensure that all the translation vectors are zero')
+            print('         which can be achieve by chosing correct origin')
+            #print(sym)
+            #exit()
+            for rotate, translate in zip(rotation,translation):
+                #print(rotate,translate)
+                symRotateList.append(rotate)
+                symTranslateList.append(translate)
+                subMap=[]
+                for iion, ion_coor in enumerate(pR.pos_ions):
+                    ion_coor_trans=ion_coor.dot(rotate.T)+translate
+                    #print('transformed',ion_coor_trans)
+                    for iion_origin, ion_coor_origin in enumerate(pR.pos_ions):
+                        #print('origin',ion_coor_origin)
+                        d_coor=vecAround(ion_coor_trans-ion_coor_origin)%1#(ion_coor_trans-ion_coor_origin)%1
+                        d_coor_len=sum(abs(d_coor))
+                        if d_coor_len<paramReader.SYMPREC:# or abs(1-d_coor_len)<paramReader.SYMPREC or abs(2-d_coor_len)<paramReader.SYMPREC or abs(3-d_coor_len)<paramReader.SYMPREC:
+                            #print('%d -> %d'%(iion,iion_origin))
+                            #print(d_coor)
+                            subMap.append(iion_origin)
+                if len(subMap)!=sum(pR.nions):
+                    print("Error, cannot find symmetric ion for symmetry op:")
+                    print(rotate)
+                    print(translate)
+                    exit()
+                symIonMap.append(subMap)
+            
+            spinRotateList=readSpinWFCSymOp(symRotateList)
+            # check if system involves nonzero local mag. mom.
+            sx=np.array([[0,1],[1,0]],dtype=complex)
+            sy=np.array([[0,-1j],[1j,0]],dtype=complex)
+            sz=np.array([[1,0],[0,-1]],dtype=complex)
+            magmom_list=atomicMagMomList
+            #for m in atomicMagMomList:
+            #    m_su2=np.array(m,dtype=complex)
+                #mx=m_su2.conjugate().dot(sx).dot(m_su2)
+                #my=m_su2.conjugate().dot(sy).dot(m_su2)
+                #mz=m_su2.conjugate().dot(sz).dot(m_su2)
+                #magmom_list.append(np.array([mx,my,mz]).real)
+            #    magmom_list.append(spinorToR(m_su2))
+            #tot_abs_mag=sum([np.sqrt(np.dot(m,m)) for m in magmom_list]) if len(magmom_list)>0 else 0.
+            if spinor: # find proper sub-group consist with magnetism and time reversal symmetry
+                if abs(sum(sum(spin_basis.dot(spin_basis.conjugate().T)-np.eye(2)))-2)<paramReader.SYMPREC:
+                    Us=spin_basis
+                else:
+                    print("Warning: spin_basis is not set or not set correctly. So, I have to calc. this via saxis.")
+                    print("         However, in some cases the saxis-inferred spin space is not satisfied.")
+                    print("         Be caucious and re-check the result!")
+                    assert np.sqrt(sum(saxis*saxis))==1, 'saxis should be normalized vector'
+                    _,Us=np.linalg.eigh(saxis[0]*sx+saxis[1]*sy+saxis[2]*sz)
+                    print("Calculated spin basis:")
+                    print(Us)
+                new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
+                for isym in range(len(symIonMap)):
+                    rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
+                    magmom_rotated_list=[]
+                    for m in atomicMagMomList:
+                        magmom_rotated_list.append(pseudoRotation(rotate_r,pR.lat,m))
+                    #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
+                    diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(pR.nions))]
+                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
+                        print('crystal sym. op. preserved:')
+                        print(rotate_r)
+                        print(translate)
+                        #print(rotate_s)
+                        #print(Usy)
+                        print(Us.conjugate().T.dot(rotate_s).dot(Us))
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                                print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
+                                    idmag,ionMap[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
+                                    *dmag))
+                        new_symRotateList.append(rotate_r)
+                        new_symTranslateList.append(translate)
+                        new_symIonMap.append(ionMap)
+                        new_spinRotateList.append(Us.conjugate().T.dot(rotate_s).dot(Us))
+                        new_timeReversalList.append(False)
+                    else:
+                        print('crystal sym. op. broken due to magnetism')
+                        print(rotate_r)
+                        print(translate)
+                        print(Us.conjugate().T.dot(rotate_s).dot(Us))
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                                print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
+                                    idmag,ionMap[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
+                                    *dmag))
+                    #continue
+                    # check time reversal symmetry
+                    rotate_s_tr=rotate_s@np.array([[0,-1],[1,0]])
+                    magmom_rotated_list=[]
+                    for m in atomicMagMomList:
+                        #m_su2=(rotate_s_tr.dot(np.array(m,dtype=complex))).conjugate() # NOTE the conjugation inherent in TRS
+                        #mx=m_su2.conjugate().dot(sx).dot(m_su2)
+                        #my=m_su2.conjugate().dot(sy).dot(m_su2)
+                        #mz=m_su2.conjugate().dot(sz).dot(m_su2)
+                        #magmom_rotated_list.append(np.array([mx,my,mz]).real)
+                        #if im==0:
+                        #    print(rotate_s_tr)
+                        #    print(m)
+                        #    print(spinorToR(m),spinorToR(m_su2))
+                        #magmom_rotated_list.append(spinorToR(m_su2))
+                        magmom_rotated_list.append(-pseudoRotation(rotate_r,pR.lat,m))
+                    #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
+                    diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(pR.nions))]
+                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
+                        print('crystal sym. op. + time reversal preserved:')
+                        print(rotate_r)
+                        print(translate)
+                        #print(rotate_s_tr)
+                        #print(Usy)
+                        print(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                                print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
+                                    idmag,ionMap[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
+                                    *dmag))
+                        new_symRotateList.append(rotate_r)
+                        new_symTranslateList.append(translate)
+                        new_symIonMap.append(ionMap)
+                        new_spinRotateList.append(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
+                        new_timeReversalList.append(True)
+                    else:
+                        print('crystal sym. op. + time reversal broken due to magnetism')
+                        print(rotate_r)
+                        print(translate)
+                        print(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
+                        print('dmag:')
+                        for idmag, dmag in enumerate(diff_magmom):
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                                print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
+                                    idmag,ionMap[idmag],
+                                    *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
+                                    *dmag))
+                symRotateList, symTranslateList, symIonMap, spinRotateList=new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList
+                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':new_timeReversalList}
+            else:
+                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':[False for sympos in symRotateList]}
+        
+        def generateAtomicWFCSymOp(symRotateList,format="w90"):
+            '''generate transformation matrix of cubic harmonics for each sym. Op
+            output:
+            data[0]:1x1 array: s; 
+            data[1]:3x3 array: pz,px,py (w90 format); px,py,pz (openmx format)
+            data[2]:5x5 array: dz2, dxz, dyz, dx2-y2, dxy (w90 format); dz2, dx2-y2, dxy, dxz, dyz (openmx format) 
+            data[3]:7x7 array: fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
+            data[4]:2x2 array: up, dn
+            '''
+            def defineVecByAngles(theta,phi):
+                '''angular rep. to cartesian rep.'''
+                return np.array([sin(theta)*cos(phi),sin(theta)*sin(phi),cos(theta)])
+            def pOrb(vec,format="w90"):
+                '''p-orbitals defined in line with wannier90 v2.1
+                   order: pz, px, py
+                '''
+                x,y,z=vec
+                if format=="openmx":
+                    return np.array([x,y,z])
+                return np.array([z,x,y]) # in order: pz, px, py, 
+            def dOrb(vec,format="w90"):
+                '''d-orbitals defined in line with wannier90 v2.1
+                   order: dz2, dxz, dyz, dx2-y2, dxy
+                '''
+                x,y,z=vec
+                if format=="openmx":
+                    return np.array([
+                        sqrt(5/16)*(3*z*z-1),
+                        sqrt(15/16)*(x*x-y*y),
+                        sqrt(15/4)*x*y,
+                        sqrt(15/4)*x*z,
+                        sqrt(15/4)*y*z,
+                    ])
+                return np.array([
+                    sqrt(5/16)*(3*z*z-1),
+                    sqrt(15/4)*x*z,
+                    sqrt(15/4)*y*z,
+                    sqrt(15/16)*(x*x-y*y),
+                    sqrt(15/16)*x*y*2
+                ])
+            def fOrb(vec,format="w90"):
+                '''f-orbitals defined in line with wannier90 v2.1
+                   order: fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
+                '''
+                x,y,z=vec
+                return np.array([
+                    sqrt(7)   *(5*z**3-3*z),
+                    sqrt(21/2)*(5*z**2-1)*x,
+                    sqrt(21/2)*(5*z**2-1)*y,
+                    sqrt(105) *(x*x-y*y)*z,
+                    sqrt(105) *(x*y*2)*z,
+                    sqrt(35/2)*(x*x-3*y*y)*x,
+                    sqrt(35/2)*(3*x*x-y*y)*y
+                ])/4#/sqrt(np.pi)
+            
+            pn1,pn2,pn3=np.array([1,0,0]),np.array([0,1,0]),np.array([0,0,1])
+            pNBasis=[pn1,pn2,pn3]
+            pList=np.array([pOrb(n_vec,format=format) for n_vec in pNBasis])
+            ao_p_basis_std=np.linalg.inv(pList)
+        
+            theta1=acos(np.sqrt(1/3))
+            theta2=np.pi-theta1
+            dn1=defineVecByAngles(0,0)
+            dn2=defineVecByAngles(theta1,0)
+            dn3=defineVecByAngles(theta1,np.pi/2)
+            dn4=defineVecByAngles(theta2,np.pi*0/6)
+            dn5=defineVecByAngles(theta2,np.pi*(0/6+1/4))
+            dNBasis=[dn1,dn2,dn3,dn4,dn5]
+            dList=np.array([dOrb(n_vec,format=format) for n_vec in dNBasis])
+            print('determinals of d-orb basis:',np.linalg.det(dList))
+            ao_d_basis_std=np.linalg.inv(dList)
+            #exit()
+        
+            theta1=acos(np.sqrt(3/5))
+            theta2=np.pi-theta1
+            fn1=defineVecByAngles(0,0)
+            fn2=defineVecByAngles(theta1,0)
+            fn3=defineVecByAngles(theta1,np.pi/2)
+            fn4=defineVecByAngles(theta2,0)
+            fn5=defineVecByAngles(theta2,np.pi/4)
+            fn6=defineVecByAngles(np.pi/2,0)
+            fn7=defineVecByAngles(np.pi/2,np.pi/6)
+            fNBasis=[fn1,fn2,fn3,fn4,fn5,fn6,fn7]
+            fList=np.array([fOrb(n_vec,format=format) for n_vec in fNBasis])
+            print('determinals of f-orb basis',np.linalg.det(fList))
+            ao_f_basis_std=np.linalg.inv(fList)
+
+            atomicWaveSymOpList=[]
+            L=pR.lat
+            L_inv=np.linalg.inv(L)
+            for rotate in symRotateList:
+                rotate_xyz=L_inv.dot(rotate.T).dot(L)
+
+                pTransList=np.array([pOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in pNBasis])
+                ao_p_basis_trans=pTransList.T
+
+                dTransList=np.array([dOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in dNBasis])
+                ao_d_basis_trans=dTransList.T
+
+                fTransList=np.array([fOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in fNBasis])
+                ao_f_basis_trans=fTransList.T
+
+                atomicWaveSymOpList.append([
+                    np.array([1]),
+                    np.dot(ao_p_basis_trans,ao_p_basis_std.T),
+                    np.dot(ao_d_basis_trans,ao_d_basis_std.T),
+                    np.dot(ao_f_basis_trans,ao_f_basis_std.T)
+                    ])
+            return atomicWaveSymOpList
+        
+        # check the projections
+        orbName=['s','p','d','f']
+        lmax=0
+        for iatom, (atomL,atomOrb) in enumerate(zip(atomicLList,atomicOrbIndexList)):
+            print('atom %d, lmax=%d'%(iatom,max(atomL)))
+            lmax=max([lmax,max(atomL)])
+            for ishell, (orbL, orbIndex) in enumerate(zip(atomL,atomOrb)):
+                print('%s orb:'%orbName[orbL],orbIndex)
+
+        # obtain sym. Ops. of atomic wavefunctions
+        sym= getSymOpsAndSymSiteMap(atomicMagMomList=atomicMagMomList)
+        symRotateList, symTranslateList, symSiteMapList, symSpinRotateList, symTimeReversalList=sym['rotations'], sym['translations'], sym['atom map'], sym['spin rotations'], sym['time reversal']
+        #for isym, rotate in enumerate(symRotateList):
+        #    print('sym. op. %d/%d'%(isym,len(symRotateList)-1))
+        #    print(rotate)
+        #    print(symTranslateList[isym])
+        #    print('time reversal:',symTimeReversalList[isym])
+        #exit()
+        if len(symOpSelection)>0:
+            symRotateList=[symRotateList[isym] for isym in symOpSelection]
+            symTranslateList=[symTranslateList[isym] for isym in symOpSelection]
+            symSiteMapList=[symSiteMapList[isym] for isym in symOpSelection]
+            symSpinRotateList=[symSpinRotateList[isym] for isym in symOpSelection]
+            symTimeReversalList=[symTimeReversalList[isym] for isym in symOpSelection]
+        atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,format=format)
+        #print(atomicWaveSymOpList[0])
+        #exit()
+        
+        # construct local sym. Op. for each sym. op.
+        localSymOpList=[] # localSymOpList[isymOp][iatom] give sym. op. in atomic subspace
+        for isymOp in range(len(symRotateList)):
+            localSymOp=[]
+            for iatom, (atomL, atom) in enumerate(zip(atomicLList,atomicOrbIndexList)):
+                atom_size=sum([len(shell) for shell in atom])
+                atomSymOp=np.zeros((atom_size,atom_size),dtype=complex)
+                cnt=0
+                for L, shell in zip(atomL,atom):
+                    nLorbitTunnels=2*L+1
+                    assert len(shell)%nLorbitTunnels==0, 'Error: in atom%d size of orbit L=%d is %d'%(iatom,L,len(shell))
+                    if spinor:
+                        nLorbit=(len(shell)//2)//nLorbitTunnels
+                        assert nLorbit==1,  'Error: in atom%d size of orbit L=%d is %d, not accommondate to (spinful) orbit size %d'%(iatom,L,len(shell),2*nLorbitTunnels)
+                        
+                        spinRotate= symSpinRotateList[isymOp]
+                        for iLorbit in range(nLorbit):
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),                   cnt:(cnt+nLorbitTunnels)                   ]=atomicWaveSymOpList[isymOp][L]*spinRotate[0,0]
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),                   (cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels)]=atomicWaveSymOpList[isymOp][L]*spinRotate[0,1]
+                            atomSymOp[(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels),cnt:(cnt+nLorbitTunnels)                   ]=atomicWaveSymOpList[isymOp][L]*spinRotate[1,0]
+                            atomSymOp[(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels),(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels)]=atomicWaveSymOpList[isymOp][L]*spinRotate[1,1]
+                            cnt+=2*nLorbitTunnels
+                    elif self.spin_polarized:
+                        nLorbit=(len(shell)//2)//nLorbitTunnels
+                        #assert nLorbit>0, 'Error: in atom%d size of orbit L=%d is %d, not accommondate to (spinful) orbit size %d'%(iatom,L,len(shell),2*nLorbitTunnels)
+                        #if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,L,iatom))
+                        assert nLorbit==1,  'Error: in atom%d size of orbit L=%d is %d, not accommondate to (spinful) orbit size %d'%(iatom,L,len(shell),2*nLorbitTunnels)
+
+                        for iLorbit in range(nLorbit):
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),                   cnt:(cnt+nLorbitTunnels)                   ]=atomicWaveSymOpList[isymOp][L]
+                            atomSymOp[(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels),(cnt+nLorbitTunnels):(cnt+2*nLorbitTunnels)]=atomicWaveSymOpList[isymOp][L]
+                            cnt+=2*nLorbitTunnels
+                    else:
+                        nLorbit=len(shell)//nLorbitTunnels
+                        #assert nLorbit>0, 'Error: in atom%d size of orbit L=%d is %d, not accommondate to orbit size %d'%(iatom,iL,len(shell),nLorbitTunnels)
+                        #if nLorbit>1: print("Warning: found more than %d L=%d tunnels in atom%d, assuming that they are in good order"%(nLorbit,L,iatom))
+                        assert nLorbit==1,  'Error: in atom%d size of orbit L=%d is %d, not accommondate to (spinful) orbit size %d'%(iatom,L,len(shell),2*nLorbitTunnels)
+
+                        for iLorbit in range(nLorbit):
+                            atomSymOp[cnt:(cnt+nLorbitTunnels),cnt:(cnt+nLorbitTunnels)]=atomicWaveSymOpList[isymOp][L]
+                            cnt+=nLorbitTunnels
+                        #print(atomicWaveSymOpList[isymOp][L])
+                        
+                localSymOp.append(atomSymOp)
+            localSymOpList.append(localSymOp)
+        '''
+        # check the whether operations are right
+        np.set_printoptions(precision=4)
+        i,j=2,0
+        orbAtomI=[]
+        for L in atomicOrbIndexList[i]:
+            for iorb in L: orbAtomI.append(iorb)
+        orbAtomJ=[]
+        for L in atomicOrbIndexList[j]:
+            for iorb in L: orbAtomJ.append(iorb)
+        print(orbAtomI)
+        print(orbAtomJ)
+        bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+        dR=[1,0,0]
+        sourceCoor0=pR.pos_ions[i]
+        targetCoor0=pR.pos_ions[j]+np.array(dR)
+        for iorbAtomI, orbAtomIIndex in enumerate(orbAtomI):
+            for iorbAtomJ, orbAtomJIndex in enumerate(orbAtomJ):
+                bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
+        #bond_atom_i_j=
+        print('bond1 atom%d-atom%d [%d %d %d]'%(i,j,*dR))
+        print(bond)
+        #exit()
+        for rotate, translate, localSymOp, siteMap, timeReversal in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList,symTimeReversalList):
+            i_trans=siteMap[i]
+            j_trans=siteMap[j]
+            orbAtomI=[]
+            for L in atomicOrbIndexList[i_trans]:
+                for iorb in L: orbAtomI.append(iorb)
+            orbAtomJ=[]
+            for L in atomicOrbIndexList[j_trans]:
+                for iorb in L: orbAtomJ.append(iorb)
+            print('rotation:')
+            print(rotate)
+            print('translation:')
+            print(translate)
+            print('time reversal:',timeReversal)
+            #print(localSymOp[i_trans])
+            #print(localSymOp[j_trans])
+            print('source atom%d'%i_trans,'source orb',orbAtomI)
+            print('target atom%d'%j_trans,'target orb',orbAtomJ)
+
+            sourceCoor1=rotate.dot(sourceCoor0)+translate
+            targetCoor1=rotate.dot(targetCoor0)+translate
+            print('source: %.4f %.4f %.4f'%(*sourceCoor1,))
+            print('target: %.4f %.4f %.4f'%(*targetCoor1,))
+            dR=(targetCoor1-pR.pos_ions[j_trans])-(sourceCoor1-pR.pos_ions[i_trans])
+            dR=np.array([int(np.around(x)) for x in dR])
+            print('bond2 atom%d-atom%d'%(i_trans,j_trans),dR)
+
+            bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+            for iorbAtomI, orbAtomIIndex in enumerate(orbAtomI):
+                for iorbAtomJ, orbAtomJIndex in enumerate(orbAtomJ):
+                    bond[iorbAtomI,iorbAtomJ]=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomIIndex,orbAtomJIndex]
+            #print('original bond')
+            #print(bond)
+            #print('transformer')
+            #print(localSymOp[i_trans].conjugate().T)
+            #print(localSymOp[j_trans])
+            bond=(localSymOp[i_trans].conjugate().T).dot(bond).dot(localSymOp[j_trans])
+            if timeReversal:
+                bond=bond.conjugate()
+            print('transformed bond')
+            print(bond)
+        exit()
+        '''
+        #np.set_printoptions(precision=4)
+        # impose symmetry constrains
+        time0=time.time()
+        nDropedBond=0
+        bondInfo=BondInfo(overlap=True)
+        cnt_redundant=0
+        for dR0 in self.dRList:
+            if dR0[0]>self.Rx_max or dR0[0]<self.Rx_min or dR0[1]>self.Ry_max or dR0[1]<self.Ry_min or dR0[2]>self.Rz_max or dR0[2]<self.Rz_min:continue
+            #print('original dR:',dR0)
+            for iatom_source, atom_source in enumerate(atomicOrbIndexList):
+                source_coor=pR.pos_ions[iatom_source]
+                for iatom_target, atom_target in enumerate(atomicOrbIndexList):
+                    target_coor=pR.pos_ions[iatom_target]+dR0
+                    dR_xyz=(target_coor-source_coor)@pR.lat
+                    dR_xyz_len=np.sqrt(dR_xyz@dR_xyz)
+                    if bondInfo.checkIfOldBond(dR_xyz_len,(iatom_source,iatom_target),dR0):
+                        cnt_redundant+=1
+                        continue
+
+                    bond_sym=0
+                    overlap_sym=0
+                    sub_atom_pair_list=[]
+                    sub_dR_list=[]
+                    outOfReach=False
+                    #print('start constructions')
+                    for rotate, translate, localSymOp, siteMap, timeReversal in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList,symTimeReversalList):
+                        iatom_source_trans=siteMap[iatom_source]
+                        iatom_target_trans=siteMap[iatom_target]
+
+                        source_coor_trans=rotate@source_coor+translate
+                        target_coor_trans=rotate@target_coor+translate
+                        dR_xyz_rotated=(target_coor_trans-source_coor_trans)@pR.lat
+                        dR_xyz_rotated_len=np.sqrt(dR_xyz_rotated@dR_xyz_rotated)
+                        assert abs(dR_xyz_rotated_len-dR_xyz_len)<paramReader.SYMPREC, 'sym. op. change bond length'
+
+                        dR_tmp=target_coor_trans-source_coor_trans+pR.pos_ions[iatom_source_trans]-pR.pos_ions[iatom_target_trans]#(target_coor_trans-target_coor_trans%1)-(source_coor_trans-source_coor_trans%1)
+                        for icomp, x in enumerate(dR_tmp):  assert abs(x-np.around(x))<paramReader.SYMPREC, 'dR[%d] is not interger %.6f'%(icomp,x)
+                        dR=np.array([int(np.around(x)) for x in dR_tmp],dtype=int)
+                        #print('symmetry dR:',dR,'time reversal:',timeReversal)
+                        if dR[0]>self.Rx_max or dR[0]<self.Rx_min or dR[1]>self.Ry_max or dR[1]<self.Ry_min or dR[2]>self.Rz_max or dR[2]<self.Rz_min:
+                            nDropedBond+=1
+                            outOfReach=True
+                            #print('dR is out of range, drop all related bonds')
+                            break
+                        
+                        sub_atom_pair_list.append((iatom_source_trans,iatom_target_trans))
+                        sub_dR_list.append(dR)
+                        #print('symmetry atom pair:',iatom_source_trans,iatom_target_trans)
+
+                        orbAtomI=[]
+                        for shell in atomicOrbIndexList[iatom_source_trans]: orbAtomI+=shell
+                        orbAtomJ=[]
+                        for shell in atomicOrbIndexList[iatom_target_trans]: orbAtomJ+=shell
+                        
+                        #bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+                        #overlap=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+                        #for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomI):
+                        #    for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomJ):
+                        #        bond[iLocalOrbI,iLocalOrbJ]=self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        #        overlap[iLocalOrbI,iLocalOrbJ]=self.overlapInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        #        #print('supporting bond, local index %d %d, global dR:(%d %d %d) %d %d'%(iLocalOrbI,iLocalOrbJ,*dR,iGlobalOrbI,iGlobalOrbJ),orbAtomI,orbAtomJ,
+                        #        #       self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ],timeReversal)
+                        bond=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomI,:][:,orbAtomJ]
+                        overlap=self.overlapInVecForm[dR[0],dR[1],dR[2],orbAtomI,:][:,orbAtomJ]
+                        bond_tmp=localSymOp[iatom_source_trans].conjugate().T@bond@localSymOp[iatom_target_trans]
+                        overlap_tmp=localSymOp[iatom_source_trans].conjugate().T@overlap@localSymOp[iatom_target_trans]
+                        #print(bond)
+                        if timeReversal: 
+                            bond_tmp=bond_tmp.conjugate()
+                            overlap_tmp=overlap_tmp.conjugate()
+                        bond_sym=bond_tmp+bond_sym
+                        overlap_sym=overlap_tmp+overlap_sym
+                        #print(bond)
+                        #print("setting")
+                    
+                    if outOfReach: continue
+
+                    #print(bond_sym)
+                    bond_sym=bond_sym/len(symRotateList)
+                    overlap_sym=overlap_sym/len(symRotateList)
+                    #print(bond_sym)
+                    bondInfo.appendNewBondAndOverlap(dR_xyz_len,
+                                           sub_atom_pair_list,
+                                           sub_dR_list,
+                                           bond_sym, overlap_sym)
+        #for dRList, atomPairList, bondLen in zip(bondInfo.dRList,bondInfo.atomPairList,bondInfo.bondLengthList):
+        #    print(bondLen,len(dRList))
+        #    for dR, atomPair in zip(dRList,atomPairList):
+        #        print(dR,atomPair)
+        #exit()
+        #return
+        # reconstruct symmetry-constrained Ham. and Overlap
+        self.bondList=[]
+        bondLen_old=-1
+        bondSymIDTrackList=[] # record the id of bond_elementary to which this bond corresponds
+        #cnt=0
+        for dRList, atomPairList, bondLen, bond_elementary, overlap_elementary, bond_ele_ID in zip(bondInfo.dRList,bondInfo.atomPairList,bondInfo.bondLengthList,bondInfo.bondSymList,bondInfo.overlapSymList,bondInfo.bondSymIDList):
+            if abs(bondLen-bondLen_old)>paramReader.SYMPREC: # since the bonds are sorted according to bond lengths
+                bond_setted_info=[]
+                bondLen_old=bondLen
+            for dR, atomPair, localSymOp, timeReversal in zip(dRList,atomPairList,localSymOpList,symTimeReversalList):
+                #if timeReversal: continue
+                iatom_source_trans, iatom_target_trans= atomPair
+                # avoid redundant setting
+                already_setted=False
+                bond_info_new=np.array([int(dR[0]),int(dR[1]),int(dR[2]),iatom_source_trans,iatom_target_trans],dtype=int)
+                #if cnt<2:print('attempt to add atom-atom bond:',bond_info_new)
+                for bond_info in bond_setted_info:
+                    #if cnt<2:print('existed bonds:',bond_info)
+                    if sum(abs(bond_info-bond_info_new))==0:# or sum(abs(bond_info-bond_conj_info_new))==0:
+                        already_setted=True
+                        #if cnt<2:print('redundant')
+                        break
+                if already_setted: continue
+
+                bond_setted_info.append(bond_info_new)
+                bond_conj_info_new=np.array([-int(dR[0]),-int(dR[1]),-int(dR[2]),iatom_target_trans,iatom_source_trans],dtype=int)
+                if sum(abs(bond_conj_info_new-bond_info_new))>0:bond_setted_info.append(bond_conj_info_new)
+                
+                bond_core=np.array(list(list(bond_elementary)))
+                overlap_core=np.array(list(list(overlap_elementary)))
+                if timeReversal: 
+                    bond_core=bond_core.conjugate()
+                    overlap_core=overlap_core.conjugate()
+                bond_rotated=localSymOp[iatom_source_trans]@bond_core@(localSymOp[iatom_target_trans].T.conjugate())
+                overlap_rotated=localSymOp[iatom_source_trans]@overlap_core@(localSymOp[iatom_target_trans].T.conjugate())
+                # check the imaginary part of overlap matrix
+                overlapIM=np.max(abs(overlap_rotated.imag))
+                assert overlapIM<paramReader.SYMPREC, "Error: find imaginary part of symmerized overlap: %.6f"%overlapIM
+                overlap_rotated=overlap_rotated.real
+                
+                atom_source,atom_target=atomicOrbIndexList[iatom_source_trans],atomicOrbIndexList[iatom_target_trans]
+                orbAtomSource=[]
+                for shell in atom_source: orbAtomSource+=shell
+                orbAtomTarget=[]
+                for shell in atom_target: orbAtomTarget+=shell
+                
+                #if cnt<2:print('including orb-orb bonds:')
+                for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomSource):
+                    for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomTarget):
+                        if sum(abs(dR))==0 and iatom_source_trans==iatom_target_trans:
+                            if iGlobalOrbI>iGlobalOrbJ:
+                                self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],overlap_rotated[iLocalOrbI,iLocalOrbJ]))
+                                self.bondList.append(lat.BondDigital(iGlobalOrbJ,iGlobalOrbI,-dR,bond_rotated[iLocalOrbI,iLocalOrbJ].conjugate(),overlap_rotated[iLocalOrbI,iLocalOrbJ]))
+                                bondSymIDTrackList.append(bond_ele_ID)
+                                bondSymIDTrackList.append(bond_ele_ID)
+                                #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'with conjugation (intra atom conjugation)')
+                            elif iGlobalOrbI==iGlobalOrbJ:
+                                self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],overlap_rotated[iLocalOrbI,iLocalOrbJ]))
+                                bondSymIDTrackList.append(bond_ele_ID)
+                                self.onsite[iGlobalOrbI]=bond_rotated[iLocalOrbI,iLocalOrbI]
+                                #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'onsite term (no conjugation)')
+                        else:
+                            self.bondList.append(lat.BondDigital(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],overlap_rotated[iLocalOrbI,iLocalOrbJ]))
+                            self.bondList.append(lat.BondDigital(iGlobalOrbJ,iGlobalOrbI,-dR,bond_rotated[iLocalOrbI,iLocalOrbJ].conjugate(),overlap_rotated[iLocalOrbI,iLocalOrbJ]))
+                            bondSymIDTrackList.append(bond_ele_ID)
+                            bondSymIDTrackList.append(bond_ele_ID)
+                            #if cnt<2:print(iGlobalOrbI,iGlobalOrbJ,dR,bond_rotated[iLocalOrbI,iLocalOrbJ],'with conjugation (normal)')
+                #cnt+=1
+        #exit()
+        #print(self.onsite)
+        print("re-construct bonds in %.3fs, %d bonds droped"%(time.time()-time0,nDropedBond))
+        #print(len(bondInfo.bondLengthList),cnt_redundant)
+        #exit()
+        #with open ('./hr_symmerized.tmp.txt','w') as fout:
+        #    for bond in self.bondList:
+        #        fout.write("%5d%5d%5d%5d%5d%12.6f%12.6f\n"%(*bond.overlat,bond.source,bond.target,bond.t.real,bond.t.imag))
+        
+        # update bond scope
+        RxList, RyList, RzList=[], [], []
+        for dRList in bondInfo.dRList:
+            for dR in dRList:
+                RxList.append(dR[0]);RyList.append(dR[1]);RzList.append(dR[2])
+        self.Rx_max, self.Rx_min, self.Ry_max, self.Ry_min, self.Rz_max, self.Rz_min= max(RxList),min(RxList),max(RyList),min(RyList),max(RzList),min(RzList)
+        # data structure: bondInVecForm[Rx,Ry,Rz,source,target]=hopping
+        self.bondInVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=complex)
+        self.overlapInVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb))
+        bondSymIDVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=int)
+        for bond, bondSymID in zip(self.bondList,bondSymIDTrackList):
+            self.bondInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.t
+            self.overlapInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.overlap
+            bondSymIDVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bondSymID
+        
+        # verification
+        time0=time.time()
+        bondInfo_verification=BondInfo()
+        cnt_redundant=0
+        for dR0 in self.dRList:
+            if dR0[0]>self.Rx_max or dR0[0]<self.Rx_min or dR0[1]>self.Ry_max or dR0[1]<self.Ry_min or dR0[2]>self.Rz_max or dR0[2]<self.Rz_min:continue
+            #print('original dR:',dR0)
+            for iatom_source, atom_source in enumerate(atomicOrbIndexList):
+                source_coor=pR.pos_ions[iatom_source]
+                for iatom_target, atom_target in enumerate(atomicOrbIndexList):
+                    target_coor=pR.pos_ions[iatom_target]+dR0
+                    dR_xyz=(target_coor-source_coor).dot(pR.lat)
+                    dR_xyz_len=np.sqrt(np.dot(dR_xyz,dR_xyz))
+                    if bondInfo_verification.checkIfOldBond(dR_xyz_len,(iatom_source,iatom_target),dR0):
+                        cnt_redundant+=1
+                        continue
+
+                    sub_bond_list,sub_overlap_list=[],[]
+                    bond_sym_list,overlap_sym_list=[],[]
+                    bond_sym_id_list=[]
+                    sub_atom_pair_list=[]
+                    sub_dR_list=[]
+                    outOfReach=False
+                    for rotate, translate, localSymOp, siteMap, timeReversal in zip(symRotateList,symTranslateList,localSymOpList,symSiteMapList,symTimeReversalList):
+                        iatom_source_trans=siteMap[iatom_source]
+                        iatom_target_trans=siteMap[iatom_target]
+
+                        source_coor_trans=rotate@source_coor+translate
+                        target_coor_trans=rotate@target_coor+translate
+
+                        dR_tmp=target_coor_trans-source_coor_trans+pR.pos_ions[iatom_source_trans]-pR.pos_ions[iatom_target_trans]
+                        dR=np.array([int(np.around(x)) for x in dR_tmp],dtype=int)
+                        #print('symmetry dR:',dR,'time reversal:',timeReversal)
+                        if dR[0]>self.Rx_max or dR[0]<self.Rx_min or dR[1]>self.Ry_max or dR[1]<self.Ry_min or dR[2]>self.Rz_max or dR[2]<self.Rz_min:
+                            outOfReach=True
+                            #print('dR is out of range, drop all related bonds')
+                            break
+                        
+                        sub_atom_pair_list.append((iatom_source_trans,iatom_target_trans))
+                        sub_dR_list.append(dR)
+                        #print('symmetry atom pair:',iatom_source_trans,iatom_target_trans)
+
+                        orbAtomI=[]
+                        for shell in atomicOrbIndexList[iatom_source_trans]: orbAtomI+=shell
+                        orbAtomJ=[]
+                        for shell in atomicOrbIndexList[iatom_target_trans]: orbAtomJ+=shell
+                        
+                        #sub_bond=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+                        #bond_rotated=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=complex)
+                        #for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomI):
+                        #    for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomJ):
+                        #        bond_rotated[iLocalOrbI,iLocalOrbJ]=self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        #        sub_bond[iLocalOrbI,iLocalOrbJ]=self.bondInVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        sub_bond=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomI,:][:,orbAtomJ]
+                        bond_rotated=self.bondInVecForm[dR[0],dR[1],dR[2],orbAtomI,:][:,orbAtomJ]
+                        sub_bond_list.append(sub_bond)
+                        sub_overlap=self.overlapInVecForm[dR[0],dR[1],dR[2],orbAtomI,:][:,orbAtomJ]
+                        overlap_rotated=self.overlapInVecForm[dR[0],dR[1],dR[2],orbAtomI,:][:,orbAtomJ]
+                        sub_overlap_list.append(sub_overlap)
+
+                        bond_back=localSymOp[iatom_source_trans].T.conjugate()@bond_rotated@localSymOp[iatom_target_trans]
+                        if timeReversal: bond_back=bond_back.conjugate()
+                        overlap_back=localSymOp[iatom_source_trans].T.conjugate()@overlap_rotated@localSymOp[iatom_target_trans]
+                        if timeReversal: overlap_back=overlap_back.conjugate()
+                        
+                        bond_sym_list.append(bond_back)
+                        overlap_sym_list.append(overlap_back)
+                        
+                        #bondSymIDMatrix=np.zeros((len(orbAtomI),len(orbAtomJ)),dtype=int)
+                        #for iLocalOrbI, iGlobalOrbI in enumerate(orbAtomI):
+                        #    for iLocalOrbJ, iGlobalOrbJ in enumerate(orbAtomJ):
+                        #        bondSymIDMatrix[iLocalOrbI,iLocalOrbJ]=bondSymIDVecForm[dR[0],dR[1],dR[2],iGlobalOrbI,iGlobalOrbJ]
+                        bondSymIDMatrix=bondSymIDVecForm[dR[0],dR[1],dR[2],orbAtomI,:][:,orbAtomJ]
+                        bond_sym_id_list.append(bondSymIDMatrix)
+
+                    if outOfReach: continue
+                    assert len(bond_sym_list)==len(symRotateList) and len(overlap_sym_list)==len(symRotateList), 'symmery parts of bond do not align with sym. ops.'
+                    res_tot,res_overlap_tot=0,0
+                    res_list,res_overlap_list=[],[]
+                    bond_elementary,overlap_elementary=bond_sym_list[0],overlap_sym_list[0]
+                    for bond_sym_part, overlap_sym_part in zip(bond_sym_list,overlap_sym_list):
+                        bond_sym_res=bond_sym_part-bond_elementary
+                        res_list.append(np.sum(abs(bond_sym_res)))
+                        res_tot+=np.sum(abs(bond_sym_res))
+                        overlap_sym_res=overlap_sym_part-overlap_elementary
+                        res_overlap_list.append(np.sum(abs(overlap_sym_res)))
+                        res_overlap_tot+=np.sum(abs(overlap_sym_res))
+                    if res_tot>paramReader.SYMPREC:
+                        np.set_printoptions(precision=4)
+                        print("failed verification on symmerized bond, with total res:%.6E"%res_tot)
+                        for sub_bond, sym_part, sym_id, localSymOp, atom_pair, _dR, _res, _TR in zip(sub_bond_list,bond_sym_list,bond_sym_id_list,localSymOpList,sub_atom_pair_list,sub_dR_list,res_list, symTimeReversalList):
+                            print("orb%d-orb%d [%d %d %d], TR:"%(atom_pair[0],atom_pair[1],*_dR),_TR,"res (ref bond0):",_res)
+                            print("transformer:")
+                            print(localSymOp[atom_pair[0]].T.conjugate())
+                            print(localSymOp[atom_pair[1]])
+                            print("sym. id for each link:")
+                            print(sym_id)
+                            print("recorded sub bond matrix:")
+                            print(sub_bond)
+                            print("recorded sym_bond (brought back) is:")
+                            print(sym_part)
+                            print("re-calculate brought back:")
+                            
+                            bond_back=(localSymOp[atom_pair[0]].T.conjugate()).dot(sub_bond).dot(localSymOp[atom_pair[1]])
+                            if timeReversal: bond_back=bond_back.conjugate()
+                            print(bond_back)
+                        exit()
+                    if res_overlap_tot>paramReader.SYMPREC:
+                        np.set_printoptions(precision=4)
+                        print("failed verification on symmerized overlaps, with total res:%.6E"%res_overlap_tot)
+                        for sub_overlap, sym_part, sym_id, localSymOp, atom_pair, _dR, _res, _TR in zip(sub_overlap_list,overlap_sym_list,bond_sym_id_list,localSymOpList,sub_atom_pair_list,sub_dR_list,res_overlap_list, symTimeReversalList):
+                            print("orb%d-orb%d [%d %d %d], TR:"%(atom_pair[0],atom_pair[1],*_dR),_TR,"res (ref bond0):",_res)
+                            print("transformer:")
+                            print(localSymOp[atom_pair[0]].T.conjugate())
+                            print(localSymOp[atom_pair[1]])
+                            print("sym. id for each link:")
+                            print(sym_id)
+                            print("recorded sub bond matrix:")
+                            print(sub_overlap)
+                            print("recorded sym_bond (brought back) is:")
+                            print(sym_part)
+                            print("re-calculate brought back:")
+                            
+                            overlap_back=localSymOp[atom_pair[0]].T.conjugate()@sub_overlap@localSymOp[atom_pair[1]]
+                            if timeReversal: overlap_back=bond_back.conjugate()
+                            print(overlap_back)
+                        exit()
+        #exit()
+        print("verrification success in %.3fs"%(time.time()-time0))
+
     def adjustSOCStrength(self,socFactor=1):
         assert self.norb%2==0, 'num. of orbs is odd, inconsistent with SOC processing'
         halfOrb=self.norb//2

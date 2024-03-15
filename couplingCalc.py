@@ -473,8 +473,8 @@ def calcIsotropicJ_GaussianQuadrature_V2(mainDir,sc=[10,10,1],
     #calcSpinWaveSpectra(mainDir,spinList,MAE)
     #calcSpinWaveDOS(mainDir,spinList,MAE)
 
-def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],overlap=False,
-      fermi=0,eta=0.0001,erange=(-500,500),extraEnergyEmpty=5.,hrcutoff=-0.01,Jcvg=1e-3,
+def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False,
+      fermi=0,eta=0.0001,erange=(-500,500),extraEnergyEmpty=5.,Jcvg=1e-3,
       lowOrder=5,highOrder=20,nthreads=param.NCORE):
     '''
     mainDir: the position of Hr file
@@ -486,8 +486,8 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],overlap=False,
     '''
     global bondList, supercellSize
     # read in Hr
-    hr=reader.Hr()
-    fileList=aux.ls(mainDir)
+    #hr=reader.Hr()
+    #fileList=aux.ls(mainDir)
 
     # Try to read existed J.txt
     if False and fileio.readJ(mainDir,bondList):
@@ -495,17 +495,17 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],overlap=False,
         writeMCSolverIsingFile(mainDir,nonlinear=True)
         return
     
-    hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
-    if len(hrFileList)==2:
-        hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=False,cutoff=hrcutoff)
-    elif len(hrFileList)==1:
-        hr.readSingleFileV2(hrFileList[0],ignoreImagPart=False,cutoff=hrcutoff,overlap=overlap)
-    elif len(hrFileList)==0:
-        print("Error: cannot find Hr file in %s, pls. provide Hr file with name hr(.up or .dn) in %s"%(mainDir,mainDir))
-        exit()
-    else:
-        print("Error: found more than two hr file in %s, pls. clean up tge directory"%mainDir)
-        exit()
+    #hrFileList=[mainDir+fileName for fileName in fileList if 'hr' in fileName]
+    #if len(hrFileList)==2:
+    #    hr.readDoubleFiles(hrFileList[0],hrFileList[1],ignoreImagPart=False,cutoff=hrcutoff)
+    #elif len(hrFileList)==1:
+    #    hr.readSingleFileV2(hrFileList[0],ignoreImagPart=False,cutoff=hrcutoff,overlap=overlap)
+    #elif len(hrFileList)==0:
+    #    print("Error: cannot find Hr file in %s, pls. provide Hr file with name hr(.up or .dn) in %s"%(mainDir,mainDir))
+    #    exit()
+    #else:
+    #    print("Error: found more than two hr file in %s, pls. clean up tge directory"%mainDir)
+    #    exit()
         
     # create Green's function
     # firstly, obtain all overLat
@@ -581,8 +581,8 @@ def calcJFull_GaussianQuadrature(mainDir,sc=[10,10,1],overlap=False,
         rho_of_each_orb=sum(diag_list)
         print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
         print("Mag.mom of source atoms: %.6f"%(
-            sum(rho_of_each_orb[np.arange(len(relevantOrbID_list)//2,dtype=int)])-
-            sum(rho_of_each_orb[len(relevantOrbID_list)//2+np.arange(len(relevantOrbID_list)//2,dtype=int)])))
+            sum(rho_of_each_orb[len(relevantOrbID_list)//2:])-
+            sum(rho_of_each_orb[:len(relevantOrbID_list)//2])))
         
         # calc. exchange coupling energies for each bond
         for ibondType, bondType in enumerate(bondList):

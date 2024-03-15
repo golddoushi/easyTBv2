@@ -13,11 +13,12 @@ class Orb:
 
 class BondDigital:
     # bond object for establish linking, attributes are numericals
-    def __init__(self,source,target,overlat,t):
+    def __init__(self,source,target,overlat,t,overlap=0.):
         self.source=source
         self.target=target
         self.overlat=np.array(overlat)
         self.t=t
+        self.overlap=overlap
 
 class BondPhysical:
     # bond object related to Orb objects
