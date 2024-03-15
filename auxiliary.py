@@ -477,7 +477,7 @@ def semiCirle(p1:float,p2:float,pathPoints:np.ndarray):
     thetaPath=(pathPoints+1)/2*np.pi
     return r*np.exp(1j*thetaPath)+o, r*1j*np.exp(1j*thetaPath)
 
-def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False):
+def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False,getLList=False):
     '''
     Produce the structured atomic orb. ids based on the projections given by Wannier90-style strings
     Useful when i need to construct the atomicOrbList for many interfaces such as velocity calcs.
@@ -498,7 +498,7 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False):
         for i in range(num):
             sub_list.append(cnt)
             cnt+=1
-        atom_index_dic[name]={"atom id":sub_list,"s":False,"p":False,"d":False,"f":False}
+        atom_index_dic[name]={"atom id":sub_list,"s":0,"p":0,"d":0,"f":0}
     #print(atom_index_dic)
     #exit()
     # 2. analyz the strings in projections, add them into dictionary
@@ -511,41 +511,43 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False):
         ele, orbs = [x.strip() for x in projection.split(':')]
         for orb in [x.strip() for x in orbs.split(";")]:
             if orb in label_to_L_dic.keys():
-                atom_index_dic[ele][orb]=True
+                atom_index_dic[ele][orb] += 1
             else:
                 print("Error, not supported orb. type: %s, only s, p, d, f are supported by now"%orb)
                 exit()    
-    #print(atom_index_dic)
+    print(atom_index_dic)
     # 3. now let's construct the atomicOrbList
     checking_label_order=['s','p','d','f']
-    checking_label_inversed_order=['f','d','p','s']
-    all_atoms_orb_list=[]
+    all_atoms_orb_list=[]  # all_atoms_orb_list[iatom][ishell][iorbital in shell] = the global index of orbital
+    all_atoms_L_list=[]    # all_atoms_L_list[iatom][ishell] = the L number of shell
     orb_id=0
     for ele in ele_name_list:
         for iatom in atom_index_dic[ele]['atom id']:
-            for ilabel, label in enumerate(checking_label_inversed_order):
-               if atom_index_dic[ele][label]:
-                    atom_orb_list=[[] for i in range(4-ilabel)]
-                    break
-            else:
-                print("Error, neither s, p, d, or f orb is founded for %s"%ele)
-                exit()
-            for ilabel, L_orb_list in enumerate(atom_orb_list):
-                if not atom_index_dic[ele][checking_label_order[ilabel]]:continue
-                for l in range(2*label_to_L_dic[checking_label_order[ilabel]]+1):
-                    L_orb_list.append(orb_id)
-                    orb_id+=1
+            atom_orb_list=[]
+            atom_L_list=[]
+            for label in checking_label_order: # checking all L, in order of s p d f
+                for ishell in range(atom_index_dic[ele][label]):
+                    atom_L_list.append(label_to_L_dic[label])
+                    shell=[]
+                    for m in range(2*label_to_L_dic[label]+1):
+                        shell.append(orb_id)
+                        orb_id+=1
+                    atom_orb_list.append(shell)
             all_atoms_orb_list.append(atom_orb_list)
+            all_atoms_L_list.append(atom_L_list)
     
+    # for double spin tunnels, or spinor 
     if ispin==2 or soc:
         for ele in ele_name_list:
             for iatom in atom_index_dic[ele]['atom id']:
-                for ilabel, L_orb_list in enumerate(all_atoms_orb_list[iatom]):
-                    if not atom_index_dic[ele][checking_label_order[ilabel]]:continue
-                    for l in range(2*label_to_L_dic[checking_label_order[ilabel]]+1):
-                        L_orb_list.append(orb_id)
+                all_atoms_L_list[iatom]*=2
+                for shell in all_atoms_orb_list[iatom]:
+                    shellSize=len(shell)
+                    for m in range(shellSize):
+                        shell.append(orb_id)
                         orb_id+=1
-    
+    if getLList:
+        return all_atoms_orb_list, all_atoms_L_list
     return all_atoms_orb_list
 
 def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[]):
