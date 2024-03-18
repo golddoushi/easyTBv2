@@ -2767,6 +2767,51 @@ class Green:
             print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
             return eig_addr, vec_addr, hk_addr
 
+    def calcEigsAndVecsInMemoryWithOverlap_FFT(
+            self,hr,kgrid:list=[1,1,1],nthreads:int=1,ispin:int=1,
+            calcVelocity=False,    # tag to identify if we should calc velocities
+            atomicOrbIndexList=[], # give the correspondence of atom id to wannier id
+        ):
+        '''
+        Calculate the eigen-vals. and eigen-vecs. on uniform BZ sampling points, with the LCAO formalism.
+        For the case with double spin-tunnels, including the case of noncolinear. The overlap is only defined for spin-up (or the first spinor)
+        \nReturn the address of eigs. and vecs.
+        '''
+        
+        R_max,R_min=np.zeros(3,dtype=int),np.zeros(3,dtype=int)
+        for bond in hr.bondList:
+            for i in range(3):
+                if bond.overlat[i]>R_max[i]: R_max[i]=bond.overlat[i]
+                if bond.overlat[i]<R_min[i]: R_min[i]=bond.overlat[i]
+        
+        # calc real-space grid
+        Rgrid=R_max+abs(R_min)+np.ones(3,dtype=int)
+        #for icomp in range(3): Rgrid[icomp]=min([kgrid[icomp],Rgrid[icomp]])
+        assert (np.array(kgrid)>=Rgrid).all(), "k-grid %dx%dx%d is smaller than Rgrid %dx%dx%d, FFT cannot be done"%(*np.array(kgrid),*Rgrid)
+
+        # prepare input parameters for cdll
+        time0=time.time()
+        nhoppings=len(hr.bondList)
+        sourceID, targetID, overLat, t_real, t_imag, overlap  =[],[],[],[],[],[]
+        for bond in hr.bondList:
+            #print("%3d %3d %3d %3d %3d %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
+            sourceID.append(bond.source);targetID.append(bond.target)
+            overLat.append(bond.overlat[0]);overLat.append(bond.overlat[1]);overLat.append(bond.overlat[2])
+            t_real.append(bond.t.real);t_imag.append(bond.t.imag)
+            overlap.append(bond.overlap)
+        #exit()
+        from eig import calcFullBandsAndVecsInMemory_OVLCorrection_FFT
+        result=calcFullBandsAndVecsInMemory_OVLCorrection_FFT(kgrid,
+                        hr.norb,nhoppings,
+                        sourceID,targetID,overLat,
+                        t_real, t_imag, overlap, ispin,
+                        nthreads,
+                        lambda callbackParameter: f"callback with {callbackParameter}")
+        eig_addr, vec_addr=result
+        print('Hk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
+        return eig_addr, vec_addr
+    
     def calcEigsAndVecsInMemoryWithOverlap_mixedFourier(
             self,hr,kgrid:list=[1,1,1],nthreads:int=1,ispin:int=1,
             calcVelocity=False,    # tag to identify if we should calc velocities

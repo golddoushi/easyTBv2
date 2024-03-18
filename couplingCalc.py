@@ -544,7 +544,7 @@ def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False
     
     print("Diagnolizing Hamiltonian")
     if overlap:
-        eigs_addr, vecs_addr, hks_addr, oks_addr=gr.calcEigsAndVecsInMemoryWithOverlap_mixedFourier(hr,kgrid=sc,nthreads=nthreads,ispin=2)
+        eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemoryWithOverlap_FFT(hr,kgrid=sc,nthreads=nthreads,ispin=2)
     else:
         eigs_addr, vecs_addr=gr.calcEigsAndVecsInMemory_simple(hr,kgrid=sc,nthreads=nthreads)
     res=hamilton.Response()

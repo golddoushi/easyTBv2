@@ -10,6 +10,7 @@
 #define TwoPI 6.28318530717958647692
 #define PI 3.14159265358979323846
 typedef unsigned int uint;
+typedef unsigned long long ulong;
 
 int omp_get_thread_num();
 
@@ -553,6 +554,261 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin(PyObject* self,
     return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
 }
 
+PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObject* args){
+    FILE*fp;
+    fp=fopen("./c_log","w");
+    fprintf(fp,"#Log file of ham.dll\n");
+    fclose(fp);
+    // read in all parameters
+    PyObject* py_kgrid;
+    PyObject* py_norbs;
+    PyObject* py_nhoppings;
+    PyObject* py_sourceID;
+    PyObject* py_targetID;
+    PyObject* py_overLat;
+    PyObject* py_treal;
+    PyObject* py_timag;
+    PyObject* py_overlap;
+    PyObject* py_ispin;
+    PyObject* py_nthreads;
+    PyObject* callback;  // callback function
+    uint icomp, iorb, jorb;
+    ulong ihopping, ikpt, ielement;
+    printf("start parsing...\n");
+    PyArg_ParseTuple(args,"OOOOOOOOOOOO",
+        &py_kgrid,&py_norbs,&py_nhoppings,&py_sourceID,&py_targetID,
+        &py_overLat,
+        &py_treal,&py_timag,&py_overlap,&py_ispin,
+        &py_nthreads,&callback);
+    uint ispin=(uint)PyLong_AS_LONG(py_ispin);
+    uint kgrid[3];
+    for(icomp=0;icomp<3;icomp++)
+        kgrid[icomp]=(uint)PyLong_AS_LONG(PyList_GetItem(py_kgrid,icomp));
+    
+    uint nKgrid=kgrid[0]*kgrid[1]*kgrid[2];
+    uint norbs=(uint)PyLong_AS_LONG(py_norbs);
+    uint nhoppings=(uint)PyLong_AS_LONG(py_nhoppings);
+    printf("nkpt=%d norbs=%d ispin=%d nhoppings=%d\n",nKgrid,norbs,ispin,nhoppings);
+    uint nthreads=(uint)PyLong_AS_LONG(py_nthreads);
+    fp=fopen("./c_log","a");
+    fprintf(fp,"use %d cores in eig.pyd::calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n",nthreads);
+    fclose(fp);
+
+    uint *sourceID=(uint*)malloc(nhoppings*sizeof(uint));
+    uint *targetID=(uint*)malloc(nhoppings*sizeof(uint));
+    int *overLat=(int*)malloc(nhoppings*3*sizeof(int));
+    double*hopping_real=(double*)malloc(nhoppings*sizeof(double));
+    double*hopping_imag=(double*)malloc(nhoppings*sizeof(double));
+    double*overlap=(double*)malloc(nhoppings*sizeof(double));
+    for(ihopping=0;ihopping<nhoppings;ihopping++){
+        sourceID[ihopping]=(uint)PyLong_AS_LONG(PyList_GetItem(py_sourceID,ihopping));
+        targetID[ihopping]=(uint)PyLong_AS_LONG(PyList_GetItem(py_targetID,ihopping));
+        for(uint idir=0;idir<3;idir++)
+            overLat[ihopping*3+idir]=PyLong_AS_LONG(PyList_GetItem(py_overLat,ihopping*3+idir));
+        hopping_real[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_treal,ihopping));
+        hopping_imag[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_timag,ihopping));
+        overlap[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_overlap,ihopping));
+    }
+    printf("Args. parsing finished.\n");
+    // create hopping on slow grids
+    clock_t time0=clock();
+    double * spectra=(double*)malloc((unsigned long long)nKgrid*norbs*sizeof(double));                               // eigen values
+    lapack_complex_double *Hrs=(lapack_complex_double*)malloc(norbs*norbs*nKgrid*sizeof(lapack_complex_double)); // eigen vectors
+    lapack_complex_double *Hks=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double)); // eigen vectors
+    lapack_complex_double *Ors=(lapack_complex_double*)malloc(norbs*norbs*nKgrid*sizeof(lapack_complex_double));      // overlap matrix in k-space
+    lapack_complex_double *Oks=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));      // overlap matrix in k-space
+    
+    // fftw_plan use global variables. So, we should create them outside the parallel loop
+    fftw_complex *tR=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
+    fftw_complex *tK=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
+    fftw_plan p_Ham=fftw_plan_dft_3d(kgrid[0],kgrid[1],kgrid[2],tR,tK,FFTW_BACKWARD,FFTW_MEASURE);
+    fftw_complex *oR=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
+    fftw_complex *oK=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
+    fftw_plan p_Overlap=fftw_plan_dft_3d(kgrid[0],kgrid[1],kgrid[2],oR,oK,FFTW_BACKWARD,FFTW_MEASURE);
+    printf("FFTW ready.\n");
+    
+    // set real-space Ham. and overlaps
+    int Rvec0, Rvec1, Rvec2; // lattice point
+    uint isource, itarget; // orbital indexes
+    ulong index; // the index for all states includes kpts and bands
+    for(ikpt=0;ikpt<nKgrid;ikpt++){for(iorb=0;iorb<norbs;iorb++){for(jorb=0;jorb<norbs;jorb++)
+        {Hrs[ikpt*norbs*norbs+iorb*norbs+jorb]=0;Ors[ikpt*norbs*norbs+iorb*norbs+jorb]=0;}}}
+    for(ihopping=0;ihopping<nhoppings;ihopping++){
+        Rvec0=overLat[ihopping*3+0];
+        Rvec1=overLat[ihopping*3+1];
+        Rvec2=overLat[ihopping*3+2];
+
+        if(Rvec0<0) Rvec0+=kgrid[0];
+        if(Rvec1<0) Rvec1+=kgrid[1];
+        if(Rvec2<0) Rvec2+=kgrid[2];
+
+        if(Rvec0<0 | Rvec1<0 | Rvec2<0){
+            printf("kmesh %dx%dx%d too slim to accomodate Bravais vector %d,%d,%d\n",kgrid[0],kgrid[1],kgrid[2],overLat[ihopping*3+0],overLat[ihopping*3+1],overLat[ihopping*3+2]);
+            exit(1);
+        }
+        isource=sourceID[ihopping];
+        itarget=targetID[ihopping];
+        index=(isource*norbs+itarget)*nKgrid+Rvec0*kgrid[1]*kgrid[2]+Rvec1*kgrid[2]+Rvec2;
+        //if(index>nKgrid*norbs*norbs){
+        //    printf("Error: index %d > %d, orb(%d-%d) Bravais [%d %d %d]\n",index,nKgrid*norbs*norbs,isource,itarget,Rvec0,Rvec1,Rvec2);
+        //}
+        Hrs[index]=hopping_real[ihopping]+_Complex_I*hopping_imag[ihopping];
+        Ors[index]=overlap[ihopping];
+        //if(isource==0 & itarget==0 & overlap[ihopping]>1E-7){
+        //    printf("%d-%d [%d %d %d] Ovl:%.2E\n",isource,itarget,Rvec0,Rvec1,Rvec2,creal(Ors[index]));
+        //}
+    }
+    printf("real-space hoppings and overlaps are set.\n");
+    uint iorb_debug=53;
+    uint jorb_debug=53;
+    //for(uint ik0=0;ik0<kgrid[0];ik0++){
+    //    for(uint ik1=0;ik1<kgrid[1];ik1++)printf("%.2E ",creal(Ors[ik0*kgrid[1]*kgrid[2]+ik1*kgrid[2]]));
+    //    printf("\n");
+    //}
+    //exit(1);
+    // obtain hoppings and overlaps in k-space
+    //#pragma omp parallel num_threads(nthreads)
+    {
+        uint iOrbPair, ik1, ik2, ik3;
+        ulong igrid, ik, index;
+        //#pragma omp for
+        for(iOrbPair=0;iOrbPair<norbs*norbs;iOrbPair++){
+            // NOTE: it is necessary to copy the data for FFT, since the data type are different in principle
+            for(igrid=0;igrid<nKgrid;igrid++){
+                tR[igrid]=Hrs[iOrbPair*nKgrid+igrid];
+                oR[igrid]=Ors[iOrbPair*nKgrid+igrid];
+                //if(iOrbPair==iorb_debug*norbs+jorb_debug & igrid%kgrid[1]==0)printf("\n");
+                //if(iOrbPair==iorb_debug*norbs+jorb_debug)printf("%.1E,%.1E ",creal(oR[igrid]),cimag(oR[igrid]));
+                
+            }
+            //if(iOrbPair==iorb_debug*norbs+jorb_debug)printf("\nFFTW");
+            //exit(1);
+            fftw_execute(p_Ham);
+            fftw_execute(p_Overlap);
+            /*for(igrid=0;igrid<nKgrid;igrid++){
+                if(iOrbPair==iorb_debug*norbs+jorb_debug & igrid%kgrid[1]==0)printf("\n");
+                if(iOrbPair==iorb_debug*norbs+jorb_debug)printf("%.1E,%.1E ",creal(oK[igrid]),cimag(oK[igrid]));
+            }*/
+            //if(iOrbPair==iorb_debug*norbs+jorb_debug)exit(1);
+            //printf("fft iOrbPair %d finished\n",iOrbPair);
+            for(ik1=0;ik1<kgrid[0];ik1++){
+            for(ik2=0;ik2<kgrid[1];ik2++){
+            for(ik3=0;ik3<kgrid[2];ik3++){
+                igrid=ik1*kgrid[1]*kgrid[2]+ik2*kgrid[2]+ik3; // ik3 run the fastest for real-grid
+                ik   =ik1+ik2*kgrid[0]+ik3*kgrid[0]*kgrid[1]; // ik1 run the fastest for reciprocal-grid
+                index=ik*norbs*norbs+iOrbPair;
+                Hks[index]=tK[igrid];
+                Oks[index]=oK[igrid];
+                //printf("%d %d-%d %.1E,%.1E \n",index,iOrbPair/norbs,iOrbPair%norbs,creal(Oks[index]),cimag(Oks[index]));
+            }
+            }
+            }
+            //exit(1);
+        }
+    }
+    printf("k-space hoppings and overlaps are set.\n");
+    /*for(uint igrid=0;igrid<nKgrid;igrid++){
+        if(igrid%kgrid[1]==0)printf("\n");
+        ulong index=igrid*norbs*norbs+(iorb_debug*norbs+jorb_debug);
+        printf("%.1E ",creal(Oks[index]));
+    }
+    exit(1);*/
+    free(tR);free(tK);free(oR);free(oK);
+    fftw_destroy_plan(p_Ham);fftw_destroy_plan(p_Overlap);
+    printf("FFT finished\n");
+
+    // solve generalized eigen-eqs.
+    #pragma omp parallel num_threads(nthreads)
+    {
+        uint ik, iorb, jorb, icontract, jcontract, ieig;
+        lapack_complex_double * _HkWave =(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk wave the one can be solved
+        lapack_complex_double * HkWave =(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk wave the one can be solved
+        lapack_complex_double * Wk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init the eigen-vecs of Ok
+        lapack_complex_double * WkHalf=(lapack_complex_double*)malloc((norbs/2)*(norbs/2)*sizeof(lapack_complex_double)); // one quarter the eigen-vecs of Ok for double spin case
+        double * eigs=(double*)malloc(norbs*sizeof(double)); // eigenvalues of Hk
+        double * Oklam=(double*)malloc(norbs*sizeof(double)); // eigenvalues of overlap
+        double alpha, beta;
+        alpha=1;beta=0; // for matrix multiply
+
+        int myrank=omp_get_thread_num();
+        #pragma omp for
+        for(ik=0;ik<nKgrid;ik++){
+            if(ispin==2){ // only one quarter overlap will be solved, and copy to the other diagonal region
+                for(iorb=0;iorb<norbs/2;iorb++)for(jorb=0;jorb<norbs/2;jorb++)
+                    WkHalf[iorb*(norbs/2)+jorb]=Oks[ik*norbs*norbs+iorb*norbs+jorb];
+                
+                int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs/2,WkHalf,norbs/2,Oklam);
+                if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
+                // Set full ovlk
+                for(iorb=0;iorb<norbs/2;iorb++){
+                    Oklam[norbs/2+iorb]=Oklam[iorb];
+                    for(jorb=0;jorb<norbs/2;jorb++){
+                        Wk[          iorb*norbs+          jorb]=WkHalf[iorb*(norbs/2)+jorb];
+                        Wk[(iorb+norbs/2)*norbs+(jorb+norbs/2)]=WkHalf[iorb*(norbs/2)+jorb];
+                        Wk[(iorb+norbs/2)*norbs          +jorb]=0;
+                        Wk[          iorb*norbs+(jorb+norbs/2)]=0;
+                    }
+                }
+            }else{ // solve the whole overlap matrix
+                for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
+                   Wk[iorb*norbs+jorb]=Oks[ik*norbs*norbs+iorb*norbs+jorb];
+                int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,Wk,norbs,Oklam);
+                if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
+            }
+            // to check the positivity of overlap eigenvals
+            if(Oklam[0]<=0){
+                printf("Error, eigenvalues of overlap is not positive:");
+                for(ieig=0;ieig<norbs;ieig++)printf(" %.3f",Oklam[ieig]);
+                printf("\n");
+                exit(1);
+            }
+                
+            // HkWave= 1/sqrt(Olam) @ W^dagger @ Hk @ W @ 1/sqrt(Olam)
+            // 1. _HkWave = Hk @ W
+            // it is essential to initialize the matrix before cblas
+            for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)_HkWave[iorb*norbs+jorb]=0;
+            cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, norbs, norbs, &alpha, Hks+ik*norbs*norbs, norbs, Wk, norbs, &beta, _HkWave, norbs);
+            // 2. HkWave = W^dagger @ _HkWave
+            for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)HkWave[iorb*norbs+jorb]=0;
+            cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, _HkWave, norbs, &beta, HkWave, norbs);
+                
+            for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
+                HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb])/sqrt(Oklam[jorb]);
+
+            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,HkWave,norbs,eigs);
+            if(info!=0){printf("LAPACKE failed for the eigen. eq. for HkWave, info: %d\n",info);exit(1);}
+            // Calc. the normalized eigen-vecs. V=W @ 1/sqrt(Olam) @ U
+            // 1. HkWave = 1/sqrt(Olam) @ U
+            for(iorb=0;iorb<norbs;iorb++){
+                spectra[ik*norbs+iorb]=eigs[iorb];
+                for(jorb=0;jorb<norbs;jorb++){
+                   HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb]);
+                }
+            }
+            // 2. V=W @ HkWave
+            for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)Hks[ik*norbs*norbs+iorb*norbs+jorb]=0;
+            cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, HkWave, norbs, &beta, Hks+ik*norbs*norbs, norbs);
+        
+            if(myrank==0){
+                printf(">");
+                fp=fopen("./c_log","a");
+                fprintf(fp,">");
+                fclose(fp);
+            }
+        }
+        if(myrank==0)printf("\n");
+        free(HkWave);free(_HkWave);free(Wk);free(WkHalf);free(eigs);free(Oklam);
+    }
+    printf("free all inputs...\n");
+    free(sourceID);free(targetID);free(overLat);free(hopping_real);free(hopping_imag);free(overlap);
+    
+    printf("Hk constructed in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);
+    long long eigs_addr=(long long)spectra;
+    long long vecs_addr=(long long)Hks;
+    printf("\nin ham.dll the addr. of eigs, vecs, hk and ok are %p, %p\n",eigs_addr,vecs_addr);
+    return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
+}
+
 PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyObject* args){
     FILE*fp;
     fp=fopen("./c_log","w");
@@ -781,8 +1037,10 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                 
                 // HkWave= 1/sqrt(Olam) @ W^dagger @ Hk @ W @ 1/sqrt(Olam)
                 // 1. _HkWave = Hk @ W
+                for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)_HkWave[ik*norbs*norbs+iorb*norbs+jorb]=0;
                 cblas_zhemm(CblasRowMajor, CblasLeft, CblasUpper, norbs, norbs, &alpha, tk_list+ik*norbs*norbs, norbs, Wk, norbs, &beta, _HkWave, norbs);
                 // 2. HkWave = W^dagger @ _HkWave
+                for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)HkWave[iorb*norbs+jorb]=0;
                 cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, _HkWave, norbs, &beta, HkWave, norbs);
                 
                 for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
@@ -800,6 +1058,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
                    }
                 }
                 // 2. V=W @ HkWave
+                for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)tk_list[ik*norbs*norbs+iorb*norbs+jorb]=0;
                 cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, HkWave, norbs, &beta, tk_list+ik*norbs*norbs, norbs);
             }
             }
@@ -838,6 +1097,7 @@ static PyMethodDef module_methods[] = {
     {"calcFullBandsAndVecs", calcFullBandsAndVecs, METH_VARARGS, "calc. the band energy and eigenvectors via directly solving the eigen eq., using phase factor"},
     {"calcFullBandsAndVecs_OVLCorrection_DoubelSpin", calcFullBandsAndVecs_OVLCorrection_DoubelSpin, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
     {"calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin", calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
+    {"calcFullBandsAndVecsInMemory_OVLCorrection_FFT",calcFullBandsAndVecsInMemory_OVLCorrection_FFT,METH_VARARGS,"compute eigen-values and vectors by solving generalized eigen-eqs. in reciprocal with FFTW"},
     {"calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT", calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT, METH_VARARGS, "compute eigen-values, vectors, energy matrix and overlap matrix in reciprocal"},
     {NULL, NULL, 0, NULL} // neccessary to tell python compiler stop here
 };

@@ -232,6 +232,8 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
                     for(ieig=0;ieig<nTotalOrbs;ieig++)for(iorb=0;iorb<norbs;iorb++)
                         g0_inversed_vecs[ieig*norbs+iorb]=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*inversed_veck[ieig*norbs+iorb];
                     // 2. Gw_k = veck^-1,dagger @ g0_inversed_vecs
+                    // it is essential to initialize Gw_k
+                    for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)Gw_k[iorb*norbs+jorb]=0;
                     cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, nTotalOrbs, &alpha, inversed_veck, norbs, g0_inversed_vecs, norbs, &beta, Gw_k, norbs);
                     
                     // inversed Fourier transformations to real-space
