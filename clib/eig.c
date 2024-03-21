@@ -2,10 +2,15 @@
 #include<stdio.h>
 #include<complex.h>
 #include<Python.h>
-#include<lapacke.h>
-#include<cblas.h>
 #include<time.h>
 #include<fftw3.h>
+#ifdef MKL_ILP64
+#define MKL_Complex16 complex double
+#include<mkl.h>
+#else
+#include<lapacke.h>
+#include<cblas.h>
+#endif
 
 #define TwoPI 6.28318530717958647692
 #define PI 3.14159265358979323846
@@ -13,6 +18,18 @@ typedef unsigned int uint;
 typedef unsigned long long ulong;
 
 int omp_get_thread_num();
+
+FILE*fp;
+
+int output(const char* s){
+    int myrank=omp_get_thread_num();
+    if(myrank==0){
+        fp=fopen("./eig.log","a");
+        fprintf(fp,s);
+        fclose(fp);
+    }
+    return 0;
+}
 
 PyObject * calcFullBandsAndVecs(PyObject* self, PyObject* args){
     // read in all parameters
@@ -555,10 +572,6 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin(PyObject* self,
 }
 
 PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObject* args){
-    FILE*fp;
-    fp=fopen("./c_log","w");
-    fprintf(fp,"#Log file of ham.dll\n");
-    fclose(fp);
     // read in all parameters
     PyObject* py_kgrid;
     PyObject* py_norbs;
@@ -574,7 +587,8 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
     PyObject* callback;  // callback function
     uint icomp, iorb, jorb;
     ulong ihopping, ikpt, ielement;
-    printf("start parsing...\n");
+    output("Args parsing into calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n");
+    char output_info[512];
     PyArg_ParseTuple(args,"OOOOOOOOOOOO",
         &py_kgrid,&py_norbs,&py_nhoppings,&py_sourceID,&py_targetID,
         &py_overLat,
@@ -588,11 +602,9 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
     uint nKgrid=kgrid[0]*kgrid[1]*kgrid[2];
     uint norbs=(uint)PyLong_AS_LONG(py_norbs);
     uint nhoppings=(uint)PyLong_AS_LONG(py_nhoppings);
-    printf("nkpt=%d norbs=%d ispin=%d nhoppings=%d\n",nKgrid,norbs,ispin,nhoppings);
+    sprintf(output_info,"nkpt=%d norbs=%d ispin=%d nhoppings=%d\n",nKgrid,norbs,ispin,nhoppings);output(output_info);
     uint nthreads=(uint)PyLong_AS_LONG(py_nthreads);
-    fp=fopen("./c_log","a");
-    fprintf(fp,"use %d cores in eig.pyd::calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n",nthreads);
-    fclose(fp);
+    sprintf(output_info,"use %d cores in eig.pyd::calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n",nthreads);output(output_info);
 
     uint *sourceID=(uint*)malloc(nhoppings*sizeof(uint));
     uint *targetID=(uint*)malloc(nhoppings*sizeof(uint));
@@ -609,10 +621,15 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
         hopping_imag[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_timag,ihopping));
         overlap[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_overlap,ihopping));
     }
-    printf("Args. parsing finished.\n");
-    // create hopping on slow grids
+    output("Args. parsing finished.\n");
+    sprintf(output_info,"estimate memory cost (per thread) %d MB\n",
+                         (nKgrid*norbs*sizeof(double)+
+                         nKgrid*norbs*norbs*sizeof(lapack_complex_double)+
+                         norbs*norbs*nKgrid*sizeof(lapack_complex_double)+
+                         nKgrid*norbs*norbs*sizeof(lapack_complex_double))/1024/1024);
+    output(output_info);
     clock_t time0=clock();
-    double * spectra=(double*)malloc((unsigned long long)nKgrid*norbs*sizeof(double));                               // eigen values
+    double * spectra=(double*)malloc(nKgrid*norbs*sizeof(double));                               // eigen values
     lapack_complex_double *Hrs=(lapack_complex_double*)malloc(norbs*norbs*nKgrid*sizeof(lapack_complex_double)); // eigen vectors
     lapack_complex_double *Hks=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double)); // eigen vectors
     lapack_complex_double *Ors=(lapack_complex_double*)malloc(norbs*norbs*nKgrid*sizeof(lapack_complex_double));      // overlap matrix in k-space
@@ -625,7 +642,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
     fftw_complex *oR=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
     fftw_complex *oK=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
     fftw_plan p_Overlap=fftw_plan_dft_3d(kgrid[0],kgrid[1],kgrid[2],oR,oK,FFTW_BACKWARD,FFTW_MEASURE);
-    printf("FFTW ready.\n");
+    output("FFTW ready.\n");
     
     // set real-space Ham. and overlaps
     int Rvec0, Rvec1, Rvec2; // lattice point
@@ -643,7 +660,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
         if(Rvec2<0) Rvec2+=kgrid[2];
 
         if(Rvec0<0 | Rvec1<0 | Rvec2<0){
-            printf("kmesh %dx%dx%d too slim to accomodate Bravais vector %d,%d,%d\n",kgrid[0],kgrid[1],kgrid[2],overLat[ihopping*3+0],overLat[ihopping*3+1],overLat[ihopping*3+2]);
+            sprintf(output_info,"kmesh %dx%dx%d too slim to accomodate Bravais vector %d,%d,%d\n",kgrid[0],kgrid[1],kgrid[2],overLat[ihopping*3+0],overLat[ihopping*3+1],overLat[ihopping*3+2]);output(output_info);
             exit(1);
         }
         isource=sourceID[ihopping];
@@ -658,7 +675,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
         //    printf("%d-%d [%d %d %d] Ovl:%.2E\n",isource,itarget,Rvec0,Rvec1,Rvec2,creal(Ors[index]));
         //}
     }
-    printf("real-space hoppings and overlaps are set.\n");
+    output("real-space hoppings and overlaps are set.\n");
     uint iorb_debug=53;
     uint jorb_debug=53;
     //for(uint ik0=0;ik0<kgrid[0];ik0++){
@@ -706,7 +723,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
             //exit(1);
         }
     }
-    printf("k-space hoppings and overlaps are set.\n");
+    output("k-space hoppings and overlaps are set.\n");
     /*for(uint igrid=0;igrid<nKgrid;igrid++){
         if(igrid%kgrid[1]==0)printf("\n");
         ulong index=igrid*norbs*norbs+(iorb_debug*norbs+jorb_debug);
@@ -715,7 +732,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
     exit(1);*/
     free(tR);free(tK);free(oR);free(oK);
     fftw_destroy_plan(p_Ham);fftw_destroy_plan(p_Overlap);
-    printf("FFT finished\n");
+    output("FFT finished\n");
 
     // solve generalized eigen-eqs.
     #pragma omp parallel num_threads(nthreads)
@@ -730,7 +747,12 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
         double alpha, beta;
         alpha=1;beta=0; // for matrix multiply
 
-        int myrank=omp_get_thread_num();
+        int my_rank=omp_get_thread_num();
+        uint my_nkpt_portion=nKgrid/nthreads/50;
+        uint my_icnt=0;
+        if(my_nkpt_portion==0)my_nkpt_portion=1;
+        if(my_rank==0){sprintf(output_info,"> corresponds to ~%d kpts\n",my_nkpt_portion*50);output(output_info);}
+
         #pragma omp for
         for(ik=0;ik<nKgrid;ik++){
             if(ispin==2){ // only one quarter overlap will be solved, and copy to the other diagonal region
@@ -738,7 +760,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
                     WkHalf[iorb*(norbs/2)+jorb]=Oks[ik*norbs*norbs+iorb*norbs+jorb];
                 
                 int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs/2,WkHalf,norbs/2,Oklam);
-                if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
+                if(info!=0){printf(output_info,"LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);exit(1);}
                 // Set full ovlk
                 for(iorb=0;iorb<norbs/2;iorb++){
                     Oklam[norbs/2+iorb]=Oklam[iorb];
@@ -753,13 +775,13 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
                 for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
                    Wk[iorb*norbs+jorb]=Oks[ik*norbs*norbs+iorb*norbs+jorb];
                 int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,Wk,norbs,Oklam);
-                if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
+                if(info!=0){printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);exit(1);}
             }
             // to check the positivity of overlap eigenvals
             if(Oklam[0]<=0){
-                printf("Error, eigenvalues of overlap is not positive:");
-                for(ieig=0;ieig<norbs;ieig++)printf(" %.3f",Oklam[ieig]);
-                printf("\n");
+                output("Error, eigenvalues of overlap is not positive:");
+                for(ieig=0;ieig<norbs;ieig++){sprintf(output_info," %.3f",Oklam[ieig]);output(output_info);}
+                output("\n");
                 exit(1);
             }
                 
@@ -789,23 +811,19 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
             for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)Hks[ik*norbs*norbs+iorb*norbs+jorb]=0;
             cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, HkWave, norbs, &beta, Hks+ik*norbs*norbs, norbs);
         
-            if(myrank==0){
-                printf(">");
-                fp=fopen("./c_log","a");
-                fprintf(fp,">");
-                fclose(fp);
-            }
+            my_icnt+=1;
+            if(my_icnt%my_nkpt_portion==0)output(">");
         }
-        if(myrank==0)printf("\n");
+        output("\n");
         free(HkWave);free(_HkWave);free(Wk);free(WkHalf);free(eigs);free(Oklam);
     }
-    printf("free all inputs...\n");
+    output("free all inputs...\n");
     free(sourceID);free(targetID);free(overLat);free(hopping_real);free(hopping_imag);free(overlap);
     
-    printf("Hk constructed in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);
+    sprintf(output_info,"Hk constructed in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);output(output_info);
     long long eigs_addr=(long long)spectra;
     long long vecs_addr=(long long)Hks;
-    printf("\nin ham.dll the addr. of eigs, vecs, hk and ok are %p, %p\n",eigs_addr,vecs_addr);
+    sprintf(output_info,"\nin eig.pyd the addr. of eigs, vecs, hk and ok are %p, %p\n",eigs_addr,vecs_addr);output(output_info);
     return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
 }
 
@@ -1111,7 +1129,8 @@ static PyModuleDef moduledef = {
 };
 
 PyMODINIT_FUNC PyInit_eig(void) {
-    printf("Initializing lib of eig...\n");
+    fp=fopen("./eig.log","w");
+    output("Initializing lib of eig...\n");
     PyObject* m;
     m= PyModule_Create(&moduledef);
     return m;

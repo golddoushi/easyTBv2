@@ -2806,9 +2806,9 @@ class Green:
                         sourceID,targetID,overLat,
                         t_real, t_imag, overlap, ispin,
                         nthreads,
-                        lambda callbackParameter: f"callback with {callbackParameter}")
+                        lambda callbackParameter: print(f"{callbackParameter}",end=""))
         eig_addr, vec_addr=result
-        print('Hk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
+        print('\nHk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))
         print('in python, memory address of eigs.: %s, vecs.: %s'%(hex(eig_addr),hex(vec_addr)))
         return eig_addr, vec_addr
     
@@ -2933,11 +2933,11 @@ class Green:
                         eta,
                         nLatVec,latVecList,
                         spinor,
-                        nthreads,lambda k: print("call back %s"%k))
+                        nthreads,lambda backInfo: print(f"{backInfo}",end=''))
         #exit()
         rG_w_lat_real,rG_w_lat_imag=np.array(result).reshape(2,len(omega_list),nLatVec,len(relevantOrbIDList),len(relevantOrbIDList))
         rG_w_lat=rG_w_lat_real+1j*rG_w_lat_imag
-        print('Retarded lattice Greens\' s function solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
+        print('\nRetarded lattice Greens\' s function solved in %.3fs with %d threads'%(time.time()-time0,nthreads))
         return rG_w_lat
 
     def calcLatticeGreenFunction_mixedFourier(self,hr,eigs_addr,vecs_addr,hk_addr,relevantOrbIDList,

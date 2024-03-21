@@ -2,10 +2,15 @@
 #include<stdio.h>
 #include<complex.h>
 #include<Python.h>
-#include<lapacke.h>
-#include<cblas.h>
 #include<time.h>
 #include<fftw3.h>
+#ifdef MKL_ILP64
+#define MKL_Complex16 complex double
+#include<mkl.h>
+#else
+#include<lapacke.h>
+#include<cblas.h>
+#endif
 
 #define TwoPI 6.28318530717958647692
 #define PI 3.14159265358979323846
@@ -13,6 +18,18 @@ typedef unsigned int uint;
 typedef unsigned long long ulong;
 
 int omp_get_thread_num();
+
+FILE*fp;
+int output(const char* s){
+    int myrank=omp_get_thread_num();
+    if(myrank==0){
+        fp=fopen("./green.log","a");
+        fprintf(fp,s);
+        fclose(fp);
+    }
+    return 0;
+}
+
 // Auxiliary func, mod, especially for negative mod
 int mod(int a, int b){
     int result=a%b;
@@ -62,7 +79,8 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
     PyObject* py_spinor_tag;
     PyObject* py_nthreads;
     PyObject* callback;  // callback function
-    printf("start parsing...\n");
+    output("Args parsing into calcRetardedLatticeGreensFunction\n");
+    char output_info[512];
     PyArg_ParseTuple(args,"OOOOOOOOOOOOOOO",
         &py_eigs_addr,&py_vecs_addr,
         &py_kgrid,&py_nTotalOrbs,&py_norbs,&py_orbIDMap,&py_nOmegaPoints,&py_omega_real,&py_omega_imag,
@@ -70,7 +88,7 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
         &py_nthreads,&callback);
     long long eigs_addr=PyLong_AsLongLong(py_eigs_addr);
     long long vecs_addr=PyLong_AsLongLong(py_vecs_addr);
-    printf("Obtain eigs and vecs @ %p, %p\n",eigs_addr,vecs_addr);
+    sprintf(output_info,"Obtain eigs and vecs @ %p, %p\n",eigs_addr,vecs_addr);output(output_info);
     uint kgrid[3];
     for(uint icomp=0;icomp<3;icomp++){
         kgrid[icomp]=(uint)PyLong_AsLong(PyList_GetItem(py_kgrid,icomp));
@@ -94,11 +112,6 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
     uint spinor_tag=(uint)PyLong_AsLong(py_spinor_tag);
     uint _nthreads=(uint)PyLong_AsLong(py_nthreads);
 
-    FILE*fp;
-    fp=fopen("./c_log","w");
-    fprintf(fp,"#Log file of green module\n");
-    fprintf(fp,"Obtain eigs and vecs @ %p, %p\n",eigs_addr,vecs_addr);
-    fclose(fp);
     double*eigs=(double*)eigs_addr;
     lapack_complex_double*vecs=(lapack_complex_double*)vecs_addr;
     
@@ -109,23 +122,31 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
     lapack_complex_double *k3_axis=(lapack_complex_double*)malloc(kgrid[2]*sizeof(lapack_complex_double));
     constructKAxis(kgrid[0],kgrid[1],kgrid[2],k1_axis,k2_axis,k3_axis);
     
-    lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc(nOmegaPoints*nLatticeVectors*norbs*norbs*sizeof(lapack_complex_double));
     uint nthreads;
     nthreads=_nthreads;
     if(nkpt<_nthreads)nthreads=nkpt;
-    printf("use %d cores in green.so::calcRetardedLatticeGreensFunction\n",nthreads);
-    fp=fopen("./c_log","a");
-    fprintf(fp,"use %d cores in green.so::calcRetardedLatticeGreensFunction\n",nthreads);
-    fclose(fp);
+    sprintf(output_info,"nkpt %d, nOmega %d, nLatticeVectors %d, norbs %d, nTotalOrbs %d\n",nkpt,nOmegaPoints,nLatticeVectors,norbs,nTotalOrbs);output(output_info);
+    sprintf(output_info,"use %d cores\n",nthreads);output(output_info);
     ulong latVec_len=norbs*norbs;
     ulong omega_len=nLatticeVectors*latVec_len;
     ulong thread_len=nOmegaPoints*omega_len;
+    sprintf(output_info,"estimate memory cost: %d MB\n",
+                    (nOmegaPoints*nLatticeVectors*norbs*norbs*sizeof(lapack_complex_double)+
+                    nthreads*thread_len*sizeof(lapack_complex_double)+
+                    nkpt*nOmegaPoints*nTotalOrbs*sizeof(lapack_complex_double)+
+                    nkpt*nTotalOrbs*nTotalOrbs*sizeof(lapack_complex_double)+
+                    nkpt*nLatticeVectors*sizeof(lapack_complex_double))/1024/1024
+    );
+    output(output_info);
+    // the lattice retarded Green's function
+    lapack_complex_double * G_w_lat=(lapack_complex_double*)malloc(nOmegaPoints*nLatticeVectors*norbs*norbs*sizeof(lapack_complex_double));
+    // partially BZ integrated retarded Green's function (only integrated in each thread)
     lapack_complex_double * _G_w_lat=(lapack_complex_double*)malloc(nthreads*thread_len*sizeof(lapack_complex_double));
-    ulong totalDataGrids=nthreads*thread_len;
-    
-    // calculate inversed h and vec
+    // inversed Hk (in eigen rep.)
     lapack_complex_double *inversed_hks=(lapack_complex_double*)malloc(nkpt*nOmegaPoints*nTotalOrbs*sizeof(lapack_complex_double));
+    // inversed vecs (in LCAO rep.)
     lapack_complex_double *inversed_vecs=(lapack_complex_double*)malloc(nkpt*nTotalOrbs*nTotalOrbs*sizeof(lapack_complex_double));
+    // lattice Fourier basis
     lapack_complex_double *lat_factors=(lapack_complex_double*)malloc(nkpt*nLatticeVectors*sizeof(lapack_complex_double));
     #pragma omp parallel num_threads(nthreads)
     {
@@ -137,7 +158,11 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
         ulong ikpt, ik1, ik2, ik3;
         ulong ilat, iorb, jorb;
         int info;
+#ifdef MKL_ILP64
+        long long *ipiv=(long long*)malloc(nTotalOrbs*sizeof(long long));
+#else
         int *ipiv=(int*)malloc(nTotalOrbs*sizeof(int));
+#endif
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         // initial G_w_lat
         for(iomega=0;iomega<nOmegaPoints;iomega++){
@@ -180,10 +205,7 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
             if(info!=0){printf("Failed zgetri (matrix inversion) info=%d\n",info);exit(1);}
         }
     }
-    printf("inversed hk, inversed vec and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
-    fp=fopen("./c_log","a");
-    fprintf(fp,"inversed hk, inversed vec and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
-    fclose(fp);
+    sprintf(output_info,"inversed hk, inversed vec and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);output(output_info);
     time0=clock();
     // calculate matrix elements
     //int index;
@@ -197,24 +219,17 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
         lapack_complex_double factor, inverse_h;
         double alpha, beta;
         alpha=1;beta=0;
+
         uint my_nkpt_portion=nkpt/nthreads/50;
         uint my_icnt=0;
         if(my_nkpt_portion==0)my_nkpt_portion=1;
-        if(my_rank==0){
-            fp=fopen("./c_log","a");
-            for(int i=0;i<51;i++){
-                printf("-");
-                fprintf(fp,"_");
-            }
-            printf("\n");
-            fprintf(fp,"\n");
-            fclose(fp);
-        }
+        if(my_rank==0){sprintf(output_info,"> corresponds to ~%d kpts\n",my_nkpt_portion*50);output(output_info);}
+
         lapack_complex_double *g0_inversed_vecs=(lapack_complex_double*)malloc(nTotalOrbs*norbs*sizeof(lapack_complex_double));
         lapack_complex_double *Gw_k=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double));
         lapack_complex_double *inversed_veck=(lapack_complex_double*)malloc(nTotalOrbs*norbs*sizeof(lapack_complex_double));
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
-        #pragma omp for
+        #pragma omp for // k-point parallel is assumed to exhibit linear scaling
         for(ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //i_eig_k=ikpt*norbs;
             i_vec_k=ikpt*nTotalOrbs*nTotalOrbs;
@@ -239,23 +254,14 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
                     // inversed Fourier transformations to real-space
                     for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
                         _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=factor*Gw_k[iorb*norbs+jorb];
-
                 }
             }
             my_icnt+=1;
-            if(my_rank==0 & my_icnt%my_nkpt_portion==0){
-                printf(">");
-                fp=fopen("./c_log","a");
-                fprintf(fp,">");
-                fclose(fp);
-            }
+            if(my_icnt%my_nkpt_portion==0)output(">");
         }
         free(g0_inversed_vecs);free(Gw_k);free(inversed_veck);
     }
-    printf("\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
-    fp=fopen("./c_log","a");
-    fprintf(fp,"\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
-    fclose(fp);
+    sprintf(output_info,"\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);output(output_info);
     
     ulong id_of_combine, id_of_sub_thread;
     for(uint iomega=0;iomega<nOmegaPoints;iomega++){
@@ -303,7 +309,8 @@ static PyModuleDef moduledef = {
 };
 
 PyMODINIT_FUNC PyInit_green(void) {
-    printf("Initializing lib of green...\n");
+    fp=fopen("./green.log","w");
+    output("Initializing lib of green...\n");
     PyObject* m;
     m= PyModule_Create(&moduledef);
     return m;

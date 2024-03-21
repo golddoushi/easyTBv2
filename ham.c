@@ -889,8 +889,9 @@ PyObject * calcRetardedLatticeGreensFunction(
     lapack_complex_double * _G_w_lat=(lapack_complex_double*)malloc(nthreads*thread_len*sizeof(lapack_complex_double));
     long totalDataGrids=nthreads*thread_len;
     
-    // calculate inversed h
-    lapack_complex_double *inversed_hks=(lapack_complex_double*)malloc(nkpt*nOmegaPoints*(long)nTotalOrbs*sizeof(lapack_complex_double));
+    // calculate inversed h and vec
+    lapack_complex_double *inversed_hks=(lapack_complex_double*)malloc((long long)nkpt*nOmegaPoints*(long long)nTotalOrbs*sizeof(lapack_complex_double));
+    lapack_complex_double *inversed_vecs=(lapack_complex_double*)malloc((long long)nkpt*nTotalOrbs*nTotalOrbs*sizeof(lapack_complex_double));
     lapack_complex_double *lat_factors=(lapack_complex_double*)malloc(nkpt*nLatticeVectors*sizeof(lapack_complex_double));
     #pragma omp parallel num_threads(nthreads)
     {
@@ -901,6 +902,8 @@ PyObject * calcRetardedLatticeGreensFunction(
         long i_eig_k, i_kpt_base;
         long ikpt, ik1, ik2, ik3;
         long ilat, iorb, jorb;
+        long info;
+        int *ipiv=(int*)malloc(nTotalOrbs*sizeof(int));
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         // initial G_w_lat
         for(iomega=0;iomega<nOmegaPoints;iomega++){
@@ -934,11 +937,18 @@ PyObject * calcRetardedLatticeGreensFunction(
                     inversed_hks[i_kpt_base+i_omega_k+ieig]=1/(omega-eigs[i_eig_k+ieig]+_Complex_I*eta);
                 }
             }
+            // compute inversed vec
+            for(iorb=0;iorb<nTotalOrbs;iorb++)for(jorb=0;jorb<nTotalOrbs;jorb++)
+                inversed_vecs[ikpt*nTotalOrbs*nTotalOrbs+iorb*nTotalOrbs+jorb]=vecs[ikpt*nTotalOrbs*nTotalOrbs+iorb*nTotalOrbs+jorb];
+            info=LAPACKE_zgetrf(LAPACK_ROW_MAJOR,nTotalOrbs,nTotalOrbs,inversed_vecs+ikpt*nTotalOrbs*nTotalOrbs,nTotalOrbs,ipiv);
+            if(info!=0){printf("Failed zgetrf (LU decomposition) info=%d\n",info);exit(1);}
+            info=LAPACKE_zgetri(LAPACK_ROW_MAJOR,nTotalOrbs,inversed_vecs+ikpt*nTotalOrbs*nTotalOrbs,nTotalOrbs,ipiv);
+            if(info!=0){printf("Failed zgetri (matrix inversion) info=%d\n",info);exit(1);}
         }
     }
-    printf("inversed hk and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
+    printf("inversed hk, inversed vec and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
     fp=fopen("./c_log","a");
-    fprintf(fp,"inversed hk and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
+    fprintf(fp,"inversed hk, inversed vec and lattice Fourier basis constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);
     fclose(fp);
     time0=clock();
     // calculate matrix elements
@@ -980,20 +990,23 @@ PyObject * calcRetardedLatticeGreensFunction(
                             for(iorb=0;iorb<norbs/2;iorb++){
                                 for(jorb=0;jorb<norbs/2;jorb++){
                                     _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                                    factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
+                                    //factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
+                                    factor*inverse_h*conj(inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]])*inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[jorb]];
                                 }
                             }
                             for(iorb=norbs/2;iorb<norbs;iorb++){
                                 for(jorb=norbs/2;jorb<norbs;jorb++){
                                     _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                                    factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
+                                    //factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
+                                    factor*inverse_h*conj(inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]])*inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[jorb]];
                                 }
                             }
                         }else{
                             for(iorb=0;iorb<norbs;iorb++){
                                 for(jorb=0;jorb<norbs;jorb++){
                                     _G_w_lat[i_rank+i_omega_k+i_lat_k+iorb*norbs+jorb]+=\
-                                    factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
+                                    //factor*inverse_h*vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig]*conj(vecs[i_vec_k+orbIDMap[jorb]*nTotalOrbs+ieig]);
+                                    factor*inverse_h*conj(inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]])*inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[jorb]];
                                 }
                             }
                         }

@@ -1,6 +1,6 @@
 import auxiliary as aux
 import paramReader as param
-
+import numpy as np
 global version
 version='0.1'
 
@@ -21,19 +21,41 @@ def readJ(mainDir, bondList):
             if versionInFile!=version:
                 print('File info: version does not match')
                 return False
-            if (len(data)-3)!=len(bondList):
+            if (len(data)-3)!=sum([len(bond) for bond in bondList]):
                 print('File info: exchange truncation dose not match %d/%d'%(len(data)-3,len(bondList)))
                 return False
-            
-            for iline in range(3,len(data)):
-                NN,  distance,  sourceID,  targetID,  Rx,  Ry,  Rz,  J = data[iline].split()
-                iBondType=iline-3
-                bond=bondList[iBondType][0]
-                if bond.sourceOrb.id==int(sourceID) and bond.targetOrb.id==int(targetID) and bond.overLat[0]==int(Rx) and bond.overLat[1]==int(Ry) and bond.overLat[2]==int(Rz):
-                    bond.exchangeEnergy=float(J)
-                else:
-                    print('File info: bond does not match ion%d-ion%d [%d %d %d] <-> ion%s-ion%s [%s %s %s]'%(
-                        bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,sourceID,targetID,Rx,Ry,Rz))
+            if len(data[3].split())==8: # isotropic exchange, only one ele of J
+                for iline in range(3,len(data)):
+                    NN,  distance,  sourceID,  targetID,  Rx,  Ry,  Rz,  J = data[iline].split()
+                    iBondType=iline-3
+                    bond=bondList[iBondType][0]
+                    if bond.sourceOrb.id==int(sourceID) and bond.targetOrb.id==int(targetID) and bond.overLat[0]==int(Rx) and bond.overLat[1]==int(Ry) and bond.overLat[2]==int(Rz):
+                        bond.exchangeEnergy=float(J)
+                    else:
+                        print('File info: bond does not match ion%d-ion%d [%d %d %d] <-> ion%s-ion%s [%s %s %s]'%(
+                            bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,sourceID,targetID,Rx,Ry,Rz))
+                        return False
+            elif len(data[3].split())==13: # anisotropic exchange
+                tag=np.array([False for i in range(len(data)-3)])
+                _ibond_abs=0
+                for ibondType, bondType in enumerate(bondList):   # scan all bonds should be addressed
+                    for ibond_inMem, bond in enumerate(bondType): # scan all bonds should be addressed
+                        for ibond_fromTXT in range(len(data)-3):  # scan txt for the data
+                            NN,  distance,  sourceID,  targetID,  Rx,  Ry,  Rz,  J, J_a_xx, J_a_yy, J_a_xy, Dx, Dy = data[3+ibond_fromTXT].split()
+                            if bond.sourceOrb.id==int(sourceID) and bond.targetOrb.id==int(targetID) and bond.overLat[0]==int(Rx) and bond.overLat[1]==int(Ry) and bond.overLat[2]==int(Rz):
+                                bond.exchangeEnergy=float(J)
+                                bond.Jani=np.array([[float(J_a_xx),float(J_a_xy)],[float(J_a_xy),float(J_a_yy)]])
+                                bond.DMI=np.array([float(Dx),float(Dy)])
+                                tag[_ibond_abs]=True
+                                data.pop(3+ibond_fromTXT)
+                                _ibond_abs+=1
+                                break
+                        else:
+                            print('File info: cannot find the info. of bond NN%d (bond%d) ion%d-ion%d [%d %d %d]'%(
+                                ibondType,ibond_inMem,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat))
+                            return False
+                if not tag.all():
+                    print("Failed to address all bonds",tag)
                     return False
         return True
     print('File info: J.txt does not exist')

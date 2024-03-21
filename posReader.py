@@ -1095,7 +1095,7 @@ def findRotationList(source_list,highestOrder=1000):
     return zip(sym['rotations'],sym['translations'])
 
 def findBondList(source_list=[],maxRange=3,tolerance=0.01,
-                 intraCell=True,getBondLen=False,dimmerMode=False):
+                 intraCell=True,getBondLen=False,dimmerMode=False,includeAllBonds=False):
     # get basic sym operations
     #global lat, pos_ions,nions
     #numbers=[]
@@ -1114,6 +1114,9 @@ def findBondList(source_list=[],maxRange=3,tolerance=0.01,
     distance_list=[]
     pos_list=[]
     for isource, source_index in enumerate(source_list):
+        # define the start index for target orb searching
+        itar_start=isource+1
+        if includeAllBonds: itar_start=0
         # source coordinates
         r0=pos_ions[source_index]
         # firstly, find intra-cell bonds
@@ -1122,7 +1125,8 @@ def findBondList(source_list=[],maxRange=3,tolerance=0.01,
             # with different type
             # no warrying about the time-reversal vectors since orbitals are different
             for dR in dR_set:
-                for itar in range(isource+1,totSource):
+                for itar in range(itar_start,totSource):
+                    if itar==isource and dR@dR == 0 : continue # exclude self-interacting
                     target_index=source_list[itar]
                     r1=pos_ions[target_index]+dR
                     d_vec=np.dot((r1-r0),lat)
@@ -1131,7 +1135,7 @@ def findBondList(source_list=[],maxRange=3,tolerance=0.01,
                     if dimmerMode:
                         break
 
-            if not dimmerMode:
+            if not dimmerMode and not includeAllBonds:
                 # with the same type
                 # firstly, generate the time-reversal independent vector-set
                 # chose order wisely so that we can get rid of zero-point
@@ -1151,7 +1155,8 @@ def findBondList(source_list=[],maxRange=3,tolerance=0.01,
                     distance_list.append(np.sqrt(np.dot(d_vec,d_vec)))
                     pos_list.append([[source_index,target_index],dR])
         else:
-            for itar in range(isource+1,totSource):
+            for itar in range(itar_start,totSource):
+                if itar==isource and dR@dR == 0 : continue # exclude self-interacting
                 target_index=source_list[itar]
                 r1=pos_ions[target_index]
                 d_vec=np.dot((r1-r0),lat)
@@ -1543,12 +1548,12 @@ def findBondListAndClassifyThem(rotations, translations, source_list=[],maxRange
     print("--->>> bonds are successfully classified <<<---")
     return bondListWithClassification
 
-def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.01):#,additionTranslation=[np.array([0,0,0])]):
+def findBondListAndClassifyThemViaLength(source_list=[],maxRange=3,tolerance=0.01,includeAllBonds=False):
     global pos_ions, lat, orbList, bondList
     lat_inv=np.linalg.inv(lat)
     print("--->>> start classifying bonds <<<---")
     aux.showElapsedTime(offset=True)
-    bondList_all, bondLen=findBondList(source_list=source_list,maxRange=maxRange,tolerance=tolerance,getBondLen=True)
+    bondList_all, bondLen=findBondList(source_list=source_list,maxRange=maxRange,tolerance=tolerance,getBondLen=True,includeAllBonds=includeAllBonds)
     if len(bondLen)<param.MAXRANGE:
         print('cannot found enough bond types for the consideration of %d/%dNN'%(len(bondLen),param.MAXRANGE))
         return[]

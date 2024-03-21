@@ -30,17 +30,16 @@ class Logger(object):
 sys.stdout = Logger('log')
 
 # 1. define the basic structure information
-mainDir='./mcalc/PtCoPtW/'
+mainDir='./mcalc/FeCl2/'
 pR.readPOS(mainDir+'POSCAR')
 projections=[
-    "Pt:s;s;s;p;p;d;d;f",
-    "W:s;s;s;p;p;d;d",
-    "Co:s;s;p;p;d;d"
+    "Fe:s;s;p;p;d;d",
+    "Cl:s;s;p;p;d;f",
 ]
-atomicMagMomList=[np.zeros(3)]*10+[
+atomicMagMomList=[np.zeros(3)]*0+[
     np.array([0,0,1]),
-    np.array([0,0,1]),
-    np.array([0,0,1]),
+    np.array([0,0,0]),
+    np.array([0,0,0]),
 ]
 # 2. read in Hamiltonian 
 hr=reader.Hr()
@@ -53,10 +52,10 @@ hr.symmerizeHamAndOverlap(atomicOrbIndexList=atomicOrbIndexList,atomicLList=atom
 # 4. assign the orbitals of spin-up tunnels to atoms (no need to change)
 wann_list=obtainProjectionsPlain(mainDir+'POSCAR',projections)
 # 5. set the iatom of magnetic atoms to source_list, set ini_S for ALL atoms
-cc.classifyBonds(mainDir, source_list=[10,11,12,], 
+cc.classifyBonds(mainDir, source_list=[0,], 
            wann_list=wann_list, 
-           ini_S=[0]*10+[1]*3,
+           ini_S=[1]*1+[0]*2,
            includeAllBonds=False)
 # 5. set overlap, set supercell size, set fermi level, set erange, etc.
 cc.calcJFull_GaussianQuadrature(hr,mainDir,nthreads=8,overlap=True,
-    sc=[28,28,1],fermi=-0.188413227082*27.2113845,eta=0.0001,erange=(-100,100),lowOrder=60,highOrder=80,Jcvg=-1e-4)
+    sc=[28,28,1],fermi=-0.19908723865958*27.2113845,eta=0.0001,erange=(-100,100),lowOrder=60,highOrder=80,Jcvg=-1e-4)
