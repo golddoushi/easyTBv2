@@ -1876,6 +1876,26 @@ class Hr:
         #for ele in np.diag(HamiltonMatrixInR[0,0,0,:,:]).real:print(f"{ele:6.3f} ",end='')
         print()
         #HamiltonMatrixInR=self.bondInVecForm.copy()
+        '''
+        # checking the trans. of onsite block
+        onsiteBond=HamiltonMatrixInR[0,0,0,atomicOrbMap[0],:][:,atomicOrbMap[0]]
+        print(f"{onsiteBond.shape=} {len(localSymOpList)=}")
+        onsiteBond_sym=onsiteBond.copy()
+        for iop, localSymOp in enumerate(localSymOpList):
+            #if iop==0: continue
+            op = localSymOp[0]
+            print(f"{op.shape=}")
+            onsiteBond_back2I = op.T.conj() @ onsiteBond @ op 
+            onsiteBond_sym += onsiteBond_back2I
+            print(onsiteBond_back2I[:3,:3])
+        onsiteBond_sym /= 3
+        print()
+        for iop, localSymOp in enumerate(localSymOpList):
+            op = localSymOp[0]
+            onsiteBond = op @ onsiteBond_sym @ op.T.conj()
+            print(onsiteBond[:3,:3])
+        exit()
+        '''
         #'''
         time0=time.time()
         nDropedBond=0
@@ -1947,10 +1967,10 @@ class Hr:
                         
                             if timeReversal: 
                                 bond_rotated=((localSymOp[iatom_source_trans].T.conj())@bond@(localSymOp[iatom_target_trans])).conj()
-                                overlap_rotated=((localSymOp[iatom_source_trans].conj().T)@overlap@localSymOp[iatom_target_trans]).conj()
+                                overlap_rotated=((localSymOp[iatom_source_trans].T.conj())@overlap@localSymOp[iatom_target_trans]).conj()
                             else:
                                 bond_rotated=(localSymOp[iatom_source_trans].T.conj())@bond@localSymOp[iatom_target_trans]
-                                overlap_rotated=(localSymOp[iatom_source_trans].conj().T)@overlap@localSymOp[iatom_target_trans]
+                                overlap_rotated=(localSymOp[iatom_source_trans].T.conj())@overlap@localSymOp[iatom_target_trans]
                         
                             symmerizedBondAndOverlapSet['bond set'].append(
                                 {
@@ -1966,35 +1986,16 @@ class Hr:
                                     'back to I overlap':overlap_rotated,
                                  }
                             )
-                            #'''
-                            #if checkRedundancy({
-                            #    'bond info':(iatom_target,iatom_source,-dR0[0],-dR0[1],-dR0[2]),
-                            #    'bond length':dR_xyz_len
-                            #    },allSymmerizedBondAndOverlap): continue # self conjugation
-                            '''
-                            bond   =HamiltonMatrixInR[-dR[0],-dR[1],-dR[2],atomicOrbMap[iatom_target_trans],:][:,atomicOrbMap[iatom_source_trans]].copy()
-                            overlap=OverlapMatrixInR[ -dR[0],-dR[1],-dR[2],atomicOrbMap[iatom_target_trans],:][:,atomicOrbMap[iatom_source_trans]].copy()
                             
-                            if timeReversal: 
-                                #bond_rotated=((localSymOp[iatom_source_trans].T.conj())@bond@(localSymOp[iatom_target_trans])).conj()
-                                #overlap_rotated=((localSymOp[iatom_source_trans].conj().T)@overlap@localSymOp[iatom_target_trans]).conj()
-                                bond_rotated=(localSymOpInv[iatom_target_trans] @ bond @ (localSymOpInv[iatom_source_trans].T.conj())).conj()
-                                overlap_rotated=(localSymOpInv[iatom_target_trans] @ overlap @ (localSymOpInv[iatom_source_trans].T.conj())).conj()
-                            else:
-                                #bond_rotated=(localSymOp[iatom_source_trans].T.conj())@bond@localSymOp[iatom_target_trans]
-                                #overlap_rotated=(localSymOp[iatom_source_trans].conj().T)@overlap@localSymOp[iatom_target_trans]
-                                bond_rotated=localSymOpInv[iatom_target_trans] @ bond @ (localSymOpInv[iatom_source_trans].T.conj())
-                                overlap_rotated=localSymOpInv[iatom_target_trans] @ overlap @ (localSymOpInv[iatom_source_trans].T.conj())
-                            '''
                             symmerizedBondAndOverlapSet['bond set'].append(
                                 {
                                     'conjugation': True,
                                     'on grid': True,
                                     'bond info':(iatom_target_trans,iatom_source_trans,-dR[0],-dR[1],-dR[2]),
-                                    'original hopping':bond,
-                                    'original overlap':overlap,
-                                    'sym. op. on source':localSymOp[iatom_target_trans],
-                                    'sym. op. on target':localSymOp[iatom_source_trans],
+                                    'original hopping':bond.conj().T,
+                                    'original overlap':overlap.conj().T,
+                                    'sym. op. on source':localSymOp[iatom_source_trans],
+                                    'sym. op. on target':localSymOp[iatom_target_trans],
                                     'time reversal':timeReversal,
                                     'back to I hopping':bond_rotated,
                                     'back to I overlap':overlap_rotated,
@@ -2021,128 +2022,128 @@ class Hr:
         print(f"\nSymmetry analysis finished in {time.time()-time0:.3f}s")
         print(f"{nDropedBond} atom pairs skipped due to out of Wigner-Seiz supercell/ negligible strength")
         
-        print("Symmetrically inequal atom pairs are:")
-        nPrint=0
         def print_matrix(mat,rowIndex,colIndex):
             for irow in rowIndex:
                 print("|",end='')
                 for icol in colIndex: 
                     for ele in (mat[irow,icol].real, mat[irow,icol].imag):
-                        if abs(ele)>1e-4:
+                        if abs(ele)>1e-6:
                             print(f"{ele:8.1E}",end='')
                         else:
                             print("        ",end='')
                     print('I ',end='')
                 print("|")
-        global_t_res,global_o_res=0.j,0.j,
         for iset, symBondSet in enumerate(allSymmerizedBondAndOverlap):
             # ISSUE: utilize the 1st bond as the elementary bond, inquiring the 1st sym. op. is identity op.
             bondElementary=symBondSet['bond set'][0]
             bondElementary_t_matrix=bondElementary['original hopping'].copy()
             bondElementary_o_matrix=bondElementary['original overlap'].copy()
-            if nPrint<maxPrint:
-                print(f"Set {iset+1:3d}/{len(allSymmerizedBondAndOverlap):3d}: atom{bondElementary['bond info'][0]}-atom{bondElementary['bond info'][1]} "+
-                      f"{bondElementary['bond info'][2:]} "+
-                      f"length: {symBondSet['bond length']:.3f} sum t: {np.sum(abs(bondElementary_t_matrix)):.3f} sum o: {np.sum(abs(bondElementary_o_matrix)):.3f} set size:{len(symBondSet['bond set'])}")
-                print_matrix(bondElementary_t_matrix,print_row,print_col)
-            total_t_res, total_o_res= 0.j, 0.j
+            
             nSymGrid=1
             for ibond, bond in enumerate(symBondSet['bond set']):
-                #if ibond==0: continue
+                if ibond==0: continue
                 if bond['on grid']:
                     nSymGrid+=1
-
                     bondElementary_t_matrix += bond['back to I hopping']
                     bondElementary_o_matrix += bond['back to I overlap']
-                    
                     t_res=np.sum(abs(bond['back to I hopping'].real-bondElementary['original hopping'].real))+1j*np.sum(abs(bond['back to I hopping'].imag-bondElementary['original hopping'].imag))
                     o_res=np.sum(abs(bond['back to I overlap'].real-bondElementary['original overlap'].real))+1j*np.sum(abs(bond['back to I overlap'].imag-bondElementary['original overlap'].imag))
-                    total_t_res+=t_res
-                    total_o_res+=o_res
-                else:
-                    #overlat=bond['bond info'][-3:]
-                    #self.Rx_max,self.Rx_min=max([overlat[0],self.Rx_max]),min([overlat[0],self.Rx_min])
-                    #self.Ry_max,self.Ry_min=max([overlat[1],self.Ry_max]),min([overlat[1],self.Ry_min])
-                    #self.Rz_max,self.Rz_min=max([overlat[2],self.Rz_max]),min([overlat[2],self.Rz_min])
-                    pass
-                if nPrint<maxPrint:
-                    print(f"atom{bond['bond info'][0]:2d}({bond['original hopping'].shape[0]:3d})-atom{bond['bond info'][1]:2d}({bond['original hopping'].shape[1]:3d}) "+
-                          f"[{bond['bond info'][2]:2d}{bond['bond info'][3]:2d}{bond['bond info'][4]:2d}] "+
-                          f"dt:{t_res.real:8.1E} {t_res.imag:8.1E} do:{o_res.real:8.1E} {o_res.imag:8.1E} "+
-                          f"TR:{bond['time reversal']:2b}")
-                    print_matrix(bond['back to I hopping'],print_row,print_col)
             else:
                 bondElementary_t_matrix/=nSymGrid
                 bondElementary_o_matrix/=nSymGrid
             bondElementary['symmerized hopping']=bondElementary_t_matrix.copy()
             bondElementary['symmerized overlap']=bondElementary_o_matrix.copy()
 
+            symBondSet['symmerized bond set']={bondElementary['bond info']:bondElementary}
+            for ibond, bond in enumerate(symBondSet['bond set']):
+                print(f"Try to add bond{ibond} {bond['bond info']} TR:{bond['time reversal']} C:{bond['conjugation']}")
+                checkConsistency=False
+                if bond['bond info'] in symBondSet['symmerized bond set']: 
+                    print(f"trigger consistency with {symBondSet['symmerized bond set'][bond['bond info']]['bond info']} TR:{symBondSet['symmerized bond set'][bond['bond info']]['time reversal']} C:{symBondSet['symmerized bond set'][bond['bond info']]['conjugation']}")
+                    checkConsistency=True
+                
+                opSource, opTarget= bond['sym. op. on source'], bond['sym. op. on target']
+                if bond['time reversal']:
+                    bond['symmerized hopping'] = opSource @ (bondElementary['symmerized hopping'].conj()) @ opTarget.conj().T
+                    bond['symmerized overlap'] = opSource @ (bondElementary['symmerized overlap'].conj()) @ opTarget.conj().T
+                else:
+                    bond['symmerized hopping'] = opSource @ bondElementary['symmerized hopping'] @ opTarget.conj().T
+                    bond['symmerized overlap'] = opSource @ bondElementary['symmerized overlap'] @ opTarget.conj().T
+
+                if bond['conjugation']:                
+                    bond['symmerized hopping'] = bond['symmerized hopping'].conj().T
+                    bond['symmerized overlap'] = bond['symmerized overlap'].conj().T
+                
+                if checkConsistency:
+                    diff=np.sum(abs(bond['symmerized hopping']-symBondSet['symmerized bond set'][bond['bond info']]['symmerized hopping']))
+                    if diff>1e-8:
+                        print(f"Failed consistency check for bond{ibond} {bond['bond info']} in symBondSet{iset} {diff=}")
+                        print(f"try to add {bond['bond info']} TR:{bond['time reversal']} C:{bond['conjugation']}, hopping:")
+                        print_matrix(bond['symmerized hopping'],print_row,print_col)
+                        print(f"\nexisted {symBondSet['symmerized bond set'][bond['bond info']]['bond info']} TR:{symBondSet['symmerized bond set'][bond['bond info']]['time reversal']} C:{symBondSet['symmerized bond set'][bond['bond info']]['conjugation']}, hopping:")
+                        print_matrix(symBondSet['symmerized bond set'][bond['bond info']]['symmerized hopping'],print_row,print_col)
+                        exit()
+                    #print("consistent")
+                    continue
+                symBondSet['symmerized bond set'][bond['bond info']]=bond
+            print(f"sym set {iset} done, length: {symBondSet['bond length']:5.3f}, with {len(symBondSet['symmerized bond set'])} atom pairs")
+        #exit()
+
+        print("Symmetrically inequal atom pairs are:")
+        nPrint=0
+        global_t_res,global_o_res=0.j,0.j,
+        for iset, symBondSet in enumerate(allSymmerizedBondAndOverlap):
+            # ISSUE: utilize the 1st bond as the elementary bond, inquiring the 1st sym. op. is identity op.
+            bondElementary=symBondSet['bond set'][0]
+            if nPrint<maxPrint:
+                print(f"Set {iset+1:3d}/{len(allSymmerizedBondAndOverlap):3d}: atom{bondElementary['bond info'][0]}-atom{bondElementary['bond info'][1]} "+
+                      f"{bondElementary['bond info'][2:]} "+
+                      f"length: {symBondSet['bond length']:.3f} sum t: {np.sum(abs(bondElementary['symmerized hopping'])):.3f} sum o: {np.sum(abs(bondElementary['symmerized overlap'])):.3f} set size:{len(symBondSet['bond set'])}")
+                print_matrix(bondElementary['symmerized hopping'],print_row,print_col)
+            total_t_res, total_o_res= 0.j, 0.j
+            nSymGrid=1
+            for bondInfo, bond in symBondSet['symmerized bond set'].items():
+                t_res=np.sum(abs((bond['symmerized hopping'] - bond['original hopping']).real)) + 1j*np.sum(abs((bond['symmerized hopping'] - bond['original hopping']).imag))
+                o_res=np.sum(abs((bond['symmerized overlap'] - bond['original overlap']).real)) + 1j*np.sum(abs((bond['symmerized overlap'] - bond['original overlap']).imag))
+                if nPrint<maxPrint:
+                    print(f"atom{bond['bond info'][0]:2d}({bond['original hopping'].shape[0]:3d})-atom{bond['bond info'][1]:2d}({bond['original hopping'].shape[1]:3d}) "+
+                          f"[{bond['bond info'][2]:2d}{bond['bond info'][3]:2d}{bond['bond info'][4]:2d}] "+
+                          f"dt:{t_res.real:8.1E} {t_res.imag:8.1E} do:{o_res.real:8.1E} {o_res.imag:8.1E} "+
+                          f"TR:{bond['time reversal']} C:{bond['conjugation']}")
+                    print_matrix(bond['back to I hopping'],print_row,print_col)
+                total_t_res+=t_res; total_o_res+=o_res
             global_t_res+=total_t_res
             global_o_res+=total_o_res
             #print(f">>> set dt:{total_t_res.real:13.6E}{total_t_res.imag:13.6E} do:{total_o_res.real:13.6E}{total_o_res.imag:13.6E}")
             nPrint+=1
         print(f">>>>>> total dt:{global_t_res.real:13.6E}{global_t_res.imag:13.6E} do:{global_o_res.real:13.6E}{global_o_res.imag:13.6E}")
-        
+        #exit()
         #'''
         # reconstruct symmetry-constrained Ham. and Overlap
         time0=time.time()
-        print("reconstructing symmery-constrained Ham. and overlap matrix")
+        print("set symmery-constrained Ham. and overlap matrix")
         HamiltonMatrixInR_sym   =np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=complex)
         OverlapMatrixInR_sym    =np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=complex)
         bond_already_set=set()
         self.bondInfoList=set()
         for iset, symBondSet in enumerate(allSymmerizedBondAndOverlap):
-            # ISSUE: utilize the 1st bond as the elementary bond, inquiring the 1st sym. op. is identity op.
-            bondElementary=symBondSet['bond set'][0]
-            bondElementary_t_matrix=bondElementary['symmerized hopping']
-            bondElementary_o_matrix=bondElementary['symmerized overlap']
-            for ibond, bond in enumerate(symBondSet['bond set']):
+            for bondInfo, bond in symBondSet['symmerized bond set'].items():
                 # to see if already set
-                if bond['bond info'] in bond_already_set:
-                    continue
-                #if not bond['on grid']:
-                #    continue
-                if bond['conjugation']: continue
-                # calc. the symmetry-constrained hopping and overlaping matrix
-                # bond_rotated=localSymOpInv[iatom_source_trans] @ bond @ localSymOpInv[iatom_target_trans].T.conj()
-                opSource, opTarget=bond['sym. op. on source'], bond['sym. op. on target']
-                if bond['time reversal']:
-                    bond_t_matrix=opSource @ (bondElementary_t_matrix.conj()) @ (opTarget.T.conj())
-                    bond_o_matrix=opSource @ (bondElementary_o_matrix.conj()) @ (opTarget.T.conj())
-                else:
-                    bond_t_matrix=opSource @ bondElementary_t_matrix @ (opTarget.T.conj())
-                    bond_o_matrix=opSource @ bondElementary_o_matrix @ (opTarget.T.conj())
-                
+                if bondInfo in bond_already_set:
+                    print(f"{bond['bond info']} already set")
+                    exit()
+                bond_t_matrix=bond['symmerized hopping']
+                bond_o_matrix=bond['symmerized overlap']
                 # set to global bond structure
-                #bond_t_matrix=bond['original hopping']
-                iatom_source, iatom_target = bond['bond info'][:2]
-                dR=bond['bond info'][-3:]
+                iatom_source, iatom_target, dR0, dR1, dR2 = bondInfo
 
-                bond_already_set.add((iatom_source,iatom_target, dR[0], dR[1], dR[2])) # record the bond
-                bond_already_set.add((iatom_target,iatom_source,-dR[0],-dR[1],-dR[2])) # and the conj pair
+                bond_already_set.add(bondInfo) # record the bond
                 
                 for iLocalOrbI, iGlobalOrbI in enumerate(atomicOrbMap[iatom_source]):
                     for iLocalOrbJ, iGlobalOrbJ in enumerate(atomicOrbMap[iatom_target]):
-                        if dR[0]==0 and dR[1]==0 and dR[2]==0 and iatom_source==iatom_target:
-                            if iGlobalOrbI>iGlobalOrbJ:
-                                HamiltonMatrixInR_sym[ dR[0], dR[1], dR[2],iGlobalOrbI,iGlobalOrbJ]=bond_t_matrix[iLocalOrbI,iLocalOrbJ]
-                                HamiltonMatrixInR_sym[-dR[0],-dR[1],-dR[2],iGlobalOrbJ,iGlobalOrbI]=bond_t_matrix[iLocalOrbI,iLocalOrbJ].conj()
-                                OverlapMatrixInR_sym[ dR[0], dR[1], dR[2],iGlobalOrbI,iGlobalOrbJ]=bond_o_matrix[iLocalOrbI,iLocalOrbJ]
-                                OverlapMatrixInR_sym[-dR[0],-dR[1],-dR[2],iGlobalOrbJ,iGlobalOrbI]=bond_o_matrix[iLocalOrbI,iLocalOrbJ].conj()
-                                self.bondInfoList.add((iGlobalOrbI,iGlobalOrbJ, dR[0], dR[1], dR[2]))
-                                self.bondInfoList.add((iGlobalOrbJ,iGlobalOrbI,-dR[0],-dR[1],-dR[2]))
-                            elif iGlobalOrbI==iGlobalOrbJ:
-                                self.onsite[iGlobalOrbI]=bond_t_matrix[iLocalOrbI,iLocalOrbI]
-                                HamiltonMatrixInR_sym[ dR[0], dR[1], dR[2],iGlobalOrbI,iGlobalOrbJ]=bond_t_matrix[iLocalOrbI,iLocalOrbJ]
-                                OverlapMatrixInR_sym[ dR[0], dR[1], dR[2],iGlobalOrbI,iGlobalOrbJ]=bond_o_matrix[iLocalOrbI,iLocalOrbJ]
-                                self.bondInfoList.add((iGlobalOrbI,iGlobalOrbJ, dR[0], dR[1], dR[2]))
-                        else:
-                            HamiltonMatrixInR_sym[ dR[0], dR[1], dR[2],iGlobalOrbI,iGlobalOrbJ]=bond_t_matrix[iLocalOrbI,iLocalOrbJ]
-                            HamiltonMatrixInR_sym[-dR[0],-dR[1],-dR[2],iGlobalOrbJ,iGlobalOrbI]=bond_t_matrix[iLocalOrbI,iLocalOrbJ].conj()
-                            OverlapMatrixInR_sym[ dR[0], dR[1], dR[2],iGlobalOrbI,iGlobalOrbJ]=bond_o_matrix[iLocalOrbI,iLocalOrbJ]
-                            OverlapMatrixInR_sym[-dR[0],-dR[1],-dR[2],iGlobalOrbJ,iGlobalOrbI]=bond_o_matrix[iLocalOrbI,iLocalOrbJ].conj()
-                            self.bondInfoList.add((iGlobalOrbI,iGlobalOrbJ, dR[0], dR[1], dR[2]))
-                            self.bondInfoList.add((iGlobalOrbJ,iGlobalOrbI,-dR[0],-dR[1],-dR[2]))
+                        HamiltonMatrixInR_sym[ dR0, dR1, dR2, iGlobalOrbI, iGlobalOrbJ]=bond_t_matrix[iLocalOrbI, iLocalOrbJ]
+                        OverlapMatrixInR_sym[  dR0, dR1, dR2, iGlobalOrbI, iGlobalOrbJ]=bond_o_matrix[iLocalOrbI, iLocalOrbJ]
+                        self.bondInfoList.add((iGlobalOrbI,iGlobalOrbJ, dR0, dR1, dR2))
         print(f"symmery-constrained Ham. and overlap matrix constructed in {time.time()-time0:.3f}s")
         #'''
         print("FFT to energy matrix")
@@ -2175,14 +2176,14 @@ class Hr:
         for ele in np.diag(self.bondInVecForm[0,0,0,:,:]).real:print(f"{ele:6.3f} ",end='')
         print()
         self.bondList=[]
-        #for bondInfo in self.bondInfoList:
-        #    iorb_source,iorb_target,dR1,dR2,dR3=bondInfo
-        #    self.bondList.append(lat.BondDigital(iorb_source,iorb_target,np.array([dR1,dR2,dR3]),self.bondInVecForm[dR1,dR2,dR3,iorb_source,iorb_target],self.overlapInVecForm[dR1,dR2,dR3,iorb_source,iorb_target]))
-        for dR in self.dRList:
-            dR1,dR2,dR3=dR
-            for iorb_source in range(self.norb):
-                for iorb_target in range(self.norb):
-                    self.bondList.append(lat.BondDigital(iorb_source,iorb_target,np.array([dR1,dR2,dR3]),self.bondInVecForm[dR1,dR2,dR3,iorb_source,iorb_target],self.overlapInVecForm[dR1,dR2,dR3,iorb_source,iorb_target]))
+        for bondInfo in self.bondInfoList:
+            iorb_source,iorb_target,dR1,dR2,dR3=bondInfo
+            self.bondList.append(lat.BondDigital(iorb_source,iorb_target,np.array([dR1,dR2,dR3]),self.bondInVecForm[dR1,dR2,dR3,iorb_source,iorb_target],self.overlapInVecForm[dR1,dR2,dR3,iorb_source,iorb_target]))
+        #for dR in self.dRList:
+        #    dR1,dR2,dR3=dR
+        #    for iorb_source in range(self.norb):
+        #        for iorb_target in range(self.norb):
+        #            self.bondList.append(lat.BondDigital(iorb_source,iorb_target,np.array([dR1,dR2,dR3]),self.bondInVecForm[dR1,dR2,dR3,iorb_source,iorb_target],self.overlapInVecForm[dR1,dR2,dR3,iorb_source,iorb_target]))
 
         #exit()
         return
