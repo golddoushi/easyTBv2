@@ -2522,7 +2522,7 @@ class Green:
         plt.show()
         plt.close()
     
-    def calcFullBandsWithOverlap_DoubelSpin(self,hr,fermi=0,erange=(0,0),optimalFermi=-100,
+    def calcFullBandsWithOverlap(self,hr,ispin=1,fermi=0,erange=(0,0),optimalFermi=-100,
                            mainDir=None,saveFig=True,nthreads=1,
                            spinComponentForColor="s0"):
         '''
@@ -2530,10 +2530,6 @@ class Green:
         For the case with double spin-tunnels, including the case of noncolinear. The overlap is only defined for spin-up (or the first spinor)
         \nReturn the .png and txt files for band-structure
         '''
-        def callback(k):
-            print("callbak function of python is reporting, recived parameter is:")
-            print(k)
-            return
         # prepare input parameters for cdll
         time0=time.time()
         if mainDir!=None: # read in kpath
@@ -2556,12 +2552,13 @@ class Green:
             overlap_real.append(bond.overlap.real)
             overlap_imag.append(bond.overlap.imag)
         #exit()
-        from eig import calcFullBandsAndVecs_OVLCorrection_DoubelSpin
-        result=calcFullBandsAndVecs_OVLCorrection_DoubelSpin(nkpts,kmesh,
+        from eig import calcFullBandsAndVecs_OVLCorrection
+        result=calcFullBandsAndVecs_OVLCorrection(nkpts,kmesh,
                         hr.norb,nhoppings,
                         sourceID,targetID,overLat,
-                        t_real, t_imag, overlap_real, overlap_imag,
-                        nthreads,callback)
+                        t_real, t_imag, overlap_real, overlap_imag, ispin,
+                        nthreads,
+                        lambda s:print(s))
         _eigList,_vec_r,_vec_i=result
         eigList=np.array(_eigList).reshape((nkpts,hr.norb))
         vecList=(np.array(_vec_r)+1j*np.array(_vec_i)).reshape((nkpts,hr.norb,hr.norb))
@@ -2792,20 +2789,20 @@ class Green:
         # prepare input parameters for cdll
         time0=time.time()
         nhoppings=len(hr.bondList)
-        sourceID, targetID, overLat, t_real, t_imag, overlap  =[],[],[],[],[],[]
+        sourceID, targetID, overLat, t_real, t_imag, overlap_real, overlap_imag  =[],[],[],[],[],[],[]
         for bond in hr.bondList:
-            #print("%3d %3d %3d %3d %3d %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag))
+            #if(np.sum(abs(bond.overlat))==0):print("%3d %3d %3d %3d %3d %9.6f %9.6f %9.6f"%(*bond.overlat,bond.source+1,bond.target+1,bond.t.real,bond.t.imag,bond.overlap.real))
             sourceID.append(bond.source);targetID.append(bond.target)
             overLat.append(bond.overlat[0]);overLat.append(bond.overlat[1]);overLat.append(bond.overlat[2])
             t_real.append(bond.t.real);t_imag.append(bond.t.imag)
-            overlap.append(bond.overlap)
+            overlap_real.append(bond.overlap.real);overlap_imag.append(bond.overlap.imag)
         #exit()
         from eig import calcFullBandsAndVecsInMemory_OVLCorrection_FFT
         result=calcFullBandsAndVecsInMemory_OVLCorrection_FFT(kgrid,
                         hr.norb,nhoppings,
                         sourceID,targetID,overLat,
-                        t_real, t_imag, overlap, ispin,
-                        nthreads,
+                        t_real, t_imag, overlap_real, overlap_imag, 
+                        ispin, nthreads,
                         lambda callbackParameter: print(f"{callbackParameter}",end=""))
         eig_addr, vec_addr=result
         print('\nHk solved in %.3fs (with %d threads)'%(time.time()-time0,nthreads))

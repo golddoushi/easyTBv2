@@ -20,13 +20,23 @@ typedef unsigned long long ulong;
 int omp_get_thread_num();
 
 FILE*fp;
-
+PyObject*callback_global;
 int output(const char* s){
     int myrank=omp_get_thread_num();
     if(myrank==0){
         fp=fopen("./eig.log","a");
         fprintf(fp,s);
         fclose(fp);
+    }
+    return 0;
+}
+int output_py(const char* s){
+    int myrank=omp_get_thread_num();
+    if(myrank==0){
+        fp=fopen("./eig.log","a");
+        fprintf(fp,s);
+        fclose(fp);
+        PyObject_CallObject(callback_global, Py_BuildValue("(s)",s));
     }
     return 0;
 }
@@ -129,7 +139,7 @@ PyObject * calcFullBandsAndVecs(PyObject* self, PyObject* args){
     return Py_BuildValue("(OOO)",Spectra,Vector_r,Vector_i);
 }
 
-PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObject* args){
+PyObject * calcFullBandsAndVecs_OVLCorrection(PyObject* self, PyObject* args){
     // read in all parameters
     PyObject* py_nkpt;
     PyObject* py_kmesh;
@@ -142,19 +152,22 @@ PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObjec
     PyObject* py_timag;
     PyObject* py_oreal;
     PyObject* py_oimag;
+    PyObject* py_ispin;
     PyObject* py_nthreads;
-    PyObject* callback;  // callback function
-    printf("start parsing...\n");
-    PyArg_ParseTuple(args,"OOOOOOOOOOOOO",
+    output("Args parsing into calcFullBandsAndVecs_OVLCorrection...\n");
+    PyArg_ParseTuple(args,"OOOOOOOOOOOOOO",
         &py_nkpt,&py_kmesh,&py_norbs,&py_nhoppings,&py_sourceID,&py_targetID,
         &py_overLat,
-        &py_treal,&py_timag,&py_oreal,&py_oimag,
-        &py_nthreads,&callback);
+        &py_treal,&py_timag,&py_oreal,&py_oimag,&py_ispin,
+        &py_nthreads,&callback_global);
+    char output_info[512];
     uint nkpt=(uint)PyLong_AS_LONG(py_nkpt);
     uint norbs=(uint)PyLong_AS_LONG(py_norbs);
+    uint ispin=(uint)PyLong_AS_LONG(py_ispin);
     uint nhoppings=(uint)PyLong_AS_LONG(py_nhoppings);
     uint nthreads=(uint)PyLong_AS_LONG(py_nthreads);
-    printf("nkpt=%d norbs=%d nhoppings=%d nthreads=%d\n",nkpt,norbs,nhoppings,nthreads);
+    
+    sprintf(output_info,"nkpt=%d norbs=%d nhoppings=%d nthreads=%d\n",nkpt,norbs,nhoppings,nthreads);output_py(output_info);
     double *kmesh=(double*)malloc(nkpt*3*sizeof(double));
     for(uint ikpt=0;ikpt<nkpt;ikpt++)for(uint idir=0;idir<3;idir++)
         kmesh[ikpt*3+idir]=PyFloat_AsDouble(PyList_GetItem(py_kmesh,ikpt*3+idir));
@@ -179,43 +192,50 @@ PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObjec
     double * Vector_r_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
     double * Vector_i_tmp=(double*)malloc(nkpt*norbs*norbs*sizeof(double));
     
-    if(nkpt<nthreads*3)nthreads=1;
+    if(nkpt<nthreads)nthreads=1;
     printf("use %d cores in eig.pyd::calcFullBandsAndVecs_OVLCorrection_DoubelSpin\n",nthreads);
-    unsigned long long index; // the index for all states includes kpts and bands
     #pragma omp parallel num_threads(nthreads)
     {
+        uint ikpt, iorb, jorb, ihopping, icomp, ieig, icontract, jcontract;
+        ulong index; // the index for all states includes kpts and bands
+        int info;
         lapack_complex_double * Hk     =(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init original Hk
         lapack_complex_double * HkWave =(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init Hk wave the one can be solved
         lapack_complex_double * Ok=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init overlap matrix
-        lapack_complex_double * OkHalf=(lapack_complex_double*)malloc((norbs/2)*(norbs/2)*sizeof(lapack_complex_double)); // for spin-polarized and noncolinear
-        lapack_complex_double * W=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init the eigen-vecs of Ok
+        //lapack_complex_double * OkHalf=(lapack_complex_double*)malloc((norbs/2)*(norbs/2)*sizeof(lapack_complex_double)); // for spin-polarized and noncolinear
+        lapack_complex_double * Wk=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double)); // init the eigen-vecs of Ok
+        lapack_complex_double * WkHalf=(lapack_complex_double*)malloc((norbs/2)*(norbs/2)*sizeof(lapack_complex_double)); // init the eigen-vecs of Ok
         double * eigs=(double*)malloc(norbs*sizeof(double)); // eigenvalues of Hk
         double * Oklam=(double*)malloc(norbs*sizeof(double)); // eigenvalues of overlap
-        double * OklamHalf=(double*)malloc(norbs/2*sizeof(double)); // for spin-polarized or noncolinear case
+        //double * OklamHalf=(double*)malloc(norbs/2*sizeof(double)); // for spin-polarized or noncolinear case
         #pragma omp for
-        for(uint ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
+        for(ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //printf("kpt%d %.3f %.3f %.3f\n",ikpt,kmesh[ikpt*3+0],kmesh[ikpt*3+1],kmesh[ikpt*3+2]);
             //int kBaseIndex=ikpt*norbs*norbs;
-            for(uint i=0;i<norbs;i++){
-                for(uint j=0;j<norbs;j++){
-                    Hk[i*norbs+j]=0;
-                    HkWave[i*norbs+j]=0;
-                    Ok[i*norbs+j]=0;
+            for(iorb=0;iorb<norbs;iorb++){
+                for(jorb=0;jorb<norbs;jorb++){
+                    Hk[iorb*norbs+jorb]=0;
+                    HkWave[iorb*norbs+jorb]=0;
+                    Ok[iorb*norbs+jorb]=0;
                 }
             }
-            for(uint i=0;i<norbs/2;i++)for(uint j=0;j<norbs/2;j++)OkHalf[i*norbs/2+j]=0;
+            //for(uint i=0;i<norbs/2;i++)for(uint j=0;j<norbs/2;j++)OkHalf[i*norbs/2+j]=0;
             //printf("hoppings\n");
             double phase;
             lapack_complex_double tk, sk;
-            for(uint ihopping=0;ihopping<nhoppings;ihopping++){
+            for(ihopping=0;ihopping<nhoppings;ihopping++){ // calc. Hk and Ok
                 phase=0;
-                for (uint i=0;i<3;i++) phase+=overLat[ihopping*3+i]*kmesh[ikpt*3+i];
+                for (icomp=0;icomp<3;icomp++) phase+=overLat[ihopping*3+icomp]*kmesh[ikpt*3+icomp];
+
                 tk=(hopping_real[ihopping]+_Complex_I*hopping_imag[ihopping])*cexp(TwoPI*_Complex_I*phase);
                 Hk[sourceID[ihopping]*norbs+targetID[ihopping]]+=tk;
-                if(sourceID[ihopping]<norbs/2 & targetID[ihopping]<norbs/2){
-                    sk=(overlap_real[ihopping]+_Complex_I*overlap_imag[ihopping])*cexp(TwoPI*_Complex_I*phase);
+                
+                sk=(overlap_real[ihopping]+_Complex_I*overlap_imag[ihopping])*cexp(TwoPI*_Complex_I*phase);
+                Ok[sourceID[ihopping]*norbs+targetID[ihopping]]+=sk;
+
+                /*if(sourceID[ihopping]<norbs/2 & targetID[ihopping]<norbs/2){    
                     OkHalf[sourceID[ihopping]*norbs/2+targetID[ihopping]]+=sk;
-                }
+                }*/
             }
             //printf("kpt%d %.3f %.3f %.3f Overlap:\n",ikpt,kmesh[ikpt*3+0],kmesh[ikpt*3+1],kmesh[ikpt*3+2]);
             //for(uint iorb=0;iorb<norbs;iorb++){
@@ -227,10 +247,37 @@ PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObjec
             //    for(uint jorb=0;jorb<norbs;jorb++)printf(" %.3f",creal(hk[iorb*norbs+jorb]));
             //    printf("\n");
             //}
-            int info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs/2,OkHalf,norbs/2,OklamHalf);
-            if(info!=0)printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);
-            //printf("kpt%d %.3f %.3f %.3f eigvals of overlap matrix:\n",ikpt,kmesh[ikpt*3+0],kmesh[ikpt*3+1],kmesh[ikpt*3+2]);
-            //for(uint iorb=0;iorb<norbs/2;iorb++)printf(" %.3f",koHalf[iorb]);
+            if(ispin==2){
+                for(iorb=0;iorb<norbs/2;iorb++)for(jorb=0;jorb<norbs/2;jorb++)
+                    WkHalf[iorb*(norbs/2)+jorb]=Ok[iorb*norbs+jorb];
+                
+                info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs/2,WkHalf,norbs/2,Oklam);
+                if(info!=0){printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);exit(1);}
+
+                for(iorb=0;iorb<norbs/2;iorb++){
+                    Oklam[norbs/2+iorb]=Oklam[iorb];
+                    for(jorb=0;jorb<norbs/2;jorb++){
+                        Wk[          iorb*norbs+          jorb]=WkHalf[iorb*(norbs/2)+jorb];
+                        Wk[(iorb+norbs/2)*norbs+(jorb+norbs/2)]=WkHalf[iorb*(norbs/2)+jorb];
+                        Wk[(iorb+norbs/2)*norbs          +jorb]=0;
+                        Wk[          iorb*norbs+(jorb+norbs/2)]=0;
+                    }
+                }
+            }else{
+                for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
+                   Wk[iorb*norbs+jorb]=Ok[iorb*norbs+jorb];
+                
+                info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,Wk,norbs,Oklam);
+                if(info!=0){printf("LAPACKE failed for the eigen. eq. for ovlk, info: %d\n",info);exit(1);}
+                //printf("kpt%d %.3f %.3f %.3f eigvals of overlap matrix:\n",ikpt,kmesh[ikpt*3+0],kmesh[ikpt*3+1],kmesh[ikpt*3+2]);
+            }
+            if(Oklam[0]<=0){
+                output_py("Error, eigenvalues of overlap is not positive:");
+                for(ieig=0;ieig<norbs;ieig++){sprintf(output_info," %.3f",Oklam[ieig]);output_py(output_info);}
+                output_py("\n");
+                exit(1);
+            }
+            //exit(1);
             //printf("\n");
             //printf("kpt%d %.3f %.3f %.3f Overlap eivenvecs:\n",ikpt,kmesh[ikpt*3+0],kmesh[ikpt*3+1],kmesh[ikpt*3+2]);
             //for(uint iorb=0;iorb<norbs;iorb++){
@@ -239,20 +286,12 @@ PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObjec
             //}
             //exit(1);
             // Set full ovlk
-            for(uint i=0;i<norbs/2;i++){
-                Oklam[i]        =OklamHalf[i];
-                Oklam[norbs/2+i]=OklamHalf[i];
-                for(uint j=0;j<norbs/2;j++){
-                    W[i*norbs          +j]          =OkHalf[i*norbs/2+j];
-                    W[(norbs/2+i)*norbs+(norbs/2+j)]=OkHalf[i*norbs/2+j];
-                }
-            }
             // HkWave= 1/sqrt(Olam) @ W^dagger @ Hk @ W @ 1/sqrt(Olam)
-            for(uint iorb=0;iorb<norbs;iorb++)
-               for(uint jorb=0;jorb<norbs;jorb++)
-                  for(uint icontract=0;icontract<norbs;icontract++)
-                    for(uint jcontract=0;jcontract<norbs;jcontract++)
-                        HkWave[iorb*norbs+jorb]+=conj(W[icontract*norbs+iorb])*Hk[icontract*norbs+jcontract]*W[jcontract*norbs+jorb];
+            for(iorb=0;iorb<norbs;iorb++)
+               for(jorb=0;jorb<norbs;jorb++)
+                  for(icontract=0;icontract<norbs;icontract++)
+                    for(jcontract=0;jcontract<norbs;jcontract++)
+                        HkWave[iorb*norbs+jorb]+=conj(Wk[icontract*norbs+iorb])*Hk[icontract*norbs+jcontract]*Wk[jcontract*norbs+jorb];
                      //B[iorb*norbs+jorb]+=ovlk[icontract*norbs+iorb]*hk[icontract*norbs+jorb];
             //printf("Real part of center matrix:\n");
             //for(uint iorb=0;iorb<norbs;iorb++){
@@ -260,27 +299,27 @@ PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObjec
             //    printf("\n");
             //}
             //exit(1);
-            for(uint iorb=0;iorb<norbs;iorb++)for(uint jorb=0;jorb<norbs;jorb++)
+            for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
                HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb])/sqrt(Oklam[jorb]);
 
             info=LAPACKE_zheev(LAPACK_ROW_MAJOR,'V','L',norbs,HkWave,norbs,eigs);
-            if(info!=0)printf("LAPACKE failed for the eigen. eq. for D, info: %d\n",info);
+            if(info!=0){printf("LAPACKE failed for the eigen. eq. for D, info: %d\n",info);exit(1);}
             //printf("kpt%d %.3f %.3f %.3f eigvals:\n",ikpt,kmesh[ikpt*3+0],kmesh[ikpt*3+1],kmesh[ikpt*3+2]);
             //for(uint iorb=0;iorb<norbs;iorb++)printf(" %.3f",eigs[iorb]);
             //printf("\n");
             //exit(1);
             // V=W @ 1/sqrt(Olam) @ U
-            for(uint iorb=0;iorb<norbs;iorb++){
-                for(uint jorb=0;jorb<norbs;jorb++){
+            for(iorb=0;iorb<norbs;iorb++){
+                for(jorb=0;jorb<norbs;jorb++){
                    HkWave[iorb*norbs+jorb]=HkWave[iorb*norbs+jorb]/sqrt(Oklam[iorb]);
                    Hk[iorb*norbs+jorb]=0;
                }
             }
             
-            for(uint iorb=0;iorb<norbs;iorb++)
-               for(uint jorb=0;jorb<norbs;jorb++)
-                  for(uint icontract=0;icontract<norbs;icontract++)
-                     Hk[iorb*norbs+jorb]+=W[iorb*norbs+icontract]*HkWave[icontract*norbs+jorb];
+            for(iorb=0;iorb<norbs;iorb++)
+               for(jorb=0;jorb<norbs;jorb++)
+                  for(icontract=0;icontract<norbs;icontract++)
+                     Hk[iorb*norbs+jorb]+=Wk[iorb*norbs+icontract]*HkWave[icontract*norbs+jorb];
             
             //printf("Real part of eigen-vecs:\n");
             //for(uint iorb=0;iorb<norbs;iorb++){
@@ -289,26 +328,28 @@ PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObjec
             //}
             //exit(1);
 
-            for(uint iorb=0;iorb<norbs;iorb++) Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
-            for(uint iorb=0;iorb<norbs;iorb++){
-                for(uint jorb=0;jorb<norbs;jorb++){
+            for(iorb=0;iorb<norbs;iorb++){
+                Spectra_tmp[ikpt*norbs+iorb]=eigs[iorb];
+                for(jorb=0;jorb<norbs;jorb++){
                     index=ikpt*norbs*norbs+iorb*norbs+jorb;
                     Vector_r_tmp[index]=creal(Hk[iorb*norbs+jorb]);
                     Vector_i_tmp[index]=cimag(Hk[iorb*norbs+jorb]);
                 }
             }
         }
-        free(Hk);free(HkWave);free(Ok);free(OkHalf);free(W);free(eigs);free(Oklam);free(OklamHalf);
+        free(Hk);free(HkWave);free(Ok);free(Wk);free(WkHalf);free(eigs);free(Oklam);
     }
 
     PyObject * Spectra=PyTuple_New(nkpt*norbs);
     PyObject * Vector_r=PyTuple_New(nkpt*norbs*norbs);
     PyObject * Vector_i=PyTuple_New(nkpt*norbs*norbs);
 
-    for(uint ikpt=0;ikpt<nkpt;ikpt++){
-        for(uint iorb=0;iorb<norbs;iorb++) PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(Spectra_tmp[ikpt*norbs+iorb]));
-        for(uint iorb=0;iorb<norbs;iorb++){
-            for(uint jorb=0;jorb<norbs;jorb++){
+    uint ikpt, iorb, jorb;
+    ulong index;
+    for(ikpt=0;ikpt<nkpt;ikpt++){
+        for(iorb=0;iorb<norbs;iorb++){
+            PyTuple_SetItem(Spectra, ikpt*norbs+iorb, PyFloat_FromDouble(Spectra_tmp[ikpt*norbs+iorb]));
+            for(jorb=0;jorb<norbs;jorb++){
                 index=ikpt*norbs*norbs+iorb*norbs+jorb;
                 PyTuple_SetItem(Vector_r, index, PyFloat_FromDouble(Vector_r_tmp[index]));
                 PyTuple_SetItem(Vector_i, index, PyFloat_FromDouble(Vector_i_tmp[index]));
@@ -323,6 +364,7 @@ PyObject * calcFullBandsAndVecs_OVLCorrection_DoubelSpin(PyObject* self, PyObjec
 //***************************************************//
 //             Green's function part                 //
 //***************************************************//
+/*
 // Auxiliary func, mod, especially for negative mod
 int mod(int a, int b){
     int result=a%b;
@@ -571,6 +613,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin(PyObject* self,
     return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
 }
 
+*/
 PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObject* args){
     // read in all parameters
     PyObject* py_kgrid;
@@ -581,19 +624,20 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
     PyObject* py_overLat;
     PyObject* py_treal;
     PyObject* py_timag;
-    PyObject* py_overlap;
+    PyObject* py_overlap_real;
+    PyObject* py_overlap_imag;
     PyObject* py_ispin;
     PyObject* py_nthreads;
-    PyObject* callback;  // callback function
+    //PyObject* callback;  // callback function
     uint icomp, iorb, jorb;
     ulong ihopping, ikpt, ielement;
-    output("Args parsing into calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n");
+    output("Args parsing into calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n,");
     char output_info[512];
-    PyArg_ParseTuple(args,"OOOOOOOOOOOO",
+    PyArg_ParseTuple(args,"OOOOOOOOOOOOO",
         &py_kgrid,&py_norbs,&py_nhoppings,&py_sourceID,&py_targetID,
         &py_overLat,
-        &py_treal,&py_timag,&py_overlap,&py_ispin,
-        &py_nthreads,&callback);
+        &py_treal,&py_timag,&py_overlap_real,&py_overlap_imag,
+        &py_ispin,&py_nthreads,&callback_global);
     uint ispin=(uint)PyLong_AS_LONG(py_ispin);
     uint kgrid[3];
     for(icomp=0;icomp<3;icomp++)
@@ -602,16 +646,17 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
     uint nKgrid=kgrid[0]*kgrid[1]*kgrid[2];
     uint norbs=(uint)PyLong_AS_LONG(py_norbs);
     uint nhoppings=(uint)PyLong_AS_LONG(py_nhoppings);
-    sprintf(output_info,"nkpt=%d norbs=%d ispin=%d nhoppings=%d\n",nKgrid,norbs,ispin,nhoppings);output(output_info);
+    sprintf(output_info,"nkpt=%d norbs=%d ispin=%d nhoppings=%d\n",nKgrid,norbs,ispin,nhoppings);output_py(output_info);
     uint nthreads=(uint)PyLong_AS_LONG(py_nthreads);
-    sprintf(output_info,"use %d cores in eig.pyd::calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n",nthreads);output(output_info);
+    sprintf(output_info,"use %d cores in eig.pyd::calcFullBandsAndVecsInMemory_OVLCorrection_FFT\n",nthreads);output_py(output_info);
 
     uint *sourceID=(uint*)malloc(nhoppings*sizeof(uint));
     uint *targetID=(uint*)malloc(nhoppings*sizeof(uint));
     int *overLat=(int*)malloc(nhoppings*3*sizeof(int));
     double*hopping_real=(double*)malloc(nhoppings*sizeof(double));
     double*hopping_imag=(double*)malloc(nhoppings*sizeof(double));
-    double*overlap=(double*)malloc(nhoppings*sizeof(double));
+    double*overlap_real=(double*)malloc(nhoppings*sizeof(double));
+    double*overlap_imag=(double*)malloc(nhoppings*sizeof(double));
     for(ihopping=0;ihopping<nhoppings;ihopping++){
         sourceID[ihopping]=(uint)PyLong_AS_LONG(PyList_GetItem(py_sourceID,ihopping));
         targetID[ihopping]=(uint)PyLong_AS_LONG(PyList_GetItem(py_targetID,ihopping));
@@ -619,15 +664,16 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
             overLat[ihopping*3+idir]=PyLong_AS_LONG(PyList_GetItem(py_overLat,ihopping*3+idir));
         hopping_real[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_treal,ihopping));
         hopping_imag[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_timag,ihopping));
-        overlap[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_overlap,ihopping));
+        overlap_real[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_overlap_real,ihopping));
+        overlap_imag[ihopping]=PyFloat_AsDouble(PyList_GetItem(py_overlap_imag,ihopping));
     }
-    output("Args. parsing finished.\n");
+    output_py("Args. parsing finished.\n");
     sprintf(output_info,"estimate memory cost (per thread) %d MB\n",
                          (nKgrid*norbs*sizeof(double)+
                          nKgrid*norbs*norbs*sizeof(lapack_complex_double)+
                          norbs*norbs*nKgrid*sizeof(lapack_complex_double)+
                          nKgrid*norbs*norbs*sizeof(lapack_complex_double))/1024/1024);
-    output(output_info);
+    output_py(output_info);
     clock_t time0=clock();
     double * spectra=(double*)malloc(nKgrid*norbs*sizeof(double));                               // eigen values
     lapack_complex_double *Hrs=(lapack_complex_double*)malloc(norbs*norbs*nKgrid*sizeof(lapack_complex_double)); // eigen vectors
@@ -636,13 +682,13 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
     lapack_complex_double *Oks=(lapack_complex_double*)malloc(nKgrid*norbs*norbs*sizeof(lapack_complex_double));      // overlap matrix in k-space
     
     // fftw_plan use global variables. So, we should create them outside the parallel loop
-    fftw_complex *tR=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
-    fftw_complex *tK=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
+    fftw_complex *tR=(fftw_complex*)fftw_alloc_complex(nKgrid*sizeof(fftw_complex));
+    fftw_complex *tK=(fftw_complex*)fftw_alloc_complex(nKgrid*sizeof(fftw_complex));
     fftw_plan p_Ham=fftw_plan_dft_3d(kgrid[0],kgrid[1],kgrid[2],tR,tK,FFTW_BACKWARD,FFTW_MEASURE);
-    fftw_complex *oR=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
-    fftw_complex *oK=(fftw_complex*)malloc(nKgrid*sizeof(fftw_complex));
+    fftw_complex *oR=(fftw_complex*)fftw_alloc_complex(nKgrid*sizeof(fftw_complex));
+    fftw_complex *oK=(fftw_complex*)fftw_alloc_complex(nKgrid*sizeof(fftw_complex));
     fftw_plan p_Overlap=fftw_plan_dft_3d(kgrid[0],kgrid[1],kgrid[2],oR,oK,FFTW_BACKWARD,FFTW_MEASURE);
-    output("FFTW ready.\n");
+    output_py("FFTW ready.\n");
     
     // set real-space Ham. and overlaps
     int Rvec0, Rvec1, Rvec2; // lattice point
@@ -660,7 +706,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
         if(Rvec2<0) Rvec2+=kgrid[2];
 
         if(Rvec0<0 | Rvec1<0 | Rvec2<0){
-            sprintf(output_info,"kmesh %dx%dx%d too slim to accomodate Bravais vector %d,%d,%d\n",kgrid[0],kgrid[1],kgrid[2],overLat[ihopping*3+0],overLat[ihopping*3+1],overLat[ihopping*3+2]);output(output_info);
+            sprintf(output_info,"kmesh %dx%dx%d too slim to accomodate Bravais vector %d,%d,%d\n",kgrid[0],kgrid[1],kgrid[2],overLat[ihopping*3+0],overLat[ihopping*3+1],overLat[ihopping*3+2]);output_py(output_info);
             exit(1);
         }
         isource=sourceID[ihopping];
@@ -670,12 +716,12 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
         //    printf("Error: index %d > %d, orb(%d-%d) Bravais [%d %d %d]\n",index,nKgrid*norbs*norbs,isource,itarget,Rvec0,Rvec1,Rvec2);
         //}
         Hrs[index]=hopping_real[ihopping]+_Complex_I*hopping_imag[ihopping];
-        Ors[index]=overlap[ihopping];
+        Ors[index]=overlap_real[ihopping]+_Complex_I*overlap_imag[ihopping];
         //if(isource==0 & itarget==0 & overlap[ihopping]>1E-7){
         //    printf("%d-%d [%d %d %d] Ovl:%.2E\n",isource,itarget,Rvec0,Rvec1,Rvec2,creal(Ors[index]));
         //}
     }
-    output("real-space hoppings and overlaps are set.\n");
+    output_py("real-space hoppings and overlaps are set.\n");
     uint iorb_debug=53;
     uint jorb_debug=53;
     //for(uint ik0=0;ik0<kgrid[0];ik0++){
@@ -723,16 +769,16 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
             //exit(1);
         }
     }
-    output("k-space hoppings and overlaps are set.\n");
+    output_py("k-space hoppings and overlaps are set.\n");
     /*for(uint igrid=0;igrid<nKgrid;igrid++){
         if(igrid%kgrid[1]==0)printf("\n");
         ulong index=igrid*norbs*norbs+(iorb_debug*norbs+jorb_debug);
         printf("%.1E ",creal(Oks[index]));
     }
     exit(1);*/
-    free(tR);free(tK);free(oR);free(oK);
+    fftw_free(tR);fftw_free(tK);fftw_free(oR);fftw_free(oK);
     fftw_destroy_plan(p_Ham);fftw_destroy_plan(p_Overlap);
-    output("FFT finished\n");
+    output_py("FFT finished\n");
 
     // solve generalized eigen-eqs.
     #pragma omp parallel num_threads(nthreads)
@@ -751,7 +797,7 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
         uint my_nkpt_portion=nKgrid/nthreads/50;
         uint my_icnt=0;
         if(my_nkpt_portion==0)my_nkpt_portion=1;
-        if(my_rank==0){sprintf(output_info,"> corresponds to ~%d kpts\n",my_nkpt_portion*50);output(output_info);}
+        if(my_rank==0){sprintf(output_info,"> corresponds to ~%d kpts\n",my_nkpt_portion*50);output_py(output_info);}
 
         #pragma omp for
         for(ik=0;ik<nKgrid;ik++){
@@ -779,9 +825,9 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
             }
             // to check the positivity of overlap eigenvals
             if(Oklam[0]<=0){
-                output("Error, eigenvalues of overlap is not positive:");
-                for(ieig=0;ieig<norbs;ieig++){sprintf(output_info," %.3f",Oklam[ieig]);output(output_info);}
-                output("\n");
+                output_py("Error, eigenvalues of overlap is not positive:");
+                for(ieig=0;ieig<norbs;ieig++){sprintf(output_info," %.3f",Oklam[ieig]);output_py(output_info);}
+                output_py("\n");
                 exit(1);
             }
                 
@@ -812,18 +858,18 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_FFT(PyObject* self, PyObje
             cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, norbs, norbs, norbs, &alpha, Wk, norbs, HkWave, norbs, &beta, Hks+ik*norbs*norbs, norbs);
         
             my_icnt+=1;
-            if(my_icnt%my_nkpt_portion==0)output(">");
+            if(my_icnt%my_nkpt_portion==0)output_py(">");
         }
-        output("\n");
+        output_py("\n");
         free(HkWave);free(_HkWave);free(Wk);free(WkHalf);free(eigs);free(Oklam);
     }
-    output("free all inputs...\n");
-    free(sourceID);free(targetID);free(overLat);free(hopping_real);free(hopping_imag);free(overlap);
+    output_py("free all inputs...\n");
+    free(sourceID);free(targetID);free(overLat);free(hopping_real);free(hopping_imag);free(overlap_real);free(overlap_imag);
     
-    sprintf(output_info,"Hk constructed in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);output(output_info);
+    sprintf(output_info,"Hk constructed in %.3fs\n",(double)(clock()-time0)/CLOCKS_PER_SEC);output_py(output_info);
     long long eigs_addr=(long long)spectra;
     long long vecs_addr=(long long)Hks;
-    sprintf(output_info,"\nin eig.pyd the addr. of eigs, vecs, hk and ok are %p, %p\n",eigs_addr,vecs_addr);output(output_info);
+    sprintf(output_info,"\nin eig.pyd the addr. of eigs, vecs, hk and ok are %p, %p\n",eigs_addr,vecs_addr);output_py(output_info);
     return Py_BuildValue("(LL)",eigs_addr,vecs_addr);
 }
 
@@ -1113,10 +1159,10 @@ PyObject * calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT(PyObject* self, PyO
 
 static PyMethodDef module_methods[] = {
     {"calcFullBandsAndVecs", calcFullBandsAndVecs, METH_VARARGS, "calc. the band energy and eigenvectors via directly solving the eigen eq., using phase factor"},
-    {"calcFullBandsAndVecs_OVLCorrection_DoubelSpin", calcFullBandsAndVecs_OVLCorrection_DoubelSpin, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
-    {"calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin", calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
+    {"calcFullBandsAndVecs_OVLCorrection", calcFullBandsAndVecs_OVLCorrection, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
+    //{"calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin", calcFullBandsAndVecsInMemory_OVLCorrection_DoubelSpin, METH_VARARGS, "calc. the band energy and eigenvectors via solving the eigen eq. with overlap corrections, using phase factor"},
     {"calcFullBandsAndVecsInMemory_OVLCorrection_FFT",calcFullBandsAndVecsInMemory_OVLCorrection_FFT,METH_VARARGS,"compute eigen-values and vectors by solving generalized eigen-eqs. in reciprocal with FFTW"},
-    {"calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT", calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT, METH_VARARGS, "compute eigen-values, vectors, energy matrix and overlap matrix in reciprocal"},
+    //{"calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT", calcFullBandsAndVecsInMemory_OVLCorrection_mixFFT, METH_VARARGS, "compute eigen-values, vectors, energy matrix and overlap matrix in reciprocal"},
     {NULL, NULL, 0, NULL} // neccessary to tell python compiler stop here
 };
 
