@@ -555,7 +555,6 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
                 atom["orbital index"][ishell]+=shell
     return atom_orb_info
 
-
 def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[]):
     '''
     A simple solution to produce the orbital index for each atom based on the projections
