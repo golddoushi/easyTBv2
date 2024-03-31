@@ -477,12 +477,42 @@ def semiCirle(p1:float,p2:float,pathPoints:np.ndarray):
     thetaPath=(pathPoints+1)/2*np.pi
     return r*np.exp(1j*thetaPath)+o, r*1j*np.exp(1j*thetaPath)
 
-def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False,getLList=False):
+def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
     '''
     Produce the structured atomic orb. ids based on the projections given by Wannier90-style strings
-    Useful when i need to construct the atomicOrbList for many interfaces such as velocity calcs.
-    This is better than read atomic orbs. from output files of Wannier90, since we may not have these files.
     NOTE: only standard atomic orb s, p, d, f are supported by now.
+    
+    Parameters:
+    -----------
+    filePathOfPOSCAR : str
+      The position of POSCAR
+    projections : dictionary
+      The atomic orbitals of each element. Key name corresponds to the element, item corresponds to the
+      sequence of atomic orbitals, e.g.,
+      projections={
+          "Fe":("s","s","p","p","d","d"),
+          "Cl":(0,0,1,1,2,3),
+      }
+      in which 0 is "s", 1 is "p", 2 is "d", 3 is "d" and 4 is "f". By now, only these 4 kinds are supported.
+    ispin : int, 1|2
+      The number of spin tunnels. For ispin=1, generate orbital indexes of only one spin tunnels. For ispin=2, 
+      generate double spin tunnels. Set ispin=2 if one needs whole orbital indexes for both spin tunnels, e.g.,
+      spinor Hams., spin-polarized Hams.
+    
+    Returns:
+    --------
+    atom_orb_info : list
+       contains the information of atomic orbitals for each atom.
+       atom_orb_info[iatom] gives the information of iatom, keys include:
+
+       'label' : str
+       - The element label of the atom
+
+       'L' : list
+       - The L-number of each shell in the atom
+
+       'orbital index' : list
+       - the global orbital indexes of the atomic orbitals
     '''
     # 1. obtain information of composite
     with open(filePathOfPOSCAR,'r') as fin:
@@ -491,76 +521,72 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1,soc=False,getL
     ele_num_list=[int(x) for x in data[6].split()]
     #print(ele_name_list)
     #print(ele_num_list)
-    atom_index_dic={}  # index of each atom
-    cnt=0
+    label_to_L_dic={'s':0,'p':1,'d':2,'f':3}
+    L_to_label_dic={0:'s',1:'p',2:'d',3:'f'}
+    atom_orb_info=[] # atomic information of each atom
+    iorb=0           # global orbital index
     for name, num in zip(ele_name_list,ele_num_list):
-        sub_list=[]
-        for i in range(num):
-            sub_list.append(cnt)
-            cnt+=1
-        atom_index_dic[name]={"atom id":sub_list,"s":0,"p":0,"d":0,"f":0}
-    #print(atom_index_dic)
-    #exit()
-    # 2. analyz the strings in projections, add them into dictionary
-    label_to_L_dic={
-        's':0,
-        'p':1,
-        'd':2,
-        'f':3}
-    for projection in projections:
-        ele, orbs = [x.strip() for x in projection.split(':')]
-        for orb in [x.strip() for x in orbs.split(";")]:
-            if orb in label_to_L_dic.keys():
-                atom_index_dic[ele][orb] += 1
-            else:
-                print("Error, not supported orb. type: %s, only s, p, d, f are supported by now"%orb)
-                exit()    
-    print(atom_index_dic)
-    # 3. now let's construct the atomicOrbList
-    checking_label_order=['s','p','d','f']
-    all_atoms_orb_list=[]  # all_atoms_orb_list[iatom][ishell][iorbital in shell] = the global index of orbital
-    all_atoms_L_list=[]    # all_atoms_L_list[iatom][ishell] = the L number of shell
-    orb_id=0
-    for ele in ele_name_list:
-        for iatom in atom_index_dic[ele]['atom id']:
-            atom_orb_list=[]
-            atom_L_list=[]
-            for label in checking_label_order: # checking all L, in order of s p d f
-                for ishell in range(atom_index_dic[ele][label]):
-                    atom_L_list.append(label_to_L_dic[label])
+        for iatom in range(num):
+            atom_orb={"label":name,"L":[],"orbital index":[]}
+            if name in projections:
+                for orb in projections[name]:
+                    if orb in label_to_L_dic: 
+                        L=label_to_L_dic[orb]
+                    elif orb in L_to_label_dic: 
+                        L=orb
+                    else:
+                        print(f"Error: get {L=}. By now, only support s, p, d, f orbitals, or L = 0|1|2|3")
+                        exit()
+                    atom_orb["L"].append(L)
                     shell=[]
-                    for m in range(2*label_to_L_dic[label]+1):
-                        shell.append(orb_id)
-                        orb_id+=1
-                    atom_orb_list.append(shell)
-            all_atoms_orb_list.append(atom_orb_list)
-            all_atoms_L_list.append(atom_L_list)
+                    for m in range(2*L+1):
+                        shell.append(iorb)
+                        iorb+=1
+                    atom_orb["orbital index"].append(shell)
+            atom_orb_info.append(atom_orb)
     
-    # for double spin tunnels, or spinor 
-    if ispin==2 or soc:
-        for ele in ele_name_list:
-            for iatom in atom_index_dic[ele]['atom id']:
-                all_atoms_L_list[iatom]*=2
-                for shell in all_atoms_orb_list[iatom]:
-                    shellSize=len(shell)
-                    for m in range(shellSize):
-                        shell.append(orb_id)
-                        orb_id+=1
-    if getLList:
-        return all_atoms_orb_list, all_atoms_L_list
-    return all_atoms_orb_list
+    if ispin==2:
+        for atom in atom_orb_info:
+            for ishell, L in enumerate(atom["L"]):
+                shell=[]
+                for m in range(2*L+1):
+                    shell.append(iorb)
+                    iorb+=1
+                atom["orbital index"][ishell]+=shell
+    return atom_orb_info
+
 
 def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[]):
-    structured_orb_list=obtainProjections(filePathOfPOSCAR,projections,ispin=1,soc=False)
-    plain_orb_list=[]
-    for atom in structured_orb_list:
-        atom_orb=[]
-        for L in atom:
-            atom_orb+=L
-        plain_orb_list.append(atom_orb)
-    return plain_orb_list
+    '''
+    A simple solution to produce the orbital index for each atom based on the projections
+    NOTE: only standard atomic orb s, p, d, f are supported by now. And only one spin tunnel is generated
     
-
+    Parameters:
+    -----------
+    filePathOfPOSCAR : str
+      The position of POSCAR
+    projections : dictionary
+      The atomic orbitals of each element. Key name corresponds to the element, item corresponds to the
+      sequence of atomic orbitals, e.g.,
+      projections={
+          "Fe":("s","s","p","p","d","d"),
+          "Cl":(0,0,1,1,2,3),
+      }
+      in which 0 is "s", 1 is "p", 2 is "d", 3 is "d" and 4 is "f". By now, only these 4 kinds are supported.
+    
+    Returns:
+    --------
+    atom_orb_index_list : list
+       atom_orb_index_list[iatom] gives the global orbital indexes relevant the the iatom
+    '''
+    atom_orb_info=obtainProjections(filePathOfPOSCAR,projections,ispin=1)
+    atom_orb_index_list=[]
+    for atom in atom_orb_info:
+        atomOrb=[]
+        for shell in atom['orbital index']: atomOrb += shell
+        atom_orb_index_list.append(atomOrb)
+    return atom_orb_index_list
+    
 def PauliBlock(p_full:np.ndarray):
     shape=p_full.shape
     assert len(shape)==2, 'Only 2-rank matrix can be decomposed into Pauli Blocks'
@@ -588,3 +614,27 @@ def PauliBlockSigmaNorm(p_full:np.ndarray):
     evec = np.array((ex, ey, ez))
     evec = evec / np.linalg.norm(evec)
     return px * evec[0] + py * evec[1] + pz * evec[2]
+
+def print_matrix(mat,rowIndex,colIndex):
+    '''
+    Print a matrix in a more visualizable mode
+    
+    Parameters:
+    -----------
+    mat : array-like
+      The matrix to be printed
+    rowIndex : list|tuple|array
+      The indexes of printed rows
+    colIndex : list|tuple|array
+      The indexes of printed cols
+    '''
+    for irow in rowIndex:
+        print("|",end='')
+        for icol in colIndex: 
+            for ele in (mat[irow,icol].real, mat[irow,icol].imag):
+                if abs(ele)>1e-6:
+                    print(f"{ele:8.1E}",end='')
+                else:
+                    print("        ",end='')
+            print('I ',end='')
+        print("|")
