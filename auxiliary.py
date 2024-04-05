@@ -484,9 +484,9 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
     
     Parameters:
     -----------
-    filePathOfPOSCAR : str
+    - filePathOfPOSCAR : str
       The position of POSCAR
-    projections : dictionary
+    - projections : dictionary
       The atomic orbitals of each element. Key name corresponds to the element, item corresponds to the
       sequence of atomic orbitals, e.g.,
       projections={
@@ -494,25 +494,25 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
           "Cl":(0,0,1,1,2,3),
       }
       in which 0 is "s", 1 is "p", 2 is "d", 3 is "d" and 4 is "f". By now, only these 4 kinds are supported.
-    ispin : int, 1|2
+    - ispin : int, 1|2
       The number of spin tunnels. For ispin=1, generate orbital indexes of only one spin tunnels. For ispin=2, 
       generate double spin tunnels. Set ispin=2 if one needs whole orbital indexes for both spin tunnels, e.g.,
       spinor Hams., spin-polarized Hams.
     
     Returns:
     --------
-    atom_orb_info : list
+    - atom_orb_info : list
        contains the information of atomic orbitals for each atom.
        atom_orb_info[iatom] gives the information of iatom, keys include:
 
        'label' : str
-       - The element label of the atom
+       The element label of the atom
 
        'L' : list
-       - The L-number of each shell in the atom
+       The L-number of each shell in the atom
 
        'orbital index' : list
-       - the global orbital indexes of the atomic orbitals
+       the global orbital indexes of the atomic orbitals
     '''
     # 1. obtain information of composite
     with open(filePathOfPOSCAR,'r') as fin:
@@ -555,7 +555,7 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
                 atom["orbital index"][ishell]+=shell
     return atom_orb_info
 
-def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[]):
+def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[],ispin=1):
     '''
     A simple solution to produce the orbital index for each atom based on the projections
     NOTE: only standard atomic orb s, p, d, f are supported by now. And only one spin tunnel is generated
@@ -578,7 +578,7 @@ def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[]):
     atom_orb_index_list : list
        atom_orb_index_list[iatom] gives the global orbital indexes relevant the the iatom
     '''
-    atom_orb_info=obtainProjections(filePathOfPOSCAR,projections,ispin=1)
+    atom_orb_info=obtainProjections(filePathOfPOSCAR,projections,ispin=ispin)
     atom_orb_index_list=[]
     for atom in atom_orb_info:
         atomOrb=[]
@@ -614,7 +614,7 @@ def PauliBlockSigmaNorm(p_full:np.ndarray):
     evec = evec / np.linalg.norm(evec)
     return px * evec[0] + py * evec[1] + pz * evec[2]
 
-def print_matrix(mat,rowIndex,colIndex):
+def print_matrix(mat,rowIndex,colIndex,thr=1e-6):
     '''
     Print a matrix in a more visualizable mode
     
@@ -631,7 +631,7 @@ def print_matrix(mat,rowIndex,colIndex):
         print("|",end='')
         for icol in colIndex: 
             for ele in (mat[irow,icol].real, mat[irow,icol].imag):
-                if abs(ele)>1e-6:
+                if abs(ele)>thr:
                     print(f"{ele:8.1E}",end='')
                 else:
                     print("        ",end='')
