@@ -3,7 +3,6 @@ from scipy.sparse import coo_matrix
 from scipy import integrate
 import scipy.sparse.linalg as linalg
 import numpy as np
-np.set_printoptions(precision=6,suppress=True)
 import time
 import posReader as pR
 import paramReader

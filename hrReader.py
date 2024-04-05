@@ -1071,7 +1071,7 @@ class Hr:
         showElapsedTime(extraInfo="FFT finished")
         print("checking the eigenvalues of general eigen-eqs.")
         overlapEigValues, Wk =np.linalg.eigh(OverlapMatrixInK)
-        assert overlapEigValues.min() > 1e-6, f"eigen-value of overlap matrix is too small or negative {overlapEigValues.min()}"
+        assert overlapEigValues.min() > 1e-6, f"eigen-value of overlap matrix is too small or negative {overlapEigValues.min()=}"
         # overlapping the energy matrix and to solve the general eigen-eqs.
         WkLam=Wk/(np.sqrt(overlapEigValues).reshape((nR1,nR2,nR3,1,norb)))
         EnergyMatrixInK_tilde=WkLam.conj().transpose((0,1,2,4,3)) @ EnergyMatrixInK @ WkLam
