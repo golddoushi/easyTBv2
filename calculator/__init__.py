@@ -41,6 +41,8 @@ class Energy(Calculator):
         '''
         Solve the eigen-eqs. to obtain eigen-vals. and vecs.
 
+        Usually the second father of all calculators
+
         Indexing:
         self.energies[ik1, ik2, ik3, ieig] gives eigen-vals.
 
@@ -48,17 +50,99 @@ class Energy(Calculator):
         '''
         super().__init__()
         self.kgrid=kgrid
+        self.model=model
 
         showElapsedTime(offset=True)
-        self.ham_R_intepolated=np.zeros(self.kgrid+(model.norbs,model.norbs),dtype=complex)
-        for dR in model.dRList:
-            self.ham_R_intepolated[dR[0],dR[1],dR[2]]=model.ham_R[dR[0],dR[1],dR[2]]
+        
+        if model.overlap:
+            self.solveGeneralEigenEquation()
+        else:
+            self.solveEigenEquation()
+
+    def solveGeneralEigenEquation(self):
+        '''
+        Solve the general eig.-eqs. 
+
+        H \dot U = O \dot U \dot \Gamma
+        '''
+        energy_K=np.fft.fftn(self.model.energy_R,axes=(0,1,2,))
+        energy_K = (energy_K + energy_K.transpose((0,1,2,4,3)).conj())/2
+        O_K=np.fft.fftn(self.model.overlap_R,axes=(0,1,2,))
+        O_K = (O_K + O_K.transpose((0,1,2,4,3)).conj())/2
+        
+        energy_R = np.fft.ifftn(energy_K,axes=(0,1,2,))
+        O_R = np.fft.ifftn(O_K,axes=(0,1,2,))
+        self.model.setEnergyR(energy_R)
+        self.model.setOR(O_R)
+        showElapsedTime(extraInfo=f"The hemit condition is imposed")
+
+        '''
+        # 第一种方案，在能量矩阵的（小）格子上设置哈密顿系数矩阵
+        O_K_inv=np.linalg.inv(O_K)
+        ham_K = O_K_inv @ energy_K @ O_K_inv
+        ham_R = np.fft.ifftn(ham_K,axes=(0,1,2,))
+        self.model.setHamR(ham_R)
+        '''
+
+        self.energy_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+        self.O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+        for dR in self.model.dRList:
+            self.energy_R_intepolated[dR[0],dR[1],dR[2]]=self.model.energy_R[dR[0],dR[1],dR[2]]
+            self.O_R_intepolated[dR[0],dR[1],dR[2]]=self.model.overlap_R[dR[0],dR[1],dR[2]]
+        self.energy_K=np.fft.fftn(self.energy_R_intepolated,axes=(0,1,2,))
+        self.O_K=np.fft.fftn(self.O_R_intepolated,axes=(0,1,2,))
+        showElapsedTime(extraInfo=f"FFT energy_R to energy_K and O_R to O_K on {self.kgrid=} finished")
+
+        overlapEigValues, Wk =np.linalg.eigh(self.O_K)
+        assert overlapEigValues.min() > 1e-6, f"eigen-value of overlap matrix is too small or negative {overlapEigValues.min()=}"
+        print(f"{overlapEigValues.min()=}")
+
+        WkLam=Wk/np.sqrt(overlapEigValues[...,None,:])
+        EnergyMatrixInK_tilde=WkLam.conj().transpose((0,1,2,4,3)) @ self.energy_K @ WkLam
+        self.energies, vecsBeforeOverlap = np.linalg.eigh(EnergyMatrixInK_tilde)
+        self.vectors = WkLam @ vecsBeforeOverlap
+        self.vectors_inv = np.linalg.inv(self.vectors)
+        showElapsedTime(extraInfo=f"general (Energy gauge) eig.-eqs. solved with {self.energies.min()=} {self.energies.max()=}")
+
+        self.O_K_inv=np.linalg.inv(self.O_K)
+        showElapsedTime(extraInfo=f"O_k^-1 finished")
+
+        # 第二种方案，在插值后的（大得多的）格子上设置哈密顿系数矩阵
+        ham_K = self.O_K_inv @ self.energy_K @ self.O_K_inv
+        ham_R = np.fft.ifftn(ham_K,axes=(0,1,2,))
+        self.model.setHamR(ham_R)
+        R1Axis=np.arange(self.kgrid[0])-self.kgrid[0]//2
+        R2Axis=np.arange(self.kgrid[1])-self.kgrid[1]//2
+        R3Axis=np.arange(self.kgrid[2])-self.kgrid[2]//2
+        R1Grid,R2Grid,R3Grid=np.meshgrid(R1Axis,R2Axis,R3Axis)
+        dRList=np.array([R1Grid.reshape(-1),R2Grid.reshape(-1),R3Grid.reshape(-1)]).T
+        self.model.setRList(np.array(dRList))
+        showElapsedTime(extraInfo=f"Lattice Ham. finished")
+
+    def solveEigenEquation(self):
+        '''
+        Solve the eig.-eqs. 
+
+        H \dot U = U \dot \Gamma
+        '''
+        self.ham_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+        for dR in self.model.dRList:
+            self.ham_R_intepolated[dR[0],dR[1],dR[2]]=self.model.ham_R[dR[0],dR[1],dR[2]]
         self.ham_K=np.fft.fftn(self.ham_R_intepolated,axes=(0,1,2,))
         showElapsedTime(extraInfo=f"FFT ham_R to ham_K on {self.kgrid=} finished")
         self.energies, self.vectors = np.linalg.eigh(self.ham_K)
         showElapsedTime(extraInfo=f"eig.-eqs. solved")
     
     def calcDeltaEInverse(self):
+        '''
+        Calc. the inversed energy difference matrix, the value at degenerated point is set to zero.
+
+        Indexing: 
+        
+        deltaE[ik1, ik2, ik3, ieig, jeig] = E_{ki} - E_{kj}
+
+        deltaEInverse[ik1, ik2, ik3, ieig, jeig] = 1/(E_{ki} - E_{kj} - 1j*eta)
+        '''
         self.deltaE = self.energies[:,:,:,:,None] - self.energies[:,:,:,None,:]
         self.deltaEInverse=1./(self.deltaE - 1j*self.eta)
         self.deltaEInverse[abs(self.deltaE)<self.degen]=0
@@ -85,9 +169,25 @@ class Velocity(Energy):
             self.RHam_R_intepolated[dR[0],dR[1],dR[2]]=model.RHam_R[dR[0],dR[1],dR[2]]
         self.RHam_K=-1j*np.fft.fftn(self.RHam_R_intepolated,axes=(0,1,2,))
         showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K finished")
-        vectors=self.vectors[:,:,:,None,:,:]
-        self.velocity_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.RHam_K @ vectors
+        if model.overlap:
+            vectors_inv=self.vectors_inv[:,:,:,None,:,:]
+            self.velocity_K=vectors_inv @ self.RHam_K @ vectors_inv.conj().transpose((0,1,2,3,5,4))
+        else:
+            vectors=self.vectors[:,:,:,None,:,:]
+            self.velocity_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.RHam_K @ vectors
         showElapsedTime(extraInfo=f"velocity matrix finished")
+
+        #print("Hk in AO gauge")
+        #print_matrix(self.ham_K[10,0,0],(0,1,2,3,),(0,1,2,3,))
+        #print("Uk in AO gauge")
+        #print_matrix(self.vectors[10,0,0],(0,1,2,3,),(0,1,2,3,))
+        #print("Uk^+ @ Hk @ Uk")
+        #print_matrix(self.vectors[10,0,0].conj().T@self.ham_K[10,0,0]@self.vectors[10,0,0],(0,1,2,3,),(0,1,2,3,))
+        #print("Vk in AO gauge")
+        #print_matrix(self.RHam_K[10,0,0,0],(0,1,2,3,),(0,1,2,3,))
+        #print("Vk in eig. gauge")
+        #print_matrix(self.velocity_K[10,0,0,0],(0,1,2,3,),(0,1,2,3,))
+        #exit()
 
 class BerryCurv(Velocity):
     
@@ -128,14 +228,36 @@ class SpinVelocity(Velocity):
         '''
         super().__init__(model, kgrid=kgrid)
         model.getSpinMatrice()
-
-        self.SRHam_K=np.zeros(self.kgrid+(3,4,model.norbs,model.norbs),dtype=complex)
-        for igamma in range(4):
-            s_op=model.spin[igamma][None,None,None,None,:,:]
-            self.SRHam_K[...,igamma,:,:] = (s_op @ self.RHam_K + self.RHam_K @ s_op)/2
-
-        vectors=self.vectors[:,:,:,None,None,:,:]
-        self.spinVelocity_K=vectors.conj().transpose((0,1,2,3,4,6,5)) @ self.SRHam_K @ vectors
+        showElapsedTime(extraInfo=f"spin matrice constructed")
+        if model.overlap:
+            vectors_inv=self.vectors_inv[:,:,:,None,:,:]
+            spin_eig=vectors_inv @ model.spin[None,None,None,:,:,:] @ vectors_inv.conj().transpose((0,1,2,3,5,4))
+        else:
+            vectors=self.vectors[:,:,:,None,:,:]
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ vectors
+        showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+        spin=spin_eig[...,None,:,:,:]
+        velocity=self.velocity_K[...,None,:,:]
+        self.spinVelocity_K = (spin @ velocity + velocity @ spin)/2
+        #self.SRHam_K=np.zeros(self.kgrid+(3,4,model.norbs,model.norbs),dtype=complex)
+        #for igamma in range(4):
+        #    s_op=model.spin[igamma][None,None,None,None,:,:]
+        #    if model.overlap:
+        #        pass
+        #        #self.SRHam_K[...,igamma,:,:] = (s_op @ self.O_K[...,None,:,:] @ self.RHam_K + self.RHam_K @ self.O_K[...,None,:,:] @ s_op)/2
+        #    else:
+        #        vectors=self.vectors[:,:,:,None,None,:,:]
+        #        s_op_eig=vectors.conj().transpose((0,1,2,3,4,6,5)) @ s_op @ vectors
+        #        self.SRHam_K[...,igamma,:,:] = (s_op @ self.RHam_K + self.RHam_K @ s_op)/2
+        #    showElapsedTime(extraInfo=f"spin velociy {igamma=} in AO basis constructed")
+        
+        #if model.overlap:
+        #    vectors_inv=self.vectors_inv[:,:,:,None,None,:,:]
+        #    self.spinVelocity_K=vectors_inv @ self.SRHam_K @ vectors_inv.conj().transpose((0,1,2,3,4,6,5))
+        #else:
+            #vectors=self.vectors[:,:,:,None,None,:,:]
+            #self.spinVelocity_K=vectors.conj().transpose((0,1,2,3,4,6,5)) @ self.SRHam_K @ vectors
+        #    pass
         showElapsedTime(extraInfo=f"spin velocity finished")
 
 class SpinBerryCurv(SpinVelocity):
