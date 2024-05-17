@@ -13,6 +13,7 @@ import shutil
 import time
 import paramReader
 from math import acos
+import spglib as spg
 global time0
 time0=0
 
@@ -313,13 +314,12 @@ def rm(path,quiet=False):
     except OSError as err:
         if not quiet: print(err, '--> remove file %s failed, skip'%path)
 
-def showElapsedTime(offset=False,extraInfo=''):
+def showElapsedTime(offset=True,extraInfo=''):
     global time0
+    if extraInfo!='':
+        print('%s in %.3fms'%(extraInfo,(time.time()-time0)*1000))
     if offset:
         time0=time.time()
-        return
-    print('%s in %.3fms'%(extraInfo,(time.time()-time0)*1000))
-    return
         
 
 def renormVec(vec:np.ndarray,cvg=paramReader.SYMPREC) -> np.ndarray:
@@ -637,3 +637,33 @@ def print_matrix(mat,rowIndex,colIndex,thr=1e-6):
                     print("        ",end='')
             print('I ',end='')
         print("|")
+
+def iterate3dpm(size):
+    return (
+        np.array([i, j, k]) for i in range(-size[0], size[0] + 1) for j in range(-size[1], size[1] + 1)
+        for k in range(-size[2], size[2] + 1))
+
+def fourier_q_to_R(AA_q, mp_grid, kpt_mp_grid, iRvec, ndegen, ):
+    mp_grid = tuple(mp_grid)
+    shapeA = AA_q.shape[1:]  # remember the shapes after q
+    AA_q_mp = np.zeros(tuple(mp_grid) + shapeA, dtype=complex)
+    for i, k in enumerate(kpt_mp_grid):
+        AA_q_mp[k] = AA_q[i]
+    AA_q_mp = np.fft.fftn(AA_q_mp, axes=(0, 1, 2))
+    AA_R = np.array([AA_q_mp[tuple(iR % mp_grid)] / nd for iR, nd in zip(iRvec, ndegen)]) / np.prod(mp_grid)
+    return AA_R
+
+def getWholeSymmetryOperator(posinfo:dict,DNA=[],symprec=1e-4):
+    interception = int(np.max(abs(np.array(DNA))))*4+3 if len(DNA)>0 else 10
+    typeNumbers=[]
+    labels=[]
+    for inion, nion in enumerate(posinfo['nions']):
+        typeNumbers.extend([(inion*interception)]*nion)
+        labels.extend([posinfo['label list'][inion]]*nion)
+    if len(DNA)>0:
+        for iorb in range(len(DNA)):
+            typeNumbers[iorb]+=int(DNA[iorb]*2)
+    
+    sym=spg.get_symmetry_dataset((posinfo['lattice'],posinfo['pos ions (frac.)'],typeNumbers),symprec=symprec)
+    return sym
+    
