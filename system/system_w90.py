@@ -198,6 +198,8 @@ class System_w90(System):
         super().getSpinMatrice()
         return
     
+    def get_mp_grid(self): return self.mp_grid
+
     def wigner_seitz(self, mp_grid):
         ws_search_size = np.ones(3,dtype=int)
         dist_dim = np.prod((ws_search_size + 1) * 2 + 1)

@@ -11,11 +11,11 @@ import numpy as np
 import os
 import shutil
 import time
-import paramReader
 from math import acos
 import spglib as spg
 global time0
 time0=0
+SYMPREC=1e-4
 
 def getMSD(input,overavg=True,bestChoice=True,verbose=False):
     '''
@@ -317,12 +317,11 @@ def rm(path,quiet=False):
 def showElapsedTime(offset=True,extraInfo=''):
     global time0
     if extraInfo!='':
-        print('%s in %.3fms'%(extraInfo,(time.time()-time0)*1000))
+        print('%s in %.3fms'%(extraInfo,(time.time()-time0)*1000),flush=True)
     if offset:
         time0=time.time()
         
-
-def renormVec(vec:np.ndarray,cvg=paramReader.SYMPREC) -> np.ndarray:
+def renormVec(vec:np.ndarray,cvg=SYMPREC) -> np.ndarray:
     '''shift the vector to wrap boders'''
     rVec=[]
     for x in vec:
@@ -344,7 +343,7 @@ def renormVec(vec:np.ndarray,cvg=paramReader.SYMPREC) -> np.ndarray:
         rVec.append(x)
     return np.array(rVec)
 
-def integeralizeVec(vec:np.ndarray, cvg=paramReader.SYMPREC) -> np.ndarray:
+def integeralizeVec(vec:np.ndarray, cvg=SYMPREC) -> np.ndarray:
     '''enforce the ele. of vec to be integer'''
     inteVec=[]
     for x in vec:
@@ -653,7 +652,7 @@ def fourier_q_to_R(AA_q, mp_grid, kpt_mp_grid, iRvec, ndegen, ):
     AA_R = np.array([AA_q_mp[tuple(iR % mp_grid)] / nd for iR, nd in zip(iRvec, ndegen)]) / np.prod(mp_grid)
     return AA_R
 
-def getWholeSymmetryOperator(posinfo:dict,DNA=[],symprec=1e-4):
+def getWholeSymmetryOperator(posinfo:dict,DNA=[],symprec=SYMPREC):
     interception = int(np.max(abs(np.array(DNA))))*4+3 if len(DNA)>0 else 10
     typeNumbers=[]
     labels=[]

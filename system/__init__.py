@@ -1,27 +1,12 @@
 import numpy as np
 from auxiliary import showElapsedTime, pseudoRotation, print_matrix, getWholeSymmetryOperator
-import paramReader
+from auxiliary import SYMPREC
 from math import acos, sin, sqrt, cos
 
 class System:
     '''
     The top level of a system, which is extended by its child classes e.g., System_w90, System_lcao
     '''
-    default_parameters = {
-        'mainDir'      : "./mcalc/Pt/",
-        'seedname'     : "wannier90",
-        'POSCAR'       : "POSCAR",
-        'KPOINTS'      : "KPOINTS",
-        'ham_R'        : None,
-        'overlap_R'    : None,
-        'mp_grid'      : (1,1,1),    # the BZ mesh
-        'ham_K'        : None,
-        'overlap_K'    : None,
-        'overlap'      : False,      # if True then the basis is non-orthorgonal
-        'energy'       : True,       # compute  the eigen-energies
-        'velocity'     : False,      # contains the velocity matrix
-        'spin velocity': False,      # contains the spin velocity matrix
-    }
     def __init__(self) -> None:
         # number of basis in unit cell
         self.norbs:int=-1  
@@ -157,12 +142,20 @@ class System:
         '''
         def checkRedundancy(checkBond,allSymmerizedBondAndOverlap):
             for symmerizedBondSet in allSymmerizedBondAndOverlap:
-                if abs(symmerizedBondSet['bond length'] - checkBond['bond length']) > 0.1*paramReader.SYMPREC: continue
+                if abs(symmerizedBondSet['bond length'] - checkBond['bond length']) > 0.1*SYMPREC: continue
                 for bond in symmerizedBondSet['bond set']:
                     if bond['bond info'] == checkBond['bond info']:
                         return True
             return False
-        def vecAround(vec): return np.int32(np.around(vec))
+        def vecAround(vec): 
+            newVec=[]
+            for x in vec:
+                x_int=int(np.around(x))
+                if abs(x-x_int)<SYMPREC:
+                    newVec.append(x_int)
+                else:
+                    newVec.append(x)
+            return np.array(newVec)
         def readSpinWFCSymOp(symRotateList):
             spinRotateList=[]
             L=self.lattice
@@ -179,7 +172,7 @@ class System:
 
                 beta=acos(z[2])
                 sin_beta=sin(beta)
-                if sin_beta>paramReader.SYMPREC:
+                if sin_beta>SYMPREC:
                     cos_alpha=z[0]/sin_beta
                     sin_alpha=z[1]/sin_beta
                     alpha=acos(cos_alpha) if sin_alpha>=0 else acos(-cos_alpha)+np.pi
@@ -215,18 +208,19 @@ class System:
             #print(sym)
             #exit()
             for rotate, translate in zip(rotation,translation):
-                #print(rotate,translate)
+                #print(rotate)
+                #print(translate)
                 symRotateList.append(rotate)
                 symTranslateList.append(translate)
                 subMap=[]
                 for iion, ion_coor in enumerate(self.posinfo['pos ions (frac.)']):
                     ion_coor_trans=ion_coor.dot(rotate.T)+translate
-                    #print('transformed',ion_coor_trans)
+                    #print(f'atom{iion} ({ion_coor[0]:6.3f}{ion_coor[1]:6.3f}{ion_coor[2]:6.3f}) transformed to ({ion_coor_trans[0]:6.3f}{ion_coor_trans[1]:6.3f}{ion_coor_trans[2]:6.3f})')
                     for iion_origin, ion_coor_origin in enumerate(self.posinfo['pos ions (frac.)']):
-                        #print('origin',ion_coor_origin)
                         d_coor=vecAround(ion_coor_trans-ion_coor_origin)%1#(ion_coor_trans-ion_coor_origin)%1
                         d_coor_len=sum(abs(d_coor))
-                        if d_coor_len<paramReader.SYMPREC:# or abs(1-d_coor_len)<paramReader.SYMPREC or abs(2-d_coor_len)<paramReader.SYMPREC or abs(3-d_coor_len)<paramReader.SYMPREC:
+                        #print(f'atom{iion_origin} at ({ion_coor_origin[0]:6.3f}{ion_coor_origin[1]:6.3f}{ion_coor_origin[2]:6.3f}) diff=({d_coor[0]:6.3f}{d_coor[1]:6.3f}{d_coor[2]:6.3f})')
+                        if d_coor_len<SYMPREC:
                             #print('%d -> %d'%(iion,iion_origin))
                             #print(d_coor)
                             subMap.append(iion_origin)
@@ -244,7 +238,7 @@ class System:
             sz=np.array([[1,0],[0,-1]],dtype=complex)
             magmom_list=atomicMagMomList
             if spinor: # find proper sub-group consist with magnetism and time reversal symmetry
-                if abs(sum(sum(spin_basis.dot(spin_basis.conjugate().T)-np.eye(2)))-2)<paramReader.SYMPREC:
+                if abs(sum(sum(spin_basis.dot(spin_basis.conjugate().T)-np.eye(2)))-2)<SYMPREC:
                     Us=spin_basis
                 else:
                     print("Warning: spin_basis is not set or not set correctly. So, I have to calc. this via saxis.")
@@ -262,16 +256,16 @@ class System:
                         magmom_rotated_list.append(pseudoRotation(rotate_r,self.lattice,m))
                     #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
                     diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(self.posinfo['nions']))]
-                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
+                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < SYMPREC:
                         print('crystal sym. op. preserved:')
                         print(rotate_r)
                         print(translate)
                         #print(rotate_s)
                         #print(Usy)
-                        print(Us.conjugate().T.dot(rotate_s).dot(Us))
+                        print_matrix(Us.conjugate().T @ rotate_s @ Us, rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
-                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
                                     *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
@@ -279,16 +273,16 @@ class System:
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
                         new_symIonMap.append(ionMap)
-                        new_spinRotateList.append(Us.conjugate().T.dot(rotate_s).dot(Us))
+                        new_spinRotateList.append(Us.conjugate().T @ rotate_s @ Us)
                         new_timeReversalList.append(False)
                     else:
                         print('crystal sym. op. broken due to magnetism')
                         print(rotate_r)
                         print(translate)
-                        print(Us.conjugate().T.dot(rotate_s).dot(Us))
+                        print_matrix(Us.conjugate().T @ rotate_s @ Us, rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
-                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
                                     *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
@@ -301,16 +295,16 @@ class System:
                         magmom_rotated_list.append(-pseudoRotation(rotate_r,self.lattice,m))
                     #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
                     diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(self.posinfo['nions']))]
-                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < paramReader.SYMPREC:
+                    if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < SYMPREC:
                         print('crystal sym. op. + time reversal preserved:')
                         print(rotate_r)
                         print(translate)
                         #print(rotate_s_tr)
                         #print(Usy)
-                        print(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
+                        print_matrix(Us.T.conjugate() @ rotate_s_tr @ Us.conjugate(), rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
-                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
                                     *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
@@ -324,10 +318,10 @@ class System:
                         print('crystal sym. op. + time reversal broken due to magnetism')
                         print(rotate_r)
                         print(translate)
-                        print(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
+                        print_matrix(Us.T.conjugate() @ rotate_s_tr @ Us.conjugate(), rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
-                            if np.dot(magmom_list[idmag],magmom_list[idmag])>paramReader.SYMPREC: 
+                            if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
                                 print("%3d-%3d %6.3f%6.3f%6.3f->%6.3f%6.3f%6.3f?=%6.3f%6.3f%6.3f dmag:%6.3f%6.3f%6.3f"%(
                                     idmag,ionMap[idmag],
                                     *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
@@ -539,15 +533,12 @@ class System:
         #if self.overlap: self.overlapInVecForm=overlapInVecForm_herm
         showElapsedTime(extraInfo="Hermit processing finished")
         
-        print("FFT to obtain Ham.")
-        #ngrid=np.prod(self.bondInVecForm.shape[:3])
-        
         def constructSymmetryBondSet(R0,iatom_source,iatom_target,verbose=False):
             iR0=self.iRvecIndex[R0]
 
-            source_coor=self.posinfo['pos ions (frac.)'][iatom_source] + R0 # coor. of source atom
+            source_coor=self.posinfo['pos ions (frac.)'][iatom_source]  # coor. of source atom
             # calc. the coor. of target atom, according to the bond info
-            target_coor=self.posinfo['pos ions (frac.)'][iatom_target] 
+            target_coor=self.posinfo['pos ions (frac.)'][iatom_target] + R0
             dR_xyz=(target_coor-source_coor)@self.lattice
             dR_xyz_len=np.sqrt(dR_xyz@dR_xyz)
 
@@ -562,10 +553,10 @@ class System:
                 target_coor_trans=rotate@target_coor+translate
                 dR_xyz_rotated=(target_coor_trans-source_coor_trans)@self.lattice
                 dR_xyz_rotated_len=np.sqrt(dR_xyz_rotated@dR_xyz_rotated)
-                assert abs(dR_xyz_rotated_len-dR_xyz_len)<paramReader.SYMPREC, 'sym. op. change bond length'
+                assert abs(dR_xyz_rotated_len-dR_xyz_len)<SYMPREC, 'sym. op. change bond length'
 
-                R_tmp=source_coor_trans-target_coor_trans+self.posinfo['pos ions (frac.)'][iatom_target_trans]-self.posinfo['pos ions (frac.)'][iatom_source_trans]
-                for icomp, x in enumerate(R_tmp):  assert abs(x-np.around(x))<paramReader.SYMPREC, 'dR[%d] is not interger %.6f'%(icomp,x)
+                R_tmp=(target_coor_trans-self.posinfo['pos ions (frac.)'][iatom_target_trans]) - (source_coor_trans - self.posinfo['pos ions (frac.)'][iatom_source_trans])#source_coor_trans-target_coor_trans+self.posinfo['pos ions (frac.)'][iatom_target_trans]-self.posinfo['pos ions (frac.)'][iatom_source_trans]
+                for icomp, x in enumerate(R_tmp):  assert abs(x-np.around(x))<SYMPREC, 'dR[%d] is not interger %.6f'%(icomp,x)
                 R=tuple([int(np.around(x)) for x in R_tmp])
                 if R not in self.iRvecIndex:
                     return {'preserve':False}
@@ -583,6 +574,8 @@ class System:
                         print("sym. op.:")
                         print(rotate)
                         print(translate)
+                        #print("original:")
+                        #print_matrix(bond,rowIndex=print_row,colIndex=print_col)
                         print("back to I hopping:")
                         print_matrix(bond_rotated,rowIndex=print_row,colIndex=print_col)
                     
@@ -637,9 +630,9 @@ class System:
         allSymmerizedBondAndOverlap=[]
         for R0 in self.iRvec:
             for iatom_source in range(self.posinfo['tot ions']):
-                source_coor=self.posinfo['pos ions (frac.)'][iatom_source] + R0 # coor. of source atom
+                source_coor=self.posinfo['pos ions (frac.)'][iatom_source] 
                 for iatom_target in range(self.posinfo['tot ions']):
-                    target_coor=self.posinfo['pos ions (frac.)'][iatom_target] 
+                    target_coor=self.posinfo['pos ions (frac.)'][iatom_target] + R0
                     dR_xyz=(target_coor-source_coor)@self.lattice
                     dR_xyz_len=np.sqrt(dR_xyz@dR_xyz)
                     if checkRedundancy({
