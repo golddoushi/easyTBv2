@@ -3,6 +3,8 @@ from auxiliary import showElapsedTime, pseudoRotation, print_matrix, getWholeSym
 from auxiliary import SYMPREC
 from math import acos, sin, sqrt, cos
 
+from symmetry import Symmetry, Group
+
 class System:
     '''
     The top level of a system, which is extended by its child classes e.g., System_w90, System_lcao
@@ -34,6 +36,8 @@ class System:
         self.spin:np.ndarray
         # lattice matrix
         self.lattice:np.ndarray
+        # reciprocal lattice
+        self.reciLattice:np.ndarray
         # structure infomation
         self.posinfo:dict
         # mapping from atom to orbitals
@@ -98,10 +102,8 @@ class System:
         '''set dR list'''
         self.dRList=dRList
     
-    def symmerizeHamAndOverlap(self,cutoff=1e-9,
-                        spinor=False,saxis:np.ndarray=np.array([0,0,-1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
+    def symmerizeHamAndOverlap(self,spinor=False,saxis:np.ndarray=np.array([0,0,-1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
                         symOpSelection:list=[],atomicMagMomList:list=[],format="w90",
-                        maxPrint=0,                    # To print out the local Hams. of inequal bonds in first maxPrint
                         print_row=(0,),print_col=(0,), # To print specialized block of local Hams.
                         ):
         '''
@@ -462,7 +464,16 @@ class System:
             symTimeReversalList=[symTimeReversalList[isym] for isym in symOpSelection]
         atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,format=format)
         #exit()
-        
+        # in now set up, the lattice is column-major and the reci-lat is row-major, which is opposite to VASP exactly
+        # and the R is the rotation with cartesian basis
+        lat,lat_inv=self.lattice.T,np.linalg.inv(self.lattice.T)
+        self.symOpList=[]
+        for rotate, translate, timeReversal in zip (symRotateList,symTranslateList,symTimeReversalList):
+            self.symOpList.append(
+                Symmetry(R=lat@rotate@lat_inv,TR=timeReversal)
+            )
+        self.pointGroup=Group(self.symOpList,real_lattice=self.lattice,recip_lattice=np.linalg.inv(self.lattice.T)*2*np.pi)
+        #exit()
         # construct local sym. Op. for each sym. op.
         localSymOpList, localSymOpInvList=[], [] # localSymOpList[isymOp][iatom] give sym. op. in atomic subspace
         for isymOp in range(len(symRotateList)):

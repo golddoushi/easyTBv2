@@ -7,6 +7,8 @@ from auxiliary import showElapsedTime, print_matrix
 from scipy.constants import elementary_charge, hbar, angstrom
 
 class Calculator():
+    Iodd = False  # inversion gives minus
+    Todd = False  # time reversal gives minus
 
     def __init__(self,verbose=0) -> None:
         '''
@@ -219,6 +221,8 @@ class Velocity(Energy):
         idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
         '''
         super().__init__(model, kgrid, phaseshift, verbose)
+        self.Todd = True
+        self.Iodd = True
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,model.norbs,model.norbs),dtype=complex)
         
         if model.overlap:
@@ -254,6 +258,8 @@ class BerryCurv(Velocity):
         Indexing: BerryCurv[ik1, ik2, ik3, idrection, iband, jband]
         '''
         super().__init__(model, kgrid, phaseshift, verbose)
+        self.Todd = True
+
         self.eta=eta
         self.smr_type=smr_type
         self.degen=degen # update the degeneracy threthold
@@ -270,6 +276,7 @@ class AnormalousHallConductance(BerryCurv):
 
     def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.0001, smr_type="Lorentzian", degen=0.000001, fermiList=[], verbose=0) -> None:
         super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose)
+        self.Todd = True
 
         sigma=np.zeros(len(fermiList))
 
@@ -279,7 +286,7 @@ class AnormalousHallConductance(BerryCurv):
             print(f"{ifermi=:3d}  {len(self.energies[occupy])/np.prod(self.kgrid):8.4f}")
             sigma[ifermi]=np.sum(berryCurv[occupy])
         
-        self.sigma=sigma/np.prod(self.kgrid)#*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
+        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
         if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
 class SpinVelocity(Velocity):
@@ -297,6 +304,7 @@ class SpinVelocity(Velocity):
         igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
         '''
         super().__init__(model, kgrid, phaseshift,verbose)
+        self.Iodd = True
         #model.getSpinMatrice()
         #showElapsedTime(extraInfo=f"spin op. in ao.-basis constructed")
         if model.overlap:

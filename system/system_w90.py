@@ -67,6 +67,7 @@ class System_w90(System):
         self.norbs=chk.num_wann#ham_R.shape[-1]
         self.mp_grid=chk.mp_grid
         self.lattice=chk.real_lattice
+        self.reciLattice=np.linalg.inv(self.lattice)
         self.iRvec, self.iRvecIndex, self.Ndegen = self.wigner_seitz(chk.mp_grid)
         self.nRvec=len(self.iRvec)
 
