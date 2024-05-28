@@ -55,15 +55,17 @@ class Energy(Calculator):
         self.kgrid=tuple(kgrid)
         self.model=model
         self.phase=False
+        self.ibmin=0             # ignore low-lying bands
+        self.ibmax=model.norbs   # ignore high bands
         if type(phaseshift)==np.ndarray: self.phase=True
         if verbose==2: showElapsedTime(offset=True)
         
         if model.overlap:
-            self.solveGeneralEigenEquation()
+            self.solveGeneralEigenEquation(phaseshift)
         else:
             self.solveEigenEquation(phaseshift)
 
-    def solveGeneralEigenEquation(self):
+    def solveGeneralEigenEquation(self,phaseshift):
         '''
         Solve the general eig.-eqs. 
 
@@ -91,6 +93,14 @@ class Energy(Calculator):
                 print(f"Only support ispin=1|2 {self.model.ispin=}")
                 raise ValueError()
 
+        if not self.phase:
+            E_R_AO=self.model.energy_R
+            O_R_AO=self.model.overlap_R
+        else:
+            assert len(phaseshift)==self.model.nRvec, f'{len(phaseshift)=} {self.model.nRvec=}'
+            
+            E_R_AO=self.model.energy_R*phaseshift[:,None,None]
+            O_R_AO=self.model.overlap_R*phaseshift[:,None,None]
         '''
         # imposing heimit
         energy_K=np.fft.fftn(self.model.energy_R,axes=(0,1,2,))
@@ -104,72 +114,30 @@ class Energy(Calculator):
         self.model.setOR(O_R)
         showElapsedTime(extraInfo=f"The hemit condition is imposed")
         #'''
+        
+        self.E_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+        self.O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+        for iR, Rvec in enumerate(self.model.iRvec):
+            self.E_R_intepolated[tuple(Rvec)]=E_R_AO[iR]
+            self.O_R_intepolated[tuple(Rvec)]=O_R_AO[iR]
+        self.E_K_AO=np.fft.ifftn(self.E_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+        self.O_K_AO=np.fft.ifftn(self.O_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+        if self.verbose==2: showElapsedTime(extraInfo=f"FFT energy_R to energy_K and O_R to O_K on {self.kgrid=} finished")
 
-        '''
-        # 第一种方案，在能量矩阵的（小）格子上设置哈密顿系数矩阵
-        O_K=np.fft.fftn(self.model.overlap_R,axes=(0,1,2,))
-        energy_K=np.fft.fftn(self.model.energy_R,axes=(0,1,2,))
-        O_K_inv=np.linalg.inv(O_K)
-        ham_K = O_K_inv @ energy_K @ O_K_inv
-        ham_R = np.fft.ifftn(ham_K,axes=(0,1,2,))
-        self.model.setHamR(ham_R)
-        R1Axis=np.arange(self.model.energy_R.shape[0])-self.model.energy_R.shape[0]//2
-        R2Axis=np.arange(self.model.energy_R.shape[1])-self.model.energy_R.shape[1]//2
-        R3Axis=np.arange(self.model.energy_R.shape[2])-self.model.energy_R.shape[2]//2
-        R1Grid,R2Grid,R3Grid=np.meshgrid(R1Axis,R2Axis,R3Axis)
-        dRList=np.array([R1Grid.reshape(-1),R2Grid.reshape(-1),R3Grid.reshape(-1)]).T
-        #self.model.setRList(dRList)
-        showElapsedTime(extraInfo=f"Ab inito lattice Ham. calculated")
-        #'''
-
-        energy_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-        O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-        for dR in self.model.dRList:
-            energy_R_intepolated[dR[0],dR[1],dR[2]]=self.model.energy_R[dR[0],dR[1],dR[2]]
-            O_R_intepolated[dR[0],dR[1],dR[2]]=self.model.overlap_R[dR[0],dR[1],dR[2]]
-        energy_K=np.fft.fftn(energy_R_intepolated,axes=(0,1,2,))
-        self.O_K=np.fft.fftn(O_R_intepolated,axes=(0,1,2,))
-        showElapsedTime(extraInfo=f"FFT energy_R to energy_K and O_R to O_K on {self.kgrid=} finished")
-
-        overlapEigValues, Wk =solveOverlap(self.O_K)
+        overlapEigValues, Wk =solveOverlap(self.O_K_AO)
         assert overlapEigValues.min() > 1e-6, f"eigen-value of overlap matrix is too small or negative {overlapEigValues.min()=}"
-        print(f"{overlapEigValues.min()=}")
+        if self.verbose==2: print(f"{overlapEigValues.min()=}")
 
         WkLam=Wk/np.sqrt(overlapEigValues[...,None,:])
-        showElapsedTime(extraInfo=f"WkLam")
-        EnergyMatrixInK_tilde=WkLam.conj().transpose((0,1,2,4,3)) @ energy_K @ WkLam
-        showElapsedTime(extraInfo=f"Overlapped energy")
+        if self.verbose==2: showElapsedTime(extraInfo=f"WkLam")
+        EnergyMatrixInK_tilde=WkLam.conj().transpose((0,1,2,4,3)) @ self.E_K_AO @ WkLam
+        if self.verbose==2: showElapsedTime(extraInfo=f"Overlapped energy")
         self.energies, vecsBeforeOverlap = np.linalg.eigh(EnergyMatrixInK_tilde)
-        showElapsedTime(extraInfo=f"eigen-eqs.")
+        if self.verbose==2: showElapsedTime(extraInfo=f"eigen-eqs.")
         self.vectors = WkLam @ vecsBeforeOverlap
-        showElapsedTime(extraInfo=f"overlapping on eig.-vecs.")
-        self.vectors_inv = np.linalg.inv(self.vectors)
-        showElapsedTime(extraInfo=f"general (Energy gauge) eig.-eqs. solved with {self.energies.min()=} {self.energies.max()=}")
-        #print("Eigen-energy at Gamma:")
-        #for ieig, eig in enumerate(self.energies[0,0,0,:]): print(f"{ieig:5d} {eig/27.2113845:15.6f}")
-        #print()
-        #exit()
+        if self.verbose==2: showElapsedTime(extraInfo=f"overlapping on eig.-vecs.")
 
-        '''
-        # 第二种方案，在插值后的（大得多的）格子上设置哈密顿系数矩阵
-        O_K_inv=np.linalg.inv(self.O_K)
-        ham_K = O_K_inv @ energy_K @ O_K_inv
-        ham_R = np.fft.ifftn(ham_K,axes=(0,1,2,))
-        self.model.setHamR(ham_R)
-        R1Axis=np.arange(self.kgrid[0])-self.kgrid[0]//2
-        R2Axis=np.arange(self.kgrid[1])-self.kgrid[1]//2
-        R3Axis=np.arange(self.kgrid[2])-self.kgrid[2]//2
-        R1Grid,R2Grid,R3Grid=np.meshgrid(R1Axis,R2Axis,R3Axis)
-        dRList=np.array([R1Grid.reshape(-1),R2Grid.reshape(-1),R3Grid.reshape(-1)]).T
-        self.model.setRList(np.array(dRList))
-        showElapsedTime(extraInfo=f"Large lattice Ham. calculated")
-        #'''
-
-        '''
-        # 第三种方案，直接用能量矩阵
-        self.model.setHamR(self.model.energy_R)
-        #self.vectors_inv=self.vectors.conj().transpose((0,1,2,4,3))
-        #'''
+        self.getEnergyWindow()
 
     def solveEigenEquation(self,phaseshift):
         '''
@@ -201,12 +169,25 @@ class Energy(Calculator):
 
         deltaEInverse[ik1, ik2, ik3, ieig, jeig] = 1/(E_{ki} - E_{kj} - 1j*eta)
         '''
-        self.deltaE = self.energies[:,:,:,:,None] - self.energies[:,:,:,None,:]
+        self.deltaE = self.energies[:,:,:,self.ibmin:,None] - self.energies[:,:,:,None,self.ibmin:]
         self.deltaEInverse=1./(self.deltaE - 1j*self.eta)
         self.deltaEInverse[abs(self.deltaE)<self.degen]=0
         if self.smr_type == 'Lorentzian':
             return
         raise NotImplementedError()
+    
+    def getEnergyWindow(self,gap=5.0):
+        energy=np.sort(self.energies.flatten()) - self.model.fermi
+        valence_bands=energy[energy<=0]
+        nvb=len(valence_bands)
+        for ilevel in range(nvb-1):
+            dE=valence_bands[nvb-1-ilevel] - valence_bands[nvb-2-ilevel]
+            if dE > gap: break
+        mid_valence=(valence_bands[nvb-1-ilevel] + valence_bands[nvb-2-ilevel])/2
+        self.ibmin=len(self.energies[(0,0,0)][self.energies[(0,0,0)]<mid_valence])
+
+        #print(self.ibmin,mid_valence,energy[0])
+
 
 class Velocity(Energy):
     def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0) -> None:
@@ -223,29 +204,30 @@ class Velocity(Energy):
         super().__init__(model, kgrid, phaseshift, verbose)
         self.Todd = True
         self.Iodd = True
+        
+        RH_R_W=model.RHam_R
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,model.norbs,model.norbs),dtype=complex)
-        
-        if model.overlap:
-            for dR in model.dRList:
-                self.RHam_R_intepolated[dR[0],dR[1],dR[2]]=model.momentum_R[dR[0],dR[1],dR[2]]
-            self.RHam_K=-1j*np.fft.fftn(self.RHam_R_intepolated,axes=(0,1,2,))
-            if verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
-            self.O_K_inv=np.linalg.inv(self.O_K)[...,None,:,:]
-            vectors_inv=self.vectors_inv[...,None,:,:]
-            self.velocity_K=vectors_inv @ (self.O_K_inv@self.RHam_K@self.O_K_inv) @ vectors_inv.conj().transpose((0,1,2,3,5,4))
-        else:
-            if not self.phase:
-                RH_R_W=model.RHam_R
-            else:
-                RH_R_W=model.RHam_R*phaseshift[:,None,None,None]
-            for iR, Rvec in enumerate(model.iRvec):
-                self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
-            self.RHam_K= -1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-            if verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
-            vectors=self.vectors[:,:,:,None,:,:]
-            self.velocity_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.RHam_K @ vectors
-        
+        if self.phase:
+            RH_R_W=RH_R_W*phaseshift[:,None,None,None]
+        for iR, Rvec in enumerate(model.iRvec):
+            self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
+        self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+
+        if verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
+        vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        self.velocity_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.RHam_K @ vectors
         if verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
+
+        if model.overlap:
+            RO_R_W=model.RO_R
+            self.RO_R_intepolated=np.zeros(self.kgrid+(3,model.norbs,model.norbs),dtype=complex)
+            if self.phase:
+                RO_R_W=RO_R_W*phaseshift[:,None,None,None]
+            for iR, Rvec in enumerate(model.iRvec):
+                self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
+            self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+
+            self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
 
 class BerryCurv(Velocity):
     
@@ -266,7 +248,7 @@ class BerryCurv(Velocity):
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
         
-        self.BerryCurv=np.zeros(self.kgrid+(3,model.norbs))
+        self.BerryCurv=np.zeros(self.kgrid+(3,model.norbs-self.ibmin))
         eps=np.arange(3)
         for ialpha in range(3):
             self.BerryCurv[...,ialpha,:]=-2*np.diagonal(self.velocity_K[...,eps[(ialpha+1)%3],:,:] @ (dEInverse2*self.velocity_K[...,eps[(ialpha+2)%3],:,:]),0,-2,-1).imag
@@ -282,7 +264,7 @@ class AnormalousHallConductance(BerryCurv):
 
         berryCurv=self.BerryCurv[...,2,:]
         for ifermi, fermi in enumerate(fermiList):
-            occupy=self.energies<fermi
+            occupy=self.energies[:,:,:,self.ibmin:]<fermi
             print(f"{ifermi=:3d}  {len(self.energies[occupy])/np.prod(self.kgrid):8.4f}")
             sigma[ifermi]=np.sum(berryCurv[occupy])
         
@@ -307,13 +289,10 @@ class SpinVelocity(Velocity):
         self.Iodd = True
         #model.getSpinMatrice()
         #showElapsedTime(extraInfo=f"spin op. in ao.-basis constructed")
+        vectors=self.vectors[:,:,:,None,:,self.ibmin:]
         if model.overlap:
-            vectors_inv=self.vectors_inv[...,None,:,:]
-            spin_eig=vectors_inv @ self.O_K_inv @model.spin[None,None,None,:,:,:] @ vectors_inv.conj().transpose((0,1,2,3,5,4))
-            #vectors=self.vectors[:,:,:,None,:,:]
-            #spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ vectors
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            vectors=self.vectors[:,:,:,None,:,:]
             spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ vectors
         if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
         spin=spin_eig[...,None,:,:,:]
@@ -340,7 +319,7 @@ class SpinBerryCurv(SpinVelocity):
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
-        self.spinBerryCurv=np.zeros(self.kgrid+(3,3,3,model.norbs))
+        self.spinBerryCurv=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
         #eps=np.arange(3)
         for ialpha in range(3):
             for ibeta in range(3):
@@ -357,11 +336,8 @@ class SpinHallConductance(SpinBerryCurv):
 
         sigma=np.zeros((len(fermiList),3,3,3))
 
-        #spinBerry=self.spinBerryCurv[...,0,1,2,:]
         for ifermi, fermi in enumerate(fermiList):
-            occupy=self.energies<fermi
-            #print(f"{ifermi=:3d}  {len(self.energies[occupy])/np.prod(self.kgrid):8.4f}")
-            #sigma[ifermi]=np.sum(spinBerry[occupy])
+            occupy=self.energies[:,:,:,self.ibmin:]<fermi
             for ialpha in range(3):
                 for ibeta in range(3):
                     for igamma in range(3):

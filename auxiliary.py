@@ -625,6 +625,8 @@ def print_matrix(mat,rowIndex,colIndex,thr=1e-6):
       The indexes of printed rows
     colIndex : list|tuple|array
       The indexes of printed cols
+    thr: float
+      The threthold to hide a number
     '''
     for irow in rowIndex:
         print("|",end='')

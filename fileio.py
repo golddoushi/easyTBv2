@@ -42,7 +42,7 @@ def readPOSCAR(filePath="./POSCAR"):
         resultDic['pos ions (cart.)']=resultDic['pos ions (cart.)'].reshape((1,3))
     return resultDic
 
-def readHrDat(filepath,ignoreImagPart=False,cutoff=-1,overlap=False,format="VASP"):
+def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
     aux.showElapsedTime(True)
     with open(filepath,'r') as fin:
         headline=fin.readline()
@@ -68,38 +68,28 @@ def readHrDat(filepath,ignoreImagPart=False,cutoff=-1,overlap=False,format="VASP
     else:
         assert ncols == 7, f"For w90 case, we need 7 cols. for R(3) iorb(2) t(2), but {ncols=} found"
 
-    dRList = -np.int16(data[:,:3])
+    iRvecList = []
+    iRvecIndex={}
+    nR=0
+    for Rvec in np.int16(data[:,:3]):
+        n=tuple(Rvec)
+        if n not in iRvecList:
+            iRvecList.append(n)
+            iRvecIndex[n]=nR
+            nR+=1
+    iRvec=np.array(iRvecList)
+
     sourceList, targetList = np.int16(data[:,3:5].T)-1
-    tList = data[:,5] + 1j* data[:,6]
-    if ignoreImagPart: tList=tList.real
+    norbs=sourceList.max()+1
+    t_R = data[:,5] + 1j* data[:,6]
+    ham_R=t_R.reshape((nR,norbs,norbs))
+    if ignoreImagPart: t_R=t_R.real
     if overlap:
-        oList, pxList, pyList, pzList = data[:,7], data[:,8], data[:,9], data[:,10]
+        o, px, py, pz = data[:,7], data[:,8], data[:,9], data[:,10]
+        overlap_R, px_R, py_R, pz_R = o.reshape((nR,norbs,norbs)), px.reshape((nR,norbs,norbs)), py.reshape((nR,norbs,norbs)), pz.reshape((nR,norbs,norbs))
     
-    Rx_max, Rx_min, Ry_max, Ry_min, Rz_max, Rz_min= dRList[:,0].max(), dRList[:,0].min(), dRList[:,1].max(), dRList[:,1].min(), dRList[:,2].max(), dRList[:,2].min()
-    ham_R    =np.zeros((Rx_max-Rx_min+1,Ry_max-Ry_min+1,Rz_max-Rz_min+1,norb,norb),dtype=complex)
-    overlap_R=np.zeros((Rx_max-Rx_min+1,Ry_max-Ry_min+1,Rz_max-Rz_min+1,norb,norb))
-    if overlap:
-        momentum_R=np.zeros((Rx_max-Rx_min+1,Ry_max-Ry_min+1,Rz_max-Rz_min+1,3,norb,norb))
-
-    dRSet=set()
-    for ibond, (dR, source, target, t) in enumerate(zip(dRList,sourceList,targetList,tList)):
-        if(ibond+1)%((nlines//50+1))==0: print('>',end='') # process bar
-
-        # unpack the bond info
-        if overlap:
-            o,px,py,pz=oList[ibond],pxList[ibond],pyList[ibond],pzList[ibond]
-        else:
-            o=0
-            if dR@dR==0 and source==target:  o=1
-        # skip negligible bond
-        if abs(t) < cutoff and abs(o) < cutoff: continue
-        # add bond
-        ham_R[dR[0],dR[1],dR[2],source,target]    =t
-        overlap_R[dR[0],dR[1],dR[2],source,target]=o
-        if overlap:
-            momentum_R[dR[0],dR[1],dR[2],:,source,target]=px,py,pz
-        
-        dRSet.add(tuple(dR))
+    Rx_max, Rx_min, Ry_max, Ry_min, Rz_max, Rz_min= iRvec[:,0].max(), iRvec[:,0].min(), iRvec[:,1].max(), iRvec[:,1].min(), iRvec[:,2].max(), iRvec[:,2].min()
+    mp_grid=np.array([Rx_max-Rx_min+1,Ry_max-Ry_min+1,Rz_max-Rz_min+1,])
     
     aux.showElapsedTime(extraInfo='\nreal-space grid: %dx%dx%d, ham_R read'%(*ham_R.shape[:3],))
     if overlap:
@@ -107,14 +97,17 @@ def readHrDat(filepath,ignoreImagPart=False,cutoff=-1,overlap=False,format="VASP
         "ham_R":ham_R,
         "overlap":overlap,
         "overlap_R":overlap_R,
-        "momentum_R":momentum_R,
-        "dRList":dRSet
+        "momentum_R":np.array([px_R,py_R,pz_R]),
+        "iRvec":iRvec,
+        "iRvecIndex":iRvecIndex,
+        "mp_grid":mp_grid,
     }    
     return {
         "ham_R":ham_R,
         "overlap":overlap,
         "overlap_R":overlap_R,
-        "dRList":dRSet
+        "iRvec":iRvec,
+        "iRvecIndex":iRvecIndex,
     }
 
 def readRDat(filepath,ignoreImagPart=False,cutoff=-1,):

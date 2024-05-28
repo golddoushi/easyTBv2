@@ -1,5 +1,7 @@
 import numpy as np
 import functools
+
+from numpy.core.multiarray import array as array, zeros as zeros
 from system import System
 from auxiliary import obtainProjections, obtainProjectionsPlain, showElapsedTime, iterate3dpm, fourier_q_to_R
 from fileio import readHrDat, readPOSCAR, readRDat
@@ -67,7 +69,7 @@ class System_w90(System):
         self.norbs=chk.num_wann#ham_R.shape[-1]
         self.mp_grid=chk.mp_grid
         self.lattice=chk.real_lattice
-        self.reciLattice=np.linalg.inv(self.lattice)
+        self.reciLattice=np.linalg.inv(self.lattice)*np.pi*2
         self.iRvec, self.iRvecIndex, self.Ndegen = self.wigner_seitz(chk.mp_grid)
         self.nRvec=len(self.iRvec)
 
@@ -199,6 +201,7 @@ class System_w90(System):
         super().getSpinMatrice()
         return
     
+    @property
     def get_mp_grid(self): return self.mp_grid
 
     def wigner_seitz(self, mp_grid):
@@ -222,3 +225,7 @@ class System_w90(System):
                 ndegen.append(np.sum(abs(dist - dist_min) < 1.e-7))
                 
         return iRvec, iRvecIndex, np.array(ndegen)
+    
+    def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = ..., spin_basis: np.ndarray = ..., symOpSelection: list = ..., atomicMagMomList: list = ..., format="w90", print_row=..., print_col=...):
+        super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, format, print_row, print_col)
+        self.getRHam_R()

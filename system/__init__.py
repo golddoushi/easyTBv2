@@ -16,6 +16,8 @@ class System:
         self.ham_R:np.ndarray=None
         # real-space energy matrix produced by openmx
         self.energy_R:np.ndarray=None
+        # position x overlap
+        self.RO_R:np.ndarray=None
         # the Bravais lattice points
         self.iRvec:np.ndarray
         # the index of each Bravais lattice points
@@ -42,6 +44,8 @@ class System:
         self.posinfo:dict
         # mapping from atom to orbitals
         self.atomicOrbInfoList:list
+        # Fermi level
+        self.fermi:float
     
     def getRHam_R(self):
         '''
@@ -538,7 +542,10 @@ class System:
         #if self.overlap: overlapInVecForm_herm=np.zeros((nR,norb,norb),dtype=complex)
         for iR, R in enumerate(self.iRvec):
             iR_dual=self.iRvecIndex[(-R[0],-R[1],-R[2])]
-            hamR_herm[iR]    = (self.ham_R[iR]    + self.ham_R[iR_dual].T.conj())/2
+            if self.overlap:
+                hamR_herm[iR]    = (self.energy_R[iR]    + self.energy_R[iR_dual].T.conj())/2
+            else:
+                hamR_herm[iR]    = (self.ham_R[iR]    + self.ham_R[iR_dual].T.conj())/2
             #if self.overlap: overlapInVecForm_herm[iR] = (self.overlapInVecForm[iR] + self.overlapInVecForm[iR_dual].T.conj())/2
         ham_R   =hamR_herm
         #if self.overlap: self.overlapInVecForm=overlapInVecForm_herm
@@ -683,7 +690,13 @@ class System:
                         ham_R_sym[iR, iGlobalOrbI, iGlobalOrbJ]=bond_t_matrix[iLocalOrbI, iLocalOrbJ]
         showElapsedTime(extraInfo=f"symmery-constrained Ham. and overlap matrix constructed")
         #'''
-        self.ham_R=ham_R_sym
+        if self.overlap:
+            self.energy_R=ham_R_sym
+        else:
+            self.ham_R=ham_R_sym
+
+    def setFermi(self,fermi:float):
+        self.fermi=fermi
 
     @property
     def Vcell(self):
