@@ -226,6 +226,6 @@ class System_w90(System):
                 
         return iRvec, iRvecIndex, np.array(ndegen)
     
-    def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = ..., spin_basis: np.ndarray = ..., symOpSelection: list = ..., atomicMagMomList: list = ..., format="w90", print_row=..., print_col=...):
-        super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, format, print_row, print_col)
+    def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,-1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], print_row=(0,1,), print_col=(0,1,)):
+        super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, 'w90', print_row, print_col)
         self.getRHam_R()

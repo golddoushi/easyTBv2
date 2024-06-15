@@ -89,7 +89,7 @@ class System_omx(System):
         return 
         #'''
         # using momentum
-        self.RHam_R=self.momentum_R.transpose((1,0,2,3)) * 27.2113845/2
+        self.RHam_R=self.momentum_R.transpose((1,0,2,3)) 
     
     def getRO_R(self):
         #return super().getRHam_R()
@@ -101,7 +101,7 @@ class System_omx(System):
         for iR, Rvec in enumerate(self.iRvec):
             self.RO_R[iR]=self.overlap_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
     
-    def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], format="omx", print_row=(0,1,2,3,), print_col=(0,1,2,3,)):
-        super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, format, print_row, print_col)
+    def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,-1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], print_row=(0,1,2,3,), print_col=(0,1,2,3,)):
+        super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, "openmx", print_row, print_col)
         self.getRHam_R()
         self.getRO_R()

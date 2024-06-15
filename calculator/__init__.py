@@ -183,11 +183,10 @@ class Energy(Calculator):
         for ilevel in range(nvb-1):
             dE=valence_bands[nvb-1-ilevel] - valence_bands[nvb-2-ilevel]
             if dE > gap: break
+        else:
+            return
         mid_valence=(valence_bands[nvb-1-ilevel] + valence_bands[nvb-2-ilevel])/2
         self.ibmin=len(self.energies[(0,0,0)][self.energies[(0,0,0)]<mid_valence])
-
-        #print(self.ibmin,mid_valence,energy[0])
-
 
 class Velocity(Energy):
     def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0) -> None:
@@ -346,3 +345,5 @@ class SpinHallConductance(SpinBerryCurv):
         
         self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
         if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
+
+from .Path import EnergyOnPath

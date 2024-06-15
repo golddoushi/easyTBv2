@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import linalg
 from auxiliary import showElapsedTime, pseudoRotation, print_matrix, getWholeSymmetryOperator
 from auxiliary import SYMPREC
 from math import acos, sin, sqrt, cos
@@ -467,6 +468,7 @@ class System:
             symSpinRotateList=[symSpinRotateList[isym] for isym in symOpSelection]
             symTimeReversalList=[symTimeReversalList[isym] for isym in symOpSelection]
         atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,format=format)
+        #print_matrix(atomicWaveSymOpList[1][2],rowIndex=(0,1,2,3,4,),colIndex=(0,1,2,3,4,))
         #exit()
         # in now set up, the lattice is column-major and the reci-lat is row-major, which is opposite to VASP exactly
         # and the R is the rotation with cartesian basis
@@ -592,8 +594,13 @@ class System:
                         print("sym. op.:")
                         print(rotate)
                         print(translate)
-                        #print("original:")
-                        #print_matrix(bond,rowIndex=print_row,colIndex=print_col)
+                        print(f"{timeReversal=}")
+                        #print("op left:")
+                        #print_matrix(localSymOp[iatom_source_trans].T.conj(),rowIndex=print_row,colIndex=print_col)
+                        #print("op right:")
+                        #print_matrix(localSymOp[iatom_target_trans],rowIndex=print_row,colIndex=print_col)
+                        print("original:")
+                        print_matrix(bond,rowIndex=print_row,colIndex=print_col)
                         print("back to I hopping:")
                         print_matrix(bond_rotated,rowIndex=print_row,colIndex=print_col)
                     
@@ -619,7 +626,7 @@ class System:
                         })
             return symmerizedBondAndOverlapSet
         
-        def calcSymmerizedBond(symSet):
+        def calcSymmerizedBond(symSet,verbose=False):
             assert symSet['preserve'], 'the set is marked as out-of-range but u make me to process it'
             symOrder=len(symSet['bond set'])
             bond_matrix_avg = np.zeros(symSet['bond set'][0]['original hopping'].shape,dtype=complex)
@@ -640,9 +647,12 @@ class System:
 
                 diff  = bond['symmerized hopping'] - bond['original hopping']
                 res_abs+=np.sum(abs(diff.real)) + 1j*np.sum(abs(diff.imag))
-            #if verbose: print(f"{res_abs/symOrder=:28.6E} {res_direct/symOrder=:28.6E}")
+            if verbose: print(f"{res_abs/symOrder=:28.6E} ")
             return res_abs/symOrder
         
+        #symBond=constructSymmetryBondSet((0,0,0),0,0,verbose=True)
+        #calcSymmerizedBond(symBond,verbose=True)
+        #exit()
         showElapsedTime()
         nDropedBond=0
         allSymmerizedBondAndOverlap=[]
