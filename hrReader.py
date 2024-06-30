@@ -158,6 +158,7 @@ class Hr:
             print('reading file %s, title line:%s'%(filepath1,data[0]))
             self.norb=int(data[1])*2
             self.onsite=[0.]*self.norb
+            self.homeOverlap=np.eye(self.norb) # the overlap matrix for orbitals in one cell
 
             totWaveVectors=int(data[2])
             iline=3
@@ -175,10 +176,14 @@ class Hr:
                 if len(lineinfo)==7:
                     R1, R2, R3, sourceID, targetID, t_real, t_imag = int(lineinfo[0]),int(lineinfo[1]),int(lineinfo[2]),int(lineinfo[3])-1,int(lineinfo[4])-1,float(lineinfo[5]),float(lineinfo[6])
                     t=t_real if ignoreImagPart else t_real + 1j*t_imag
+                    overlat=(R1,R2,R3)
+                    o=0
+                    if overlat==(0,0,0) and sourceID==targetID:  o=1
+
                     nTotal+=1
-                    if True or sourceID==targetID and sourceID==0: self.dRList.add((R1,R2,R3))
-                    if abs(t)>cutoff:
-                        self.bondList.append(lat.BondDigital(sourceID,targetID,[R1,R2,R3],t))
+                    if True or sourceID==targetID and sourceID==0: self.dRList.add(overlat)
+                    if abs(t)>cutoff or abs(o)>cutoff:
+                        self.bondList.append(lat.BondDigital(sourceID,targetID,[R1,R2,R3],t,overlap=o))
                         RxList.append(R1)
                         RyList.append(R2)
                         RzList.append(R3)
@@ -216,10 +221,14 @@ class Hr:
                 if len(lineinfo)==7:
                     R1, R2, R3, sourceID, targetID, t_real, t_imag = int(lineinfo[0]),int(lineinfo[1]),int(lineinfo[2]),int(lineinfo[3])-1,int(lineinfo[4])-1,float(lineinfo[5]),float(lineinfo[6])
                     t=t_real if ignoreImagPart else t_real + 1j*t_imag
+                    overlat=(R1,R2,R3)
+                    o=0
+                    if overlat==(0,0,0) and sourceID==targetID:  o=1
+
                     nTotal+=1
-                    if sourceID==targetID and sourceID==0: self.dRList.add((R1,R2,R3))
+                    if sourceID==targetID and sourceID==0: self.dRList.add(overlat)
                     if abs(t)>cutoff:
-                        self.bondList.append(lat.BondDigital(sourceID+self.norb//2,targetID+self.norb//2,[R1,R2,R3],t))
+                        self.bondList.append(lat.BondDigital(sourceID+self.norb//2,targetID+self.norb//2,[R1,R2,R3],t,o))
                         RxList.append(R1)
                         RyList.append(R2)
                         RzList.append(R3)
@@ -234,8 +243,10 @@ class Hr:
             self.Rx_max, self.Rx_min, self.Ry_max, self.Ry_min, self.Rz_max, self.Rz_min= max(RxList),min(RxList),max(RyList),min(RyList),max(RzList),min(RzList)
             # data structure: bondInVecForm[Rx,Ry,Rz,source,target]=hopping
             self.bondInVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=complex)
+            self.overlapInVecForm=np.zeros((self.Rx_max-self.Rx_min+1,self.Ry_max-self.Ry_min+1,self.Rz_max-self.Rz_min+1,self.norb,self.norb),dtype=complex)
             for bond in self.bondList:
                 self.bondInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.t
+                self.overlapInVecForm[bond.overlat[0],bond.overlat[1],bond.overlat[2],bond.source,bond.target]=bond.overlap
             print('file %s (spin-dn) has been successfully read in %.3fms, %d/%d skipped'%(filepath2,1000*(time.time()-time0),nSkip,nTotal))
 
     def getAtomicSelfEnergy(self,wannSpinUpIDList:list):
