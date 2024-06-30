@@ -238,29 +238,34 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
 
         lapack_complex_double *g0_inversed_vecs=(lapack_complex_double*)malloc(nTotalOrbs*norbs*sizeof(lapack_complex_double));
         lapack_complex_double *Gw_k=(lapack_complex_double*)malloc(norbs*norbs*sizeof(lapack_complex_double));
-        lapack_complex_double *inversed_veck=(lapack_complex_double*)malloc(nTotalOrbs*norbs*sizeof(lapack_complex_double));
+        //lapack_complex_double *inversed_veck=(lapack_complex_double*)malloc(nTotalOrbs*norbs*sizeof(lapack_complex_double));
+        lapack_complex_double *veck=(lapack_complex_double*)malloc(norbs*nTotalOrbs*sizeof(lapack_complex_double));
         //printf("thread %d initialized %.6f\n",my_rank,creal(_G_w_lat[my_rank*thread_len]));
         #pragma omp for // k-point parallel is assumed to exhibit linear scaling
         for(ikpt=0;ikpt<nkpt;ikpt++){// loop over kmesh
             //i_eig_k=ikpt*norbs;
             i_vec_k=ikpt*nTotalOrbs*nTotalOrbs;
             // get out veck^-1
-            for(ieig=0;ieig<nTotalOrbs;ieig++)for(iorb=0;iorb<norbs;iorb++)inversed_veck[ieig*norbs+iorb]=inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]];
+            for(ieig=0;ieig<nTotalOrbs;ieig++)for(iorb=0;iorb<norbs;iorb++)
+                //inversed_veck[ieig*norbs+iorb]=inversed_vecs[i_vec_k+ieig*nTotalOrbs+orbIDMap[iorb]];
+                veck[iorb*nTotalOrbs+ieig]=vecs[i_vec_k+orbIDMap[iorb]*nTotalOrbs+ieig];
             for(ilat=0;ilat<nLatticeVectors;ilat++){
                 //printf("rank%d, ikpt*nLatticeVectors+ilat %d\n",my_rank,ikpt*nLatticeVectors+ilat);
                 factor=lat_factors[ikpt*nLatticeVectors+ilat];
                 i_lat_k=ilat*latVec_len;
                 for(iomega=0;iomega<nOmegaPoints;iomega++){
                     i_omega_k=iomega*omega_len;
-                    // Gw_k = veck^-1,dagger @ Gw_lam @ veck^-1
-                    // 1. g0_inversed_vecs = Gw_lam @ veck^-1
+                    // Gw_k = veck @ Gw_lam @ veck.conj().T
+                    // 1. g0_inversed_vecs = Gw_lam @ vec.conj().T
                     //cblas_ztrmm(CblasRowMajor, CblasLeft, CblasUpper, CblasNoTrans, Cblas)
                     for(ieig=0;ieig<nTotalOrbs;ieig++)for(iorb=0;iorb<norbs;iorb++)
-                        g0_inversed_vecs[ieig*norbs+iorb]=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*inversed_veck[ieig*norbs+iorb];
-                    // 2. Gw_k = veck^-1,dagger @ g0_inversed_vecs
+                        //g0_inversed_vecs[ieig*norbs+iorb]=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*inversed_veck[ieig*norbs+iorb];
+                        g0_inversed_vecs[ieig*norbs+iorb]=inversed_hks[ikpt*nOmegaPoints*nTotalOrbs+iomega*nTotalOrbs+ieig]*conj(veck[iorb*nTotalOrbs+ieig]);
+                    // 2. Gw_k = veck @ g0_inversed_vecs
                     // it is essential to initialize Gw_k
                     for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)Gw_k[iorb*norbs+jorb]=0;
-                    cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, nTotalOrbs, &alpha, inversed_veck, norbs, g0_inversed_vecs, norbs, &beta, Gw_k, norbs);
+                    //cblas_zgemm(CblasRowMajor, CblasConjTrans, CblasNoTrans, norbs, norbs, nTotalOrbs, &alpha, inversed_veck, norbs, g0_inversed_vecs, norbs, &beta, Gw_k, norbs);
+                    cblas_zgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, norbs, norbs, nTotalOrbs, &alpha, veck, nTotalOrbs, g0_inversed_vecs, norbs, &beta, Gw_k, norbs);
                     
                     // inversed Fourier transformations to real-space
                     for(iorb=0;iorb<norbs;iorb++)for(jorb=0;jorb<norbs;jorb++)
@@ -270,7 +275,9 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
             my_icnt+=1;
             if(my_icnt%my_nkpt_portion==0)output_py(">");
         }
-        free(g0_inversed_vecs);free(Gw_k);free(inversed_veck);
+        free(g0_inversed_vecs);free(Gw_k);
+        //free(inversed_veck);
+        free(veck);
     }
     sprintf(output_info,"\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);output_py(output_info);
     
