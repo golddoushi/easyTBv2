@@ -45,6 +45,12 @@ class System:
         self.posinfo:dict
         # mapping from atom to orbitals
         self.atomicOrbInfoList:list
+        # name of each orbital, indexing: atomicOrbNameList[iL][im] = label
+        self.atomicOrbNameList:list=[
+            ["s",]*2,
+            ["p_z","p_x","p_y",]*2,
+            ["d_{z^2}","d_{xz}","d_{yz}","d_{x^2-y^2}","d_{xy}",]*2,
+            ["f_{z^3}","f_{xz^2}","f_{yz^2}","f_{z(x^2-y^2)}","f_{xyz}","f_{x(x^2-3y^2)}","f_{y(3x^2-y^2)}"]*2,]
         # Fermi level
         self.fermi:float
     
@@ -63,7 +69,7 @@ class System:
         for iR, Rvec in enumerate(self.iRvec):
             self.RHam_R[iR]=self.ham_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
 
-    def getSpinMatrice(self):
+    def getSpinMatrice(self,projectedOrbIndex=[]):
         '''
         Calc. the spin matrices.
 
@@ -74,7 +80,14 @@ class System:
         assert 2*(self.norbs//2) == self.norbs, f"Spin matrices only make sense for system with double spin tunnels and even basis, but {self.norbs=}"
         
         self.spin=np.zeros((3,self.norbs,self.norbs),dtype=complex)
-        II=np.eye(self.norbs//2)
+        if len(projectedOrbIndex)==0:
+            II=np.eye(self.norbs//2)
+        else:
+            ii=np.zeros(self.norbs//2)
+            for iorb in projectedOrbIndex:
+                if iorb>=self.norbs//2: break
+                ii[iorb]=1
+            II=np.diag(ii)
         if self.format=="VASP":
             # sigma^x
             self.spin[0,:self.norbs//2,self.norbs//2:] = II
@@ -634,7 +647,7 @@ class System:
                 bond_matrix_avg += bond['back to I hopping']
             bond_matrix_avg /= symOrder
 
-            res_abs=0.
+            res_list=[]
             for bond in symSet['bond set']:
                 opSource, opTarget= bond['sym. op. on source'], bond['sym. op. on target']
                 if bond['time reversal']:
@@ -646,11 +659,12 @@ class System:
                     bond['symmerized hopping'] = bond['symmerized hopping'].conj().T
 
                 diff  = bond['symmerized hopping'] - bond['original hopping']
-                res_abs+=np.sum(abs(diff.real)) + 1j*np.sum(abs(diff.imag))
-            if verbose: print(f"{res_abs/symOrder=:28.6E} ")
-            return res_abs/symOrder
+                res_list.append(np.max(abs(diff.real)) + 1j*np.max(abs(diff.imag)))
+            res_max=np.max(np.array(res_list).real) + 1j*np.max(np.array(res_list).imag)
+            if verbose: print(f"{res_max=:28.6E} ")
+            return res_max
         
-        #symBond=constructSymmetryBondSet((0,0,0),0,0,verbose=True)
+        #symBond=constructSymmetryBondSet((0,0,0),4,4,verbose=True)
         #calcSymmerizedBond(symBond,verbose=True)
         #exit()
         showElapsedTime()

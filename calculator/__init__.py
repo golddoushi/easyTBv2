@@ -101,19 +101,6 @@ class Energy(Calculator):
             
             E_R_AO=self.model.energy_R*phaseshift[:,None,None]
             O_R_AO=self.model.overlap_R*phaseshift[:,None,None]
-        '''
-        # imposing heimit
-        energy_K=np.fft.fftn(self.model.energy_R,axes=(0,1,2,))
-        energy_K = (energy_K + energy_K.transpose((0,1,2,4,3)).conj())/2
-        O_K=np.fft.fftn(self.model.overlap_R,axes=(0,1,2,))
-        O_K = (O_K + O_K.transpose((0,1,2,4,3)).conj())/2
-        
-        energy_R = np.fft.ifftn(energy_K,axes=(0,1,2,))
-        O_R = np.fft.ifftn(O_K,axes=(0,1,2,))
-        self.model.setEnergyR(energy_R)
-        self.model.setOR(O_R)
-        showElapsedTime(extraInfo=f"The hemit condition is imposed")
-        #'''
         
         self.E_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         self.O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
@@ -187,6 +174,32 @@ class Energy(Calculator):
             return
         mid_valence=(valence_bands[nvb-1-ilevel] + valence_bands[nvb-2-ilevel])/2
         self.ibmin=len(self.energies[(0,0,0)][self.energies[(0,0,0)]<mid_valence])
+
+class PDOS(Energy):
+    def __init__(self, model: System, energyAxis:np.ndarray, eta=0.05, kgrid=(1, 1, 1), phaseshift=1, verbose=0) -> None:
+        '''
+        Compute the PDOS
+
+        Parameters:
+        -----------
+        - energy Axis: energy axis for pdos intepolation, in absolute frame, NOT relative to Fermi
+        - sigma: gaussian width
+        '''
+        super().__init__(model, kgrid, phaseshift, verbose)
+
+        NEDOS,=energyAxis.shape
+        self.pdos=np.zeros((NEDOS,model.norbs),dtype=float)
+        for ik1 in range(kgrid[0]):
+            for ik2 in range(kgrid[1]):
+                for ik3 in range(kgrid[2]):
+                    for iband in range(model.norbs):
+                        E_band = self.energies[ik1,ik2,ik3,iband]
+                        vecs   = self.vectors[ik1,ik2,ik3,:,iband]
+                        rho    = abs(vecs)**2
+                        if E_band < energyAxis[0] - 10*eta or E_band > energyAxis[-1] + 10*eta: continue
+                        tdos=np.exp(-((E_band-energyAxis)/eta)**2/2)
+                        self.pdos += tdos[:,None] * rho
+        self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(kgrid)
 
 class Velocity(Energy):
     def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0) -> None:
@@ -264,11 +277,11 @@ class AnormalousHallConductance(BerryCurv):
         berryCurv=self.BerryCurv[...,2,:]
         for ifermi, fermi in enumerate(fermiList):
             occupy=self.energies[:,:,:,self.ibmin:]<fermi
-            print(f"{ifermi=:3d}  {len(self.energies[occupy])/np.prod(self.kgrid):8.4f}")
+            #print(f"{ifermi=:3d}  {len(self.energies[occupy])/np.prod(self.kgrid):8.4f}")
             sigma[ifermi]=np.sum(berryCurv[occupy])
         
         self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
-        if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
+        if verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
 class SpinVelocity(Velocity):
     def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0) -> None:
@@ -326,6 +339,41 @@ class SpinBerryCurv(SpinVelocity):
                     self.spinBerryCurv[...,ialpha,ibeta,igamma,:]=-2*np.diagonal(self.spinVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*self.velocity_K[...,ialpha,:,:]),0,-2,-1).imag
         if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
+class Spin_x_Velocity(Velocity):
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0) -> None:
+        '''
+        Calc. spin x velocity correlation at each k-point: S_alpha^gamma_k = \Sigma_n s^{\gamma}_mn v_{\alpha,nm} / (E_n - E_m +i\eta)**2 
+
+        alpha can be x, y, z, denoting the (cart.) space direction. 
+        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the spin-polarization. 
+        k denotes the crystal moment, m, n index the bands.
+
+        Indexing: spin_x_velocity[ik1, ik2, ik3, ialpha, igamma, ieig]
+        '''
+        super().__init__(model, kgrid, phaseshift, verbose)
+        self.Todd = True
+        self.Iodd = True
+
+        self.degen=degen # update the degeneracy threthold
+        self.eta=eta
+        self.smr_type=smr_type
+        self.calcDeltaEInverse()
+        dEInverse2 = self.deltaEInverse**2
+        
+        vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        if model.overlap:
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        else:
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ vectors
+        if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+
+        self.spin_x_velocity=np.zeros(self.kgrid+(3,3,model.norbs-self.ibmin))
+        for ialpha in range(3):
+            for igamma in range(3):
+                self.spin_x_velocity[...,ialpha,igamma,:]=-2*np.diagonal(spin_eig[...,igamma,:,:] @ (dEInverse2*self.velocity_K[...,ialpha,:,:]),0,-2,-1).imag
+
+        if verbose==2: showElapsedTime(extraInfo=f"Spin_x_Velocity in eig.-basis finished")
+
 class SpinHallConductance(SpinBerryCurv):
     def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=0.000001, fermiList=[0.,], verbose=0) -> None:
         '''
@@ -346,4 +394,4 @@ class SpinHallConductance(SpinBerryCurv):
         self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
         if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
-from .Path import EnergyOnPath
+from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath

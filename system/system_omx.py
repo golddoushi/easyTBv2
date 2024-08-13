@@ -47,7 +47,7 @@ class System_omx(System):
         
         '''
         super().__init__()
-        # wannier basis are normalized and othorgonal
+        # atomic orbital basis are normalized but nonothorgonal
         self.overlap=True
         # read in real-space ham
         hrDat=readHrDat('%s/%s_hr.dat'%(mainDir,hamR),ignoreImagPart=ignoreImagPart,overlap=True,format=format)
@@ -69,7 +69,9 @@ class System_omx(System):
             for iorb in atom_shell: self.rList[:,iorb]=atom_coor
         
         self.atomicOrbInfoList=obtainProjections('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
-
+        # the basis order of openmx is different from the w90 convention
+        self.atomicOrbNameList[1]=["p_x","p_y","p_z",]*2
+        self.atomicOrbNameList[2]=["d_{z^2}","d_{x^2-y^2}","d_{xy}","d_{xz}","d_{yz}",]*2
         self.lattice=self.posinfo['lattice']
         self.reciLattice=np.linalg.inv(self.lattice)*np.pi*2
 
