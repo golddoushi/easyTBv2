@@ -5,6 +5,7 @@ from system import System
 import numpy as np
 from auxiliary import showElapsedTime, print_matrix
 from scipy.constants import elementary_charge, hbar, angstrom
+from scipy.constants import k as kB
 
 class Calculator():
     Iodd = False  # inversion gives minus
@@ -393,5 +394,44 @@ class SpinHallConductance(SpinBerryCurv):
         
         self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
         if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
+
+class SpinVeloVelo(SpinVelocity):
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, verbose=0) -> None:
+        '''
+        Calc. correlation of spin velocity and velocity at each k-point \Omega^{alpha,beta,gamma}_{k,m}.
+
+        alpha, beta can be x, y, z, denoting the (cart.) space direction, corresponding to the direction of velocity and spin velocity
+        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the spin-polarization. 
+        k denotes the crystal moment, m indexes the bands.
+
+        Indexing: spinVeloVelo[ik1, ik2, ik3, ialpha, ibeta, igamma, ieig]
+        '''
+        super().__init__(model, kgrid, phaseshift, verbose)
+
+        self.spinVeloVelo=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
+        for ialpha in range(3):
+            for ibeta in range(3):
+                for igamma in range(3):
+                    #self.spinVeloVelo[...,ialpha,ibeta,igamma,:]=(np.diagonal(self.spinVelocity_K[...,ibeta,igamma,:,:],0,-2,-1) * np.diagonal(self.velocity_K[...,ialpha,:,:],0,-2,-1)).real
+                    self.spinVeloVelo[...,ialpha,ibeta,igamma,:]=(np.diagonal(self.velocity_K[...,ibeta,:,:],0,-2,-1) * np.diagonal(self.velocity_K[...,ialpha,:,:],0,-2,-1)).real
+        if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
+
+class SpinHallConductanceRashiba(SpinVeloVelo):
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, T=300, fermiList=[0.,], verbose=0) -> None:
+        super().__init__(model, kgrid, phaseshift, verbose)
+
+        sigma=np.zeros((len(fermiList),3,3,3))
+
+        for ifermi, fermi in enumerate(fermiList):
+            condition=abs(self.energies[:,:,:,self.ibmin:]-fermi)<10*(kB*T/elementary_charge)
+            exp=np.exp((self.energies[:,:,:,self.ibmin:][condition]-fermi)/(kB*T/elementary_charge))
+            f_E=-1/(kB/elementary_charge*T)*exp/(1+exp)**2
+            for ialpha in range(3):
+                for ibeta in range(3):
+                    for igamma in range(3):
+                        sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.spinVeloVelo[...,ialpha,ibeta,igamma,:][condition]*f_E)
+        
+        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**3/hbar**2/angstrom/2)/model.Vcell
+        if verbose==2: showElapsedTime(extraInfo=f"Rashiba spin Hall conductance finished")
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath

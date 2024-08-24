@@ -598,9 +598,11 @@ class System:
                     bond   =ham_R[iR,atomicOrbMap[iatom_source_trans],:][:,atomicOrbMap[iatom_target_trans]].copy()
                         
                     if timeReversal: 
-                        bond_rotated=((localSymOp[iatom_source_trans].T.conj())@bond@(localSymOp[iatom_target_trans])).conj()
+                        #bond_rotated=((localSymOp[iatom_source_trans].T.conj())@bond@(localSymOp[iatom_target_trans])).conj()
+                        bond_rotated=((localSymOpInv[iatom_source_trans])@bond@(localSymOp[iatom_target_trans])).conj()
                     else:
-                        bond_rotated=(localSymOp[iatom_source_trans].T.conj())@bond@localSymOp[iatom_target_trans]
+                        #bond_rotated=(localSymOp[iatom_source_trans].T.conj())@bond@localSymOp[iatom_target_trans]
+                        bond_rotated=(localSymOpInv[iatom_source_trans])@bond@localSymOp[iatom_target_trans]
                 
                     if verbose: 
                         print(f'symmetry bond {R}({iR}) {iatom_source_trans} {iatom_target_trans} {timeReversal=}')
@@ -608,10 +610,6 @@ class System:
                         print(rotate)
                         print(translate)
                         print(f"{timeReversal=}")
-                        #print("op left:")
-                        #print_matrix(localSymOp[iatom_source_trans].T.conj(),rowIndex=print_row,colIndex=print_col)
-                        #print("op right:")
-                        #print_matrix(localSymOp[iatom_target_trans],rowIndex=print_row,colIndex=print_col)
                         print("original:")
                         print_matrix(bond,rowIndex=print_row,colIndex=print_col)
                         print("back to I hopping:")
@@ -623,7 +621,7 @@ class System:
                             'bond info':(iatom_source_trans,iatom_target_trans,R[0],R[1],R[2]),
                             'original hopping':bond,
                             'sym. op. on source':localSymOp[iatom_source_trans],
-                            'sym. op. on target':localSymOp[iatom_target_trans],
+                            'sym. op. on target':localSymOpInv[iatom_target_trans],
                             'time reversal':timeReversal,
                             'back to I hopping':bond_rotated,
                         })
@@ -633,7 +631,7 @@ class System:
                             'bond info':(iatom_target_trans,iatom_source_trans,-R[0],-R[1],-R[2]),
                             'original hopping':bond.conj().T,
                             'sym. op. on source':localSymOp[iatom_source_trans],
-                            'sym. op. on target':localSymOp[iatom_target_trans],
+                            'sym. op. on target':localSymOpInv[iatom_target_trans],
                             'time reversal':timeReversal,
                             'back to I hopping':bond_rotated,
                         })
@@ -651,9 +649,9 @@ class System:
             for bond in symSet['bond set']:
                 opSource, opTarget= bond['sym. op. on source'], bond['sym. op. on target']
                 if bond['time reversal']:
-                    bond['symmerized hopping'] = opSource @ (bond_matrix_avg.conj()) @ opTarget.conj().T
+                    bond['symmerized hopping'] = opSource @ (bond_matrix_avg.conj()) @ opTarget#.conj().T
                 else:
-                    bond['symmerized hopping'] = opSource @ bond_matrix_avg @ opTarget.conj().T
+                    bond['symmerized hopping'] = opSource @ bond_matrix_avg @ opTarget#.conj().T
 
                 if bond['conjugation']:                
                     bond['symmerized hopping'] = bond['symmerized hopping'].conj().T
@@ -664,12 +662,31 @@ class System:
             if verbose: print(f"{res_max=:28.6E} ")
             return res_max
         
-        #symBond=constructSymmetryBondSet((0,0,0),4,4,verbose=True)
-        #calcSymmerizedBond(symBond,verbose=True)
+        def setSymmerizedBond(symSet,ham_sym:np.ndarray):
+            for bond in symSet['bond set']:
+                bond_t_matrix=bond['symmerized hopping']
+                #bond_o_matrix=bond['symmerized overlap']
+                # set to global bond structure
+                iatom_source, iatom_target, R0, R1, R2 = bond['bond info']
+                iR = self.iRvecIndex[(R0,R1,R2)]
+                
+                for iLocalOrbI, iGlobalOrbI in enumerate(atomicOrbMap[iatom_source]):
+                    for iLocalOrbJ, iGlobalOrbJ in enumerate(atomicOrbMap[iatom_target]):
+                        ham_sym[iR, iGlobalOrbI, iGlobalOrbJ]=bond_t_matrix[iLocalOrbI, iLocalOrbJ]
+        
+        #symBondSet=constructSymmetryBondSet((0,0,0),0,0,verbose=True)
+        #res=calcSymmerizedBond(symBondSet,verbose=True)
+        #ham_R_sym   =np.zeros((self.nRvec,self.norbs,self.norbs),dtype=complex)
+        #setSymmerizedBond(symBondSet,ham_R)
+        #print("Check consistency of symmerization =====>>>>")
+        #symBondSet=constructSymmetryBondSet((0,0,0),0,0,verbose=True)
+        #res=calcSymmerizedBond(symBondSet,verbose=True)
         #exit()
+
         showElapsedTime()
         nDropedBond=0
         allSymmerizedBondAndOverlap=[]
+        resList=[]
         for R0 in self.iRvec:
             for iatom_source in range(self.posinfo['tot ions']):
                 source_coor=self.posinfo['pos ions (frac.)'][iatom_source] 
@@ -693,25 +710,18 @@ class System:
                         ilen_order+=1
                     allSymmerizedBondAndOverlap.insert(ilen_order,symBondSet)
 
-                    res=calcSymmerizedBond(symBondSet)
-                    print(f"sym set: [{R0[0]:2d}{R0[1]:2d}{R0[2]:2d}]{iatom_source:3d}{iatom_target:3d} {res=:20.3E}")
+                    resList.append({"R0":R0,"isource":iatom_source,"itarget":iatom_target,"res":calcSymmerizedBond(symBondSet)})
+                    #print(f"sym set: [{R0[0]:2d}{R0[1]:2d}{R0[2]:2d}]{iatom_source:3d}{iatom_target:3d} {res=:20.3E}")
+        ires=np.argsort([abs(res['res']) for res in resList])[-1]
+        res=resList[ires]
+        print(f"sym set with largest res: [{res['R0'][0]:2d}{res['R0'][1]:2d}{res['R0'][2]:2d}]{res['isource']:3d}{res['itarget']:3d} res={res['res']:20.3E}")
         showElapsedTime(extraInfo=f"Symmetry analysis finished")
         print(f"{nDropedBond} atom pairs skipped due to out of Wigner-Seiz supercell/ negligible strength")
         
         print("set symmery-constrained Ham. and overlap matrix")
         ham_R_sym   =np.zeros((self.nRvec,self.norbs,self.norbs),dtype=complex)
         for iset, symBondSet in enumerate(allSymmerizedBondAndOverlap):
-            for bond in symBondSet['bond set']:
-                
-                bond_t_matrix=bond['symmerized hopping']
-                #bond_o_matrix=bond['symmerized overlap']
-                # set to global bond structure
-                iatom_source, iatom_target, R0, R1, R2 = bond['bond info']
-                iR = self.iRvecIndex[(R0,R1,R2)]
-                
-                for iLocalOrbI, iGlobalOrbI in enumerate(atomicOrbMap[iatom_source]):
-                    for iLocalOrbJ, iGlobalOrbJ in enumerate(atomicOrbMap[iatom_target]):
-                        ham_R_sym[iR, iGlobalOrbI, iGlobalOrbJ]=bond_t_matrix[iLocalOrbI, iLocalOrbJ]
+            setSymmerizedBond(symBondSet,ham_R_sym)
         showElapsedTime(extraInfo=f"symmery-constrained Ham. and overlap matrix constructed")
         #'''
         if self.overlap:
