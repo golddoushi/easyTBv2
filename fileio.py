@@ -232,6 +232,42 @@ def writeJmat(mainDir, bondList, supercellSize):
                     (ibondType+1), bond.bondLen, bond.sourceOrb.id, bond.targetOrb.id, *bond.overLat,  
                     bond.exchangeEnergy,bond.Jani[0,0],bond.Jani[1,1],bond.Jani[0,1],bond.DMI[0],bond.DMI[1]))
                 
+def writeVolumeData(filePath:str,lat: list | np.ndarray,grid_size:tuple | list | np.ndarray,grid_data:np.ndarray):
+    '''
+    output volume data in the format of CHGCAR
+
+    Parameters
+    ----------
+    - filePath : str 
+        the target file path
+    - lat : array-like, float
+        lattice matrix, row major
+    - grid_size : size-3 tuple-like, int
+        grid size Nx, Ny, Nz in a1, a2, a3 direction
+    - grid_data : np.ndarray((Nx,Ny,Nz)), float
+        volume data to be outputed
+    '''
+    assert tuple(grid_size) == grid_data.shape
+    with open(filePath,"w") as fout:
+        fout.write("Automatic generated volume data\n")
+        fout.write("1.0\n")
+        for ib in range(3):
+            for icomp in range(3): fout.write("%.9f "%lat[ib,icomp])
+            fout.write("\n")
+        fout.write("H\n")
+        fout.write("0\n")
+        fout.write("D\n")
+        fout.write("\n")
+        fout.write("\n")
+        fout.write("%5d%5d%5d\n"%(*grid_size,))
+        cnt=0
+        for ik3 in range(grid_size[2]):
+           for ik2 in range(grid_size[1]):
+              for ik1 in range(grid_size[0]):
+                  fout.write("%18.9E"%grid_data[ik1,ik2,ik3])
+                  cnt+=1
+                  if cnt%5==0:fout.write("\n")
+
 class FortranFileR(fortio.FortranFile):
 
     def __init__(self, filename):
