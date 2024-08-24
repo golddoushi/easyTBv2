@@ -1,7 +1,7 @@
 import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
-from multiprocessing import Pool, freeze_support
+from multiprocessing import freeze_support
 
 import paramReader
 paramReader.readGlobalConst()
@@ -10,8 +10,6 @@ import numpy as np
 from task import BZGridTask
 from system import System_omx, System_w90
 from calculator import Velocity, SpinHallConductance, Energy, SpinBerryCurv, AnormalousHallConductance, EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, PDOS, SpinHallConductanceRashiba
-from auxiliary import showElapsedTime
-from symmetry import SYMMETRY_PRECISION
 from fileio import writeVolumeData
 
 def solveQ(param):
@@ -41,16 +39,6 @@ def solvePDOS(param):
 def solveVelocity(param):
     calc=Velocity(param['model'],kgrid=param['FFT grid'],)
     return {"energies":calc.energies,"velocities":calc.velocity_K,"iq":param["iq"]}
-
-def getVBM(energies,fermi):
-    vb_condition=energies <= fermi
-    low_bound = np.min(energies)
-    return np.max((energies + low_bound) * vb_condition, axis=(-1,)) - low_bound
-
-def getCBM(energies,fermi):
-    cb_condition=energies > fermi
-    up_bound = np.max(energies)
-    return np.min((energies - up_bound) * cb_condition, axis=(-1,)) + up_bound
 
 def run():
     # Pbene, spin hall conductance
@@ -215,38 +203,7 @@ def run():
     spinBerry=(0.25*spinBerryCurv[:,:,:,0,2,0]+0.4330127*spinBerryCurv[:,:,:,0,2,1]+0.4330127*spinBerryCurv[:,:,:,1,2,0]+0.75*spinBerryCurv[:,:,:,1,2,1])/100#/1E15
     print(np.sum(spinBerry,axis=(0,1,2,)))
     writeVolumeData("%s/spinBerryCurv_xzx.vasp"%mainDir, model.reciLattice.T, (BZGrid[0],BZGrid[1],BZGrid[2]), spinBerry)
-    #vbm=getVBM(energies, fermi)
-    #cbm=getCBM(energies, fermi)
-    #outputVolumeData("%s/VBM.vasp"%mainDir, model.reciLattice.T, BZGrid, vbm)
-    #outputVolumeData("%s/CBM.vasp"%mainDir, model.reciLattice.T, BZGrid, cbm)
-    '''
-    kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
-    #print(f"{energies[:,:,0,27].mean()=}{energies[:,:,0,27].max()=}{energies[:,:,0,27].min()=}")
-    with open("%s/energies.txt"%mainDir,"w") as fout:
-        for ik1 in range(BZGrid[0]):
-            for ik2 in range(BZGrid[1]):
-                for ik3 in range(BZGrid[2]):
-                    kx,ky,kz=kcoor[ik1,ik2,ik3]
-                    fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(model.norbs): fout.write(f"{energies[ik1,ik2,ik3,ib]:15.6E}")
-                    fout.write("\n")
-    with open("%s/vx.txt"%mainDir,"w") as fout:
-        for ik1 in range(BZGrid[0]):
-            for ik2 in range(BZGrid[1]):
-                for ik3 in range(BZGrid[2]):
-                    kx,ky,kz=kcoor[ik1,ik2,ik3]
-                    fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(model.norbs): fout.write(f"{velocity[ik1,ik2,ik3,0,ib]:15.6E}")
-                    fout.write("\n")
-    with open("%s/vy.txt"%mainDir,"w") as fout:
-        for ik1 in range(BZGrid[0]):
-            for ik2 in range(BZGrid[1]):
-                for ik3 in range(BZGrid[2]):
-                    kx,ky,kz=kcoor[ik1,ik2,ik3]
-                    fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(model.norbs): fout.write(f"{velocity[ik1,ik2,ik3,1,ib]:15.6E}")
-                    fout.write("\n")
-    exit()'''
+    
     '''
     import matplotlib.pyplot as plt
     fig=plt.figure()
