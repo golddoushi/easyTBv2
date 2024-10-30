@@ -275,9 +275,7 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
             my_icnt+=1;
             if(my_icnt%my_nkpt_portion==0)output_py(">");
         }
-        free(g0_inversed_vecs);free(Gw_k);
-        //free(inversed_veck);
-        free(veck);
+        free(g0_inversed_vecs);free(Gw_k);free(veck);
     }
     sprintf(output_info,"\nLattice G constructed in %ds\n",(clock()-time0)/CLOCKS_PER_SEC);output_py(output_info);
     
@@ -296,7 +294,7 @@ PyObject * calcRetardedLatticeGreensFunction(PyObject* self, PyObject* args){
             }
         }
     }
-    free(_G_w_lat);free(k1_axis);free(k2_axis);free(k3_axis);
+    free(_G_w_lat);free(inversed_hks);free(inversed_vecs);free(lat_factors);free(k1_axis);free(k2_axis);free(k3_axis);
     
     PyObject * GreenFunc=PyTuple_New(2*thread_len);
     for(uint iomega=0;iomega<nOmegaPoints;iomega++){

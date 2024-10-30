@@ -474,12 +474,12 @@ def calcIsotropicJ_GaussianQuadrature_V2(mainDir,sc=[10,10,1],
     #calcSpinWaveDOS(mainDir,spinList,MAE)
 
 def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False,
-      fermi=0,eta=0.0001,erange=(-500,500),extraEnergyEmpty=5.,Jcvg=1e-3,
+      fermiAxis=[0.],eta=0.0001,erange=(-500,500),extraEnergyEmpty=5.,Jcvg=1e-3,
       lowOrder=5,highOrder=20,nthreads=param.NCORE):
     '''
     mainDir: the position of Hr file
     sc : k-grid used for BZ integration
-    fermi: assumed Fermi level
+    fermiAxis: assumed Fermi level, 1d array
     eta: eta of retarded Green's function
     Jcvg: convergence criterial for J, no convergence check if Jcvg<0 
     lowOrder, highOrder: the order used for Gaussian quadrature
@@ -539,7 +539,16 @@ def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False
     orbIDMapFromStandardToRelevant=np.zeros(hr.norb,dtype=int)-1
     for iRelevantOrb, orbID in enumerate(sorted_relevantOrbID):
         orbIDMapFromStandardToRelevant[orbID]=iRelevantOrb
-        
+    
+    # prepare for fermi scanning
+    nfermi=len(fermiAxis)
+    for bondType in bondList:
+        for bond in bondType:
+            bond.fermi=fermiAxis
+            bond.exchangeEnergy=np.zeros(nfermi)
+            bond.Jani=np.zeros((nfermi,2,2))
+            bond.DMI=np.zeros((nfermi,2))
+
     gr=hamilton.Green()
     
     print("Diagnolizing Hamiltonian")
@@ -552,142 +561,145 @@ def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False
     bandEnergyMin, bandEnergyMax= eigs.flatten().min(), eigs.flatten().max()
     print("Bands energy range: %.6f ~ %.6f"%(bandEnergyMin,bandEnergyMax))
     emin=np.max([erange[0],bandEnergyMin])-extraEnergyEmpty
-    emax=np.min([erange[1],fermi])
-    print("Energy window: [%f, %f]"%(emin,emax))
+    emaxList=[np.min([erange[1],fermi]) for fermi in fermiAxis]
+    print("Largest energy window: [%f, %f]"%(emin,emaxList[-1]))
     
-    print("Main loop for exchange calculation")
-    J_list_old=np.zeros((len(bondList),3,3))
-    J_list_new=np.zeros((len(bondList),3,3))
-    iteration_num=0 
     fout=open("./mag.out","w")
-    for gaussianOrder in range(lowOrder,highOrder):
-        points, weights=p_roots(gaussianOrder)
-        npoints=len(points)
-        print("----- Iteration %d -----"%iteration_num)
-        z,dz=aux.semiCirle(emin,emax,points)
-        if overlap:
-            rG_w_lat=gr.calcLatticeGreenFunctionWithOverlap(
-                hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
-                kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=1,
-                nthreads=nthreads)
-        else:
-            rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
-                hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
-                kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=True,
-                nthreads=nthreads)
+    for ifermi, emax in enumerate(emaxList):
+        print("Main loop for exchange calculation on fermi=%.6f"%fermiAxis[ifermi])
+        J_list_old=np.zeros((len(bondList),3,3))
+        J_list_new=np.zeros((len(bondList),3,3))
         
-        # calc. charge density and spin density
-        diag_list=np.array([np.diag(np.linalg.inv(hr.homeOverlap[relevantOrbID_list,:][:,relevantOrbID_list])@rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
-        rho_of_each_orb=sum(diag_list)
-        print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
-        print("Mag.mom of source atoms: %.6f"%(
-            sum(rho_of_each_orb[len(relevantOrbID_list)//2:])-
-            sum(rho_of_each_orb[:len(relevantOrbID_list)//2])))
+        iteration_num=0 
+        for gaussianOrder in range(lowOrder,highOrder):
+            points, weights=p_roots(gaussianOrder)
+            npoints=len(points)
+            print("----- Iteration %d -----"%iteration_num)
+            z,dz=aux.semiCirle(emin,emax,points)
+            if overlap:
+                rG_w_lat=gr.calcLatticeGreenFunctionWithOverlap(
+                    hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
+                    kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=1,
+                    nthreads=nthreads)
+            else:
+                rG_w_lat=gr.calcLatticeGreenFunction_CDLL(
+                    hr,eigs_addr,vecs_addr,sorted_relevantOrbID,
+                    kgrid=sc,omega_list=z,lat_vecs=overlat_list,eta=eta,spinor=True,
+                    nthreads=nthreads)
         
-        # calc. exchange coupling energies for each bond
-        for ibondType, bondType in enumerate(bondList):
-            for bond in bondType:
-                i_overlat_p=overLat_id_dic[tuple(bond.overLat)]
-                i_overlat_n=overLat_id_dic[tuple(-bond.overLat)]
+            # calc. charge density and spin density
+            diag_list=np.array([np.diag(np.linalg.inv(hr.homeOverlap[relevantOrbID_list,:][:,relevantOrbID_list])@rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
+            rho_of_each_orb=sum(diag_list)
+            print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
+            print("Mag.mom of source atoms: %.6f"%(
+                sum(rho_of_each_orb[len(relevantOrbID_list)//2:])-
+                sum(rho_of_each_orb[:len(relevantOrbID_list)//2])))
+
+            # calc. exchange coupling energies for each bond
+            for ibondType, bondType in enumerate(bondList):
+                for bond in bondType:
+                    i_overlat_p=overLat_id_dic[tuple(bond.overLat)]
+                    i_overlat_n=overLat_id_dic[tuple(-bond.overLat)]
             
-                sourceOrbList=bond.sourceOrb.wannIDList
-                targetOrbList=bond.targetOrb.wannIDList
-                p_source=hr.getAtomicSelfEnergy(sourceOrbList)
-                p_target=hr.getAtomicSelfEnergy(targetOrbList)
+                    sourceOrbList=bond.sourceOrb.wannIDList
+                    targetOrbList=bond.targetOrb.wannIDList
+                    p_source=hr.getAtomicSelfEnergy(sourceOrbList)
+                    p_target=hr.getAtomicSelfEnergy(targetOrbList)
             
-                orbID_source_up=list(orbIDMapFromStandardToRelevant[sourceOrbList])
-                orbID_source_dn=list(orbIDMapFromStandardToRelevant[[i+hr.norb//2 for i in sourceOrbList]])
-                orbID_target_up=list(orbIDMapFromStandardToRelevant[targetOrbList])
-                orbID_target_dn=list(orbIDMapFromStandardToRelevant[[i+hr.norb//2 for i in targetOrbList]])
-                orbID_source=orbID_source_up+orbID_source_dn
-                orbID_target=orbID_target_up+orbID_target_dn
+                    orbID_source_up=list(orbIDMapFromStandardToRelevant[sourceOrbList])
+                    orbID_source_dn=list(orbIDMapFromStandardToRelevant[[i+hr.norb//2 for i in sourceOrbList]])
+                    orbID_target_up=list(orbIDMapFromStandardToRelevant[targetOrbList])
+                    orbID_target_dn=list(orbIDMapFromStandardToRelevant[[i+hr.norb//2 for i in targetOrbList]])
+                    orbID_source=orbID_source_up+orbID_source_dn
+                    orbID_target=orbID_target_up+orbID_target_dn
                 
-                J=0j
-                J_orbDecomp=np.zeros((p_source.shape[0],p_target.shape[0]),dtype=complex)
-                J_a_xx=0j
-                J_a_yy=0j
-                J_a_xy=0j
-                DMI=np.zeros(3,dtype=complex)
-                DMI_orbDecomp=np.zeros((3,p_source.shape[0],p_target.shape[0]),dtype=complex)
-                for iw in range(npoints):
-                    rG_w_p=rG_w_lat[iw][i_overlat_p][orbID_source][:,orbID_target]
-                    rG_w_p_pauli_block =aux.PauliBlock(rG_w_p)
+                    J=0j
+                    J_orbDecomp=np.zeros((p_source.shape[0],p_target.shape[0]),dtype=complex)
+                    J_a_xx=0j
+                    J_a_yy=0j
+                    J_a_xy=0j
+                    DMI=np.zeros(3,dtype=complex)
+                    DMI_orbDecomp=np.zeros((3,p_source.shape[0],p_target.shape[0]),dtype=complex)
+                    for iw in range(npoints):
+                        rG_w_p=rG_w_lat[iw][i_overlat_p][orbID_source][:,orbID_target]
+                        rG_w_p_pauli_block =aux.PauliBlock(rG_w_p)
 
-                    rG_w_n=rG_w_lat[iw][i_overlat_n][orbID_target][:,orbID_source]
-                    rG_w_n_pauli_block =aux.PauliBlock(rG_w_n)
+                        rG_w_n=rG_w_lat[iw][i_overlat_n][orbID_target][:,orbID_source]
+                        rG_w_n_pauli_block =aux.PauliBlock(rG_w_n)
 
-                    AMat=np.zeros((4,4),dtype=complex)
-                    AMat_orbDecomp=np.zeros((4,4,p_source.shape[0],p_target.shape[0]),dtype=complex)
-                    for i in range(4):
-                        for j in range(4):
-                            #print(p_source.shape,rG_w_p_pauli_block[i].shape,p_target.shape,rG_w_n_pauli_block[j].shape)
-                            route1=p_source@rG_w_p_pauli_block[i]
-                            route2=p_target@rG_w_n_pauli_block[j]
-                            for iorb_source in range(p_source.shape[0]):
-                                for iorb_target in range(p_target.shape[0]):
-                                    AMat_orbDecomp[i,j,iorb_source,iorb_target]=route1[iorb_source,iorb_target]*route2[iorb_target,iorb_source]
-                            AMat[i,j]=np.sum(AMat_orbDecomp[i,j])#np.trace(p_source@rG_w_p_pauli_block[i]@p_target@rG_w_n_pauli_block[j])
+                        AMat=np.zeros((4,4),dtype=complex)
+                        AMat_orbDecomp=np.zeros((4,4,p_source.shape[0],p_target.shape[0]),dtype=complex)
+                        for i in range(4):
+                            for j in range(4):
+                                #print(p_source.shape,rG_w_p_pauli_block[i].shape,p_target.shape,rG_w_n_pauli_block[j].shape)
+                                route1=p_source@rG_w_p_pauli_block[i]
+                                route2=p_target@rG_w_n_pauli_block[j]
+                                for iorb_source in range(p_source.shape[0]):
+                                    for iorb_target in range(p_target.shape[0]):
+                                        AMat_orbDecomp[i,j,iorb_source,iorb_target]=route1[iorb_source,iorb_target]*route2[iorb_target,iorb_source]
+                                AMat[i,j]=np.sum(AMat_orbDecomp[i,j])#np.trace(p_source@rG_w_p_pauli_block[i]@p_target@rG_w_n_pauli_block[j])
 
-                    J+=2*(AMat[0,0]-AMat[1,1]-AMat[2,2]-AMat[3,3])*dz[iw]*weights[iw]
-                    J_orbDecomp+=2*(AMat_orbDecomp[0,0]-AMat_orbDecomp[1,1]-AMat_orbDecomp[2,2]-AMat_orbDecomp[3,3])*dz[iw]*weights[iw]
-                    J_a_xx+=2*(AMat[1,1]+AMat[1,1])*dz[iw]*weights[iw]
-                    J_a_yy+=2*(AMat[2,2]+AMat[2,2])*dz[iw]*weights[iw]
-                    J_a_xy+=2*(AMat[1,2]+AMat[2,1])*dz[iw]*weights[iw]
-                    DMI[0]+=2j*(AMat[0,1]-AMat[1,0])*dz[iw]*weights[iw]
-                    DMI[1]+=2j*(AMat[0,2]-AMat[2,0])*dz[iw]*weights[iw]
-                    DMI_orbDecomp[0,...]+=2j*(AMat_orbDecomp[0,1]-AMat_orbDecomp[1,0])*dz[iw]*weights[iw]
-                    DMI_orbDecomp[1,...]+=2j*(AMat_orbDecomp[0,2]-AMat_orbDecomp[2,0])*dz[iw]*weights[iw]
+                        J+=2*(AMat[0,0]-AMat[1,1]-AMat[2,2]-AMat[3,3])*dz[iw]*weights[iw]
+                        J_orbDecomp+=2*(AMat_orbDecomp[0,0]-AMat_orbDecomp[1,1]-AMat_orbDecomp[2,2]-AMat_orbDecomp[3,3])*dz[iw]*weights[iw]
+                        J_a_xx+=2*(AMat[1,1]+AMat[1,1])*dz[iw]*weights[iw]
+                        J_a_yy+=2*(AMat[2,2]+AMat[2,2])*dz[iw]*weights[iw]
+                        J_a_xy+=2*(AMat[1,2]+AMat[2,1])*dz[iw]*weights[iw]
+                        DMI[0]+=2j*(AMat[0,1]-AMat[1,0])*dz[iw]*weights[iw]
+                        DMI[1]+=2j*(AMat[0,2]-AMat[2,0])*dz[iw]*weights[iw]
+                        DMI_orbDecomp[0,...]+=2j*(AMat_orbDecomp[0,1]-AMat_orbDecomp[1,0])*dz[iw]*weights[iw]
+                        DMI_orbDecomp[1,...]+=2j*(AMat_orbDecomp[0,2]-AMat_orbDecomp[2,0])*dz[iw]*weights[iw]
                     
-                    #DMI[2]+=2j*(a0z-az0)*dz[iw]*weights[iw]
+                        #DMI[2]+=2j*(a0z-az0)*dz[iw]*weights[iw]
 
-                bond.exchangeEnergy=J.imag/2
-                bond.Jani=np.array([[J_a_xx,J_a_xy],[J_a_xy,J_a_yy]]).imag/2
-                bond.DMI=DMI[:2].imag/2
+                    bond.exchangeEnergy[ifermi]=J.imag/2
+                    bond.Jani[ifermi]=np.array([[J_a_xx,J_a_xy],[J_a_xy,J_a_yy]]).imag/2
+                    bond.DMI[ifermi]=DMI[:2].imag/2
                 
-                print("bondType%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f"%(
-                    ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
-                    J.imag/4*1000,J_a_xx.imag/4*1000,
-                    J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
-                fout.write("bondType%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f\n"%(
-                    ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
-                    J.imag/4*1000,J_a_xx.imag/4*1000,
-                    J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
-                fout.write("J (meV) decomposed to orbital-paris\n")
-                for iorb_source in range(p_source.shape[0]):
-                    for iorb_target in range(p_target.shape[0]):
-                        fout.write(f"{J_orbDecomp.imag[iorb_source,iorb_target]/4*1000:10.3f}")
-                    fout.write("\n")
-                fout.write("Dx (meV) decomposed to orbital-paris\n")
-                for iorb_source in range(p_source.shape[0]):
-                    for iorb_target in range(p_target.shape[0]):
-                        fout.write(f"{DMI_orbDecomp.imag[0,iorb_source,iorb_target]/4*1000:10.3f}")
-                    fout.write("\n")
-                fout.write("Dy (meV) decomposed to orbital-paris\n")
-                for iorb_source in range(p_source.shape[0]):
-                    for iorb_target in range(p_target.shape[0]):
-                        fout.write(f"{DMI_orbDecomp.imag[1,iorb_source,iorb_target]/4*1000:10.3f}")
-                    fout.write("\n")
-            bond.exchangeEnergyMatrix=np.diag(np.array([bond.exchangeEnergy,bond.exchangeEnergy,bond.exchangeEnergy]))
-            J_list_new[ibondType,:,:]=bond.exchangeEnergyMatrix
-        
-        # compute averaged J_list_new
-        #J_list_new=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
-        # check convergence
-        if Jcvg<0:
-            print("Warning: no convergence check. Use the results at your own risk!")
-            break
-        #print(J_list_new)
-        #print(J_list_old)
-        dJ=J_list_new-J_list_old
-        dJ_max=abs(dJ).max()
-        print("Max dJ= %.6f"%dJ_max)
-        if iteration_num>0 and dJ_max<Jcvg:
-            print("----- Accuracy reached -----")
-            break
-        J_list_old=J_list_new.copy()
-        iteration_num+=1
-    else:
-        print("Warning: Accuracy is not reached. Use the results at your own risk!")
+                    print("bondType%d ifermi%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f"%(
+                        ibondType,ifermi,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
+                        J.imag/4*1000,J_a_xx.imag/4*1000,
+                        J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
+                    fout.write("bondType%d ifermi%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f\n"%(
+                        ibondType,ifermi,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
+                        J.imag/4*1000,J_a_xx.imag/4*1000,
+                        J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
+                    fout.write("J (meV) decomposed to orbital-paris\n")
+                    for iorb_source in range(p_source.shape[0]):
+                        for iorb_target in range(p_target.shape[0]):
+                            fout.write(f"{J_orbDecomp.imag[iorb_source,iorb_target]/4*1000:10.3f}")
+                        fout.write("\n")
+                    fout.write("Dx (meV) decomposed to orbital-paris\n")
+                    for iorb_source in range(p_source.shape[0]):
+                        for iorb_target in range(p_target.shape[0]):
+                            fout.write(f"{DMI_orbDecomp.imag[0,iorb_source,iorb_target]/4*1000:10.3f}")
+                        fout.write("\n")
+                    fout.write("Dy (meV) decomposed to orbital-paris\n")
+                    for iorb_source in range(p_source.shape[0]):
+                        for iorb_target in range(p_target.shape[0]):
+                            fout.write(f"{DMI_orbDecomp.imag[1,iorb_source,iorb_target]/4*1000:10.3f}")
+                        fout.write("\n")
+                bond.exchangeEnergyMatrix=np.diag(np.array([bond.exchangeEnergy,bond.exchangeEnergy,bond.exchangeEnergy]))
+                J_list_new[ibondType,:,:]=bond.exchangeEnergyMatrix
+
+            del rG_w_lat
+            # compute averaged J_list_new
+            #J_list_new=(J_list_old*iteration_num+J_list_new)/(iteration_num+1)
+            # check convergence
+            if Jcvg<0:
+                print("Warning: no convergence check. Use the results at your own risk!")
+                break
+            #print(J_list_new)
+            #print(J_list_old)
+            dJ=J_list_new-J_list_old
+            dJ_max=abs(dJ).max()
+            print("Max dJ= %.6f"%dJ_max)
+            if iteration_num>0 and dJ_max<Jcvg:
+                print("----- Accuracy reached -----")
+                break
+            J_list_old=J_list_new.copy()
+            iteration_num+=1
+        else:
+            print("Warning: Accuracy is not reached. Use the results at your own risk!")
     fout.close()
     #for Jmat, bondType in zip(J_list_new,bondList):
     #    bondType[0].exchangeEnergyMatrix=Jmat
