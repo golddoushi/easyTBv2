@@ -3,7 +3,7 @@
 #
 from system import System
 import numpy as np
-from auxiliary import showElapsedTime, print_matrix
+from auxiliary import showElapsedTime, print_matrix, projectionOperator
 from scipy.constants import elementary_charge, hbar, angstrom
 from scipy.constants import k as kB
 
@@ -203,7 +203,7 @@ class PDOS(Energy):
         self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(kgrid)
 
 class Velocity(Energy):
-    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0) -> None:
+    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, projection=None) -> None:
         '''
         Compute velocity matrix in original basis and eigen-basis
 
@@ -239,8 +239,19 @@ class Velocity(Energy):
             for iR, Rvec in enumerate(model.iRvec):
                 self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-
             self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
+
+        if projection != None:
+            proj1=projectionOperator(projection['source'],model.atomicOrbInfoList,model.norbs)
+            proj2=projectionOperator(projection['target'],model.atomicOrbInfoList,model.norbs)
+            proj1=proj1[None,None,None,None,:,:]
+            proj2=proj2[None,None,None,None,:,:]
+            RHam_K_proj=(proj1@self.RHam_K@proj2 + proj2@self.RHam_K@proj1)/2
+            self.velocity_K_proj=vectors.conj().transpose((0,1,2,3,5,4)) @ RHam_K_proj @ vectors
+
+            if model.overlap:
+                RO_K_proj=(proj1@self.RO_K@proj2 + proj2@self.RO_K@proj1)/2
+                self.velocity_K_proj -= vectors.conj().transpose((0,1,2,3,5,4)) @ RO_K_proj @ (vectors *self.energies[...,None,None,self.ibmin:])
 
 class BerryCurv(Velocity):
     
@@ -285,7 +296,7 @@ class AnormalousHallConductance(BerryCurv):
         if verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
 class SpinVelocity(Velocity):
-    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0) -> None:
+    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, currentProjection=[], spincurrentProjection=[]) -> None:
         '''
         Compute spin velocity matrix in original basis and eigen-basis
 
@@ -298,7 +309,7 @@ class SpinVelocity(Velocity):
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
         igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
         '''
-        super().__init__(model, kgrid, phaseshift,verbose)
+        super().__init__(model, kgrid, phaseshift, verbose, currentProjection)
         self.Iodd = True
         #model.getSpinMatrice()
         #showElapsedTime(extraInfo=f"spin op. in ao.-basis constructed")
@@ -315,7 +326,7 @@ class SpinVelocity(Velocity):
         if verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
 class SpinBerryCurv(SpinVelocity):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0) -> None:
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0, currentProjection=None, spincurrentProjection=None) -> None:
         '''
         Calc. spin Berry curvature \Omega^{alpha,gamma}_{k,mn}.
 
@@ -325,19 +336,46 @@ class SpinBerryCurv(SpinVelocity):
 
         Indexing: spinBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
         '''
-        super().__init__(model, kgrid, phaseshift, verbose)
+        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, spincurrentProjection)
         self.degen=degen # update the degeneracy threthold
         self.eta=eta
         self.smr_type=smr_type
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
-        self.spinBerryCurv=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
+        velocity_K=self.velocity_K
+        spinVelocity_K=self.spinVelocity_K
+        if currentProjection!=None:
+            velocity_K=self.velocity_K_proj
+        if spincurrentProjection!=None:
+            spinVelocity_K=self.spinVelocity_K_proj
         #eps=np.arange(3)
+        self.spinBerryCurv=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
         for ialpha in range(3):
             for ibeta in range(3):
                 for igamma in range(3):
-                    self.spinBerryCurv[...,ialpha,ibeta,igamma,:]=-2*np.diagonal(self.spinVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*self.velocity_K[...,ialpha,:,:]),0,-2,-1).imag
+                    self.spinBerryCurv[...,ialpha,ibeta,igamma,:]=-2*np.diagonal(spinVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*velocity_K[...,ialpha,:,:]),0,-2,-1).imag
+        if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
+
+class SpinVeloVelo(SpinVelocity):
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, verbose=0) -> None:
+        '''
+        Calc. correlation of spin velocity and velocity at each k-point \Omega^{alpha,beta,gamma}_{k,m}.
+
+        alpha, beta can be x, y, z, denoting the (cart.) space direction, corresponding to the direction of velocity and spin velocity
+        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the spin-polarization. 
+        k denotes the crystal moment, m indexes the bands.
+
+        Indexing: spinVeloVelo[ik1, ik2, ik3, ialpha, ibeta, igamma, ieig]
+        '''
+        super().__init__(model, kgrid, phaseshift, verbose)
+
+        self.spinVeloVelo=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
+        for ialpha in range(3):
+            for ibeta in range(3):
+                for igamma in range(3):
+                    self.spinVeloVelo[...,ialpha,ibeta,igamma,:]=(np.diagonal(self.spinVelocity_K[...,ibeta,igamma,:,:],0,-2,-1) * np.diagonal(self.velocity_K[...,ialpha,:,:],0,-2,-1)).real
+                    #self.spinVeloVelo[...,ialpha,ibeta,igamma,:]=(np.diagonal(self.velocity_K[...,ibeta,:,:],0,-2,-1) * np.diagonal(self.velocity_K[...,ialpha,:,:],0,-2,-1)).real
         if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class Spin_x_Velocity(Velocity):
@@ -376,11 +414,11 @@ class Spin_x_Velocity(Velocity):
         if verbose==2: showElapsedTime(extraInfo=f"Spin_x_Velocity in eig.-basis finished")
 
 class SpinHallConductance(SpinBerryCurv):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=0.000001, fermiList=[0.,], verbose=0) -> None:
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=0.000001, fermiList=[0.,], verbose=0, currentProjection=None, spincurrentProjection=None) -> None:
         '''
         Spin hall conductance in (S/m hbar/2e)
         '''
-        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose)
+        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose, currentProjection, spincurrentProjection)
 
         sigma=np.zeros((len(fermiList),3,3,3))
 
@@ -394,27 +432,6 @@ class SpinHallConductance(SpinBerryCurv):
         
         self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
         if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
-
-class SpinVeloVelo(SpinVelocity):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, verbose=0) -> None:
-        '''
-        Calc. correlation of spin velocity and velocity at each k-point \Omega^{alpha,beta,gamma}_{k,m}.
-
-        alpha, beta can be x, y, z, denoting the (cart.) space direction, corresponding to the direction of velocity and spin velocity
-        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the spin-polarization. 
-        k denotes the crystal moment, m indexes the bands.
-
-        Indexing: spinVeloVelo[ik1, ik2, ik3, ialpha, ibeta, igamma, ieig]
-        '''
-        super().__init__(model, kgrid, phaseshift, verbose)
-
-        self.spinVeloVelo=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
-        for ialpha in range(3):
-            for ibeta in range(3):
-                for igamma in range(3):
-                    #self.spinVeloVelo[...,ialpha,ibeta,igamma,:]=(np.diagonal(self.spinVelocity_K[...,ibeta,igamma,:,:],0,-2,-1) * np.diagonal(self.velocity_K[...,ialpha,:,:],0,-2,-1)).real
-                    self.spinVeloVelo[...,ialpha,ibeta,igamma,:]=(np.diagonal(self.velocity_K[...,ibeta,:,:],0,-2,-1) * np.diagonal(self.velocity_K[...,ialpha,:,:],0,-2,-1)).real
-        if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class SpinHallConductanceRashiba(SpinVeloVelo):
     def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, T=300, fermiList=[0.,], verbose=0) -> None:

@@ -17,36 +17,6 @@ global time0
 time0=0
 SYMPREC=1e-4
 
-def getVBM(energies:np.ndarray,fermi=0.) -> np.ndarray:
-    '''
-    Caculate the highest occupied band energy at a grid of BZ.
-
-    Parameters
-    ----------
-    - energies : array-like, float
-       band energies on a grid or a path, the band index should be in the last axis
-    - fermi : float
-       fermi energy
-    '''
-    vb_condition=energies <= fermi
-    low_bound = np.min(energies)
-    return np.max((energies + low_bound) * vb_condition, axis=(-1,)) - low_bound
-
-def getCBM(energies:np.ndarray,fermi=0.) -> np.ndarray:
-    '''
-    Caculate the lowest unoccupied band energy at a grid of BZ.
-
-    Parameters
-    ----------
-    - energies : array-like, float
-       band energies on a grid or a path, the band index should be in the last axis
-    - fermi : float
-       fermi energy
-    '''
-    cb_condition=energies > fermi
-    up_bound = np.max(energies)
-    return np.min((energies - up_bound) * cb_condition, axis=(-1,)) + up_bound
-
 def getMSD(input,overavg=True,bestChoice=True,verbose=False):
     '''
     SHOULD BE ABANDONED, use np.std rather
@@ -613,6 +583,32 @@ def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[],ispin=1):
         for shell in atom['orbital index']: atomOrb += shell
         atom_orb_index_list.append(atomOrb)
     return atom_orb_index_list
+
+def projectionOperator(projection,atom_orb_info,norbs):
+    '''
+    Build projection matrix based on the selected atom shells
+
+    Parameters:
+    -----------
+    projection : list
+      contains all the atom shells, with form of (atom_id, (shell_id0, shell_id1,...)).
+    atom_orb_info : list
+      atom_orb_index_list[iatom] gives the global orbital indexes relevant the the iatom
+    norbs : int
+      total num. of orb-basis
+
+    Returns:
+    --------
+    proj_mat : np.ndarray
+       diagonal matrix with element = 1 or 0. The projected orbitals have 1, others are 0.
+    '''
+    proj_orb_index_list=[]
+    for atom_id, shell_ids in projection:
+        for shell_id in shell_ids:
+            proj_orb_index_list += atom_orb_info[atom_id]['orbital index'][shell_id]
+    proj=np.zeros(norbs)
+    proj[proj_orb_index_list]=1
+    return np.diag(proj)
     
 def PauliBlock(p_full:np.ndarray):
     shape=p_full.shape
