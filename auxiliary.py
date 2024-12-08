@@ -17,6 +17,36 @@ global time0
 time0=0
 SYMPREC=1e-4
 
+def getVBM(energies:np.ndarray,fermi=0.) -> np.ndarray:
+    '''
+    Caculate the highest occupied band energy at a grid of BZ.
+
+    Parameters
+    ----------
+    - energies : array-like, float
+       band energies on a grid or a path, the band index should be in the last axis
+    - fermi : float
+       fermi energy
+    '''
+    vb_condition=energies <= fermi
+    low_bound = np.min(energies)
+    return np.max((energies + low_bound) * vb_condition, axis=(-1,)) - low_bound
+
+def getCBM(energies:np.ndarray,fermi=0.) -> np.ndarray:
+    '''
+    Caculate the lowest unoccupied band energy at a grid of BZ.
+
+    Parameters
+    ----------
+    - energies : array-like, float
+       band energies on a grid or a path, the band index should be in the last axis
+    - fermi : float
+       fermi energy
+    '''
+    cb_condition=energies > fermi
+    up_bound = np.max(energies)
+    return np.min((energies - up_bound) * cb_condition, axis=(-1,)) + up_bound
+
 def getMSD(input,overavg=True,bestChoice=True,verbose=False):
     '''
     SHOULD BE ABANDONED, use np.std rather
