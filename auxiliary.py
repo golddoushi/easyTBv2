@@ -195,6 +195,127 @@ def getCombinationLoop(input_list=[],ncomb=1,maxComb=-1):
             break
     return comb_list
 
+def quicksort(input_list=[]):
+    '''
+    THIS SHOULD BE ABANDONED, use np.sort rather
+    Sort the input list and return a sort index list
+    e.g. we want to sort input_list = [1, 3, 2, 5, 0]
+    then the function will return the sorted INDEX:
+        output = [4, 0, 2, 1, 3]
+        its first element is 4, since the lowest num. 0
+        is at 4th position in original input_list, and so on
+    
+    WARNING: the input_list will also be changed forever. 
+    '''
+    def __firstSort(input_list,sort_list,low,high):
+        l=low;h=high
+        split=input_list[low]
+        
+        while(l<h):
+            while(input_list[h]>split):
+                h-=1
+                
+            if(l<h):
+                input_list[l]=input_list[h]
+                input_list[h]=split
+                
+                sort_tmp=sort_list[l]
+                sort_list[l]=sort_list[h]
+                sort_list[h]=sort_tmp
+                
+                l+=1
+            
+            while(input_list[l]<split):
+                l+=1
+            
+            if l<h :
+                input_list[h]=input_list[l]
+                input_list[l]=split
+                
+                sort_tmp=sort_list[l]
+                sort_list[l]=sort_list[h]
+                sort_list[h]=sort_tmp
+                
+                h-=1
+        
+        if l>low :
+            __firstSort(input_list,sort_list,low,h-1)
+            
+        if h<high:
+            __firstSort(input_list,sort_list,l+1,high)
+    if len(input_list)==1:
+        return [0]    
+    if len(input_list)==0:
+        print('ERROR: try to sort empty list')
+        exit()
+        return []
+    sort_list=[]
+    high=len(input_list)-1
+    for i in range(0,high+1):
+        sort_list.append(i)
+    __firstSort(input_list,sort_list,0,high)            
+    return sort_list
+
+def quicksort_inverse(input_list=[]):
+    '''
+    THIS SHOULD BE ABANDONED, use np.sort rather
+    Sort the input list and return a sort index list
+    e.g. we want to sort input_list = [1, 3, 2, 5, 0]
+    then the function will return the sorted INDEX:
+        output = [3, 1, 2, 0, 4]
+        its first element is 3, since the highest num. 5
+        is at 3rd position in original input_list, and so on
+    
+    WARNING: the input_list will also be changed forever. 
+    '''
+    def __firstSort(input_list,sort_list,low,high):
+        l=low;h=high
+        split=input_list[low]
+        
+        while(l<h):
+            while(input_list[h]<split):
+                h-=1
+                
+            if(l<h):
+                input_list[l]=input_list[h]
+                input_list[h]=split
+                
+                sort_tmp=sort_list[l]
+                sort_list[l]=sort_list[h]
+                sort_list[h]=sort_tmp
+                
+                l+=1
+            
+            while(input_list[l]>split):
+                l+=1
+            
+            if l<h :
+                input_list[h]=input_list[l]
+                input_list[l]=split
+                
+                sort_tmp=sort_list[l]
+                sort_list[l]=sort_list[h]
+                sort_list[h]=sort_tmp
+                
+                h-=1
+        
+        if l>low :
+            __firstSort(input_list,sort_list,low,h-1)
+            
+        if h<high:
+            __firstSort(input_list,sort_list,l+1,high)
+    if len(input_list)==1:
+        return [0]    
+    if len(input_list)==0:
+        print('ERROR: try to sort empty list')
+        exit()
+    sort_list=[]
+    high=len(input_list)-1
+    for i in range(0,high+1):
+        sort_list.append(i)
+    __firstSort(input_list,sort_list,0,high)            
+    return sort_list
+
 def createDir(path):
     try:
         os.mkdir(path)
