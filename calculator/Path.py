@@ -92,7 +92,7 @@ class EnergyOnPath(CalculatorOnPath):
                 phase=np.exp(2j*np.pi*kpt@Rvec)
                 self.E_K_AO[ikpt]+=phase*ER
                 self.O_K_AO[ikpt]+=phase*OR
-        if self.verbose==2: showElapsedTime(extraInfo=f"FFT energy_R to energy_K and O_R to O_K on path of {self.nkpt=} finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"Normal FT energy_R to energy_K and O_R to O_K on path of {self.nkpt=} finished")
 
         overlapEigValues, Wk =solveOverlap(self.O_K_AO)
         assert overlapEigValues.min() > 1e-6, f"eigen-value of overlap matrix is too small or negative {overlapEigValues.min()=}"
@@ -103,11 +103,9 @@ class EnergyOnPath(CalculatorOnPath):
         EnergyMatrixInK_tilde=WkLam.conj().transpose((0,2,1,)) @ self.E_K_AO @ WkLam
         if self.verbose==2: showElapsedTime(extraInfo=f"Overlapped energy")
         self.energies, vecsBeforeOverlap = np.linalg.eigh(EnergyMatrixInK_tilde)
-        if self.verbose==2: showElapsedTime(extraInfo=f"eigen-eqs.")
+        if self.verbose==2: showElapsedTime(extraInfo=f"general eigen-eqs.")
         self.vectors = WkLam @ vecsBeforeOverlap
         if self.verbose==2: showElapsedTime(extraInfo=f"overlapping on eig.-vecs.")
-
-        #self.getEnergyWindow()
 
     def solveEigenEquation(self):
         '''
@@ -213,6 +211,25 @@ class BerryCurvOnPath(VelocityOnPath):
         for ialpha in range(3):
             self.BerryCurv[...,ialpha,:]=-2*np.diagonal(self.velocity_K[...,eps[(ialpha+1)%3],:,-4:] @ (dEInverse2[...,-4:,:]*self.velocity_K[...,eps[(ialpha+2)%3],-4:,:]),0,-2,-1).imag
         if verbose==2: showElapsedTime(extraInfo=f"Berry curvature finished")
+
+class SpinExpectationOnPath(EnergyOnPath):
+    def __init__(self, model, KPOINTS="./KPOINTS", verbose=0):
+        '''
+        Compute spin matrix in eigen-basis
+
+        Indexing
+        ---------
+        - self.spin_eig[ik, igamma, ieig, jeig] gives spin matrix in eigen-basis. 
+          igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        '''
+        super().__init__(model, KPOINTS, verbose)
+        self.Iodd = True
+        vectors=self.vectors[:,None,:,self.ibmin:]
+        if model.overlap:
+            self.spin_eig=vectors.conj().transpose((0,1,3,2)) @ model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        else:
+            self.spin_eig=vectors.conj().transpose((0,1,3,2)) @ model.spin[None,:,:,:] @ vectors
+        if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
 
 class SpinVelocityOnPath(VelocityOnPath):
     def __init__(self, model: System, KPOINTS="./KPOINTS", verbose=0) -> None:

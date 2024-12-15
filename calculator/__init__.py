@@ -451,4 +451,4 @@ class SpinHallConductanceRashiba(SpinVeloVelo):
         self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**3/hbar**2/angstrom/2)/model.Vcell
         if verbose==2: showElapsedTime(extraInfo=f"Rashiba spin Hall conductance finished")
 
-from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
+from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, SpinExpectationOnPath

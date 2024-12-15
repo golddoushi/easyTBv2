@@ -1,7 +1,7 @@
 import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
-from multiprocessing import Pool, freeze_support
+from multiprocessing import freeze_support
 
 import paramReader
 paramReader.readGlobalConst()
