@@ -30,8 +30,14 @@ class BZGridTask:
         - ncores : int
             parallel number
         '''
-        FastGrid=np.array(list(model.mp_grid))+1
-        #FastGrid=BZGrid
+        FastGrid=np.zeros(3,dtype=int)
+        for icomp, comp in enumerate(model.mp_grid):
+            if comp>1: 
+                FastGrid[icomp]=comp+1
+            elif comp==1:
+                FastGrid[icomp]=1
+            else:
+                raise RuntimeError(f"FFT grid is zero {FastGrid=}")
 
         for icomp in range(3):
             for extra_size in range(BZGrid[icomp]-FastGrid[icomp]+1):
@@ -58,7 +64,7 @@ class BZGridTask:
                     'qlen':qlen,
                     'phase':np.array([np.exp(2j*np.pi*((q/BZGrid) @ Rvec)) for Rvec in model.iRvec]),
                     'model':model,
-                    'FFT grid':FastGrid,
+                    'FFT grid':tuple(FastGrid),
                     }
                     newTask.update(args)
                     if not BZSymm: 
