@@ -9,7 +9,7 @@ import numpy as np
 
 from task import BZGridTask
 from system import System_omx, System_w90
-from calculator import Velocity, SpinHallConductance, Energy, SpinBerryCurv, AnormalousHallConductance, EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, PDOS, SpinHallConductanceRashiba
+from calculator import Velocity, Velocity_diag, SpinHallConductance, Energy, SpinBerryCurv, AnormalousHallConductance, EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, PDOS, SpinHallConductanceRashiba
 from auxiliary import showElapsedTime, getCBM, getVBM
 from symmetry import SYMMETRY_PRECISION
 from fileio import writeVolumeData
@@ -35,16 +35,20 @@ def solveAHC(param):
             "sigma":calc.sigma,"iq":param["iq"]}
 
 def solvePDOS(param):
-    calc=PDOS(param['model'],energyAxis=param['fermi'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026)
+    calc=PDOS(energyAxis=param['fermi'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,model=param['model'],)
     return {"energies":calc.energies,"PDOS":calc.pdos,"iq":param["iq"]}
 
 def solveVelocity(param):
-    calc=Velocity(param['model'],kgrid=param['FFT grid'],)
+    calc=Velocity(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_K,"iq":param["iq"]}
+
+def solveVelocity_diag(param):
+    calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
+    return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FePtH/"
+    mainDir="./mcalc/FeCl2/"
     model=System_omx(
         mainDir=mainDir,
         #hamR="wannier90",
@@ -60,8 +64,9 @@ def run():
             "Pt":(0,0,1,1,2,),
             #"Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
-            "Fe":(0,0,0,1,1,2,2,),
-            "Cl":(1,),
+            "Fe":(0,0,1,1,2,2,),
+            #"Cl":(1,),
+            "Cl":(0,0,1,1,2,3),
             "H":(0,0,1,),
         },
         ispin=2
@@ -81,6 +86,7 @@ def run():
     #fermi=0  # OPNEMX generated wannier model always displays zero fermi energy
     #fermi=-0.141600218424*27.2113845 # OPENMX Sn
     #fermi=-0.16790565257604*27.2113845 # OPENMX Pt
+    fermi=-0.19908723865958*27.2113845 # OPENMX FeCl2
     #fermi=-2.41861676 # VASP Sn
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.0         # VASP 2H-FeCl2
@@ -92,13 +98,13 @@ def run():
     #fermi=9.35224895           # VASP FePt
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
-    fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
+    #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     
     fermiAxis=np.linspace(fermi-0.5,fermi+0.5,101)
     model.setFermi(fermi)
     '''
     # check band intepolation
-    calc=EnergyOnPath(model, mainDir+"/KPOINTS", verbose=2)
+    calc=EnergyOnPath(mainDir+"/KPOINTS", verbose=2, model=model,)
     with open(mainDir+"./tbbands.txt","w") as fout:
         fout.write("#ikpt Energy(eV)\n")
         for iband in range(model.norbs):
@@ -107,41 +113,43 @@ def run():
             fout.write("\n")
     exit()
     #'''
-    BZGrid=(100,100,100)
+    BZGrid=(50,50,1)
     BZSymm=False
-    calc=BZGridTask(model, solveQ, 
+    calc=BZGridTask(model, solveVelocity_diag, 
                     args={"fermi":fermiAxis,
                           #"projected shells for applying current":None,
                           #"projected shells for applying current":{"source":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),], "target":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),]},
                           #"projected shells for applying current":{"source":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
                           #"projected shells for applying current":{"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
                           #"projected shells for applying current":{"source":[(0,(0,1,2,)),] "target":[(0,(0,1,2,)),]},
-                          "projected shells for applying current":{"source":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),], "target":[(0,(0,1,2,)),(0,(0,1,2,)),]},
+                          #"projected shells for applying current":{"source":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),], "target":[(0,(0,1,2,)),(0,(0,1,2,)),]},
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
-                    ncores=96)
+                    ncores=8)
 
-    #pdos=np.zeros((101,model.norbs,))
-    #energies=np.zeros(tuple(BZGrid)+(model.norbs,))
-    #velocity=np.zeros(tuple(BZGrid)+(3,model.norbs,))
-    #berryCurv=np.zeros(tuple(BZGrid)+(3,model.norbs,))
-    spinBerryCurv=np.zeros(BZGrid+(3,3,3))
+    _,_,_,nbands=calc.results[0]["energies"].shape
+    #pdos=np.zeros((101,nbands,))
+    #energies=np.zeros(tuple(BZGrid)+(nbands,))
+    velocity=np.zeros(tuple(BZGrid)+(3,nbands,))
+    #berryCurv=np.zeros(tuple(BZGrid)+(3,nbands,))
+    #spinBerryCurv=np.zeros(BZGrid+(3,3,3))
     #spinBerryCurvOnFermi=np.zeros((BZGrid[0],BZGrid[1],len(fermiAxis),3,3,3))
     sigma=np.zeros((len(fermiAxis),3,3,3))
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=np.diagonal(result_q['velocities'],axis1=-2,axis2=-1)
+        velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['velocities'] # obtained by Velocity_diag
         #berryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['Berry curv']
-        valence=result_q['energies']<=fermi
+        #valence=result_q['energies']<=fermi
         #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
-        _sBC=np.sum(result_q["spin Berry curv"]*valence[...,None,None,None,:],axis=(-1,))
-        spinBerryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=_sBC
+        #_sBC=np.sum(result_q["spin Berry curv"]*valence[...,None,None,None,:],axis=(-1,))
+        #spinBerryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=_sBC
         #for ifermi, f in enumerate(fermiAxis):
         #    valence=result_q['energies']<=f
         #    _sBC=np.sum(result_q["spin Berry curv"]*valence[:,:,:,None,None,None,:],axis=(2,-1,))
         #    spinBerryCurvOnFermi[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],ifermi,:,:,:] += _sBC
-        #continue
+        continue
         if not BZSymm:
             sigma += result_q['sigma']
         else:
@@ -162,7 +170,7 @@ def run():
             fout.write("\n")
     exit()'''
     
-    #'''
+    '''
     sigma/=len(calc.results)
     with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
         fout.write("Fermi(eV)")
@@ -201,21 +209,21 @@ def run():
     '''
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
     #print(f"{energies[:,:,0,27].mean()=}{energies[:,:,0,27].max()=}{energies[:,:,0,27].min()=}")
-    with open("%s/energies.txt"%mainDir,"w") as fout:
-        for ik1 in range(BZGrid[0]):
-            for ik2 in range(BZGrid[1]):
-                for ik3 in range(BZGrid[2]):
-                    kx,ky,kz=kcoor[ik1,ik2,ik3]
-                    fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(model.norbs): fout.write(f"{energies[ik1,ik2,ik3,ib]:15.6E}")
-                    fout.write("\n")
+    #with open("%s/energies.txt"%mainDir,"w") as fout:
+    #    for ik1 in range(BZGrid[0]):
+    #        for ik2 in range(BZGrid[1]):
+    #            for ik3 in range(BZGrid[2]):
+    #                kx,ky,kz=kcoor[ik1,ik2,ik3]
+    #                fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
+    #                for ib in range(model.norbs): fout.write(f"{energies[ik1,ik2,ik3,ib]:15.6E}")
+    #                fout.write("\n")
     with open("%s/vx.txt"%mainDir,"w") as fout:
         for ik1 in range(BZGrid[0]):
             for ik2 in range(BZGrid[1]):
                 for ik3 in range(BZGrid[2]):
                     kx,ky,kz=kcoor[ik1,ik2,ik3]
                     fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(model.norbs): fout.write(f"{velocity[ik1,ik2,ik3,0,ib]:15.6E}")
+                    for ib in range(nbands): fout.write(f"{velocity[ik1,ik2,ik3,0,ib]:15.6E}")
                     fout.write("\n")
     with open("%s/vy.txt"%mainDir,"w") as fout:
         for ik1 in range(BZGrid[0]):
@@ -223,9 +231,9 @@ def run():
                 for ik3 in range(BZGrid[2]):
                     kx,ky,kz=kcoor[ik1,ik2,ik3]
                     fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(model.norbs): fout.write(f"{velocity[ik1,ik2,ik3,1,ib]:15.6E}")
+                    for ib in range(nbands): fout.write(f"{velocity[ik1,ik2,ik3,1,ib]:15.6E}")
                     fout.write("\n")
-    exit()'''
+    exit()#'''
     '''
     import matplotlib.pyplot as plt
     fig=plt.figure()

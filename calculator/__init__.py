@@ -11,7 +11,7 @@ class Calculator():
     Iodd = False  # inversion gives minus
     Todd = False  # time reversal gives minus
 
-    def __init__(self,verbose=0) -> None:
+    def __init__(self,**kwarg) -> None:
         '''
         Calculations on gamma-centered kmesh on BZ
 
@@ -19,21 +19,44 @@ class Calculator():
         -----------
         - model : System
         The basis system, involving the hopping, basis coordinates, lattice matrix and perharps the overlap
-        - kgrid : size-3 int. tuple
-        The size of kmesh
+        - kgrid : tuple(3, dtype=int)
+        Size of kmesh
         - eta   : float
         The relaxation energy, in the same unit with energy, usually eV
         - smr_type : str, "Lorentzian"|"Gaussian"
         - degen : float
-        The threthold two states are degenerated
+        The threthold two states are treated to be degenerated
+        - skip_low : bool
+        To skip lowest and seperated eigen-states IN ALL CASES
+
+        - phaseshift : np.ndarray(self.model.nRvec, dtype=complex)
+        Extra phase for the Bloch states, used for hybrid FFT algorithm. Default: 1, no extra phase shift
         '''
-        if verbose==2: print("initializing calculator module")
-        self.model=None
-        self.kgrid=(1,1,1)
-        self.eta=0.
-        self.smr_type="Lorentzian"
-        self.degen=1e-6
-        self.verbose=verbose
+        defaultSettings={
+            "model":None,
+            "kgrid":(1,1,1),
+            "eta":0.0,
+            "smr_type":"Lorentzian",
+            "degen":1e-6,
+            "skip_low":False,
+
+            "phaseshift":1,
+
+            "verbose":0,
+        }
+        defaultSettings.update(kwarg)
+        self.model:System=defaultSettings["model"]
+        self.kgrid:tuple=defaultSettings["kgrid"]
+        assert type(self.kgrid)==tuple, f"expect tuple type of kgrid but {type(self.kgrid)=}"
+        self.eta=defaultSettings["eta"]
+        self.smr_type=defaultSettings["smr_type"]
+        self.degen=defaultSettings["degen"]
+        self.skip_low=defaultSettings["skip_low"]
+
+        self.phaseshift=defaultSettings["phaseshift"]
+
+        self.verbose=defaultSettings["verbose"]
+        if self.verbose==2: print("initializing calculator module finished")
 
 #
 # Implemented calculaors
@@ -41,7 +64,7 @@ class Calculator():
 # Berry curvature, spin Berry curvature
 #
 class Energy(Calculator):
-    def __init__(self, model:System, kgrid=(1,1,1), phaseshift=1, verbose=0) -> None:
+    def __init__(self, **kwarg) -> None:
         '''
         Solve the eigen-eqs. to obtain eigen-vals. and vecs.
 
@@ -52,21 +75,18 @@ class Energy(Calculator):
 
         self.vectors[ik1, ik2, ik3, ieig, jeig] gives eigen-vecs. in ao basis.
         '''
-        super().__init__()
-        self.kgrid=tuple(kgrid)
-        self.model=model
+        super().__init__(**kwarg)
         self.phase=False
         self.ibmin=0             # ignore low-lying bands
-        self.ibmax=model.norbs   # ignore high bands
-        if type(phaseshift)==np.ndarray: self.phase=True
-        if verbose==2: showElapsedTime(offset=True)
+        if type(self.phaseshift)==np.ndarray: self.phase=True
+        if self.verbose==2: showElapsedTime(offset=True)
         
-        if model.overlap:
-            self.solveGeneralEigenEquation(phaseshift)
+        if self.model.overlap:
+            self.solveGeneralEigenEquation()
         else:
-            self.solveEigenEquation(phaseshift)
+            self.solveEigenEquation()
 
-    def solveGeneralEigenEquation(self,phaseshift):
+    def solveGeneralEigenEquation(self):
         '''
         Solve the general eig.-eqs. 
 
@@ -98,10 +118,10 @@ class Energy(Calculator):
             E_R_AO=self.model.energy_R
             O_R_AO=self.model.overlap_R
         else:
-            assert len(phaseshift)==self.model.nRvec, f'{len(phaseshift)=} {self.model.nRvec=}'
+            assert len(self.phaseshift)==self.model.nRvec, f'{len(self.phaseshift)=} {self.model.nRvec=}'
             
-            E_R_AO=self.model.energy_R*phaseshift[:,None,None]
-            O_R_AO=self.model.overlap_R*phaseshift[:,None,None]
+            E_R_AO=self.model.energy_R*self.phaseshift[:,None,None]
+            O_R_AO=self.model.overlap_R*self.phaseshift[:,None,None]
         
         self.E_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         self.O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
@@ -125,9 +145,9 @@ class Energy(Calculator):
         self.vectors = WkLam @ vecsBeforeOverlap
         if self.verbose==2: showElapsedTime(extraInfo=f"overlapping on eig.-vecs.")
 
-        self.getEnergyWindow()
+        if self.skip_low: self.getEnergyWindow()
 
-    def solveEigenEquation(self,phaseshift):
+    def solveEigenEquation(self):
         '''
         Solve the eig.-eqs. 
 
@@ -136,9 +156,9 @@ class Energy(Calculator):
         if not self.phase:
             HH_R_W=self.model.ham_R
         else:
-            assert len(phaseshift)==self.model.nRvec, f'{len(phaseshift)=} {self.model.nRvec=}'
+            assert len(self.phaseshift)==self.model.nRvec, f'{len(self.phaseshift)=} {self.model.nRvec=}'
             
-            HH_R_W=self.model.ham_R*phaseshift[:,None,None]
+            HH_R_W=self.model.ham_R*self.phaseshift[:,None,None]
         self.ham_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         for iR, Rvec in enumerate(self.model.iRvec):
             self.ham_R_intepolated[tuple(Rvec)]=HH_R_W[iR]
@@ -146,6 +166,8 @@ class Energy(Calculator):
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT ham_R to ham_K on {self.kgrid=} finished")
         self.energies, self.vectors = np.linalg.eigh(self.ham_K)
         if self.verbose==2: showElapsedTime(extraInfo=f"eig.-eqs. solved")
+
+        if self.skip_low: self.getEnergyWindow()
     
     def calcDeltaEInverse(self):
         '''
@@ -157,7 +179,8 @@ class Energy(Calculator):
 
         deltaEInverse[ik1, ik2, ik3, ieig, jeig] = 1/(E_{ki} - E_{kj} - 1j*eta)
         '''
-        self.deltaE = self.energies[:,:,:,self.ibmin:,None] - self.energies[:,:,:,None,self.ibmin:]
+        #self.deltaE = self.energies[:,:,:,self.ibmin:,None] - self.energies[:,:,:,None,self.ibmin:]
+        self.deltaE = self.energies[:,:,:,:,None] - self.energies[:,:,:,None,:]
         self.deltaEInverse=1./(self.deltaE - 1j*self.eta)
         self.deltaEInverse[abs(self.deltaE)<self.degen]=0
         if self.smr_type == 'Lorentzian':
@@ -175,9 +198,11 @@ class Energy(Calculator):
             return
         mid_valence=(valence_bands[nvb-1-ilevel] + valence_bands[nvb-2-ilevel])/2
         self.ibmin=len(self.energies[(0,0,0)][self.energies[(0,0,0)]<mid_valence])
+        self.energies=self.energies[:,:,:,self.ibmin:]
+        self.vectors=self.vectors[:,:,:,:,self.ibmin:]
 
 class PDOS(Energy):
-    def __init__(self, model: System, energyAxis:np.ndarray, eta=0.05, kgrid=(1, 1, 1), phaseshift=1, verbose=0) -> None:
+    def __init__(self, energyAxis:np.ndarray, eta=0.05, **kwarg) -> None:
         '''
         Compute the PDOS
 
@@ -186,24 +211,24 @@ class PDOS(Energy):
         - energy Axis: energy axis for pdos intepolation, in absolute frame, NOT relative to Fermi
         - sigma: gaussian width
         '''
-        super().__init__(model, kgrid, phaseshift, verbose)
+        super().__init__(**kwarg)
 
         NEDOS,=energyAxis.shape
-        self.pdos=np.zeros((NEDOS,model.norbs),dtype=float)
-        for ik1 in range(kgrid[0]):
-            for ik2 in range(kgrid[1]):
-                for ik3 in range(kgrid[2]):
-                    for iband in range(model.norbs):
+        self.pdos=np.zeros((NEDOS,self.model.norbs),dtype=float)
+        for ik1 in range(self.kgrid[0]):
+            for ik2 in range(self.kgrid[1]):
+                for ik3 in range(self.kgrid[2]):
+                    for iband in range(self.model.norbs-self.ibmin):
                         E_band = self.energies[ik1,ik2,ik3,iband]
                         vecs   = self.vectors[ik1,ik2,ik3,:,iband]
                         rho    = abs(vecs)**2
                         if E_band < energyAxis[0] - 10*eta or E_band > energyAxis[-1] + 10*eta: continue
                         tdos=np.exp(-((E_band-energyAxis)/eta)**2/2)
                         self.pdos += tdos[:,None] * rho
-        self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(kgrid)
+        self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(self.kgrid)
 
 class Velocity(Energy):
-    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, projection=None) -> None:
+    def __init__(self, projection=None, **kwarg) -> None:
         '''
         Compute velocity matrix in original basis and eigen-basis
 
@@ -214,48 +239,108 @@ class Velocity(Energy):
         self.velocity_K[ik1, ik2, ik3, idirection, ieig, jeig] gives velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
         '''
-        super().__init__(model, kgrid, phaseshift, verbose)
+        super().__init__(**kwarg)
         self.Todd = True
         self.Iodd = True
         
-        RH_R_W=model.RHam_R
-        self.RHam_R_intepolated=np.zeros(self.kgrid+(3,model.norbs,model.norbs),dtype=complex)
+        RH_R_W=self.model.RHam_R
+        self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
         if self.phase:
-            RH_R_W=RH_R_W*phaseshift[:,None,None,None]
-        for iR, Rvec in enumerate(model.iRvec):
+            RH_R_W=RH_R_W*self.phaseshift[:,None,None,None]
+        for iR, Rvec in enumerate(self.model.iRvec):
             self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
 
-        if verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
-        vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
+        #vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        vectors=self.vectors[:,:,:,None,:,:]
         self.velocity_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.RHam_K @ vectors
-        if verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
 
-        if model.overlap:
-            RO_R_W=model.RO_R
-            self.RO_R_intepolated=np.zeros(self.kgrid+(3,model.norbs,model.norbs),dtype=complex)
+        # extra modifications to velocity due to orbital overlaps
+        if self.model.overlap:
+            RO_R_W=self.model.RO_R
+            self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
             if self.phase:
-                RO_R_W=RO_R_W*phaseshift[:,None,None,None]
-            for iR, Rvec in enumerate(model.iRvec):
+                RO_R_W=RO_R_W*self.phaseshift[:,None,None,None]
+            for iR, Rvec in enumerate(self.model.iRvec):
                 self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-            self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
+            #self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
+            self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,:])
 
         if projection != None:
-            proj1=projectionOperator(projection['source'],model.atomicOrbInfoList,model.norbs)
-            proj2=projectionOperator(projection['target'],model.atomicOrbInfoList,model.norbs)
+            proj1=projectionOperator(projection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(projection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             proj1=proj1[None,None,None,None,:,:]
             proj2=proj2[None,None,None,None,:,:]
             RHam_K_proj=(proj1@self.RHam_K@proj2 + proj2@self.RHam_K@proj1)/2
             self.velocity_K_proj=vectors.conj().transpose((0,1,2,3,5,4)) @ RHam_K_proj @ vectors
 
-            if model.overlap:
+            if self.model.overlap:
                 RO_K_proj=(proj1@self.RO_K@proj2 + proj2@self.RO_K@proj1)/2
-                self.velocity_K_proj -= vectors.conj().transpose((0,1,2,3,5,4)) @ RO_K_proj @ (vectors *self.energies[...,None,None,self.ibmin:])
+                #self.velocity_K_proj -= vectors.conj().transpose((0,1,2,3,5,4)) @ RO_K_proj @ (vectors *self.energies[...,None,None,self.ibmin:])
+                self.velocity_K_proj -= vectors.conj().transpose((0,1,2,3,5,4)) @ RO_K_proj @ (vectors *self.energies[...,None,None,:])
+
+class Velocity_diag(Energy):
+    def __init__(self, projection=None, **kwarg) -> None:
+        '''
+        Compute group velocity in original basis and eigen-basis
+
+        Indexing:
+        self.RHam_K[ik1, ik2, ik3, idirection, iorb, jorb] gives velocity matrix in original basis,
+        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
+
+        self.velocity_diag_K[ik1, ik2, ik3, idirection, ieig] gives group velocity of each eigen-basis.
+        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
+        '''
+        super().__init__(**kwarg)
+        self.Todd = True
+        self.Iodd = True
+        
+        RH_R_W=self.model.RHam_R
+        self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+        if self.phase:
+            RH_R_W=RH_R_W*self.phaseshift[:,None,None,None]
+        for iR, Rvec in enumerate(self.model.iRvec):
+            self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
+        self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+
+        if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
+        vectors=self.vectors[:,:,:,None,:,:]
+        _RHam_K_vector=self.RHam_K @ vectors
+        self.velocity_diag_K=np.sum(vectors.conj() * _RHam_K_vector, axis=(4,))
+        if self.verbose==2: showElapsedTime(extraInfo=f"group velocity of eig.-basis finished")
+
+        # extra modifications to velocity due to orbital overlaps
+        if self.model.overlap:
+            RO_R_W=self.model.RO_R
+            self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+            if self.phase:
+                RO_R_W=RO_R_W*self.phaseshift[:,None,None,None]
+            for iR, Rvec in enumerate(self.model.iRvec):
+                self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
+            self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+            _RO_K_vector=self.RO_K @ (vectors *self.energies[...,None,None,:])
+            self.velocity_diag_K -= np.sum(vectors.conj() *_RO_K_vector, axis=(4,))
+
+        if projection != None:
+            proj1=projectionOperator(projection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(projection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj1=proj1[None,None,None,None,:,:]
+            proj2=proj2[None,None,None,None,:,:]
+            RHam_K_proj=(proj1@self.RHam_K@proj2 + proj2@self.RHam_K@proj1)/2
+            _RHam_K_vector=RHam_K_proj @ vectors
+            self.velocity_diag_K_proj=np.sum(vectors.conj() * _RHam_K_vector, axis=(4,))
+
+            if self.model.overlap:
+                RO_K_proj=(proj1@self.RO_K@proj2 + proj2@self.RO_K@proj1)/2
+                _RO_K_vector=RO_K_proj @ (vectors *self.energies[...,None,None,:])
+                self.velocity_diag_K_proj -= np.sum(vectors.conj() *_RO_K_vector, axis=(4,))
 
 class BerryCurv(Velocity):
     
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=1e-4, smr_type="Lorentzian", degen=1e-6, verbose=0) -> None:
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=1e-4, smr_type="Lorentzian", degen=1e-6, verbose=0, **kwarg) -> None:
         '''
         Calc. Berry curvature \Omega^{alpha}_{k,mn}.
 
@@ -263,7 +348,7 @@ class BerryCurv(Velocity):
 
         Indexing: BerryCurv[ik1, ik2, ik3, idrection, iband, jband]
         '''
-        super().__init__(model, kgrid, phaseshift, verbose)
+        super().__init__(model, kgrid, phaseshift, verbose, **kwarg)
         self.Todd = True
 
         self.eta=eta
@@ -280,15 +365,16 @@ class BerryCurv(Velocity):
 
 class AnormalousHallConductance(BerryCurv):
 
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.0001, smr_type="Lorentzian", degen=0.000001, fermiList=[], verbose=0) -> None:
-        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose)
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.0001, smr_type="Lorentzian", degen=0.000001, fermiList=[], verbose=0, **kwarg) -> None:
+        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose, **kwarg)
         self.Todd = True
 
         sigma=np.zeros(len(fermiList))
 
         berryCurv=self.BerryCurv[...,2,:]
         for ifermi, fermi in enumerate(fermiList):
-            occupy=self.energies[:,:,:,self.ibmin:]<fermi
+            #occupy=self.energies[:,:,:,self.ibmin:]<fermi
+            occupy=self.energies<fermi
             #print(f"{ifermi=:3d}  {len(self.energies[occupy])/np.prod(self.kgrid):8.4f}")
             sigma[ifermi]=np.sum(berryCurv[occupy])
         
@@ -296,7 +382,7 @@ class AnormalousHallConductance(BerryCurv):
         if verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
 class SpinVelocity(Velocity):
-    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, currentProjection=[], spincurrentProjection=[]) -> None:
+    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, currentProjection=[], spincurrentProjection=[], **kwarg) -> None:
         '''
         Compute spin velocity matrix in original basis and eigen-basis
 
@@ -309,11 +395,12 @@ class SpinVelocity(Velocity):
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
         igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
         '''
-        super().__init__(model, kgrid, phaseshift, verbose, currentProjection)
+        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, **kwarg)
         self.Iodd = True
         #model.getSpinMatrice()
         #showElapsedTime(extraInfo=f"spin op. in ao.-basis constructed")
-        vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        #vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        vectors=self.vectors[:,:,:,None,:,:]
         if model.overlap:
             spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
@@ -325,8 +412,37 @@ class SpinVelocity(Velocity):
         self.spinVelocity_K = (sV + sV.transpose((0,1,2,3,4,6,5)).conj())/2#(spin @ velocity + velocity @ spin)/2
         if verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
+class SpinVelocity_diag(Velocity_diag):
+    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, currentProjection=[], spincurrentProjection=[], **kwarg) -> None:
+        '''
+        Compute spin group velocity in original basis and eigen-basis
+
+        Indexing:
+        self.SRHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives spin velocity matrix in original basis,
+        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
+        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+
+        self.spinVelocity_diag_K[ik1, ik2, ik3, idirection, igamma, ieig] gives spin group velocity of each eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
+        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        '''
+        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, **kwarg)
+        self.Iodd = True
+        
+        vectors=self.vectors[:,:,:,None,:,:]
+        if model.overlap:
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        else:
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ vectors
+        if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+        spin=spin_eig[...,None,:,:,:]
+        velocity=self.velocity_K[...,None,:,:]
+        sV=spin @ velocity
+        self.spinVelocity_K = (sV + sV.transpose((0,1,2,3,4,6,5)).conj())/2
+        if verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
+
 class SpinBerryCurv(SpinVelocity):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0, currentProjection=None, spincurrentProjection=None) -> None:
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0, currentProjection=None, spincurrentProjection=None, **kwarg) -> None:
         '''
         Calc. spin Berry curvature \Omega^{alpha,gamma}_{k,mn}.
 
@@ -336,7 +452,7 @@ class SpinBerryCurv(SpinVelocity):
 
         Indexing: spinBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
         '''
-        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, spincurrentProjection)
+        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, spincurrentProjection, **kwarg)
         self.degen=degen # update the degeneracy threthold
         self.eta=eta
         self.smr_type=smr_type
@@ -358,7 +474,7 @@ class SpinBerryCurv(SpinVelocity):
         if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class SpinVeloVelo(SpinVelocity):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, verbose=0) -> None:
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, verbose=0, **kwarg) -> None:
         '''
         Calc. correlation of spin velocity and velocity at each k-point \Omega^{alpha,beta,gamma}_{k,m}.
 
@@ -368,7 +484,7 @@ class SpinVeloVelo(SpinVelocity):
 
         Indexing: spinVeloVelo[ik1, ik2, ik3, ialpha, ibeta, igamma, ieig]
         '''
-        super().__init__(model, kgrid, phaseshift, verbose)
+        super().__init__(model, kgrid, phaseshift, verbose, **kwarg)
 
         self.spinVeloVelo=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
         for ialpha in range(3):
@@ -379,7 +495,7 @@ class SpinVeloVelo(SpinVelocity):
         if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class Spin_x_Velocity(Velocity):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0) -> None:
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0, **kwarg) -> None:
         '''
         Calc. spin x velocity correlation at each k-point: S_alpha^gamma_k = \Sigma_n s^{\gamma}_mn v_{\alpha,nm} / (E_n - E_m +i\eta)**2 
 
@@ -389,7 +505,7 @@ class Spin_x_Velocity(Velocity):
 
         Indexing: spin_x_velocity[ik1, ik2, ik3, ialpha, igamma, ieig]
         '''
-        super().__init__(model, kgrid, phaseshift, verbose)
+        super().__init__(model, kgrid, phaseshift, verbose, **kwarg)
         self.Todd = True
         self.Iodd = True
 
@@ -399,7 +515,8 @@ class Spin_x_Velocity(Velocity):
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
         
-        vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        #vectors=self.vectors[:,:,:,None,:,self.ibmin:]
+        vectors=self.vectors[:,:,:,None,:,:]
         if model.overlap:
             spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
@@ -414,16 +531,17 @@ class Spin_x_Velocity(Velocity):
         if verbose==2: showElapsedTime(extraInfo=f"Spin_x_Velocity in eig.-basis finished")
 
 class SpinHallConductance(SpinBerryCurv):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=0.000001, fermiList=[0.,], verbose=0, currentProjection=None, spincurrentProjection=None) -> None:
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=0.000001, fermiList=[0.,], verbose=0, currentProjection=None, spincurrentProjection=None, **kwarg) -> None:
         '''
         Spin hall conductance in (S/m hbar/2e)
         '''
-        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose, currentProjection, spincurrentProjection)
+        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose, currentProjection, spincurrentProjection, **kwarg)
 
         sigma=np.zeros((len(fermiList),3,3,3))
 
         for ifermi, fermi in enumerate(fermiList):
-            occupy=self.energies[:,:,:,self.ibmin:]<fermi
+            #occupy=self.energies[:,:,:,self.ibmin:]<fermi
+            occupy=self.energies<fermi
             for ialpha in range(3):
                 for ibeta in range(3):
                     for igamma in range(3):
@@ -434,14 +552,19 @@ class SpinHallConductance(SpinBerryCurv):
         if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
 class SpinHallConductanceRashiba(SpinVeloVelo):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, T=300, fermiList=[0.,], verbose=0) -> None:
-        super().__init__(model, kgrid, phaseshift, verbose)
+    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, T=300, fermiList=[0.,], verbose=0, **kwarg) -> None:
+        '''
+        Rashiba-Elderson effect induced Spin hall conductance in (S/m hbar/2e)
+        '''
+        super().__init__(model, kgrid, phaseshift, verbose, **kwarg)
 
         sigma=np.zeros((len(fermiList),3,3,3))
 
         for ifermi, fermi in enumerate(fermiList):
-            condition=abs(self.energies[:,:,:,self.ibmin:]-fermi)<10*(kB*T/elementary_charge)
-            exp=np.exp((self.energies[:,:,:,self.ibmin:][condition]-fermi)/(kB*T/elementary_charge))
+            #condition=abs(self.energies[:,:,:,self.ibmin:]-fermi)<10*(kB*T/elementary_charge)
+            #exp=np.exp((self.energies[:,:,:,self.ibmin:][condition]-fermi)/(kB*T/elementary_charge))
+            condition=abs(self.energies-fermi)<10*(kB*T/elementary_charge)
+            exp=np.exp((self.energies[condition]-fermi)/(kB*T/elementary_charge))
             f_E=-1/(kB/elementary_charge*T)*exp/(1+exp)**2
             for ialpha in range(3):
                 for ibeta in range(3):
