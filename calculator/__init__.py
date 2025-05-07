@@ -54,6 +54,8 @@ class Calculator():
         self.skip_low=defaultSettings["skip_low"]
 
         self.phaseshift=defaultSettings["phaseshift"]
+        self.phase=False
+        if type(self.phaseshift)==np.ndarray: self.phase=True
 
         self.verbose=defaultSettings["verbose"]
         if self.verbose==2: print("initializing calculator module finished")
@@ -76,9 +78,7 @@ class Energy(Calculator):
         self.vectors[ik1, ik2, ik3, ieig, jeig] gives eigen-vecs. in ao basis.
         '''
         super().__init__(**kwarg)
-        self.phase=False
         self.ibmin=0             # ignore low-lying bands
-        if type(self.phaseshift)==np.ndarray: self.phase=True
         if self.verbose==2: showElapsedTime(offset=True)
         
         if self.model.overlap:
@@ -227,6 +227,10 @@ class PDOS(Energy):
                         self.pdos += tdos[:,None] * rho
         self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(self.kgrid)
 
+class Spin(Energy):
+    def __init__(self, **kwarg):
+        super().__init__(**kwarg)
+
 class Velocity(Energy):
     def __init__(self, projection=None, **kwarg) -> None:
         '''
@@ -267,7 +271,8 @@ class Velocity(Energy):
                 self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
             #self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
-            self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,:])
+            UdOkU = (vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
+            self.velocity_K -= (UdOkU+UdOkU.conj().transpose((0,1,2,3,5,4)))/2
 
         if projection != None:
             proj1=projectionOperator(projection['source'],self.model.atomicOrbInfoList,self.model.norbs)
@@ -340,7 +345,7 @@ class Velocity_diag(Energy):
 
 class BerryCurv(Velocity):
     
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=1e-4, smr_type="Lorentzian", degen=1e-6, verbose=0, **kwarg) -> None:
+    def __init__(self, projection=None, **kwarg) -> None:
         '''
         Calc. Berry curvature \Omega^{alpha}_{k,mn}.
 
@@ -348,41 +353,43 @@ class BerryCurv(Velocity):
 
         Indexing: BerryCurv[ik1, ik2, ik3, idrection, iband, jband]
         '''
-        super().__init__(model, kgrid, phaseshift, verbose, **kwarg)
+        super().__init__(projection=projection, **kwarg)
         self.Todd = True
 
-        self.eta=eta
-        self.smr_type=smr_type
-        self.degen=degen # update the degeneracy threthold
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
+
+        velocity_alpha_K=self.velocity_K
+        velocity_beta_K=self.velocity_K
+        if projection!=None:
+            velocity_alpha_K=self.velocity_K_proj
         
-        self.BerryCurv=np.zeros(self.kgrid+(3,model.norbs-self.ibmin))
-        eps=np.arange(3)
+        self.BerryCurv=np.zeros(self.kgrid+(3,3,self.model.norbs-self.ibmin))
         for ialpha in range(3):
-            self.BerryCurv[...,ialpha,:]=-2*np.diagonal(self.velocity_K[...,eps[(ialpha+1)%3],:,:] @ (dEInverse2*self.velocity_K[...,eps[(ialpha+2)%3],:,:]),0,-2,-1).imag
-        if verbose==2: showElapsedTime(extraInfo=f"Berry curvature finished")
+            for ibeta in range(3):
+                self.BerryCurv[...,ialpha,ibeta,:]=-2*np.diagonal(velocity_beta_K[...,ibeta,:,:] @ (dEInverse2*velocity_alpha_K[...,ialpha,:,:]),0,-2,-1).imag
+        if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class AnormalousHallConductance(BerryCurv):
 
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.0001, smr_type="Lorentzian", degen=0.000001, fermiList=[], verbose=0, **kwarg) -> None:
-        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose, **kwarg)
+    def __init__(self, fermiList=[], projection=None, **kwarg) -> None:
+        super().__init__(projection=projection, **kwarg)
         self.Todd = True
 
-        sigma=np.zeros(len(fermiList))
+        sigma=np.zeros((len(fermiList),3,3))
 
-        berryCurv=self.BerryCurv[...,2,:]
         for ifermi, fermi in enumerate(fermiList):
             #occupy=self.energies[:,:,:,self.ibmin:]<fermi
             occupy=self.energies<fermi
-            #print(f"{ifermi=:3d}  {len(self.energies[occupy])/np.prod(self.kgrid):8.4f}")
-            sigma[ifermi]=np.sum(berryCurv[occupy])
+            for ialpha in range(3):
+                for ibeta in range(3):
+                    sigma[ifermi,ialpha,ibeta]=np.sum(self.BerryCurv[...,ialpha,ibeta,:][occupy])
         
-        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
-        if verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
+        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
 class SpinVelocity(Velocity):
-    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, currentProjection=[], spincurrentProjection=[], **kwarg) -> None:
+    def __init__(self, currentProjection=[], spincurrentProjection=[], **kwarg) -> None:
         '''
         Compute spin velocity matrix in original basis and eigen-basis
 
@@ -395,22 +402,21 @@ class SpinVelocity(Velocity):
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
         igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
         '''
-        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, **kwarg)
+        super().__init__(projection=currentProjection, **kwarg)
         self.Iodd = True
         #model.getSpinMatrice()
         #showElapsedTime(extraInfo=f"spin op. in ao.-basis constructed")
-        #vectors=self.vectors[:,:,:,None,:,self.ibmin:]
         vectors=self.vectors[:,:,:,None,:,:]
-        if model.overlap:
-            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        if self.model.overlap:
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ self.model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ vectors
-        if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ self.model.spin[None,None,None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
         spin=spin_eig[...,None,:,:,:]
         velocity=self.velocity_K[...,None,:,:]
         sV=spin @ velocity
         self.spinVelocity_K = (sV + sV.transpose((0,1,2,3,4,6,5)).conj())/2#(spin @ velocity + velocity @ spin)/2
-        if verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
 class SpinVelocity_diag(Velocity_diag):
     def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, currentProjection=[], spincurrentProjection=[], **kwarg) -> None:
@@ -442,7 +448,7 @@ class SpinVelocity_diag(Velocity_diag):
         if verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
 class SpinBerryCurv(SpinVelocity):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0, currentProjection=None, spincurrentProjection=None, **kwarg) -> None:
+    def __init__(self, currentProjection=None, spincurrentProjection=None, **kwarg) -> None:
         '''
         Calc. spin Berry curvature \Omega^{alpha,gamma}_{k,mn}.
 
@@ -452,10 +458,7 @@ class SpinBerryCurv(SpinVelocity):
 
         Indexing: spinBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
         '''
-        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, spincurrentProjection, **kwarg)
-        self.degen=degen # update the degeneracy threthold
-        self.eta=eta
-        self.smr_type=smr_type
+        super().__init__(currentProjection=currentProjection, spincurrentProjection=spincurrentProjection, **kwarg)
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
@@ -466,12 +469,12 @@ class SpinBerryCurv(SpinVelocity):
         if spincurrentProjection!=None:
             spinVelocity_K=self.spinVelocity_K_proj
         #eps=np.arange(3)
-        self.spinBerryCurv=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
+        self.spinBerryCurv=np.zeros(self.kgrid+(3,3,3,self.model.norbs-self.ibmin))
         for ialpha in range(3):
             for ibeta in range(3):
                 for igamma in range(3):
                     self.spinBerryCurv[...,ialpha,ibeta,igamma,:]=-2*np.diagonal(spinVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*velocity_K[...,ialpha,:,:]),0,-2,-1).imag
-        if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class SpinVeloVelo(SpinVelocity):
     def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, verbose=0, **kwarg) -> None:
@@ -531,11 +534,11 @@ class Spin_x_Velocity(Velocity):
         if verbose==2: showElapsedTime(extraInfo=f"Spin_x_Velocity in eig.-basis finished")
 
 class SpinHallConductance(SpinBerryCurv):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, eta=0.005, smr_type="Lorentzian", degen=0.000001, fermiList=[0.,], verbose=0, currentProjection=None, spincurrentProjection=None, **kwarg) -> None:
+    def __init__(self, fermiList=[], currentProjection=None, spincurrentProjection=None, **kwarg) -> None:
         '''
         Spin hall conductance in (S/m hbar/2e)
         '''
-        super().__init__(model, kgrid, phaseshift, eta, smr_type, degen, verbose, currentProjection, spincurrentProjection, **kwarg)
+        super().__init__(currentProjection=currentProjection, spincurrentProjection=spincurrentProjection, **kwarg)
 
         sigma=np.zeros((len(fermiList),3,3,3))
 
@@ -548,8 +551,9 @@ class SpinHallConductance(SpinBerryCurv):
                         sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.spinBerryCurv[...,ialpha,ibeta,igamma,:][occupy])
             #exit()
         
-        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/model.Vcell
-        if verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
+        #self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
 class SpinHallConductanceRashiba(SpinVeloVelo):
     def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, T=300, fermiList=[0.,], verbose=0, **kwarg) -> None:
