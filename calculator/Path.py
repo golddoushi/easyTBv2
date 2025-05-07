@@ -31,8 +31,10 @@ class CalculatorOnPath():
         self.degen=1e-6
         self.verbose=verbose
 
-        self.kpath=np.loadtxt(KPOINTS,skiprows=3)[:,:3]
-        self.nkpt=len(self.kpath)
+        with open(KPOINTS,"r") as fin:
+            data=fin.read().split("\n")
+        self.nkpt=int(data[1].split()[0])
+        self.kpath=np.loadtxt(data[3:3+self.nkpt])[:,:3]
 
 class EnergyOnPath(CalculatorOnPath):
     def __init__(self, model:System, KPOINTS="./KPOINTS", verbose=0) -> None:
