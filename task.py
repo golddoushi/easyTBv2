@@ -46,6 +46,7 @@ class BZGridTask:
 
         self.QGrid=np.array([max([x,1]) for x in np.array(BZGrid)//FastGrid])
 
+        print(f"Real-space grid: {model.mp_grid}")
         print(f"Intepolation BZ grid: {BZGrid}")
         print(f"FFT grid: {FastGrid}")
         print(f"Phase grid: {self.QGrid}")
