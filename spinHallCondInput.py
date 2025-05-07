@@ -15,7 +15,11 @@ from symmetry import SYMMETRY_PRECISION
 from fileio import writeVolumeData
 
 def solveQ(param):
-    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=1e-6,degen=1e-6,fermiList=param['fermi'],currentProjection=param['projected shells for applying current'],skip_low=False)
+    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,degen=1e-4,skip_low=True,
+                             fermiList=param['fermi'],
+                             currentProjectionList    =param['projected shells for applying current'],
+                             spincurrentProjectionList=param['projected shells for detecting spincurrent'],
+                             )
     return {"energies":calc.energies,
             #"velocities":calc.velocity_K,
             "spin Berry curv":calc.spinBerryCurv,
@@ -133,12 +137,11 @@ def run():
     BZSymm=False
     calc=BZGridTask(model, solveQ, 
                     args={"fermi":fermiAxis,
-                          "projected shells for applying current":None,
-                          #"projected shells for applying current":{"source":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),], "target":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),]},
-                          #"projected shells for applying current":{"source":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
-                          #"projected shells for applying current":{"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
-                          #"projected shells for applying current":{"source":[(0,(0,1,2,)),] "target":[(0,(0,1,2,)),]},
-                          #"projected shells for applying current":{"source":[(1,(0,1,2,3,4,5,6,)),(2,(0,1,2,3,4,5,6,)),], "target":[(0,(0,1,2,)),(0,(0,1,2,)),]},
+                          "projected shells for applying current":[],
+                          #"projected shells for applying current":[
+                          # {"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
+                          # ],
+                          'projected shells for detecting spincurrent':[],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     ncores=8)
