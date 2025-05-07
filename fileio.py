@@ -81,9 +81,12 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
 
     sourceList, targetList = np.int16(data[:,3:5].T)-1
     norbs=sourceList.max()+1
-    t_R = data[:,5] + 1j* data[:,6]
-    ham_R=t_R.reshape((nR,norbs,norbs))
-    if ignoreImagPart: t_R=t_R.real
+    #t_R = data[:,5] + 1j* data[:,6]
+    #ham_R=t_R.reshape((nR,norbs,norbs))
+    ham_R=np.zeros((nR,norbs,norbs),dtype=complex)
+    for Rvec, (isource, itarget), t in zip(np.int16(data[:,:3]),np.int16(data[:,3:5])-1,data[:,5] + 1j* data[:,6]):
+        ham_R[iRvecIndex[tuple(Rvec)],isource,itarget]=t
+    if ignoreImagPart: ham_R=ham_R.real
     if overlap:
         o, px, py, pz = data[:,7], data[:,8], data[:,9], data[:,10]
         overlap_R, px_R, py_R, pz_R = o.reshape((nR,norbs,norbs)), px.reshape((nR,norbs,norbs)), py.reshape((nR,norbs,norbs)), pz.reshape((nR,norbs,norbs))
@@ -104,10 +107,9 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
     }    
     return {
         "ham_R":ham_R,
-        "overlap":overlap,
-        "overlap_R":overlap_R,
         "iRvec":iRvec,
         "iRvecIndex":iRvecIndex,
+        "mp_grid":mp_grid,
     }
 
 def readRDat(filepath,ignoreImagPart=False,cutoff=-1,):
