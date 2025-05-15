@@ -64,7 +64,7 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
     
     nlines, ncols= data.shape
     if overlap:
-        assert ncols == 11, f"For LCAO case, we need 11 cols. for R(3) iorb(2) t(2) overlap(1) p(3), but {ncols=} found"
+        assert ncols == 14, f"For LCAO case, we need 14 cols. for R(3) iorb(2) t(2) overlap(1) p(3) r(3), but {ncols=} found"
     else:
         assert ncols == 7, f"For w90 case, we need 7 cols. for R(3) iorb(2) t(2), but {ncols=} found"
 
@@ -88,8 +88,8 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
         ham_R[iRvecIndex[tuple(Rvec)],isource,itarget]=t
     if ignoreImagPart: ham_R=ham_R.real
     if overlap:
-        o, px, py, pz = data[:,7], data[:,8], data[:,9], data[:,10]
-        overlap_R, px_R, py_R, pz_R = o.reshape((nR,norbs,norbs)), px.reshape((nR,norbs,norbs)), py.reshape((nR,norbs,norbs)), pz.reshape((nR,norbs,norbs))
+        o, px, py, pz, rx, ry, rz = data[:,7], data[:,8], data[:,9], data[:,10], data[:,11], data[:,12], data[:,13]
+        overlap_R, px_R, py_R, pz_R, rx_R, ry_R, rz_R = o.reshape((nR,norbs,norbs)), px.reshape((nR,norbs,norbs)), py.reshape((nR,norbs,norbs)), pz.reshape((nR,norbs,norbs)), rx.reshape((nR,norbs,norbs)), ry.reshape((nR,norbs,norbs)), rz.reshape((nR,norbs,norbs))
     
     Rx_max, Rx_min, Ry_max, Ry_min, Rz_max, Rz_min= iRvec[:,0].max(), iRvec[:,0].min(), iRvec[:,1].max(), iRvec[:,1].min(), iRvec[:,2].max(), iRvec[:,2].min()
     mp_grid=np.array([Rx_max-Rx_min+1,Ry_max-Ry_min+1,Rz_max-Rz_min+1,])
@@ -100,7 +100,8 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
         "ham_R":ham_R,
         "overlap":overlap,
         "overlap_R":overlap_R,
-        "momentum_R":np.array([px_R,py_R,pz_R]),
+        "momentum_R":np.array([px_R,py_R,pz_R]).transpose((1,0,2,3)), # set 1st index to be the Rvec
+        "position_R":np.array([rx_R,ry_R,rz_R]).transpose((1,0,2,3)), # set 1st index to be the Rvec
         "iRvec":iRvec,
         "iRvecIndex":iRvecIndex,
         "mp_grid":mp_grid,

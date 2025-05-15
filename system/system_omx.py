@@ -68,6 +68,19 @@ class System_omx(System):
         for atom_coor, atom_shell in zip(self.posinfo['pos ions (cart.)'],orb_list):
             for iorb in atom_shell: self.rList[:,iorb]=atom_coor
         
+        # For now, set r_mn to be diagonal, for approximation
+        #self.AA_R_W=np.zeros((self.nRvec,3,self.norbs,self.norbs),dtype=complex)
+        self.AA_R_W=hrDat['position_R']
+        self.AA_R_W += self.rList[None,:,None,:]*self.overlap_R[:,None,:,:]
+        #np.set_printoptions(precision=3)
+        #for iRvec, Rvec in enumerate(self.iRvec):
+        #    print(Rvec)
+        #    print(self.AA_R_W[iRvec,0,65:69,65:69])
+            #print(self.rList[0,65:69])
+            #print(self.overlap_R[iRvec,65:69,65:69])
+            #for iorb in range(self.norbs): 
+            
+        #exit()
         self.atomicOrbInfoList=obtainProjections('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
         # the basis order of openmx is different from the w90 convention
         self.atomicOrbNameList[1]=["p_x","p_y","p_z",]*2

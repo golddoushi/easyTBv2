@@ -12,7 +12,7 @@ class System_w90(System):
     def __init__(self,
                  mainDir:str,hamR:str="wannier90",ignoreImagPart=False,cutoff=-1.,format="VASP",
                  poscar:str="POSCAR",projections:dict=None,ispin=1,
-                 getAA:bool=False,trans_inv=True,
+                 getAA:bool=True,trans_inv=True,
                  ) -> None:
         '''
         The system in basis of wannier orbitals, with convention as below:
@@ -127,10 +127,20 @@ class System_w90(System):
                         _AA_k_W[:,np.arange(self.norbs,dtype=int),np.arange(self.norbs,dtype=int)]=-(
                             wb*bvec[:,None]*(np.log(np.diag(overlap)).imag)[None,:])
                     AA_k_W[ikpt,...]+=_AA_k_W
+            # enforce the Hermite condition for AA_k_W
+            #AA_k_W=(AA_k_W+AA_k_W.transpose((0,1,3,2)).conj())/2
+            #np.set_printoptions(precision=3)
+            #for kpt, AA_k in zip(chk.kpt_list,AA_k_W):
+            #    print(kpt)
+            #    print(AA_k[0,:4,:4])
+            #exit()
             # 8. FFT to obtain AA_W in R-space
             self.AA_R_W=fourier_q_to_R_loc(AA_k_W)
-            for iR, AA in zip(self.iRvec,self.AA_R_W):
-                if iR@iR==0: self.rList=np.diagonal(AA,axis1=-2,axis2=-1).real
+            for Rvec, AA in zip(self.iRvec,self.AA_R_W):
+            #    print(Rvec)
+            #    print(AA[0,:3,:3])
+                if Rvec@Rvec==0: self.rList=np.diagonal(AA,axis1=-2,axis2=-1).real
+            #exit()
             print("diagonal element of AA_R_W and the wcc produced in .chk")
             for AA_r, wcc in zip(self.rList.T,chk.wannier_centers): 
                 print(f"{AA_r[0].real:10.6f}{AA_r[1].real:10.6f}{AA_r[2].real:10.6f} - {wcc[0]:10.6f}{wcc[1]:10.6f}{wcc[2]:10.6f}")

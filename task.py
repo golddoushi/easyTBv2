@@ -13,6 +13,7 @@ class BZGridTask:
                  args:dict,
                  BZGrid:np.ndarray|tuple|list,
                  BZSymm=False,
+                 mode="run",
                  ncores=1) -> None:
         '''
         Conduct tasks that calculate quantity on the regular grids of Brillouin zone, using mixed FFT algorithm
@@ -27,6 +28,8 @@ class BZGridTask:
             extra args passing to the task Func
         - BZGrid : np.ndarray(3) | tuple(3) | list(3), int
             size of BZ sampling
+        - mode : "run" | "show"
+            "run" to run the tasks directly, ortherwise, only show the grid info.
         - ncores : int
             parallel number
         '''
@@ -50,8 +53,11 @@ class BZGridTask:
         print(f"Intepolation BZ grid: {BZGrid}")
         print(f"FFT grid: {FastGrid}")
         print(f"Phase grid: {self.QGrid}")
-
         showElapsedTime()
+
+        if mode!="run": 
+            print(f"{mode=} the tasks are stoped. set mode = 'run' to run the tasks")
+            exit()
     
         irreducibleTask=[]
         for iq1 in range(self.QGrid[0]):

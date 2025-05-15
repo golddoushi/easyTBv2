@@ -15,7 +15,7 @@ from symmetry import SYMMETRY_PRECISION
 from fileio import writeVolumeData
 
 def solveQ(param):
-    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,degen=1e-4,skip_low=True,
+    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026e-4,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              currentProjectionList    =param['projected shells for applying current'],
                              spincurrentProjectionList=param['projected shells for detecting spincurrent'],
@@ -52,33 +52,33 @@ def solveVelocity_diag(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/BN/"
-    model=System_tb(
+    mainDir="./mcalc/PbSnH/"
+    model=System_w90(
         mainDir=mainDir,
-        #hamR="wannier90",
+        hamR="wannier90",
         #hamR="omx",
-        hamR="BNsoc",
+        #hamR="BNsoc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
             "B":(0,),
             "N":(0,),
             "Ge":(0,0,1,2),
-            #"Sn":(0,1,),
             #"Mn":(0,0,0,1,1,2,),
             "Mn":(0,1,2,),
-            "Sn":(0,0,0,1,1,2,),
-            #"Pb":(0,1,),
-            "Pb":(0,0,0,1,1,2,2,),
-            #"Pt":(0,1,2,),
-            "Pt":(0,0,1,1,2,2,),
+            "Sn":(0,1,),
+            #"Sn":(0,0,0,1,1,2,),
+            "Pb":(0,1,),
+            #"Pb":(0,0,0,1,1,2,2,),
+            "Pt":(0,1,2,),
+            #"Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
             #"Fe":(2,),
             "Fe":(0,0,1,1,2,2,),
             #"Cl":(1,),
             "Cl":(0,0,1,1,2,3),
-            "H":(0,0,1,),
-            #"H":(0,),
+            "H":(0,),
+            #"H":(0,0,1,),
         },
         ispin=2
     )
@@ -107,7 +107,7 @@ def run():
     #fermi=-2.41861676 # VASP Sn
     #fermi=-2.58287444 # VASP Pb
     #fermi=10.96516405 # VASP Pt
-    #fermi=-2.63611399 # VASP PbSnH
+    fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
     #fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
@@ -119,7 +119,7 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
     
     fermiAxis=np.linspace(fermi-0.5,fermi+0.5,101)
     model.setFermi(fermi)
@@ -133,7 +133,7 @@ def run():
                 fout.write(f"{ik:5d}{energy:15.6E}\n")
             fout.write("\n")
     exit()#'''
-    BZGrid=(51,51,1)
+    BZGrid=(102,102,1)
     BZSymm=False
     calc=BZGridTask(model, solveQ, 
                     args={"fermi":fermiAxis,
@@ -144,6 +144,7 @@ def run():
                           'projected shells for detecting spincurrent':[],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
+                    mode='run',
                     ncores=8)
 
     _,_,_,nbands=calc.results[0]["energies"].shape

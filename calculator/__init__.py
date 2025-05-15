@@ -276,17 +276,27 @@ class Velocity(Energy):
         
         RH_R_W=self.model.RHam_R
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+        r_R=self.model.AA_R_W
+        r_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
         if self.phase:
             RH_R_W=RH_R_W*self.phaseshift[:,None,None,None]
+            r_R=r_R*self.phaseshift[:,None,None,None]
         for iR, Rvec in enumerate(self.model.iRvec):
             self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
+            r_R_intepolated[tuple(Rvec)]=r_R[iR]
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
-        #vectors=self.vectors[:,:,:,None,:,self.ibmin:]
         vectors=self.vectors[:,:,:,None,:,:]
         self.velocity_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.RHam_K @ vectors
+
+        r_K        =  1j*np.fft.ifftn(r_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+        r_K_H = (vectors.conj().transpose((0,1,2,3,5,4)) @ r_K @ vectors) * self.energies[...,None,None,:]
+        self.velocity_K += -1j*(r_K_H - r_K_H.conj().transpose((0,1,2,3,5,4)))
+        if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
+        # check hermity
+        #dconj=np.sum(abs(self.velocity_K.transpose((0,1,2,3,5,4)).conj()-self.velocity_K))
+        #assert dconj<1e-4, f"Hermity of velocity is not satisfied {dconj=}"
 
         # extra modifications to velocity due to orbital overlaps
         if self.model.overlap:
@@ -579,8 +589,8 @@ class SpinHallConductance(SpinBerryCurv):
                         sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.spinBerryCurv[...,ialpha,ibeta,igamma,:][occupy])
             #exit()
         
-        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        #self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
 class SpinHallConductanceRashiba(SpinVeloVelo):
