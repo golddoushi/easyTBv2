@@ -31,6 +31,7 @@ class System:
         self.overlap_R:np.ndarray=None
         # position x Hamitonian
         self.RHam_R:np.ndarray=None
+        self.AA_R_W:np.ndarray=None # Berry connection, the expectation of position r
         # spin convention, "VASP" collect the same spin at one block, while "QE" collect the same orbital at one small block
         self.format="VASP"
         # num. of spin tunnels

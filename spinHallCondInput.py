@@ -9,13 +9,13 @@ import numpy as np
 
 from task import BZGridTask
 from system import System_omx, System_w90, System_tb
-from calculator import Velocity, Velocity_diag, SpinHallConductance, Energy, SpinBerryCurv, AnormalousHallConductance, EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, PDOS, SpinHallConductanceRashiba
+from calculator import Velocity, Velocity_diag, SpinHallConductance, Energy, SpinBerryCurv, AnormalousHallConductance, EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, PDOS, SpinHallConductanceRashiba, SpinGalvanic_diag
 from auxiliary import showElapsedTime, getCBM, getVBM
 from symmetry import SYMMETRY_PRECISION
 from fileio import writeVolumeData
 
 def solveQ(param):
-    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026e-4,degen=1e-6,skip_low=True,
+    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              currentProjectionList    =param['projected shells for applying current'],
                              spincurrentProjectionList=param['projected shells for detecting spincurrent'],
@@ -38,6 +38,15 @@ def solveAHC(param):
             "Berry curv":calc.BerryCurv,
             "sigma":calc.sigma,"iq":param["iq"]}
 
+def solveSpinGalvanic(param):
+    calc=SpinGalvanic_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,degen=1e-6,skip_low=True,
+                             fermiList=param['fermi'],
+                             )
+    return {"energies":calc.energies,
+            "spin velocities":calc.spinVelocity_diag_K,
+            "velocities":calc.velocity_diag_K,
+            "sigma":calc.sigma,"iq":param["iq"]}
+
 def solvePDOS(param):
     calc=PDOS(energyAxis=param['fermi'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,model=param['model'],)
     return {"energies":calc.energies,"PDOS":calc.pdos,"iq":param["iq"]}
@@ -52,8 +61,8 @@ def solveVelocity_diag(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/PbSnH/"
-    model=System_w90(
+    mainDir="./mcalc/FeCl2/"
+    model=System_tb(
         mainDir=mainDir,
         hamR="wannier90",
         #hamR="omx",
@@ -70,13 +79,13 @@ def run():
             #"Sn":(0,0,0,1,1,2,),
             "Pb":(0,1,),
             #"Pb":(0,0,0,1,1,2,2,),
-            "Pt":(0,1,2,),
-            #"Pt":(0,0,1,1,2,2,),
+            #"Pt":(0,1,2,),
+            "Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
-            #"Fe":(2,),
-            "Fe":(0,0,1,1,2,2,),
-            #"Cl":(1,),
-            "Cl":(0,0,1,1,2,3),
+            "Fe":(2,),
+            #"Fe":(0,0,1,1,2,2,),
+            "Cl":(1,),
+            #"Cl":(0,0,1,1,2,3),
             "H":(0,),
             #"H":(0,0,1,),
         },
@@ -107,9 +116,9 @@ def run():
     #fermi=-2.41861676 # VASP Sn
     #fermi=-2.58287444 # VASP Pb
     #fermi=10.96516405 # VASP Pt
-    fermi=-2.63611399 # VASP PbSnH
+    #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-2.1         # VASP 2H-FeCl2
+    fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -121,7 +130,7 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
     
-    fermiAxis=np.linspace(fermi-0.5,fermi+0.5,101)
+    fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
     model.setFermi(fermi)
     '''
     # check band intepolation
@@ -135,7 +144,7 @@ def run():
     exit()#'''
     BZGrid=(102,102,1)
     BZSymm=False
-    calc=BZGridTask(model, solveQ, 
+    calc=BZGridTask(model, solveSpinGalvanic, 
                     args={"fermi":fermiAxis,
                           "projected shells for applying current":[],
                           #"projected shells for applying current":[
@@ -151,20 +160,23 @@ def run():
     #pdos=np.zeros((101,nbands,))
     #energies=np.zeros(tuple(BZGrid)+(nbands,))
     #velocity=np.zeros(tuple(BZGrid)+(3,nbands,))
+    spinVelocity=np.zeros(tuple(BZGrid)+(3,3,nbands,))
     #berryCurv=np.zeros(tuple(BZGrid)+(3,nbands,))
-    spinBerryCurv=np.zeros(BZGrid+(3,3,3))
+    #spinBerryCurv=np.zeros(BZGrid+(3,3,3))
     #spinBerryCurvOnFermi=np.zeros((BZGrid[0],BZGrid[1],len(fermiAxis),3,3,3))
-    sigma=np.zeros((len(fermiAxis),3,3,3))
+    #sigma=np.zeros((len(fermiAxis),3,3,3))
+    sigma=np.zeros((len(fermiAxis),3,3))   # sigma of rank-2, i.e., spin galvanic tensor
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=np.diagonal(result_q['velocities'],axis1=-2,axis2=-1)
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['velocities'] # obtained by Velocity_diag
+        spinVelocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin velocities'] # obtained by spinVelocity_diag
         #berryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['Berry curv']
-        valence=result_q['energies']<=fermi
+        #valence=result_q['energies']<=fermi
         #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
-        _sBC=np.sum(result_q["spin Berry curv"]*valence[...,None,None,None,:],axis=(-1,))
-        spinBerryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=_sBC
+        #_sBC=np.sum(result_q["spin Berry curv"]*valence[...,None,None,None,:],axis=(-1,))
+        #spinBerryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=_sBC
         #for ifermi, f in enumerate(fermiAxis):
         #    valence=result_q['energies']<=f
         #    _sBC=np.sum(result_q["spin Berry curv"]*valence[:,:,:,None,None,None,:],axis=(2,-1,))
@@ -208,7 +220,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    #'''
+    '''
     # output spin Hall conductance
     sigma/=len(calc.results)
     with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
@@ -226,26 +238,26 @@ def run():
                     for gamma in range(3):
                         fout.write(f"{s[alpha,beta,gamma]:15.6E}")
             fout.write("\n")
-    #exit()#'''
+    exit()#'''
 
-    '''# quantity on BZ
-    spinBerry=-(1/2*spinBerryCurv[:,:,:,0,2,2] - np.sqrt(3)/2*spinBerryCurv[:,:,:,1,2,2])/100#/1E15
-    print(np.sum(spinBerry,axis=(0,1,2,)))
-    writeVolumeData("%s/spinBerryCurv_xzz.vasp"%mainDir, model.reciLattice.T, (BZGrid[0],BZGrid[1],BZGrid[2]), spinBerry)
-    spinBerry=-(np.sqrt(3)/2*spinBerryCurv[:,:,:,0,2,2] + 1/2*spinBerryCurv[:,:,:,1,2,2])/100#/1E15
-    print(np.sum(spinBerry,axis=(0,1,2,)))
-    writeVolumeData("%s/spinBerryCurv_yzz.vasp"%mainDir, model.reciLattice.T, (BZGrid[0],BZGrid[1],BZGrid[2]), spinBerry)
-    spinBerry=(0.4330127*spinBerryCurv[:,:,:,0,2,0]-0.75*spinBerryCurv[:,:,:,0,2,1]+0.25*spinBerryCurv[:,:,:,1,2,0]-0.4330127*spinBerryCurv[:,:,:,1,2,1])/100#/1E15
-    print(np.sum(spinBerry,axis=(0,1,2,)))
-    writeVolumeData("%s/spinBerryCurv_xzy.vasp"%mainDir, model.reciLattice.T, (BZGrid[0],BZGrid[1],BZGrid[2]), spinBerry)
-    spinBerry=(0.25*spinBerryCurv[:,:,:,0,2,0]+0.4330127*spinBerryCurv[:,:,:,0,2,1]+0.4330127*spinBerryCurv[:,:,:,1,2,0]+0.75*spinBerryCurv[:,:,:,1,2,1])/100#/1E15
-    print(np.sum(spinBerry,axis=(0,1,2,)))
-    writeVolumeData("%s/spinBerryCurv_xzx.vasp"%mainDir, model.reciLattice.T, (BZGrid[0],BZGrid[1],BZGrid[2]), spinBerry)
-    #vbm=getVBM(energies, fermi)
-    #cbm=getCBM(energies, fermi)
-    #outputVolumeData("%s/VBM.vasp"%mainDir, model.reciLattice.T, BZGrid, vbm)
-    #outputVolumeData("%s/CBM.vasp"%mainDir, model.reciLattice.T, BZGrid, cbm)
-    '''
+    #'''
+    # output spin galvanic conductance
+    sigma/=len(calc.results)
+    with open("%s/spinGalvanics.txt"%mainDir,"w") as fout:
+        fout.write("Fermi(eV)")
+        directionName=['x','y','z']
+        for alpha in range(3):
+            for gamma in range(3):
+                fout.write(f"            {directionName[alpha]}{directionName[gamma]}")
+        fout.write("\n")
+        for f, s in zip(fermiAxis,sigma):
+            fout.write(f"{f-fermi:9.6f}")
+            for alpha in range(3):
+                for gamma in range(3):
+                    fout.write(f"{s[alpha,gamma]:15.6E}")
+            fout.write("\n")
+    exit()#'''
+
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
     '''
     #print(f"{energies[:,:,0,27].mean()=}{energies[:,:,0,27].max()=}{energies[:,:,0,27].min()=}")
@@ -289,9 +301,10 @@ def run():
     #ax3.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],energies[:,:,0,-4],cmap="Spectral")
     #ax3.axis('equal')
 
-    data_grid=spinBerryCurv[:,:,0,0,1,2]
+    data_grid=spinVelocity[:,:,0,1,2,-4]
     magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
     plt.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
+    plt.colorbar()
     plt.axis("equal")
     plt.show()
     #'''

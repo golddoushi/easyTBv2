@@ -255,6 +255,27 @@ class Spin(Energy):
             else:
                 self.spin_K_proj=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ vectors
 
+class Spin_diag(Energy):
+    def __init__(self, spinProjection=None, **kwarg):
+        '''
+        Compute spin expectation of eigen-basis
+
+        Indexing:
+        self.spin_diag_K[ik1, ik2, ik3, idirection, ieig] gives spin expectation of eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to sigma_x | sigma_y | sigma_z.
+        '''
+        super().__init__(**kwarg)
+        self.Todd = True
+
+        vectors=self.vectors[:,:,:,None,:,:]
+        if self.model.overlap:
+            _sv=self.model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            self.spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
+        else:
+            _sv=self.model.spin[None,None,None,:,:,:] @ vectors
+            self.spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
+        if self.verbose==2: showElapsedTime(extraInfo=f"<spin> of eig.-basis calculated")
+
 class Velocity(Energy):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
@@ -460,34 +481,28 @@ class SpinVelocity(Velocity, Spin):
         
         if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
-class SpinVelocity_diag(Velocity_diag):
-    def __init__(self, model: System, kgrid=(1,1,1), phaseshift=1, verbose=0, currentProjection=[], spincurrentProjection=[], **kwarg) -> None:
+class SpinVelocity_diag(Velocity_diag, Spin_diag):
+    def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
         '''
-        Compute spin group velocity in original basis and eigen-basis
+        Compute spin velocity matrix in original basis and eigen-basis
+        and projected spin velocity matrix.
+        Note, the projection is on the velocity component, corresponding to the spin-currents running in specific basis.
 
         Indexing:
-        self.SRHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives spin velocity matrix in original basis,
+        self.spinVelocity_diag_K[ik1, ik2, ik3, idirection, igamma, ieig] gives spin velocity expectation of eigen-basis.
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
         igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
 
-        self.spinVelocity_diag_K[ik1, ik2, ik3, idirection, igamma, ieig] gives spin group velocity of each eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        if spinvelocityProjctionList is not empty
+        self.spinVelocity_K_proj[iproj] gives each projected spin velocity matrix in eigen-basis.
         '''
-        super().__init__(model, kgrid, phaseshift, verbose, currentProjection, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList+spinvelocityProjectionList, **kwarg)
         self.Iodd = True
         
-        vectors=self.vectors[:,:,:,None,:,:]
-        if model.overlap:
-            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
-        else:
-            spin_eig=vectors.conj().transpose((0,1,2,3,5,4)) @ model.spin[None,None,None,:,:,:] @ vectors
-        if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
-        spin=spin_eig[...,None,:,:,:]
-        velocity=self.velocity_K[...,None,:,:]
-        sV=spin @ velocity
-        self.spinVelocity_K = (sV + sV.transpose((0,1,2,3,4,6,5)).conj())/2
-        if verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
+        self.spinVelocity_diag_K=self.spin_diag_K[...,None,:,:] * self.velocity_diag_K[...,None,:]
+
+        self.projected_spinVelocity_K_list=[]
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
@@ -589,8 +604,33 @@ class SpinHallConductance(SpinBerryCurv):
                         sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.spinBerryCurv[...,ialpha,ibeta,igamma,:][occupy])
             #exit()
         
-        #self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
+
+class SpinGalvanic_diag(SpinVelocity_diag):
+    def __init__(self, fermiList=[], currentProjectionList=[], spincurrentProjectionList=[], **kwarg) -> None:
+        '''
+        Spin galvanic (\hbar/2 per cell per V/m)
+        '''
+        super().__init__(velocityProjectionList=currentProjectionList, spinvelocityProjectionList=spincurrentProjectionList, **kwarg)
+
+        sigma=np.zeros((len(fermiList),3,3))
+
+        for ifermi, fermi in enumerate(fermiList):
+            condition=abs(self.energies-fermi) < 20*self.eta
+            sV=self.spinVelocity_diag_K.transpose((0,1,2,5,3,4))[condition]
+
+            energy = self.energies[condition] - fermi
+            exp=np.exp(energy/self.eta)
+            weight=-exp/(exp+1)**2/self.eta
+            weight=weight[...,None,None]
+            #weight=1#condition[:,:,:,None,None,:]
+            
+            sigma[ifermi]=np.sum(sV*weight,axis=(0,)).real
+        
+        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge/hbar*angstrom)
+        #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
 class SpinHallConductanceRashiba(SpinVeloVelo):
