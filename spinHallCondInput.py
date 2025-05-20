@@ -41,6 +41,8 @@ def solveAHC(param):
 def solveSpinGalvanic(param):
     calc=SpinGalvanic_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
+                             spinProjectionList=param['projected shells for detecting spin accumulation'],
+                             currentProjectionList=param['projected shells for applying current'],
                              )
     return {"energies":calc.energies,
             #"spin velocities":calc.spinVelocity_diag_K,
@@ -115,7 +117,8 @@ def run():
     #fermi=-3.89                         # OPENMX PbSn offset topological insulator
     #fermi=-0.16790565257604*27.2113845 # OPENMX Pt
     #fermi=-0.19908723865958*27.2113845 # OPENMX FeCl2
-    fermi=-0.22660759670266*27.2113845 # OPENMX FeCl2
+    #fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
+    fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
     #fermi=-2.41861676 # VASP Sn
     #fermi=-2.58287444 # VASP Pb
     #fermi=10.96516405 # VASP Pt
@@ -150,10 +153,13 @@ def run():
     calc=BZGridTask(model, solveSpinGalvanic, 
                     args={"fermi":fermiAxis,
                           "projected shells for applying current":[],
-                          #"projected shells for applying current":[
-                          # {"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
-                          # ],
+                          "projected shells for applying current":[
+                              #{"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
+                           ],
                           'projected shells for detecting spincurrent':[],
+                          'projected shells for detecting spin accumulation':[
+                              {"source":[(2,(0,1,2,3,4,5,6,)),], "target":[(2,(0,1,2,3,4,5,6,)),]},
+                          ],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
@@ -311,6 +317,7 @@ def run():
     plt.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
     plt.colorbar()
     plt.axis("equal")
+    plt.savefig(f"{mainDir}/BZ_distr.png",dpi=300)
     plt.show()
     #'''
 

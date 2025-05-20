@@ -228,7 +228,7 @@ class PDOS(Energy):
         self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(self.kgrid)
 
 class Spin(Energy):
-    def __init__(self, spinProjection=None, **kwarg):
+    def __init__(self, spinProjectionList=[], **kwarg):
         '''
         Compute spin matrix in eigen-basis
 
@@ -246,17 +246,19 @@ class Spin(Energy):
             self.spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.model.spin[None,None,None,:,:,:] @ vectors
         if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
 
-        if spinProjection != None:
+        self.projected_spin_K_list=[]
+        for spinProjection in spinProjectionList:
             proj1=projectionOperator(spinProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(spinProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             spin_proj=(proj1@self.model.spin@proj2 + proj2@self.model.spin@proj1)/2
             if self.model.overlap:
-                self.spin_K_proj=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+                projected_spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
             else:
-                self.spin_K_proj=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ vectors
+                projected_spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ vectors
+            self.projected_spin_K_list.append(projected_spin_K)
 
 class Spin_diag(Energy):
-    def __init__(self, spinProjection=None, **kwarg):
+    def __init__(self, spinProjectionList=[], **kwarg):
         '''
         Compute spin expectation of eigen-basis
 
@@ -275,6 +277,19 @@ class Spin_diag(Energy):
             _sv=self.model.spin[None,None,None,:,:,:] @ vectors
             self.spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
         if self.verbose==2: showElapsedTime(extraInfo=f"<spin> of eig.-basis calculated")
+
+        self.projected_spin_diag_K_list=[]
+        for spinProjection in spinProjectionList:
+            proj1=projectionOperator(spinProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(spinProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+            spin_proj=(proj1@self.model.spin@proj2 + proj2@self.model.spin@proj1)/2
+            if self.model.overlap:
+                _sv=spin_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+                projected_spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
+            else:
+                _sv=spin_proj[None,None,None,:,:,:] @ vectors
+                projected_spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
+            self.projected_spin_diag_K_list.append(projected_spin_diag_K)
 
 class Velocity(Energy):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
@@ -341,6 +356,10 @@ class Velocity(Energy):
             RHam_K_proj=(proj1@self.RHam_K@proj2 + proj2@self.RHam_K@proj1)/2
             velocity_K_proj=vectors.conj().transpose((0,1,2,3,5,4)) @ RHam_K_proj @ vectors
 
+            r_K_proj=(proj1@r_K@proj2 + proj2@r_K@proj1)/2
+            r_K_H_proj = (vectors.conj().transpose((0,1,2,3,5,4)) @ r_K_proj @ vectors) * self.energies[...,None,None,:]
+            velocity_K_proj += -1j*(r_K_H_proj - r_K_H_proj.conj().transpose((0,1,2,3,5,4)))
+
             if self.model.overlap:
                 RO_K_proj=(proj1@self.RO_K@proj2 + proj2@self.RO_K@proj1)/2
                 __UdOkU = (vectors.conj().transpose((0,1,2,3,5,4)) @ RO_K_proj @ vectors)*self.energies[...,None,:,None]
@@ -348,7 +367,7 @@ class Velocity(Energy):
             self.projected_velocity_K_list.append(velocity_K_proj)
 
 class Velocity_diag(Energy):
-    def __init__(self, projection=None, **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
         Compute group velocity in original basis and eigen-basis
 
@@ -389,19 +408,21 @@ class Velocity_diag(Energy):
             _RO_K_vector=self.RO_K @ (vectors *self.energies[...,None,None,:])
             self.velocity_diag_K -= np.sum(vectors.conj() *_RO_K_vector, axis=(4,))
 
-        if projection != None:
-            proj1=projectionOperator(projection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(projection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+        self.projected_velocity_diag_K_list=[]
+        for velocityProjection in velocityProjectionList:
+            proj1=projectionOperator(velocityProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(velocityProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             proj1=proj1[None,None,None,None,:,:]
             proj2=proj2[None,None,None,None,:,:]
             RHam_K_proj=(proj1@self.RHam_K@proj2 + proj2@self.RHam_K@proj1)/2
-            _RHam_K_vector=RHam_K_proj @ vectors
-            self.velocity_diag_K_proj=np.sum(vectors.conj() * _RHam_K_vector, axis=(4,))
+            _RHam_K_proj_vector=RHam_K_proj @ vectors
+            projected_velocity_diag_K=np.sum(vectors.conj() * _RHam_K_proj_vector, axis=(4,))
 
             if self.model.overlap:
                 RO_K_proj=(proj1@self.RO_K@proj2 + proj2@self.RO_K@proj1)/2
-                _RO_K_vector=RO_K_proj @ (vectors *self.energies[...,None,None,:])
-                self.velocity_diag_K_proj -= np.sum(vectors.conj() *_RO_K_vector, axis=(4,))
+                _RO_K_proj_vector=RO_K_proj @ (vectors *self.energies[...,None,None,:])
+                projected_velocity_diag_K -= np.sum(vectors.conj() *_RO_K_proj_vector, axis=(4,))
+            self.projected_velocity_diag_K_list.append(projected_velocity_diag_K)
 
 class BerryCurv(Velocity):
     
@@ -482,7 +503,7 @@ class SpinVelocity(Velocity, Spin):
         if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
 class SpinVelocity_diag(Velocity_diag, Spin_diag):
-    def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], spinProjectionList=[], **kwarg) -> None:
         '''
         Compute spin velocity matrix in original basis and eigen-basis
         and projected spin velocity matrix.
@@ -496,7 +517,7 @@ class SpinVelocity_diag(Velocity_diag, Spin_diag):
         if spinvelocityProjctionList is not empty
         self.spinVelocity_K_proj[iproj] gives each projected spin velocity matrix in eigen-basis.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList+spinvelocityProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, spinProjectionList=spinProjectionList, **kwarg)
         self.Iodd = True
         
         self.spinVelocity_diag_K=self.spin_diag_K[...,None,:,:] * self.velocity_diag_K[...,None,:]
@@ -608,12 +629,12 @@ class SpinHallConductance(SpinBerryCurv):
         #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
-class SpinGalvanic_diag(SpinVelocity_diag):
-    def __init__(self, fermiList=[], currentProjectionList=[], spincurrentProjectionList=[], **kwarg) -> None:
+class SpinGalvanic_diag(Velocity_diag, Spin_diag):
+    def __init__(self, fermiList=[], currentProjectionList=[], spinProjectionList=[], **kwarg) -> None:
         '''
         Spin galvanic (\hbar/2 per cell per V/m)
         '''
-        super().__init__(velocityProjectionList=currentProjectionList, spinvelocityProjectionList=spincurrentProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=currentProjectionList, spinProjectionList=spinProjectionList, **kwarg)
         # search energy window
         Emax, Emin=np.max(fermiList)+20*self.eta, np.min(fermiList)-20*self.eta
         condition_energyInRange=np.sum((self.energies>Emin) * (self.energies<Emax),axis=(0,1,2,))
@@ -625,11 +646,14 @@ class SpinGalvanic_diag(SpinVelocity_diag):
         if self.verbose==2: showElapsedTime(extraInfo=f"Band index window: {ibmin=} {ibmax=}")
         #
         energies=self.energies[:,:,:,ibmin:ibmax+1]
-        spinVelocity_diag_K = self.spinVelocity_diag_K[:,:,:,:,:,ibmin:ibmax+1]
+        
+        # <n|spin|n> * <n|velocity|n>, only intra-band contribution
+        spin_diag_K_list=[self.spin_diag_K]+self.projected_spin_diag_K_list
+        velocity_diag_K_list=[self.velocity_diag_K]+self.projected_velocity_diag_K_list
+        spinVelocity_diag_K  = spin_diag_K_list[-1][...,None,:,ibmin:ibmax+1] * velocity_diag_K_list[-1][...,None,ibmin:ibmax+1]
 
         sigma=np.zeros((len(fermiList),3,3))
         self.spinGalvanicK=np.zeros((len(fermiList),)+self.kgrid+(3,3),dtype=float)
-        
         for ifermi, fermi in enumerate(fermiList):
             exp=np.exp((energies-fermi)/self.eta)
             weight=(-exp/(exp+1)**2/self.eta)
