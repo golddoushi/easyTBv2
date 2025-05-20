@@ -43,8 +43,9 @@ def solveSpinGalvanic(param):
                              fermiList=param['fermi'],
                              )
     return {"energies":calc.energies,
-            "spin velocities":calc.spinVelocity_diag_K,
-            "velocities":calc.velocity_diag_K,
+            #"spin velocities":calc.spinVelocity_diag_K,
+            #"velocities":calc.velocity_diag_K,
+            "spin galvanic response":calc.spinGalvanicK,
             "sigma":calc.sigma,"iq":param["iq"]}
 
 def solvePDOS(param):
@@ -61,11 +62,11 @@ def solveVelocity_diag(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
-    model=System_tb(
+    mainDir="./mcalc/Au111/"
+    model=System_omx(
         mainDir=mainDir,
-        hamR="wannier90",
-        #hamR="omx",
+        #hamR="wannier90",
+        hamR="omx",
         #hamR="BNsoc",
         cutoff=-0.002,
         poscar="POSCAR",
@@ -86,8 +87,9 @@ def run():
             #"Fe":(0,0,1,1,2,2,),
             "Cl":(1,),
             #"Cl":(0,0,1,1,2,3),
-            "H":(0,),
-            #"H":(0,0,1,),
+            #"H":(0,),
+            "H":(0,0,1,),
+            "Au":(0,0,0,1,1,2,2,)
         },
         ispin=2
     )
@@ -113,12 +115,13 @@ def run():
     #fermi=-3.89                         # OPENMX PbSn offset topological insulator
     #fermi=-0.16790565257604*27.2113845 # OPENMX Pt
     #fermi=-0.19908723865958*27.2113845 # OPENMX FeCl2
+    fermi=-0.22660759670266*27.2113845 # OPENMX FeCl2
     #fermi=-2.41861676 # VASP Sn
     #fermi=-2.58287444 # VASP Pb
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.1         # VASP 2H-FeCl2
+    #fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -130,7 +133,7 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
     
-    fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
+    fermiAxis=np.linspace(fermi-0.5,fermi+0.5,101)
     model.setFermi(fermi)
     '''
     # check band intepolation
@@ -142,7 +145,7 @@ def run():
                 fout.write(f"{ik:5d}{energy:15.6E}\n")
             fout.write("\n")
     exit()#'''
-    BZGrid=(102,102,1)
+    BZGrid=(108,108,1)
     BZSymm=False
     calc=BZGridTask(model, solveSpinGalvanic, 
                     args={"fermi":fermiAxis,
@@ -160,10 +163,11 @@ def run():
     #pdos=np.zeros((101,nbands,))
     #energies=np.zeros(tuple(BZGrid)+(nbands,))
     #velocity=np.zeros(tuple(BZGrid)+(3,nbands,))
-    spinVelocity=np.zeros(tuple(BZGrid)+(3,3,nbands,))
+    #spinVelocity=np.zeros(tuple(BZGrid)+(3,3,nbands,))
     #berryCurv=np.zeros(tuple(BZGrid)+(3,nbands,))
     #spinBerryCurv=np.zeros(BZGrid+(3,3,3))
     #spinBerryCurvOnFermi=np.zeros((BZGrid[0],BZGrid[1],len(fermiAxis),3,3,3))
+    spinGalvanic=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,))
     #sigma=np.zeros((len(fermiAxis),3,3,3))
     sigma=np.zeros((len(fermiAxis),3,3))   # sigma of rank-2, i.e., spin galvanic tensor
     for result_q in calc.results:
@@ -171,7 +175,8 @@ def run():
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=np.diagonal(result_q['velocities'],axis1=-2,axis2=-1)
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['velocities'] # obtained by Velocity_diag
-        spinVelocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin velocities'] # obtained by spinVelocity_diag
+        #spinVelocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin velocities'] # obtained by spinVelocity_diag
+        spinGalvanic[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin galvanic response'] # obtained by spinVelocity_diag
         #berryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['Berry curv']
         #valence=result_q['energies']<=fermi
         #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
@@ -256,7 +261,7 @@ def run():
                 for gamma in range(3):
                     fout.write(f"{s[alpha,gamma]:15.6E}")
             fout.write("\n")
-    exit()#'''
+    #exit()#'''
 
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
     '''
@@ -301,7 +306,7 @@ def run():
     #ax3.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],energies[:,:,0,-4],cmap="Spectral")
     #ax3.axis('equal')
 
-    data_grid=spinVelocity[:,:,0,1,2,-4]
+    data_grid=spinGalvanic[len(fermiAxis)//2,:,:,0,0,1]
     magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
     plt.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
     plt.colorbar()

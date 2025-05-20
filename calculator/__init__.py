@@ -614,20 +614,27 @@ class SpinGalvanic_diag(SpinVelocity_diag):
         Spin galvanic (\hbar/2 per cell per V/m)
         '''
         super().__init__(velocityProjectionList=currentProjectionList, spinvelocityProjectionList=spincurrentProjectionList, **kwarg)
+        # search energy window
+        Emax, Emin=np.max(fermiList)+20*self.eta, np.min(fermiList)-20*self.eta
+        condition_energyInRange=np.sum((self.energies>Emin) * (self.energies<Emax),axis=(0,1,2,))
+        ibmin, ibmax= 0, self.energies.shape[-1]-1
+        while(condition_energyInRange[ibmin]<0.5):
+            ibmin+=1
+        while(condition_energyInRange[ibmax]<0.5):
+            ibmax-=1
+        if self.verbose==2: showElapsedTime(extraInfo=f"Band index window: {ibmin=} {ibmax=}")
+        #
+        energies=self.energies[:,:,:,ibmin:ibmax+1]
+        spinVelocity_diag_K = self.spinVelocity_diag_K[:,:,:,:,:,ibmin:ibmax+1]
 
         sigma=np.zeros((len(fermiList),3,3))
-
+        self.spinGalvanicK=np.zeros((len(fermiList),)+self.kgrid+(3,3),dtype=float)
+        
         for ifermi, fermi in enumerate(fermiList):
-            condition=abs(self.energies-fermi) < 20*self.eta
-            sV=self.spinVelocity_diag_K.transpose((0,1,2,5,3,4))[condition]
-
-            energy = self.energies[condition] - fermi
-            exp=np.exp(energy/self.eta)
-            weight=-exp/(exp+1)**2/self.eta
-            weight=weight[...,None,None]
-            #weight=1#condition[:,:,:,None,None,:]
-            
-            sigma[ifermi]=np.sum(sV*weight,axis=(0,)).real
+            exp=np.exp((energies-fermi)/self.eta)
+            weight=(-exp/(exp+1)**2/self.eta)
+            self.spinGalvanicK[ifermi] += np.sum(spinVelocity_diag_K.real * weight[...,None,None,:],axis=(5,))
+            sigma[ifermi]=np.sum(self.spinGalvanicK[ifermi],axis=(0,1,2))
         
         self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge/hbar*angstrom)
         #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
