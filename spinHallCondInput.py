@@ -47,7 +47,7 @@ def solveSpinGalvanic(param):
     return {"energies":calc.energies,
             #"spin velocities":calc.spinVelocity_diag_K,
             #"velocities":calc.velocity_diag_K,
-            "spin galvanic response":calc.spinGalvanicK,
+            "spin galvanic response":calc.spinGalvanic_K,
             "sigma":calc.sigma,"iq":param["iq"]}
 
 def solvePDOS(param):
@@ -152,7 +152,6 @@ def run():
     BZSymm=False
     calc=BZGridTask(model, solveSpinGalvanic, 
                     args={"fermi":fermiAxis,
-                          "projected shells for applying current":[],
                           "projected shells for applying current":[
                               #{"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
                            ],

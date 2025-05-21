@@ -28,9 +28,10 @@ class Calculator():
         The threthold two states are treated to be degenerated
         - skip_low : bool
         To skip lowest and seperated eigen-states IN ALL CASES
-
         - phaseshift : np.ndarray(self.model.nRvec, dtype=complex)
         Extra phase for the Bloch states, used for hybrid FFT algorithm. Default: 1, no extra phase shift
+        - fermiList : np.ndarray(dtype=float)
+        Fermi levels to scan
         '''
         defaultSettings={
             "model":None,
@@ -41,6 +42,8 @@ class Calculator():
             "skip_low":False,
 
             "phaseshift":1,
+
+            "fermiList":np.array([0,]),
 
             "verbose":0,
         }
@@ -56,6 +59,8 @@ class Calculator():
         self.phaseshift=defaultSettings["phaseshift"]
         self.phase=False
         if type(self.phaseshift)==np.ndarray: self.phase=True
+
+        self.fermiList=defaultSettings["fermiList"]
 
         self.verbose=defaultSettings["verbose"]
         if self.verbose==2: print("initializing calculator module finished")
@@ -201,6 +206,23 @@ class Energy(Calculator):
         self.energies=self.energies[:,:,:,self.ibmin:]
         self.vectors=self.vectors[:,:,:,:,self.ibmin:]
 
+class FermiScan(Energy):
+    def __init__(self, **kwarg):
+        '''
+        Search the band in range, based on the band energies, fermi energie(s), and eta.
+        |Ek - Ef| < 20/(kB T) are thought to be involved
+        self.ibmin, self.ibmax are integers, giving the involved min and max index of band (on whole BZ)
+        '''
+        super().__init__(**kwarg)
+        Emax, Emin=np.max(self.fermiList)+20*self.eta, np.min(self.fermiList)-20*self.eta
+        condition_energyInRange=np.sum((self.energies>Emin) * (self.energies<Emax),axis=(0,1,2,))
+        self.ibmin, self.ibmax= 0, self.energies.shape[-1]-1
+        while(condition_energyInRange[self.ibmin]<0.5):
+            self.ibmin+=1
+        while(condition_energyInRange[self.ibmax]<0.5):
+            self.ibmax-=1
+        if self.verbose==2: showElapsedTime(extraInfo=f"Band index window: {self.ibmin=} {self.ibmax=}")
+
 class PDOS(Energy):
     def __init__(self, energyAxis:np.ndarray, eta=0.05, **kwarg) -> None:
         '''
@@ -257,7 +279,7 @@ class Spin(Energy):
                 projected_spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ vectors
             self.projected_spin_K_list.append(projected_spin_K)
 
-class Spin_diag(Energy):
+class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], **kwarg):
         '''
         Compute spin expectation of eigen-basis
@@ -269,7 +291,7 @@ class Spin_diag(Energy):
         super().__init__(**kwarg)
         self.Todd = True
 
-        vectors=self.vectors[:,:,:,None,:,:]
+        vectors=self.vectors[:,:,:,None,:,self.ibmin:self.ibmax+1]
         if self.model.overlap:
             _sv=self.model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
             self.spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
@@ -366,7 +388,7 @@ class Velocity(Energy):
                 velocity_K_proj -= (__UdOkU + __UdOkU.conj().transpose((0,1,2,3,5,4)))/2
             self.projected_velocity_K_list.append(velocity_K_proj)
 
-class Velocity_diag(Energy):
+class Velocity_diag(FermiScan):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
         Compute group velocity in original basis and eigen-basis
@@ -391,7 +413,7 @@ class Velocity_diag(Energy):
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
 
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
-        vectors=self.vectors[:,:,:,None,:,:]
+        vectors=self.vectors[:,:,:,None,:,self.ibmin:self.ibmax+1]
         _RHam_K_vector=self.RHam_K @ vectors
         self.velocity_diag_K=np.sum(vectors.conj() * _RHam_K_vector, axis=(4,))
         if self.verbose==2: showElapsedTime(extraInfo=f"group velocity of eig.-basis finished")
@@ -405,7 +427,7 @@ class Velocity_diag(Energy):
             for iR, Rvec in enumerate(self.model.iRvec):
                 self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-            _RO_K_vector=self.RO_K @ (vectors *self.energies[...,None,None,:])
+            _RO_K_vector=self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:self.ibmax+1])
             self.velocity_diag_K -= np.sum(vectors.conj() *_RO_K_vector, axis=(4,))
 
         self.projected_velocity_diag_K_list=[]
@@ -630,37 +652,34 @@ class SpinHallConductance(SpinBerryCurv):
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
 class SpinGalvanic_diag(Velocity_diag, Spin_diag):
-    def __init__(self, fermiList=[], currentProjectionList=[], spinProjectionList=[], **kwarg) -> None:
+    def __init__(self, currentProjectionList=[], spinProjectionList=[], **kwarg) -> None:
         '''
         Spin galvanic (\hbar/2 per cell per V/m)
+
+        Indexing:
+        self.spinGalvanic_K[iFermi, ik1, ik2, ik3, idirection, igamma] gives spin galvanic response distribution on BZ.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z current direction. 
+        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization orientation.
+
+        self.sigma[iFermi, idirection, igamma], gives integrated spin galvanic response, dependent on Fermi level.
+        Indexing strategy is same as ahead.
         '''
         super().__init__(velocityProjectionList=currentProjectionList, spinProjectionList=spinProjectionList, **kwarg)
-        # search energy window
-        Emax, Emin=np.max(fermiList)+20*self.eta, np.min(fermiList)-20*self.eta
-        condition_energyInRange=np.sum((self.energies>Emin) * (self.energies<Emax),axis=(0,1,2,))
-        ibmin, ibmax= 0, self.energies.shape[-1]-1
-        while(condition_energyInRange[ibmin]<0.5):
-            ibmin+=1
-        while(condition_energyInRange[ibmax]<0.5):
-            ibmax-=1
-        if self.verbose==2: showElapsedTime(extraInfo=f"Band index window: {ibmin=} {ibmax=}")
-        #
-        energies=self.energies[:,:,:,ibmin:ibmax+1]
-        
-        # <n|spin|n> * <n|velocity|n>, only intra-band contribution
+        # calc operator expectation, <n|spin|n> * <n|velocity|n>, only intra-band contribution
         spin_diag_K_list=[self.spin_diag_K]+self.projected_spin_diag_K_list
         velocity_diag_K_list=[self.velocity_diag_K]+self.projected_velocity_diag_K_list
-        spinVelocity_diag_K  = spin_diag_K_list[-1][...,None,:,ibmin:ibmax+1] * velocity_diag_K_list[-1][...,None,ibmin:ibmax+1]
+        spinVelocity_diag_K  = spin_diag_K_list[-1][...,None,:,:] * velocity_diag_K_list[-1][...,None,:]
+        spinVelocity_diag_K=spinVelocity_diag_K.real
 
-        sigma=np.zeros((len(fermiList),3,3))
-        self.spinGalvanicK=np.zeros((len(fermiList),)+self.kgrid+(3,3),dtype=float)
-        for ifermi, fermi in enumerate(fermiList):
-            exp=np.exp((energies-fermi)/self.eta)
-            weight=(-exp/(exp+1)**2/self.eta)
-            self.spinGalvanicK[ifermi] += np.sum(spinVelocity_diag_K.real * weight[...,None,None,:],axis=(5,))
-            sigma[ifermi]=np.sum(self.spinGalvanicK[ifermi],axis=(0,1,2))
+        # Fermi weight
+        exp=np.exp((self.energies[None,:,:,:,self.ibmin:self.ibmax+1]-self.fermiList[:,None,None,None,None])/self.eta)
+        weight=(-exp/(exp+1)**2/self.eta)
+
+        # spin Galvanic response on BZ
+        self.spinGalvanic_K=np.sum(spinVelocity_diag_K[None,...] * weight[...,None,None,:],axis=(-1,))
+        self.sigma=np.sum(self.spinGalvanic_K,axis=(1,2,3))
         
-        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge/hbar*angstrom)
+        self.sigma *= elementary_charge/hbar*angstrom/np.prod(self.kgrid)
         #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
