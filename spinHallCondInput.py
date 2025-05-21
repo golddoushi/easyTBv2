@@ -9,7 +9,7 @@ import numpy as np
 
 from task import BZGridTask
 from system import System_omx, System_w90, System_tb
-from calculator import Velocity, Velocity_diag, SpinHallConductance, Energy, SpinBerryCurv, AnormalousHallConductance, EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, PDOS, SpinHallConductanceRashiba, SpinGalvanic_diag
+from calculator import Velocity, Velocity_diag, SpinHallConductance, Energy, SpinBerryCurv, AnormalousHallConductance, EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, PDOS, SpinRashibaConductance, SpinGalvanic_diag
 from auxiliary import showElapsedTime, getCBM, getVBM
 from symmetry import SYMMETRY_PRECISION
 from fileio import writeVolumeData
@@ -26,9 +26,13 @@ def solveQ(param):
             "sigma":calc.sigma,"iq":param["iq"]}
 
 def solveRashiba(param):
-    calc=SpinHallConductanceRashiba(param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],T=300,fermiList=param['fermi'])
+    calc=SpinRashibaConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,degen=1e-6,skip_low=True,
+                                fermiList=param['fermi'],
+                                spinProjectionList=param['projected shells for detecting spin accumulation'],
+                                currentProjectionList=param['projected shells for applying current'],
+                             )
     return {"energies":calc.energies,
-            "spin Berry curv":calc.spinVeloVelo,
+            "spin Rashiba response":calc.spinRashiba_K,
             "sigma":calc.sigma,"iq":param["iq"]}
 
 def solveAHC(param):
@@ -64,7 +68,7 @@ def solveVelocity_diag(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/Au111/"
+    mainDir="./mcalc/AuH111/"
     model=System_omx(
         mainDir=mainDir,
         #hamR="wannier90",
@@ -117,8 +121,8 @@ def run():
     #fermi=-3.89                         # OPENMX PbSn offset topological insulator
     #fermi=-0.16790565257604*27.2113845 # OPENMX Pt
     #fermi=-0.19908723865958*27.2113845 # OPENMX FeCl2
-    #fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
-    fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
+    fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
+    #fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
     #fermi=-2.41861676 # VASP Sn
     #fermi=-2.58287444 # VASP Pb
     #fermi=10.96516405 # VASP Pt
@@ -150,7 +154,7 @@ def run():
     exit()#'''
     BZGrid=(108,108,1)
     BZSymm=False
-    calc=BZGridTask(model, solveSpinGalvanic, 
+    calc=BZGridTask(model, solveRashiba, 
                     args={"fermi":fermiAxis,
                           "projected shells for applying current":[
                               #{"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
@@ -172,16 +176,18 @@ def run():
     #berryCurv=np.zeros(tuple(BZGrid)+(3,nbands,))
     #spinBerryCurv=np.zeros(BZGrid+(3,3,3))
     #spinBerryCurvOnFermi=np.zeros((BZGrid[0],BZGrid[1],len(fermiAxis),3,3,3))
-    spinGalvanic=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,))
-    #sigma=np.zeros((len(fermiAxis),3,3,3))
-    sigma=np.zeros((len(fermiAxis),3,3))   # sigma of rank-2, i.e., spin galvanic tensor
+    spinRashiba=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,3,))
+    sigma=np.zeros((len(fermiAxis),3,3,3))
+    #spinGalvanic=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,))
+    #sigma=np.zeros((len(fermiAxis),3,3))   # sigma of rank-2, i.e., spin galvanic tensor
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=np.diagonal(result_q['velocities'],axis1=-2,axis2=-1)
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['velocities'] # obtained by Velocity_diag
         #spinVelocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin velocities'] # obtained by spinVelocity_diag
-        spinGalvanic[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin galvanic response'] # obtained by spinVelocity_diag
+        #spinGalvanic[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin galvanic response'] # obtained by spinVelocity_diag
+        spinRashiba[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin Rashiba response'] # obtained by SpinRashibaConductance
         #berryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['Berry curv']
         #valence=result_q['energies']<=fermi
         #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
@@ -230,7 +236,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    '''
+    #'''
     # output spin Hall conductance
     sigma/=len(calc.results)
     with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
@@ -248,9 +254,9 @@ def run():
                     for gamma in range(3):
                         fout.write(f"{s[alpha,beta,gamma]:15.6E}")
             fout.write("\n")
-    exit()#'''
+    #exit()#'''
 
-    #'''
+    '''
     # output spin galvanic conductance
     sigma/=len(calc.results)
     with open("%s/spinGalvanics.txt"%mainDir,"w") as fout:
@@ -311,7 +317,7 @@ def run():
     #ax3.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],energies[:,:,0,-4],cmap="Spectral")
     #ax3.axis('equal')
 
-    data_grid=spinGalvanic[len(fermiAxis)//2,:,:,0,0,1]
+    data_grid=spinRashiba[len(fermiAxis)//2,:,:,0,0,2,1]
     magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
     plt.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
     plt.colorbar()

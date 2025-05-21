@@ -683,27 +683,37 @@ class SpinGalvanic_diag(Velocity_diag, Spin_diag):
         #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
-class SpinHallConductanceRashiba(SpinVeloVelo):
-    def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, T=300, fermiList=[0.,], verbose=0, **kwarg) -> None:
+class SpinRashibaConductance(SpinVelocity_diag):
+    def __init__(self, currentProjectionList=[], spinProjectionList=[], **kwarg) -> None:
         '''
-        Rashiba-Elderson effect induced Spin hall conductance in (S/m hbar/2e)
+        Spin conductance (S/(m s) hbar/2e)
+
+        Indexing:
+        self.spinRashiba_K[iFermi, ik1, ik2, ik3, idirection, jdirection, igamma] gives spin Hall response distribution on BZ.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z the current direction. 
+        jdirection can be 0 | 1 | 2, corresponding to x | y | z the spincurrent direction. 
+        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization orientation.
+
+        self.sigma[iFermi, idirection, jdirection, igamma], gives integrated spin Hall response, dependent on Fermi level.
+        Indexing strategy is same as ahead.
         '''
-        super().__init__(model, kgrid, phaseshift, verbose, **kwarg)
+        super().__init__(velocityProjectionList=currentProjectionList, spinProjectionList=spinProjectionList, **kwarg)
+        # calc operator expectation, <n|spin|n> * <n|velocity|n>, only intra-band contribution
+        #spin_diag_K_list=[self.spin_diag_K]+self.projected_spin_diag_K_list
+        #velocity_diag_K_list=[self.velocity_diag_K]+self.projected_velocity_diag_K_list
+        #spinVelocity_diag_K  = spin_diag_K_list[-1][...,None,:,:] * velocity_diag_K_list[-1][...,None,:]
+        #spinVelocity_diag_K=spinVelocity_diag_K.real
+        spinVel_x_Vel = self.spinVelocity_diag_K[...,None,:,:,:] * self.velocity_diag_K[...,None,None,:]
 
-        sigma=np.zeros((len(fermiList),3,3,3))
+        # Fermi weight
+        exp=np.exp((self.energies[None,:,:,:,self.ibmin:self.ibmax+1]-self.fermiList[:,None,None,None,None])/self.eta)
+        weight=(-exp/(exp+1)**2/self.eta)
 
-        for ifermi, fermi in enumerate(fermiList):
-            #condition=abs(self.energies[:,:,:,self.ibmin:]-fermi)<10*(kB*T/elementary_charge)
-            #exp=np.exp((self.energies[:,:,:,self.ibmin:][condition]-fermi)/(kB*T/elementary_charge))
-            condition=abs(self.energies-fermi)<10*(kB*T/elementary_charge)
-            exp=np.exp((self.energies[condition]-fermi)/(kB*T/elementary_charge))
-            f_E=-1/(kB/elementary_charge*T)*exp/(1+exp)**2
-            for ialpha in range(3):
-                for ibeta in range(3):
-                    for igamma in range(3):
-                        sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.spinVeloVelo[...,ialpha,ibeta,igamma,:][condition]*f_E)
+        # spin Galvanic response on BZ
+        self.spinRashiba_K=np.sum(spinVel_x_Vel[None,...] * weight[...,None,None,None,:],axis=(-1,)).real
+        self.sigma=np.sum(self.spinRashiba_K,axis=(1,2,3))
         
-        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**3/hbar**2/angstrom/2)/model.Vcell
-        if verbose==2: showElapsedTime(extraInfo=f"Rashiba spin Hall conductance finished")
+        self.sigma *= (elementary_charge**3/hbar**2/angstrom)/self.model.Vcell/np.prod(self.kgrid)
+        if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, SpinExpectationOnPath
