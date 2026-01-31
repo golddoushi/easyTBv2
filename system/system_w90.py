@@ -164,11 +164,20 @@ class System_w90(System):
         
         self.atomicOrbInfoList=obtainProjections('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
         '''
-        #hrDat=readHrDat('%s/%s_hr.dat'%(mainDir,hamR),ignoreImagPart=ignoreImagPart,cutoff=cutoff,format=format)
-        #self.dRList=hrDat['dRList']
-        #self.ham_R=hrDat['ham_R']
-        #self.mp_grid=self.ham_R.shape[:3]
-        '''
+        # tight-binding approach
+        hrDat=readHrDat('%s/%s_hr.dat'%(mainDir,hamR),ignoreImagPart=ignoreImagPart,overlap=False,format=format)
+        self.iRvec=hrDat['iRvec']
+        self.iRvecIndex=hrDat['iRvecIndex']
+        self.nRvec=len(self.iRvec)
+        self.mp_grid=hrDat['mp_grid']
+        self.ham_R=hrDat['ham_R']
+        self.norbs=self.ham_R.shape[-1]
+        # r_mn of tight-binding model is diagonal
+        self.AA_R_W=np.zeros((self.nRvec,3,self.norbs,self.norbs),dtype=complex)
+        for iRvec, Rvec in enumerate(self.iRvec):
+            if Rvec@Rvec==0: 
+                for iorb in range(self.norbs): self.AA_R_W[iRvec,:,iorb,iorb]=self.rList[:,iorb]
+        #'''
         # 12. compute the [r, Ham]
         self.getRHam_R()
         self.getSpinMatrice()

@@ -68,11 +68,11 @@ def solveVelocity_diag(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/AuH111/"
-    model=System_omx(
+    mainDir="./mcalc/Pt/"
+    model=System_w90(
         mainDir=mainDir,
-        #hamR="wannier90",
-        hamR="omx",
+        hamR="wannier90",
+        #hamR="omx",
         #hamR="BNsoc",
         cutoff=-0.002,
         poscar="POSCAR",
@@ -86,15 +86,15 @@ def run():
             #"Sn":(0,0,0,1,1,2,),
             "Pb":(0,1,),
             #"Pb":(0,0,0,1,1,2,2,),
-            #"Pt":(0,1,2,),
-            "Pt":(0,0,1,1,2,2,),
+            "Pt":(0,1,2,),
+            #"Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
             "Fe":(2,),
             #"Fe":(0,0,1,1,2,2,),
             "Cl":(1,),
             #"Cl":(0,0,1,1,2,3),
-            #"H":(0,),
-            "H":(0,0,1,),
+            "H":(0,),
+            #"H":(0,0,1,),
             "Au":(0,0,0,1,1,2,2,)
         },
         ispin=2
@@ -104,14 +104,15 @@ def run():
         #np.zeros(3),
         #np.array([0, 0, 1]),
         #np.array([0, 0, 1]),
-        np.zeros(3),
-        np.zeros(3),
+        #np.zeros(3),
+        #np.zeros(3),
         np.zeros(3),
         np.zeros(3),
     ]
-    #model.symmerizeHamAndOverlap(
-    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,),print_col=(0,1,2,3,4,5),
-    #)
+    model.symmerizeHamAndOverlap(
+        atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,2,3,),print_col=(0,1,2,3,),
+    )
+    #exit()
     #'''
     #fermi=0  # OPNEMX generated wannier model always displays zero fermi energy
     #fermi=-0.167662613970*27.2113845 # OPENMX Ge
@@ -121,11 +122,11 @@ def run():
     #fermi=-3.89                         # OPENMX PbSn offset topological insulator
     #fermi=-0.16790565257604*27.2113845 # OPENMX Pt
     #fermi=-0.19908723865958*27.2113845 # OPENMX FeCl2
-    fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
+    #fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
     #fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
     #fermi=-2.41861676 # VASP Sn
     #fermi=-2.58287444 # VASP Pb
-    #fermi=10.96516405 # VASP Pt
+    fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
     #fermi=-2.1         # VASP 2H-FeCl2
@@ -140,7 +141,7 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
     
-    fermiAxis=np.linspace(fermi-0.5,fermi+0.5,101)
+    fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
     model.setFermi(fermi)
     '''
     # check band intepolation
@@ -152,21 +153,21 @@ def run():
                 fout.write(f"{ik:5d}{energy:15.6E}\n")
             fout.write("\n")
     exit()#'''
-    BZGrid=(108,108,1)
+    BZGrid=(21,21,21)
     BZSymm=False
-    calc=BZGridTask(model, solveRashiba, 
+    calc=BZGridTask(model, solveQ, 
                     args={"fermi":fermiAxis,
                           "projected shells for applying current":[
                               #{"source":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),], "target":[(3,(0,1,2,3,4,)),(4,(0,1,2,3,4,)),]},
                            ],
                           'projected shells for detecting spincurrent':[],
                           'projected shells for detecting spin accumulation':[
-                              {"source":[(2,(0,1,2,3,4,5,6,)),], "target":[(2,(0,1,2,3,4,5,6,)),]},
+                              #{"source":[(2,(0,1,2,3,4,5,6,)),], "target":[(2,(0,1,2,3,4,5,6,)),]},
                           ],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
-                    ncores=8)
+                    ncores=16)
 
     _,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
@@ -174,9 +175,9 @@ def run():
     #velocity=np.zeros(tuple(BZGrid)+(3,nbands,))
     #spinVelocity=np.zeros(tuple(BZGrid)+(3,3,nbands,))
     #berryCurv=np.zeros(tuple(BZGrid)+(3,nbands,))
-    #spinBerryCurv=np.zeros(BZGrid+(3,3,3))
+    spinBerryCurv=np.zeros(BZGrid+(3,3,3))
     #spinBerryCurvOnFermi=np.zeros((BZGrid[0],BZGrid[1],len(fermiAxis),3,3,3))
-    spinRashiba=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,3,))
+    #spinRashiba=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,3,))
     sigma=np.zeros((len(fermiAxis),3,3,3))
     #spinGalvanic=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,))
     #sigma=np.zeros((len(fermiAxis),3,3))   # sigma of rank-2, i.e., spin galvanic tensor
@@ -187,12 +188,12 @@ def run():
         #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['velocities'] # obtained by Velocity_diag
         #spinVelocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin velocities'] # obtained by spinVelocity_diag
         #spinGalvanic[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin galvanic response'] # obtained by spinVelocity_diag
-        spinRashiba[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin Rashiba response'] # obtained by SpinRashibaConductance
+        #spinRashiba[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin Rashiba response'] # obtained by SpinRashibaConductance
         #berryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['Berry curv']
-        #valence=result_q['energies']<=fermi
+        valence=result_q['energies']<=fermi
         #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
-        #_sBC=np.sum(result_q["spin Berry curv"]*valence[...,None,None,None,:],axis=(-1,))
-        #spinBerryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=_sBC
+        _sBC=np.sum(result_q["spin Berry curv"]*valence[...,None,None,None,:],axis=(-1,))
+        spinBerryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=_sBC
         #for ifermi, f in enumerate(fermiAxis):
         #    valence=result_q['energies']<=f
         #    _sBC=np.sum(result_q["spin Berry curv"]*valence[:,:,:,None,None,None,:],axis=(2,-1,))
@@ -254,7 +255,7 @@ def run():
                     for gamma in range(3):
                         fout.write(f"{s[alpha,beta,gamma]:15.6E}")
             fout.write("\n")
-    #exit()#'''
+    exit()#'''
 
     '''
     # output spin galvanic conductance
@@ -317,7 +318,7 @@ def run():
     #ax3.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],energies[:,:,0,-4],cmap="Spectral")
     #ax3.axis('equal')
 
-    data_grid=spinRashiba[len(fermiAxis)//2,:,:,0,0,2,1]
+    data_grid=spinBerryCurv[:,:,0,0,2,1]
     magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
     plt.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
     plt.colorbar()

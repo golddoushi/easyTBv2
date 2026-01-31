@@ -54,6 +54,9 @@ class Hr:
 
             # unpack the bond info
             source, target = int(bondInfo[3])-1,int(bondInfo[4])-1
+            if format=="QE":
+                source = source//2+(source%2)*(self.norb//2)
+                target = target//2+(target%2)*(self.norb//2)
             overlat=(int(bondInfo[0]),int(bondInfo[1]),int(bondInfo[2]))
             t=bondInfo[5] if ignoreImagPart else bondInfo[5] + 1j * bondInfo[6] 
             if self.overlap:

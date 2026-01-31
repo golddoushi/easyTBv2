@@ -39,9 +39,9 @@ class System:
         # spin matrix, in basis of home cell
         self.spin:np.ndarray
         # lattice matrix
-        self.lattice:np.ndarray
+        self.lattice:np.ndarray=None
         # reciprocal lattice
-        self.reciLattice:np.ndarray
+        self.reciLattice:np.ndarray=None
         # structure infomation
         self.posinfo:dict
         # mapping from atom to orbitals
@@ -54,6 +54,8 @@ class System:
             ["f_{z^3}","f_{xz^2}","f_{yz^2}","f_{z(x^2-y^2)}","f_{xyz}","f_{x(x^2-3y^2)}","f_{y(3x^2-y^2)}"]*2,]
         # Fermi level
         self.fermi:float
+        # symmetry group
+        self.pointGroup=Group([Symmetry(np.eye(3))],real_lattice=None,recip_lattice=None)
     
     def getRHam_R(self):
         '''
@@ -121,7 +123,8 @@ class System:
         '''set dR list'''
         self.dRList=dRList
     
-    def symmerizeHamAndOverlap(self,spinor=False,saxis:np.ndarray=np.array([0,0,-1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
+    def symmerizeTensorInAtomicBasis(self,tensor:np.ndarray,axisRep=("iRvec","atomic orb","atomic orb"),
+                        spinor=False,saxis:np.ndarray=np.array([0,0,-1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
                         symOpSelection:list=[],atomicMagMomList:list=[],format="w90",
                         print_row=(0,),print_col=(0,), # To print specialized block of local Hams.
                         ):
@@ -420,7 +423,7 @@ class System:
             dn5=defineVecByAngles(theta2,np.pi*(0/6+1/4))
             dNBasis=[dn1,dn2,dn3,dn4,dn5]
             dList=np.array([dOrb(n_vec,format=format) for n_vec in dNBasis])
-            print('determinals of d-orb basis:',np.linalg.det(dList))
+            #print('determinals of d-orb basis:',np.linalg.det(dList))
             ao_d_basis_std=np.linalg.inv(dList)
             #exit()
         
@@ -435,29 +438,28 @@ class System:
             fn7=defineVecByAngles(np.pi/2,np.pi/6)
             fNBasis=[fn1,fn2,fn3,fn4,fn5,fn6,fn7]
             fList=np.array([fOrb(n_vec,format=format) for n_vec in fNBasis])
-            print('determinals of f-orb basis',np.linalg.det(fList))
+            #print('determinals of f-orb basis',np.linalg.det(fList))
             ao_f_basis_std=np.linalg.inv(fList)
 
             atomicWaveSymOpList=[]
-            L=self.lattice
-            L_inv=np.linalg.inv(L)
+            invLat=np.linalg.inv(self.lattice)
             for rotate in symRotateList:
-                rotate_xyz=L_inv.dot(rotate.T).dot(L)
+                rotate_xyz=invLat@(rotate.T)@self.lattice
 
-                pTransList=np.array([pOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in pNBasis])
+                pTransList=np.array([pOrb(n_vec@rotate_xyz,format=format) for n_vec in pNBasis])
                 ao_p_basis_trans=pTransList.T
 
-                dTransList=np.array([dOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in dNBasis])
+                dTransList=np.array([dOrb(n_vec@rotate_xyz,format=format) for n_vec in dNBasis])
                 ao_d_basis_trans=dTransList.T
 
-                fTransList=np.array([fOrb(n_vec.dot(rotate_xyz),format=format) for n_vec in fNBasis])
+                fTransList=np.array([fOrb(n_vec@rotate_xyz,format=format) for n_vec in fNBasis])
                 ao_f_basis_trans=fTransList.T
 
                 atomicWaveSymOpList.append([
                     np.array([1]),
-                    np.dot(ao_p_basis_trans,ao_p_basis_std.T),
-                    np.dot(ao_d_basis_trans,ao_d_basis_std.T),
-                    np.dot(ao_f_basis_trans,ao_f_basis_std.T)
+                    ao_p_basis_trans@ao_p_basis_std.T,
+                    ao_d_basis_trans@ao_d_basis_std.T,
+                    ao_f_basis_trans@ao_f_basis_std.T,
                     ])
             return atomicWaveSymOpList
         
@@ -553,20 +555,19 @@ class System:
             for shell in atom['orbital index']: orbIndex += shell
             atomicOrbMap.append(orbIndex)
         
-        print(f"Enforce the hermit condition for energy and overlap matrix {self.nRvec=} {self.norbs=}")
-        hamR_herm    =np.zeros((self.nRvec,self.norbs,self.norbs),dtype=complex)
-        #if self.overlap: overlapInVecForm_herm=np.zeros((nR,norb,norb),dtype=complex)
+        # checking the shape
+        assert len(tensor.shape)==len(axisRep), f"there are {len(tensor.shape)=} axis in tensor, but axis rep is {axisRep}"
+        assert tensor.shape[0]==self.nRvec, f"first axis should be the iRvec, {self.nRvec=}, but {tensor.shape[0]=}"
+        assert tensor.shape[-1]==self.norbs, f"the last two axes should be the iorb and jorb, {self.norbs=}, but {tensor.shape[-1]=}"
+        assert tensor.shape[-2]==self.norbs, f"the last two axes should be the iorb and jorb, {self.norbs=}, but {tensor.shape[-2]=}"
+        print(f"Enforce the hermit condition for real-space matrix {self.nRvec=} {self.norbs=}")
+        tensor_herm    =np.zeros(tensor.shape,dtype=complex)
         for iR, R in enumerate(self.iRvec):
             iR_dual=self.iRvecIndex[(-R[0],-R[1],-R[2])]
-            if self.overlap:
-                hamR_herm[iR]    = (self.energy_R[iR]    + self.energy_R[iR_dual].T.conj())/2
-            else:
-                hamR_herm[iR]    = (self.ham_R[iR]    + self.ham_R[iR_dual].T.conj())/2
-            #if self.overlap: overlapInVecForm_herm[iR] = (self.overlapInVecForm[iR] + self.overlapInVecForm[iR_dual].T.conj())/2
-        ham_R   =hamR_herm
-        #if self.overlap: self.overlapInVecForm=overlapInVecForm_herm
+            tensor_herm[iR,...,:,:]    = (tensor[iR,...,:,:]    + tensor[iR_dual,...,:,:].swapaxes(-2,-1).conj())/2
+        ham_R   =tensor_herm
         showElapsedTime(extraInfo="Hermit processing finished")
-        
+
         def constructSymmetryBondSet(R0,iatom_source,iatom_target,verbose=False):
             iR0=self.iRvecIndex[R0]
 
@@ -724,12 +725,35 @@ class System:
         for iset, symBondSet in enumerate(allSymmerizedBondAndOverlap):
             setSymmerizedBond(symBondSet,ham_R_sym)
         showElapsedTime(extraInfo=f"symmery-constrained Ham. and overlap matrix constructed")
+        return ham_R_sym
+
+    def symmerizeHamAndOverlap(self,spinor=False,saxis:np.ndarray=np.array([0,0,-1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),
+                        symOpSelection:list=[],atomicMagMomList:list=[],format="w90",
+                        print_row=(0,),print_col=(0,), # To print specialized block of local Hams.
+                        ):
         #'''
         if self.overlap:
-            self.energy_R=ham_R_sym
+            self.energy_R=self.symmerizeTensorInAtomicBasis(self.energy_R,axisRep=("iRvec","atomic orb","atomic orb"),
+                        spinor=spinor,saxis=saxis,spin_basis=spin_basis,
+                        symOpSelection=symOpSelection,atomicMagMomList=atomicMagMomList,format=format,
+                        print_row=print_row,print_col=print_col,
+                                                            )
         else:
-            self.ham_R=ham_R_sym
-
+            self.ham_R=self.symmerizeTensorInAtomicBasis(self.ham_R,axisRep=("iRvec","atomic orb","atomic orb"),
+                        spinor=spinor,saxis=saxis,spin_basis=spin_basis,
+                        symOpSelection=symOpSelection,atomicMagMomList=atomicMagMomList,format=format,
+                        print_row=print_row,print_col=print_col,
+                                                         )
+        '''
+        if self.AA_R_W is not None:
+            AA_Rx_W=self.symmerizeTensorInAtomicBasis(self.AA_R_W,axisRep=("iRvec","p","atomic orb","atomic orb"),
+                        spinor=spinor,saxis=saxis,spin_basis=spin_basis,
+                        symOpSelection=symOpSelection,atomicMagMomList=atomicMagMomList,format=format,
+                        print_row=print_row,print_col=print_col,
+                                                            )
+        '''
+        
+    
     def setFermi(self,fermi:float):
         self.fermi=fermi
 
