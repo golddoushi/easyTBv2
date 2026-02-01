@@ -255,38 +255,19 @@ class System:
                     exit()
                 symIonMap.append(subMap)
             
-            spinRotateList=readSpinWFCSymOp(symRotateList)
-            # check if system involves nonzero local mag. mom.
-            sx=np.array([[0,1],[1,0]],dtype=complex)
-            sy=np.array([[0,-1j],[1j,0]],dtype=complex)
-            sz=np.array([[1,0],[0,-1]],dtype=complex)
             magmom_list=atomicMagMomList
             if spinor: # find proper sub-group consist with magnetism and time reversal symmetry
-                if abs(sum(sum(spin_basis.dot(spin_basis.conjugate().T)-np.eye(2)))-2)<SYMPREC:
-                    Us=spin_basis
-                else:
-                    print("Warning: spin_basis is not set or not set correctly. So, I have to calc. this via saxis.")
-                    print("         However, in some cases the saxis-inferred spin space is not satisfied.")
-                    print("         Be caucious and re-check the result!")
-                    assert np.sqrt(sum(saxis*saxis))==1, 'saxis should be normalized vector'
-                    _,Us=np.linalg.eigh(saxis[0]*sx+saxis[1]*sy+saxis[2]*sz)
-                    print("Calculated spin basis:")
-                    print(Us)
-                new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList, new_timeReversalList= [], [], [], [], []
+                new_symRotateList, new_symTranslateList, new_symIonMap, new_timeReversalList= [], [], [], []
                 for isym in range(len(symIonMap)):
-                    rotate_r, rotate_s, translate, ionMap= symRotateList[isym], spinRotateList[isym], symTranslateList[isym], symIonMap[isym]
+                    rotate_r, translate, ionMap= symRotateList[isym], symTranslateList[isym], symIonMap[isym]
                     magmom_rotated_list=[]
                     for m in atomicMagMomList:
                         magmom_rotated_list.append(pseudoRotation(rotate_r,self.lattice,m))
-                    #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
                     diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(self.posinfo['nions']))]
                     if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < SYMPREC:
                         print('crystal sym. op. preserved:')
                         print(rotate_r)
                         print(translate)
-                        #print(rotate_s)
-                        #print(Usy)
-                        print_matrix(Us.conjugate().T @ rotate_s @ Us, rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
@@ -297,13 +278,11 @@ class System:
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
                         new_symIonMap.append(ionMap)
-                        new_spinRotateList.append(Us.conjugate().T @ rotate_s @ Us)
                         new_timeReversalList.append(False)
                     else:
-                        print('crystal sym. op. broken due to magnetism')
+                        print(f'crystal sym. op. broken due to magnetism. res:{sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]):15.6E}')
                         print(rotate_r)
                         print(translate)
-                        print_matrix(Us.conjugate().T @ rotate_s @ Us, rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
@@ -313,19 +292,14 @@ class System:
                                     *dmag))
                     #continue
                     # check time reversal symmetry
-                    rotate_s_tr=rotate_s@np.array([[0,-1],[1,0]])
                     magmom_rotated_list=[]
                     for m in atomicMagMomList:
                         magmom_rotated_list.append(-pseudoRotation(rotate_r,self.lattice,m))
-                    #transformed_magmom=[rotate_s.dot(m) for m in magmom_list]
                     diff_magmom=[magmom_rotated_list[i_ion]-magmom_list[ionMap[i_ion]] for i_ion in range(sum(self.posinfo['nions']))]
                     if sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]) < SYMPREC:
                         print('crystal sym. op. + time reversal preserved:')
                         print(rotate_r)
                         print(translate)
-                        #print(rotate_s_tr)
-                        #print(Usy)
-                        print_matrix(Us.T.conjugate() @ rotate_s_tr @ Us.conjugate(), rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
@@ -336,13 +310,11 @@ class System:
                         new_symRotateList.append(rotate_r)
                         new_symTranslateList.append(translate)
                         new_symIonMap.append(ionMap)
-                        new_spinRotateList.append(Us.T.conjugate().dot(rotate_s_tr).dot(Us.conjugate()))
                         new_timeReversalList.append(True)
                     else:
-                        print('crystal sym. op. + time reversal broken due to magnetism')
+                        print(f'crystal sym. op. + time reversal broken due to magnetism. res:{sum([np.sqrt(np.dot(dmag,dmag)) for dmag in diff_magmom]):15.6E}')
                         print(rotate_r)
                         print(translate)
-                        print_matrix(Us.T.conjugate() @ rotate_s_tr @ Us.conjugate(), rowIndex=(0,1,),colIndex=(0,1,))
                         print('dmag:')
                         for idmag, dmag in enumerate(diff_magmom):
                             if np.dot(magmom_list[idmag],magmom_list[idmag])>SYMPREC: 
@@ -350,10 +322,10 @@ class System:
                                     idmag,ionMap[idmag],
                                     *atomicMagMomList[idmag],*magmom_rotated_list[idmag],*atomicMagMomList[ionMap[idmag]],
                                     *dmag))
-                symRotateList, symTranslateList, symIonMap, spinRotateList=new_symRotateList, new_symTranslateList, new_symIonMap, new_spinRotateList
-                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':new_timeReversalList}
+                symRotateList, symTranslateList, symIonMap=new_symRotateList, new_symTranslateList, new_symIonMap
+                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'time reversal':new_timeReversalList}
             else:
-                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':[False for sympos in symRotateList]}       
+                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':[False]*len(symRotateList)}
         def generateAtomicWFCSymOp(symRotateList,format="w90"):
             '''generate transformation matrix of cubic harmonics for each sym. Op
             output:
@@ -463,6 +435,44 @@ class System:
                     ])
             return atomicWaveSymOpList
         
+        def generateSpinWFCSymOp(rotate,timeReversal=False):
+            L=self.lattice
+            L_inv=np.linalg.inv(L)
+            
+            if not spinor:
+                return np.eye(2)
+            rotate_xyz=L_inv.dot(rotate.T).dot(L)
+            x,y,z=[vecAround(vec) for vec in rotate_xyz]
+            _z=np.array([x[1]*y[2]-x[2]*y[1],x[2]*y[0]-x[0]*y[2],x[0]*y[1]-x[1]*y[0]])
+            if np.dot(z,_z)<0: # improper rotation
+                x,y,z=-x,-y,-z # implement symmetric spin orbs
+
+            beta=acos(z[2])
+            sin_beta=sin(beta)
+            if sin_beta>SYMPREC:
+                cos_alpha=z[0]/sin_beta
+                sin_alpha=z[1]/sin_beta
+                alpha=acos(cos_alpha) if sin_alpha>=0 else acos(-cos_alpha)+np.pi
+
+                sin_gamma=y[2]/sin_beta
+                cos_gamma=-x[2]/sin_beta
+                gamma=acos(cos_gamma) if sin_gamma>=0 else acos(-cos_gamma)+np.pi
+            else:
+                gamma=0
+                beta=0 if z[2]>0 else np.pi
+
+                cos_alpha=y[1]
+                sin_alpha=-y[0]
+                alpha=acos(cos_alpha) if sin_alpha>=0 else acos(-cos_alpha)+np.pi
+
+            spinRotation=np.array([
+                [np.exp(-1j/2*(alpha+gamma))*cos(beta/2),-np.exp(-1j/2*(alpha-gamma))*sin(beta/2)],
+                [np.exp( 1j/2*(alpha-gamma))*sin(beta/2), np.exp( 1j/2*(alpha+gamma))*cos(beta/2)]
+            ])
+            if timeReversal:
+                return spinRotation@np.array([[0,-1],[1,0]])
+            return spinRotation
+            
         showElapsedTime()
         # check the projections
         orbName=['s','p','d','f']
@@ -473,30 +483,54 @@ class System:
             lmax=max([lmax,max(atomL)])
             for ishell, (orbL, orbIndex) in enumerate(zip(atomL,atomOrb)):
                 print('%s orb:'%orbName[orbL],orbIndex)
+        # checking the shape
+        assert len(tensor.shape)==len(axisRep), f"there are {len(tensor.shape)=} axis in tensor, but axis rep is {axisRep}"
+        assert tensor.shape[0]==self.nRvec, f"first axis should be the iRvec, {self.nRvec=}, but {tensor.shape[0]=}"
+        assert tensor.shape[-1]==self.norbs, f"the last two axes should be the iorb and jorb, {self.norbs=}, but {tensor.shape[-1]=}"
+        assert tensor.shape[-2]==self.norbs, f"the last two axes should be the iorb and jorb, {self.norbs=}, but {tensor.shape[-2]=}"
+        # enforce the hermit
+        print(f"Enforce the hermit condition for real-space matrix {self.nRvec=} {self.norbs=}")
+        tensor_herm    =np.zeros(tensor.shape,dtype=complex)
+        for iR, R in enumerate(self.iRvec):
+            iR_dual=self.iRvecIndex[(-R[0],-R[1],-R[2])]
+            tensor_herm[iR,...]    = (tensor[iR,...]    + tensor[iR_dual,...].swapaxes(-2,-1).conj())/2
+        ham_R   =tensor_herm
+        showElapsedTime(extraInfo="Hermit processing finished")
 
-        # obtain sym. Ops. of atomic wavefunctions
+        # obtain all sym. Ops. consistent with magnetism
         sym= getSymOpsAndSymSiteMap(atomicMagMomList=atomicMagMomList)
-        symRotateList, symTranslateList, symSiteMapList, symSpinRotateList, symTimeReversalList=sym['rotations'], sym['translations'], sym['atom map'], sym['spin rotations'], sym['time reversal']
+        symRotateList, symTranslateList, symSiteMapList, symTimeReversalList=sym['rotations'], sym['translations'], sym['atom map'], sym['time reversal']
         if len(symOpSelection)>0:
             symRotateList=[symRotateList[isym] for isym in symOpSelection]
             symTranslateList=[symTranslateList[isym] for isym in symOpSelection]
             symSiteMapList=[symSiteMapList[isym] for isym in symOpSelection]
-            symSpinRotateList=[symSpinRotateList[isym] for isym in symOpSelection]
             symTimeReversalList=[symTimeReversalList[isym] for isym in symOpSelection]
-        atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,format=format)
-        #print_matrix(atomicWaveSymOpList[1][2],rowIndex=(0,1,2,3,4,),colIndex=(0,1,2,3,4,))
-        #exit()
+        
+        # set up symmetry group (for terms on BZ)
         # in now set up, the lattice is column-major and the reci-lat is row-major, which is opposite to VASP exactly
         # and the R is the rotation with cartesian basis
+        # r 
         lat,lat_inv=self.lattice.T,np.linalg.inv(self.lattice.T)
         self.symOpList=[]
-        for rotate, translate, timeReversal in zip (symRotateList,symTranslateList,symTimeReversalList):
+        for rotate, timeReversal in zip (symRotateList,symTimeReversalList):
             self.symOpList.append(
                 Symmetry(R=lat@rotate@lat_inv,TR=timeReversal)
             )
-        self.pointGroup=Group(self.symOpList,real_lattice=self.lattice,recip_lattice=np.linalg.inv(self.lattice.T)*2*np.pi)
+        self.pointGroup=Group(self.symOpList,real_lattice=self.lattice)
+        
+        # creating reps for each sym. op. 
+        # firstly, the reps of spin basis
+        symSpinRotateList=[]
+        for rotate, timeReversal in zip(symRotateList,symTimeReversalList):
+            symSpinRotateList.append(generateSpinWFCSymOp(rotate,timeReversal))
+
+        # secondly, the reps of atom orbital basis
+        # TODO: seperate the spin and atom orbital basis into different axis and operate seperately
+        atomicWaveSymOpList= generateAtomicWFCSymOp(symRotateList,format=format) # reps for rotation op. on s, p, d, f shell
+        #print_matrix(atomicWaveSymOpList[1][2],rowIndex=(0,1,2,3,4,),colIndex=(0,1,2,3,4,))
         #exit()
-        # construct local sym. Op. for each sym. op.
+
+        # for one specific atom, it might contains mutiple diffrent or same shell. So, here constructs reps for rotation op. on each atom
         localSymOpList, localSymOpInvList=[], [] # localSymOpList[isymOp][iatom] give sym. op. in atomic subspace
         for isymOp in range(len(symRotateList)):
             localSymOp, localSymOpInv=[], []
@@ -545,6 +579,7 @@ class System:
             localSymOpList.append(localSymOp)
             localSymOpInvList.append(localSymOpInv)
         
+
         #np.set_printoptions(precision=4)
         # impose symmetry constrains
         #'''
@@ -554,19 +589,6 @@ class System:
             orbIndex=[]
             for shell in atom['orbital index']: orbIndex += shell
             atomicOrbMap.append(orbIndex)
-        
-        # checking the shape
-        assert len(tensor.shape)==len(axisRep), f"there are {len(tensor.shape)=} axis in tensor, but axis rep is {axisRep}"
-        assert tensor.shape[0]==self.nRvec, f"first axis should be the iRvec, {self.nRvec=}, but {tensor.shape[0]=}"
-        assert tensor.shape[-1]==self.norbs, f"the last two axes should be the iorb and jorb, {self.norbs=}, but {tensor.shape[-1]=}"
-        assert tensor.shape[-2]==self.norbs, f"the last two axes should be the iorb and jorb, {self.norbs=}, but {tensor.shape[-2]=}"
-        print(f"Enforce the hermit condition for real-space matrix {self.nRvec=} {self.norbs=}")
-        tensor_herm    =np.zeros(tensor.shape,dtype=complex)
-        for iR, R in enumerate(self.iRvec):
-            iR_dual=self.iRvecIndex[(-R[0],-R[1],-R[2])]
-            tensor_herm[iR,...,:,:]    = (tensor[iR,...,:,:]    + tensor[iR_dual,...,:,:].swapaxes(-2,-1).conj())/2
-        ham_R   =tensor_herm
-        showElapsedTime(extraInfo="Hermit processing finished")
 
         def constructSymmetryBondSet(R0,iatom_source,iatom_target,verbose=False):
             iR0=self.iRvecIndex[R0]
@@ -597,14 +619,11 @@ class System:
                     return {'preserve':False}
                 else:
                     iR=self.iRvecIndex[R]
-                    bond   =ham_R[iR,atomicOrbMap[iatom_source_trans],:][:,atomicOrbMap[iatom_target_trans]].copy()
-                        
+                    bond   =ham_R[iR][...,atomicOrbMap[iatom_source_trans],:][...,atomicOrbMap[iatom_target_trans]].copy()
+                    
+                    bond_rotated=(localSymOpInv[iatom_source_trans])@bond@localSymOp[iatom_target_trans]
                     if timeReversal: 
-                        #bond_rotated=((localSymOp[iatom_source_trans].T.conj())@bond@(localSymOp[iatom_target_trans])).conj()
-                        bond_rotated=((localSymOpInv[iatom_source_trans])@bond@(localSymOp[iatom_target_trans])).conj()
-                    else:
-                        #bond_rotated=(localSymOp[iatom_source_trans].T.conj())@bond@localSymOp[iatom_target_trans]
-                        bond_rotated=(localSymOpInv[iatom_source_trans])@bond@localSymOp[iatom_target_trans]
+                        bond_rotated=bond_rotated.conj()
                 
                     if verbose: 
                         print(f'symmetry bond {R}({iR}) {iatom_source_trans} {iatom_target_trans} {timeReversal=}')
@@ -631,7 +650,7 @@ class System:
                             'conjugation': True,
                             'on grid': True,
                             'bond info':(iatom_target_trans,iatom_source_trans,-R[0],-R[1],-R[2]),
-                            'original hopping':bond.conj().T,
+                            'original hopping':bond.conj().swapaxes(-2,-1),
                             'sym. op. on source':localSymOp[iatom_source_trans],
                             'sym. op. on target':localSymOpInv[iatom_target_trans],
                             'time reversal':timeReversal,
@@ -651,12 +670,12 @@ class System:
             for bond in symSet['bond set']:
                 opSource, opTarget= bond['sym. op. on source'], bond['sym. op. on target']
                 if bond['time reversal']:
-                    bond['symmerized hopping'] = opSource @ (bond_matrix_avg.conj()) @ opTarget#.conj().T
+                    bond['symmerized hopping'] = opSource @ (bond_matrix_avg.conj()) @ opTarget
                 else:
-                    bond['symmerized hopping'] = opSource @ bond_matrix_avg @ opTarget#.conj().T
+                    bond['symmerized hopping'] = opSource @ bond_matrix_avg @ opTarget
 
                 if bond['conjugation']:                
-                    bond['symmerized hopping'] = bond['symmerized hopping'].conj().T
+                    bond['symmerized hopping'] = bond['symmerized hopping'].conj().swapaxes(-2,-1)
 
                 diff  = bond['symmerized hopping'] - bond['original hopping']
                 res_list.append(np.max(abs(diff.real)) + 1j*np.max(abs(diff.imag)))
@@ -674,14 +693,13 @@ class System:
                 
                 for iLocalOrbI, iGlobalOrbI in enumerate(atomicOrbMap[iatom_source]):
                     for iLocalOrbJ, iGlobalOrbJ in enumerate(atomicOrbMap[iatom_target]):
-                        ham_sym[iR, iGlobalOrbI, iGlobalOrbJ]=bond_t_matrix[iLocalOrbI, iLocalOrbJ]
+                        ham_sym[iR, ..., iGlobalOrbI, iGlobalOrbJ]=bond_t_matrix[..., iLocalOrbI, iLocalOrbJ]
         
-        #symBondSet=constructSymmetryBondSet((0,0,0),0,0,verbose=True)
+        #symBondSet=constructSymmetryBondSet((1,0,0),0,0,verbose=True)
         #res=calcSymmerizedBond(symBondSet,verbose=True)
-        #ham_R_sym   =np.zeros((self.nRvec,self.norbs,self.norbs),dtype=complex)
         #setSymmerizedBond(symBondSet,ham_R)
         #print("Check consistency of symmerization =====>>>>")
-        #symBondSet=constructSymmetryBondSet((0,0,0),0,0,verbose=True)
+        #symBondSet=constructSymmetryBondSet((1,0,0),0,0,verbose=True)
         #res=calcSymmerizedBond(symBondSet,verbose=True)
         #exit()
 
