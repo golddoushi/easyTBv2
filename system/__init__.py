@@ -325,7 +325,7 @@ class System:
                 symRotateList, symTranslateList, symIonMap=new_symRotateList, new_symTranslateList, new_symIonMap
                 return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'time reversal':new_timeReversalList}
             else:
-                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'spin rotations':spinRotateList, 'time reversal':[False]*len(symRotateList)}
+                return {'rotations':symRotateList, 'translations':symTranslateList, 'atom map':symIonMap, 'time reversal':[False]*len(symRotateList)}
         def generateAtomicWFCSymOp(symRotateList,format="w90"):
             '''generate transformation matrix of cubic harmonics for each sym. Op
             output:

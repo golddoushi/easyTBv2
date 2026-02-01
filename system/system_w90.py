@@ -127,13 +127,6 @@ class System_w90(System):
                         _AA_k_W[:,np.arange(self.norbs,dtype=int),np.arange(self.norbs,dtype=int)]=-(
                             wb*bvec[:,None]*(np.log(np.diag(overlap)).imag)[None,:])
                     AA_k_W[ikpt,...]+=_AA_k_W
-            # enforce the Hermite condition for AA_k_W
-            #AA_k_W=(AA_k_W+AA_k_W.transpose((0,1,3,2)).conj())/2
-            #np.set_printoptions(precision=3)
-            #for kpt, AA_k in zip(chk.kpt_list,AA_k_W):
-            #    print(kpt)
-            #    print(AA_k[0,:4,:4])
-            #exit()
             # 8. FFT to obtain AA_W in R-space
             self.AA_R_W=fourier_q_to_R_loc(AA_k_W)
             for Rvec, AA in zip(self.iRvec,self.AA_R_W):
@@ -148,7 +141,7 @@ class System_w90(System):
 
         # 12. read in the centers of each basis
         print("set wcc to align the chk")
-        self.rList=chk.wannier_centers.T#np.zeros((3,self.norbs))
+        self.rList=chk.wannier_centers.T
         self.ispin=ispin
         
         self.posinfo=readPOSCAR('%s/%s'%(mainDir,poscar))
