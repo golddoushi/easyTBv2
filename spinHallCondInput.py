@@ -67,7 +67,7 @@ def solveVelocity_diag(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
+    mainDir="./mcalc/Pt/"
     model=System_w90(
         mainDir=mainDir,
         hamR="wannier90",
@@ -101,16 +101,16 @@ def run():
     
     atomicMagMomList=[
         #np.zeros(3),
-        np.array([0, 0, 1]),
+        #np.array([0, 0, 1]),
         #np.array([0, 0, 1]),
         #np.zeros(3),
         #np.zeros(3),
         np.zeros(3),
         np.zeros(3),
     ]
-    #model.symmerizeHamAndOverlap(
-    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,2,3,),print_col=(0,1,2,3,),
-    #)
+    model.symmerizeHamAndOverlap(
+        atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,2,3,4,),print_col=(0,1,2,),
+    )
     #exit()
     #'''
     #fermi=0  # OPNEMX generated wannier model always displays zero fermi energy
@@ -125,10 +125,10 @@ def run():
     #fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
     #fermi=-2.41861676 # VASP Sn
     #fermi=-2.58287444 # VASP Pb
-    #fermi=10.96516405 # VASP Pt
+    fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.1         # VASP 2H-FeCl2
+    #fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -152,8 +152,8 @@ def run():
                 fout.write(f"{ik:5d}{energy:15.6E}\n")
             fout.write("\n")
     exit()#'''
-    BZGrid=(21,21,1)
-    BZSymm=False
+    BZGrid=(51,51,51)
+    BZSymm=True
     calc=BZGridTask(model, solveQ, 
                     args={"fermi":fermiAxis,
                           "projected shells for applying current":[
