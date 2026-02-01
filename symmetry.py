@@ -51,9 +51,7 @@ from packaging import version as pversion
 from scipy.spatial.transform import Rotation as rotmat
 from copy import deepcopy
 from collections.abc import Iterable
-
-SYMMETRY_PRECISION = 1e-4
-
+from auxiliary import SYMPREC
 
 class Symmetry():
     """
@@ -245,10 +243,11 @@ class Group():
             + " and that  enough digits were written for the lattice vectors (at least 6-7 after coma)")
         if real_lattice is not None:
             assert self.check_basis_symmetry(self.real_lattice), "real_lattice is not symmetric" + MSG_not_symmetric
-        if real_lattice is not None:
+            self.recip_lattice=np.linalg.inv(self.real_lattice)*2*np.pi
+        if recip_lattice is not None:
             assert self.check_basis_symmetry(self.recip_lattice), "recip_lattice is not symmetric" + MSG_not_symmetric
 
-    def check_basis_symmetry(self, basis, tol=SYMMETRY_PRECISION, rel_tol=None):
+    def check_basis_symmetry(self, basis, tol=SYMPREC, rel_tol=None):
         "returns True if the basis is symmetric"
         if rel_tol is not None:
             tol = rel_tol * tol
@@ -352,6 +351,6 @@ class Group():
         st = [S.transform_reduced_vector(k, self.recip_lattice) for S in self.symmetries]
         for i in range(len(st) - 1, 0, -1):
             diff = np.array(st[:i]) - np.array(st[i])[None, :]
-            if np.linalg.norm(diff - diff.round(), axis=-1).min() < SYMMETRY_PRECISION:
+            if np.linalg.norm(diff - diff.round(), axis=-1).min() < SYMPREC:
                 del st[i]
         return np.array(st)

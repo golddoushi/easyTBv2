@@ -683,16 +683,21 @@ def print_matrix(mat,rowIndex,colIndex,thr=1e-6):
     thr: float
       The threthold to hide a number
     '''
-    for irow in rowIndex:
-        print("|",end='')
-        for icol in colIndex: 
-            for ele in (mat[irow,icol].real, mat[irow,icol].imag):
-                if abs(ele)>thr:
-                    print(f"{ele:8.1E}",end='')
-                else:
-                    print("        ",end='')
-            print('I ',end='')
-        print("|")
+    totalElements=np.prod(mat.shape,dtype=int)
+    nstacks=totalElements//np.prod(mat.shape[-2:],dtype=int)
+    print_mat=mat.reshape((nstacks,)+mat.shape[-2:])
+    for istack in range(nstacks):
+        if nstacks>1: print(f"stack {istack}")
+        for irow in rowIndex:
+            print("|",end='')
+            for icol in colIndex: 
+                for ele in (print_mat[istack,irow,icol].real, print_mat[istack,irow,icol].imag):
+                    if abs(ele)>thr:
+                        print(f"{ele:8.1E}",end='')
+                    else:
+                        print("        ",end='')
+                print('I ',end='')
+            print("|")
 
 def iterate3dpm(size):
     return (

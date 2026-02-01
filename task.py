@@ -2,9 +2,8 @@
 # 
 from multiprocessing import Pool, freeze_support
 import numpy as np
-from auxiliary import showElapsedTime
+from auxiliary import showElapsedTime, SYMPREC
 from system import System
-from symmetry import SYMMETRY_PRECISION
 
 class BZGridTask:
 
@@ -78,13 +77,13 @@ class BZGridTask:
                         irreducibleTask.append(newTask)
                         continue
                     for itask, oldTask in enumerate(irreducibleTask):
-                        if abs(oldTask['qlen'] - qlen) < SYMMETRY_PRECISION:
+                        if abs(oldTask['qlen'] - qlen) < SYMPREC:
                             if self.equiv(model,oldTask['q'],newTask['q']):
                                 break
                             else:
                                 irreducibleTask.insert(itask,newTask)
                                 break
-                        elif oldTask['qlen']>qlen+SYMMETRY_PRECISION:
+                        elif oldTask['qlen']>qlen+SYMPREC:
                             irreducibleTask.insert(itask,newTask)
                             break
                     else:
@@ -129,5 +128,5 @@ class BZGridTask:
             fractional coordinates of the other k-point
         '''
         q_diff = model.pointGroup.star(q1)[:,None,:] - model.pointGroup.star(q2)[None,:,:]
-        if np.linalg.norm((q_diff - np.round(q_diff)), axis=2).min() < SYMMETRY_PRECISION: return True
+        if np.linalg.norm((q_diff - np.round(q_diff)), axis=2).min() < SYMPREC: return True
         return False
