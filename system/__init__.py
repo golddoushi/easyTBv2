@@ -574,8 +574,9 @@ class System:
                 assert component in repFuncMapping.keys(), f"for now, only the reps. for following quantities are available: {repFuncMapping.keys()}"
                 assert tensor.shape[1+icomponent]==dimRep[component], f"the dimension of axis{1+icomponent}: {tensor.shape[1+icomponent]} in consist with the reps of {component} {dimRep[component]}"
                 repMat=repFuncMapping[component](rotate)
-                symMidRotateList[-1].append((repMat,timeReversalSign[component]))
-                symMidRotateInvList[-1].append((np.linalg.inv(repMat),timeReversalSign[component]))
+                if timeReversal: repMat*=timeReversalSign[component]
+                symMidRotateList[-1].append(repMat)
+                symMidRotateInvList[-1].append(np.linalg.inv(repMat))
 
         #np.set_printoptions(precision=4)
         # impose symmetry constrains
@@ -623,9 +624,8 @@ class System:
                         bond_rotated=bond_rotated.conj()
                     
                     # then rotate the extra axes
-                    for iExtraAxis, (midSymOpInvAxis,timeReversalSign) in enumerate(middleSymOpsInv):
-                        bond_rotated=np.tensordot(midSymOpInvAxis,bond_rotated,axes=((-1,),(iExtraAxis)))
-                        if timeReversal: bond_rotated *= timeReversalSign
+                    for iExtraAxis, midSymOpInv in enumerate(middleSymOpsInv):
+                        bond_rotated=np.tensordot(midSymOpInv,bond_rotated,axes=((-1,),(iExtraAxis,)))
                 
                     if verbose: 
                         print(f'symmetry bond {R}({iR}) {iatom_source_trans} {iatom_target_trans} {timeReversal=}')
@@ -678,9 +678,8 @@ class System:
                 else:
                     bond['symmerized hopping'] = opSource @ bond_matrix_avg @ opTarget
                 # processing middle part if any
-                for iExtraAxis, (midSymOpAxis,timeReversalSign) in enumerate(opsMiddle):
-                    bond['symmerized hopping']=np.tensordot(midSymOpAxis,bond['symmerized hopping'],axes=((-1,),(iExtraAxis)))
-                    if timeReversal: bond['symmerized hopping'] *= timeReversalSign
+                for iExtraAxis, midSymOp in enumerate(opsMiddle):
+                    bond['symmerized hopping']=np.tensordot(midSymOp,bond['symmerized hopping'],axes=((-1,),(iExtraAxis,)))
                 
                 if bond['conjugation']:                
                     bond['symmerized hopping'] = bond['symmerized hopping'].conj().swapaxes(-2,-1)
