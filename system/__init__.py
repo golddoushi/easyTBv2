@@ -37,7 +37,9 @@ class System:
         # num. of spin tunnels
         self.ispin=-1
         # spin matrix, in basis of home cell
-        self.spin:np.ndarray
+        self.spin:np.ndarray=None
+        # torque matrix, rely on the spin matrix defined
+        self.spinTorque_R:np.ndarray=None
         # lattice matrix
         self.lattice:np.ndarray=None
         # reciprocal lattice
@@ -91,7 +93,20 @@ class System:
                 if iorb>=self.norbs//2: break
                 ii[iorb]=1
             II=np.diag(ii)
-        if self.format=="VASP":
+        if self.format=="VASP" or self.format=="openmx": # ideal spinor basis, with blocked tunnels
+            # sigma^x
+            self.spin[0,:self.norbs//2,self.norbs//2:] = II
+            self.spin[0,self.norbs//2:,:self.norbs//2] = II
+            # sigma^y
+            self.spin[1,:self.norbs//2,self.norbs//2:] = -1j*II
+            self.spin[1,self.norbs//2:,:self.norbs//2] =  1j*II
+            # sigma^z
+            self.spin[2,:self.norbs//2,:self.norbs//2] =  II
+            self.spin[2,self.norbs//2:,self.norbs//2:] = -II
+        elif self.format=="VASP6":
+            # TODO: read spin operator from wannier90.spn
+            # < u_nk| simga_i | u_mk > , i=x,y,z
+            # i(fastest) , n, m, k
             # sigma^x
             self.spin[0,:self.norbs//2,self.norbs//2:] = II
             self.spin[0,self.norbs//2:,:self.norbs//2] = II
@@ -296,9 +311,9 @@ class System:
             '''generate transformation matrix of cubic harmonics for each sym. Op
             output:
             data[0]:1x1 array: s; 
-            data[1]:3x3 array: pz,px,py (w90 format); px,py,pz (openmx format)
-            data[2]:5x5 array: dz2, dxz, dyz, dx2-y2, dxy (w90 format); dz2, dx2-y2, dxy, dxz, dyz (openmx format) 
-            data[3]:7x7 array: fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
+            data[1]:3x3 array: pz,px,py (w90 format); px,py,pz (openmx format); py,pz,px (VASP6 format)
+            data[2]:5x5 array: dz2, dxz, dyz, dx2-y2, dxy (w90 format); dz2, dx2-y2, dxy, dxz, dyz (openmx format); dxy,dyz,dz2,dxz,dx2-y2 (VASP6 format)
+            data[3]:7x7 array: fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2) (w90 and openmx); fy(3x2-y2), fxyz, fyz2, fz3, fxz2, fz(x2-y2), fx(x2-3y2) (VASP6 format)
             data[4]:2x2 array: up, dn
             '''
             def defineVecByAngles(theta,phi):
@@ -309,8 +324,8 @@ class System:
                    order: pz, px, py
                 '''
                 x,y,z=vec
-                if format=="openmx":
-                    return np.array([x,y,z])
+                if format=="openmx": return np.array([x,y,z])
+                if format=="VASP6": return np.array([y,z,x])
                 return np.array([z,x,y]) # in order: pz, px, py, 
             def dOrb(vec,format="w90"):
                 '''d-orbitals defined in line with wannier90 v2.1
@@ -319,11 +334,19 @@ class System:
                 x,y,z=vec
                 if format=="openmx":
                     return np.array([
-                        sqrt(5/16)*(3*z*z-1),
-                        sqrt(15/16)*(x*x-y*y),
                         sqrt(15/4)*x*y,
-                        sqrt(15/4)*x*z,
                         sqrt(15/4)*y*z,
+                        sqrt(5/16)*(3*z*z-1),
+                        sqrt(15/4)*x*z,
+                        sqrt(15/16)*(x*x-y*y),
+                    ])
+                if format=="VASP6":
+                    return np.array([
+                        sqrt(15/4)*x*y,
+                        sqrt(15/4)*y*z,
+                        sqrt(5/16)*(3*z*z-1),
+                        sqrt(15/4)*x*z,
+                        sqrt(15/16)*(x*x-y*y),
                     ])
                 return np.array([
                     sqrt(5/16)*(3*z*z-1),
@@ -337,7 +360,8 @@ class System:
                    order: fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
                 '''
                 x,y,z=vec
-                return np.array([
+                if format=="VASP6":
+                    return np.array([
                     sqrt(7)   *(5*z**3-3*z),
                     sqrt(21/2)*(5*z**2-1)*x,
                     sqrt(21/2)*(5*z**2-1)*y,
@@ -345,7 +369,16 @@ class System:
                     sqrt(105) *(x*y*2)*z,
                     sqrt(35/2)*(x*x-3*y*y)*x,
                     sqrt(35/2)*(3*x*x-y*y)*y
-                ])/4#/sqrt(np.pi)
+                    ])/4
+                return np.array([
+                    sqrt(35/2)*(3*x*x-y*y)*y,
+                    sqrt(105) *(x*y*2)*z,
+                    sqrt(21/2)*(5*z**2-1)*y,
+                    sqrt(7)   *(5*z**3-3*z),
+                    sqrt(21/2)*(5*z**2-1)*x,
+                    sqrt(105) *(x*x-y*y)*z,
+                    sqrt(35/2)*(x*x-3*y*y)*x,
+                ])/4
             
             pn1,pn2,pn3=np.array([1,0,0]),np.array([0,1,0]),np.array([0,0,1])
             pNBasis=[pn1,pn2,pn3]

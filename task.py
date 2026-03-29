@@ -93,9 +93,15 @@ class BZGridTask:
     
         pool=Pool(processes=ncores)
         self.results=[]
-        for result in pool.imap_unordered(taskFunc,irreducibleTask):
-            self.results.append(result)
-            if len(self.results) % ncores == 1: showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(irreducibleTask):3d} finished")
+        if ncores==1: # serial run
+            for task in irreducibleTask:
+                result=taskFunc(task)
+                self.results.append(result)
+                showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(irreducibleTask):3d} finished")
+        else: # parallel run
+            for result in pool.imap_unordered(taskFunc,irreducibleTask):
+                self.results.append(result)
+                if len(self.results) % ncores == 1: showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(irreducibleTask):3d} finished")
 
         showElapsedTime(extraInfo=f"integration finished")
 

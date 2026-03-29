@@ -714,6 +714,17 @@ def fourier_q_to_R(AA_q, mp_grid, kpt_mp_grid, iRvec, ndegen, ):
     AA_R = np.array([AA_q_mp[tuple(iR % mp_grid)] / nd for iR, nd in zip(iRvec, ndegen)]) / np.prod(mp_grid)
     return AA_R
 
+def reindexOrbitalsQE2VASP(tensor:np.ndarray,axis:int):
+    '''
+    In convention (VASP<6, OPENMX), the orbitals are indexed like: s_up, p_up, d_up, s_dn, p_dn, d_dn 
+    In VASP>=6 and QE, the orbitals are indexed like: s_up, s_dn, p_up, p_dn, d_up, d_dn
+    This function is to change the QE convention into the OPENMX
+    '''
+    norbs=tensor.shape[axis]
+    assert (norbs//2)*2 == norbs, f"the dimension should be even! {norbs=}"
+    reindex=np.concatenate((np.arange(norbs//2)*2,np.arange(norbs//2)*2+1))
+    return np.take(tensor,reindex,axis=axis)
+
 def getWholeSymmetryOperator(posinfo:dict,DNA=[],symprec=SYMPREC):
     interception = int(np.max(abs(np.array(DNA))))*4+3 if len(DNA)>0 else 10
     typeNumbers=[]

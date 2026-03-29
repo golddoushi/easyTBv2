@@ -3,14 +3,14 @@ import functools
 
 from numpy.core.multiarray import array as array, zeros as zeros
 from system import System
-from auxiliary import obtainProjections, obtainProjectionsPlain, showElapsedTime, iterate3dpm, fourier_q_to_R
+from auxiliary import obtainProjections, obtainProjectionsPlain, showElapsedTime, iterate3dpm, fourier_q_to_R, reindexOrbitalsQE2VASP
 from fileio import readHrDat, readPOSCAR, readRDat
 from fileio import W90CHK, W90MMN, W90EIG
 
 class System_w90(System):
 
     def __init__(self,
-                 mainDir:str,hamR:str="wannier90",ignoreImagPart=False,cutoff=-1.,format="VASP",
+                 mainDir:str,hamR:str="wannier90",ignoreImagPart=False,cutoff=-1.,format="VASP",vaspSPN=None,
                  poscar:str="POSCAR",projections:dict=None,ispin=1,
                  getAA:bool=True,trans_inv=True,
                  ) -> None:
@@ -32,8 +32,8 @@ class System_w90(System):
         to skip the imaginary part of hopping and overlap
         - cutoff : float
         to skip the bond with strength below the criteria
-        - format : "VASP"|"QE"
-        the spin tunnel order can be in VASP format, which the spin-down are collected, or in QE format
+        - format : "VASP"|"VASP6"|"QE"
+        the spin tunnel order can be in VASP format, which the spin-down are collected, or in QE and VASP format
         - poscarPath : str
         seedname of POSCAR
         - projections : dictionary
@@ -53,6 +53,8 @@ class System_w90(System):
         super().__init__()
         # wannier basis are normalized and othorgonal
         self.overlap=False
+        # order of angular moment
+        self.format=format
         # TB approximation
         self.getAA=getAA
         showElapsedTime()
@@ -86,6 +88,9 @@ class System_w90(System):
         
         # 6. FFT to obtain H_W in R-space
         self.ham_R=fourier_q_to_R_loc(Ham_k_W)
+        if format=="QE" or format=="VASP6": 
+            self.ham_R=reindexOrbitalsQE2VASP(self.ham_R, axis=-1)
+            self.ham_R=reindexOrbitalsQE2VASP(self.ham_R, axis=-2)
         
         '''
         # 7. check the eigs
@@ -129,19 +134,24 @@ class System_w90(System):
                     AA_k_W[ikpt,...]+=_AA_k_W
             # 8. FFT to obtain AA_W in R-space
             self.AA_R_W=fourier_q_to_R_loc(AA_k_W)
+            if format=="QE" or format=="VASP6": 
+                self.AA_R_W=reindexOrbitalsQE2VASP(self.AA_R_W, axis=-1)
+                self.AA_R_W=reindexOrbitalsQE2VASP(self.AA_R_W, axis=-2)
             for Rvec, AA in zip(self.iRvec,self.AA_R_W):
             #    print(Rvec)
             #    print(AA[0,:3,:3])
                 if Rvec@Rvec==0: self.rList=np.diagonal(AA,axis1=-2,axis2=-1).real
             #exit()
             print("diagonal element of AA_R_W and the wcc produced in .chk")
-            for AA_r, wcc in zip(self.rList.T,chk.wannier_centers): 
+            chk_center=chk.wannier_centers
+            if format=="QE" or format=="VASP6": chk_center=reindexOrbitalsQE2VASP(chk_center, axis=0)
+            for AA_r, wcc in zip(self.rList.T,chk_center): 
                 print(f"{AA_r[0].real:10.6f}{AA_r[1].real:10.6f}{AA_r[2].real:10.6f} - {wcc[0]:10.6f}{wcc[1]:10.6f}{wcc[2]:10.6f}")
             showElapsedTime(extraInfo="AA_R_W calc. done")
 
         # 12. read in the centers of each basis
         print("set wcc to align the chk")
-        self.rList=chk.wannier_centers.T
+        self.rList=chk_center.T
         self.ispin=ispin
         
         self.posinfo=readPOSCAR('%s/%s'%(mainDir,poscar))
@@ -149,11 +159,18 @@ class System_w90(System):
         assert self.norbs == sum([len(atom) for atom in orb_list])
         print("pls. check the wcc and atom coors.")
         print("At present, the atom coor will be used (for furthur symmerization)")
-        for iatom, (atom_coor, atom_shell) in enumerate(zip(self.posinfo['pos ions (cart.)'],orb_list)):
+        reciLat=np.linalg.inv(self.posinfo['lattice'])
+        for iatom, (atom_cart, atom_frac, atom_shell) in enumerate(zip(self.posinfo['pos ions (cart.)'],self.posinfo['pos ions (frac.)'],orb_list)):
+            orbCenter=np.mean(self.rList[:,atom_shell],axis=1)@reciLat
+            atom_frac = atom_frac + np.around(orbCenter - atom_frac)
+            atom_cart = atom_frac@self.posinfo['lattice']
+            # update poscar
+            self.posinfo['pos ions (frac.)'][iatom] = atom_frac
+            self.posinfo['pos ions (cart.)'][iatom] = atom_cart
             for iorb in atom_shell:
                 wcc=self.rList[:,iorb]
-                print(f"orb{iorb:3d} {wcc[0]:6.3f} {wcc[1]:6.3f} {wcc[2]:6.3f} atom{iatom:3d} {atom_coor[0]:6.3f} {atom_coor[1]:6.3f} {atom_coor[2]:6.3f}")
-                self.rList[:,iorb]=atom_coor
+                print(f"orb{iorb:3d} {wcc[0]:6.3f} {wcc[1]:6.3f} {wcc[2]:6.3f} atom{iatom:3d} {atom_cart[0]:6.3f} {atom_cart[1]:6.3f} {atom_cart[2]:6.3f}")
+                self.rList[:,iorb]=atom_cart
         
         self.atomicOrbInfoList=obtainProjections('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
         '''
@@ -239,5 +256,8 @@ class System_w90(System):
         return iRvec, iRvecIndex, np.array(ndegen)
     
     def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,-1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], print_row=(0,1,), print_col=(0,1,)):
-        super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, 'w90', print_row, print_col)
+        if self.format=="VASP6":
+            super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, 'VASP6', print_row, print_col)
+        else:
+            super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, 'w90', print_row, print_col)
         self.getRHam_R()
