@@ -191,6 +191,9 @@ class System_w90(System):
         # 12. compute the [r, Ham]
         self.getRHam_R()
         self.getSpinMatrice()
+        # 13. compute orbital angular moment operator
+        self.atomOrbAM=self.orbitalAngularMomentCubic()
+        self.getOrbitalMatrice()
     
     def toWannierGauge(self, mat:np.ndarray, ik1:int, ik2:int, chk:W90CHK):
         '''
@@ -229,6 +232,101 @@ class System_w90(System):
     def getSpinMatrice(self):
         super().getSpinMatrice()
         return
+
+    def orbitalAngularMomentCubic(self):
+        '''
+        Orbital angular moment operator represented in the cubic hamonics (s, px, py, pz, ...)
+        in unit of \hbar
+        For now, only l=s, p, d, f was implemented
+
+        Return
+        ------
+        - Lop : list
+          Lop[l][idirection][m1, m2]. 
+          l=s, p, d, e, denoting the orbital quantum number
+          idirection=0, 1, 2, denoting the spatial orientation of x, y, z
+          m1, m2 is the magnetic quantum number
+        '''
+        orbitalAngularMomentSpherical=self.orbitalAngularMomentSpherical()
+        w=1/np.sqrt(2)
+        def orbitalAngularP():
+            '''
+            Representation of orbital angular moment in space of cubic harmonics
+            For w90 format, p-orbitals are listed as pz, px, py
+            For VASP6 format, p-orbitals are listed as  py,pz,px
+            '''
+            if self.format=="VASP" or self.format=="QE":
+                L=np.array([
+                [    0, 1,    0],   # pz
+                [   -w, 0,    w],   # px 
+                [ 1j*w, 0, 1j*w],   # py
+                ])
+            elif self.format=="VASP6":
+                L=np.array([
+                [ 1j*w, 0, 1j*w],   # py
+                [    0, 1,    0],   # pz
+                [   -w, 0,    w],   # px
+                ])
+            else:
+                raise NotImplementedError()
+            return L.conj() @ orbitalAngularMomentSpherical[1] @ L.T
+
+        def orbitalAngularD():
+            '''
+            Representation of orbital angular moment in space of cubic harmonics
+            For w90 format, d-orbitals are listed as dz2, dxz, dyz, dx2-y2, dxy
+            For VASP6 format, d-orbitals are listed as  dxy, dyz, dz2, dxz, dx2-y2
+            '''
+            if self.format=="VASP" or self.format=="QE":
+                L=np.array([
+                [    0,    0, 1,    0,    0],    # dz2
+                [    0,   -w, 0,    w,    0],    # dxz
+                [    0, 1j*w, 0, 1j*w,    0],    # dyz
+                [    w,    0, 0,    0,    w],    # dx2-y2
+                [-1j*w,    0, 0,    0, 1j*w],    # dxy
+                ])
+            elif self.format=="VASP6":
+                L=np.array([
+                [-1j*w,    0, 0,    0, 1j*w],    # dxy
+                [    0, 1j*w, 0, 1j*w,    0],    # dyz
+                [    0,    0, 1,    0,    0],    # dz2
+                [    0,   -w, 0,    w,    0],    # dxz
+                [    w,    0, 0,    0,    w],    # dx2-y2
+                ])
+            else:
+                raise NotImplementedError()
+            return L.conj() @ orbitalAngularMomentSpherical[2] @ L.T
+
+        def orbitalAngularF():
+            '''
+            Representation of orbital angular moment in space of cubic harmonics
+            For w90 format, f-orbitals are listed as fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
+            For VASP6 format, f-orbitals are listed as  fy(3x2-y2), fxyz, fyz2, fz3, fxz2, fz(x2-y2), fx(x2-3y2)
+            '''
+            if self.format=="VASP" or self.format=="QE":
+                L=np.array([
+                [    0,    0,    0,  1,    0,    0,    0],    # fz3
+                [    0,    0,   -w,  0,    w,    0,    0],    # fxz2
+                [    0,    0, 1j*w,  0, 1j*w,    0,    0],    # fyz2
+                [    0,    w,    0,  0,    0,    w,    0],    # fz(x2-y2)
+                [    0,-1j*w,    0,  0,    0, 1j*w,    0],    # fxyz
+                [   -w,    0,    0,  0,    0,    0,    w],    # fx(x2-3y2)
+                [ 1j*w,    0,    0,  0,    0,    0, 1j*w],    # fy(3x2-y2)
+                ])
+            elif self.format=="VASP6":
+                L=np.array([
+                [ 1j*w,    0,    0,  0,    0,    0, 1j*w],    # fy(3x2-y2)
+                [    0,-1j*w,    0,  0,    0, 1j*w,    0],    # fxyz
+                [    0,    0, 1j*w,  0, 1j*w,    0,    0],    # fyz2
+                [    0,    0,    0,  1,    0,    0,    0],    # fz3
+                [    0,    0,   -w,  0,    w,    0,    0],    # fxz2
+                [    0,    w,    0,  0,    0,    w,    0],    # fz(x2-y2)
+                [   -w,    0,    0,  0,    0,    0,    w],    # fx(x2-3y2)
+                ])
+            else:
+                raise NotImplementedError()
+            return L.conj() @ orbitalAngularMomentSpherical[3] @ L.T
+        return (0, orbitalAngularP(), orbitalAngularD(), orbitalAngularF())
     
     @property
     def get_mp_grid(self): return self.mp_grid

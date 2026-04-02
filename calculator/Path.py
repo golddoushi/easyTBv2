@@ -228,10 +228,44 @@ class SpinExpectationOnPath(EnergyOnPath):
         self.Iodd = True
         vectors=self.vectors[:,None,:,self.ibmin:]
         if model.overlap:
-            self.spin_eig=vectors.conj().transpose((0,1,3,2)) @ model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.spin_eig=vectors.conj().transpose((0,1,3,2)) @ model.spin[None,:,:,:] @ vectors
+            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ model.spin[None,:,:,:] @ vectors
         if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+
+class OrbitalExpectationOnPath(EnergyOnPath):
+    def __init__(self, model, KPOINTS="./KPOINTS", verbose=0):
+        '''
+        Compute orbital matrix in eigen-basis
+
+        Indexing
+        --------
+        - self.orbital_eig[ik, igamma, ieig, jeig] gives orbital matrix in eigen-basis. 
+          igamma can be 0 | 1 | 2 | 3, corresponding to L^x | L^y | L^z | L^0 orbital-polarization. 
+        '''
+        super().__init__(model, KPOINTS, verbose)
+        self.Iodd = True
+        vectors=self.vectors[:,None,:,self.ibmin:]
+        if model.overlap:
+            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ model.orbital[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        else:
+            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ model.orbital[None,:,:,:] @ vectors
+        if verbose==2: showElapsedTime(extraInfo=f"orbital op. in eig.-basis calculated")
+
+class SpinOrbitalExpectationOnPath(SpinExpectationOnPath, OrbitalExpectationOnPath):
+    def __init__(self, model, KPOINTS="./KPOINTS", verbose=0):
+        '''
+        Compute spin and orbital matrix in eigen-basis
+
+        Indexing
+        --------
+        - self.spin_eig[ik, igamma, ieig, jeig] gives spin matrix in eigen-basis.
+          igamma can be 0 | 1 | 2 | 3, corresponding to S^x | S^y | S^z | S^0 orbital-polarization. 
+
+        - self.orbital_eig[ik, igamma, ieig, jeig] gives orbital matrix in eigen-basis. 
+          igamma can be 0 | 1 | 2 | 3, corresponding to L^x | L^y | L^z | L^0 orbital-polarization. 
+        '''
+        super().__init__(model, KPOINTS, verbose)
 
 class SpinVelocityOnPath(VelocityOnPath):
     def __init__(self, model: System, KPOINTS="./KPOINTS", verbose=0) -> None:

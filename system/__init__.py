@@ -40,6 +40,10 @@ class System:
         self.spin:np.ndarray=None
         # torque matrix, rely on the spin matrix defined
         self.spinTorque_R:np.ndarray=None
+        # atomic orbital angular moment operator represented in cubic harmonics
+        self.atomOrbAM:tuple=None
+        # orbital matrix, in basis of home cell
+        self.orbital:np.ndarray=None
         # lattice matrix
         self.lattice:np.ndarray=None
         # reciprocal lattice
@@ -76,7 +80,8 @@ class System:
 
     def getSpinMatrice(self,projectedOrbIndex=[]):
         '''
-        Calc. the spin matrices.
+        Construct and compute spin angular moment operator represented in the eigen. space of Sz
+        in unit of (1/2)\hbar
 
         Indexing: spin[icomponent=0, 1, 2][ispin][jspin].
 
@@ -122,6 +127,138 @@ class System:
         #self.spin[3,:self.norbs//2,:self.norbs//2] =  II
         #self.spin[3,self.norbs//2:,self.norbs//2:] =  II
 
+    def orbitalAngularMomentSpherical(self):
+        '''
+        Orbital angular moment operator represented in the spherical hamonics (Y_{l, l}, Y_{l, l-1}, ...,  Y_{l, -l})
+        in unit of \hbar
+        For now, only l=0, 1, 2, 3 was implemented
+
+        Return
+        ------
+        - Lop : list
+          Lop[l][idirection][m1, m2]. 
+          l=0, 1, 2, 3, denoting the orbital quantum number
+          idirection=0, 1, 2, denoting the spatial orientation of x, y, z
+          m1, m2 is the magnetic quantum number
+        '''
+
+        def orbitalAngularL1():
+            '''
+            Orbital moment operator represented in the spherical hamonics (Y_{1, +1}, Y_{1, 0}, Y_{1, -1})
+            in unit of \hbar
+            '''
+            Lx=(1/np.sqrt(2))*np.array([
+                [ 0, 1, 0],
+                [ 1, 0, 1],
+                [ 0, 1, 0],
+            ])
+            Ly=(1/np.sqrt(2))*np.array([
+                [  0, -1j,   0],
+                [ 1j,   0, -1j],
+                [  0,  1j,   0],
+            ])
+            Lz=np.array([
+                [ 1, 0, 0],
+                [ 0, 0, 0],
+                [ 0, 0,-1],
+            ])
+            return np.array([Lx,Ly,Lz])
+        
+        def orbitalAngularL2():
+            '''
+            Orbital moment operator represented in the spherical hamonics (Y_{2, +2}, Y_{2, +1}, Y_{2, 0}, Y_{2, -1}, Y_{2, -2})
+            in unit of \hbar
+            '''
+            w=np.sqrt(3./2)
+            Lx=np.array([
+                [ 0, 1, 0, 0, 0],
+                [ 1, 0, w, 0, 0],
+                [ 0, w, 0, w, 0],
+                [ 0, 0, w, 0, 1],
+                [ 0, 0, 0, 1, 0],
+            ])
+            Ly=np.array([
+                [  0,   -1j,     0,     0,   0],
+                [ 1j,     0, -1j*w,     0,   0],
+                [  0,  1j*w,     0, -1j*w,   0],
+                [  0,     0,  1j*w,     0, -1j],
+                [  0,     0,     0,    1j,   0],
+            ])
+            Lz=np.array([
+                [ 2, 0, 0, 0, 0],
+                [ 0, 1, 0, 0, 0],
+                [ 0, 0, 0, 0, 0],
+                [ 0, 0, 0,-1, 0],
+                [ 0, 0, 0, 0,-2],
+            ])
+            return np.array([Lx,Ly,Lz])
+    
+        def orbitalAngularL3():
+            '''
+            Orbital moment operator represented in the spherical harmonics 
+            (Y_{3, +3}, Y_{3, +2}, Y_{3, +1}, Y_{3, 0}, Y_{3, -1}, Y_{3, -2}, Y_{3, -3})
+            in units of \hbar.
+            '''
+            w1 = np.sqrt(3./2)
+            w2 = np.sqrt(5./2)
+            w3 = np.sqrt(3.)
+        
+            Lx = np.array([
+                [ 0, w1,  0,  0,  0,  0,  0],
+                [w1,  0, w2,  0,  0,  0,  0],
+                [ 0, w2,  0, w3,  0,  0,  0],
+                [ 0,  0, w3,  0, w3,  0,  0],
+                [ 0,  0,  0, w3,  0, w2,  0],
+                [ 0,  0,  0,  0, w2,  0, w1],
+                [ 0,  0,  0,  0,  0, w1,  0],
+            ])
+        
+            Ly = np.array([
+                [    0, -1j*w1,      0,      0,      0,      0,      0],
+                [1j*w1,      0, -1j*w2,      0,      0,      0,      0],
+                [    0,  1j*w2,      0, -1j*w3,      0,      0,      0],
+                [    0,      0,  1j*w3,      0, -1j*w3,      0,      0],
+                [    0,      0,      0,  1j*w3,      0, -1j*w2,      0],
+                [    0,      0,      0,      0,  1j*w2,      0, -1j*w1],
+                [    0,      0,      0,      0,      0,  1j*w1,      0],
+            ])
+        
+            Lz = np.array([
+                [ 3,  0,  0,  0,  0,  0,  0],
+                [ 0,  2,  0,  0,  0,  0,  0],
+                [ 0,  0,  1,  0,  0,  0,  0],
+                [ 0,  0,  0,  0,  0,  0,  0],
+                [ 0,  0,  0,  0, -1,  0,  0],
+                [ 0,  0,  0,  0,  0, -2,  0],
+                [ 0,  0,  0,  0,  0,  0, -3],
+            ])
+            return np.array([Lx, Ly, Lz])
+    
+        return (0, orbitalAngularL1(), orbitalAngularL2(), orbitalAngularL3())
+    
+    def getOrbitalMatrice(self):
+        '''
+        Calc. the orbital matrices.
+
+        Indexing: orbital[icomponent=0, 1, 2][iorb, jorb].
+
+        spin[0], spin[1], spin[2] correspond to Lx,  Ly,  Lz.
+        '''
+        self.orbital=np.zeros((3,self.norbs,self.norbs),dtype=complex)
+
+        iorb=0
+        for atom in self.atomicOrbInfoList:
+            for l in atom["L"]:
+                if l==0:
+                    iorb+=1
+                else:
+                    self.orbital[:,iorb:(iorb+2*l+1),iorb:(iorb+2*l+1)]=self.atomOrbAM[l]
+                    iorb+=(2*l+1)
+
+        if iorb<self.norbs:
+            assert iorb*2==self.norbs, f"we have set all magnetic quantum tunnel, but the total orbital tunnel is not reached {iorb=}, {self.norbs=}"
+            self.orbital[:,iorb:self.norbs,iorb:self.norbs]=self.orbital[:,:iorb,:iorb]
+    
     def setEnergyR(self,ene_R) -> None:
         '''set lattice Energy matrix'''
         self.energy_R=ene_R
@@ -506,6 +643,7 @@ class System:
         showElapsedTime(extraInfo="Hermit processing finished")
 
         # obtain all sym. Ops. consistent with magnetism
+        assert self.posinfo['tot ions'] == len(atomicMagMomList), f'inconsistent magmom with num. of atoms in structure. {self.posinfo["tot ions"]=} {len(atomicMagMomList)=}'
         sym= getSymOpsAndSymSiteMap(atomicMagMomList=atomicMagMomList)
         symRotateList, symTranslateList, symSiteMapList, symTimeReversalList=sym['rotations'], sym['translations'], sym['atom map'], sym['time reversal']
         if len(symOpSelection)>0:
@@ -807,11 +945,21 @@ class System:
         #'''
         if self.AA_R_W is not None:
             print("Symerizing position matrix")
+            # Zero out the diagonal elements which should not be transformed!
+            iR0 = self.iRvecIndex[(0,0,0)]
+            AA_0_W = np.zeros((3,self.norbs), dtype=complex)
+            for iorb in range(self.norbs): 
+                AA_0_W[:,iorb] = self.AA_R_W[iR0, :, iorb, iorb]
+                self.AA_R_W[iR0, :, iorb, iorb] = 0
+
+            # Only symertrize the off-diagonal transition dipoles (which strictly obey pure rotation)
             self.AA_R_W=self.symmerizeTensorInAtomicBasis(self.AA_R_W,axisRep=("iRvec","r","atomic orb","atomic orb"),
                         spinor=spinor,saxis=saxis,spin_basis=spin_basis,
                         symOpSelection=symOpSelection,atomicMagMomList=atomicMagMomList,format=format,
                         print_row=print_row,print_col=print_col,reportSymOps=False,
                                                             )
+            # Restore the true, translationally-correct diagonal using the symmetric lattice coordinates
+            for iorb in range(self.norbs): self.AA_R_W[iR0, :, iorb, iorb] = AA_0_W[:,iorb]
         #'''
         #exit()
     

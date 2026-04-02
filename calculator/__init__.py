@@ -259,13 +259,11 @@ class Spin(Energy):
         idirection can be 0 | 1 | 2, corresponding to sigma_x | sigma_y | sigma_z.
         '''
         super().__init__(**kwarg)
-        self.Todd = True
-
         vectors=self.vectors[:,:,:,None,:,:]
         if self.model.overlap:
-            self.spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            self.spin_K=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.model.spin[None,None,None,:,:,:] @ vectors
+            self.spin_K=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,None,None,:,:,:] @ vectors
         if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
 
         self.projected_spin_K_list=[]
@@ -274,10 +272,60 @@ class Spin(Energy):
             proj2=projectionOperator(spinProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             spin_proj=(proj1@self.model.spin@proj2 + proj2@self.model.spin@proj1)/2
             if self.model.overlap:
-                projected_spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+                projected_spin_K=vectors.conj().swapaxes(-2,-1) @ spin_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
             else:
-                projected_spin_K=vectors.conj().transpose((0,1,2,3,5,4)) @ spin_proj[None,None,None,:,:,:] @ vectors
+                projected_spin_K=vectors.conj().swapaxes(-2,-1) @ spin_proj[None,None,None,:,:,:] @ vectors
             self.projected_spin_K_list.append(projected_spin_K)
+
+class Orbital(Energy):
+    def __init__(self, orbitalProjectionList=[], **kwarg):
+        '''
+        Compute orbital matrix in eigen-basis
+
+        Indexing:
+        self.orbital_K[ik1, ik2, ik3, idirection, ieig, jeig] gives orbital matrix in eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to L_x | L_y | L_z.
+        '''
+        super().__init__(**kwarg)
+        vectors=self.vectors[:,:,:,None,:,:]
+        if self.model.overlap:
+            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        else:
+            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,None,None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"orbital op. in eig.-basis calculated")
+
+        self.projected_orbital_K_list=[]
+        for orbitalProjection in orbitalProjectionList:
+            proj1=projectionOperator(orbitalProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(orbitalProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+            orbital_proj=(proj1@self.model.orbital@proj2 + proj2@self.model.orbital@proj1)/2
+            if self.model.overlap:
+                projected_orbital_K=vectors.conj().swapaxes(4,5) @ orbital_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            else:
+                projected_orbital_K=vectors.conj().swapaxes(4,5) @ orbital_proj[None,None,None,:,:,:] @ vectors
+            self.projected_orbital_K_list.append(projected_orbital_K)
+
+class SpinTorque(Spin):
+    def __init__(self, spinTorqueProjectionList=[], **kwarg):
+        '''
+        Compute spin torque matrix in eigen-basis
+
+        T = (-i/\hbar) [S, H]
+
+        In eigen-basis, H is diagonalized eigen-energy, S is computed in parent Spin class. So, the only work is matrix product
+
+        Indexing:
+        self.spinTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives spin torque matrix in eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to sigma_x | sigma_y | sigma_z.
+        '''
+        super().__init__(spinProjectionList=spinTorqueProjectionList,**kwarg)
+
+        self.spinTorque_K=-1j*(self.spin_K*self.energies[...,None,None,:] - self.spin_K*self.energies[...,None,:,None])
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin torque in eig.-basis finished")
+        self.projected_spinTorque_K_list=[]
+        
+        for projected_spin_K in self.projected_spin_K_list:
+            self.projected_spinTorque_K_list.append(-1j*(projected_spin_K*self.energies[...,None,None,:] - projected_spin_K*self.energies[...,None,:,None]))
 
 class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], **kwarg):
@@ -289,7 +337,6 @@ class Spin_diag(FermiScan):
         idirection can be 0 | 1 | 2, corresponding to sigma_x | sigma_y | sigma_z.
         '''
         super().__init__(**kwarg)
-        self.Todd = True
 
         vectors=self.vectors[:,:,:,None,:,self.ibmin:self.ibmax+1]
         if self.model.overlap:
@@ -329,8 +376,6 @@ class Velocity(Energy):
         self.projected_velocity_K_list[iproj] gives each projected velocity matrix
         '''
         super().__init__(**kwarg)
-        self.Todd = True
-        self.Iodd = True
         
         RH_R_W=self.model.RHam_R
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
@@ -345,11 +390,11 @@ class Velocity(Energy):
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
         vectors=self.vectors[:,:,:,None,:,:]
-        self.velocity_K=vectors.conj().transpose((0,1,2,3,5,4)) @ self.RHam_K @ vectors
+        self.velocity_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
 
         r_K        =  1j*np.fft.ifftn(r_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        r_K_H = (vectors.conj().transpose((0,1,2,3,5,4)) @ r_K @ vectors) * self.energies[...,None,None,:]
-        self.velocity_K += -1j*(r_K_H - r_K_H.conj().transpose((0,1,2,3,5,4)))
+        r_K_H = (vectors.conj().swapaxes(-2,-1) @ r_K @ vectors) * self.energies[...,None,None,:]
+        self.velocity_K += -1j*(r_K_H - r_K_H.conj().swapaxes(-2,-1))
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
         # check hermity
@@ -365,9 +410,8 @@ class Velocity(Energy):
             for iR, Rvec in enumerate(self.model.iRvec):
                 self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-            #self.velocity_K -= vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
-            __UdOkU = (vectors.conj().transpose((0,1,2,3,5,4)) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
-            self.velocity_K -= (__UdOkU + __UdOkU.conj().transpose((0,1,2,3,5,4)))/2
+            __UdOkU = (vectors.conj().swapaxes(-2,-1) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
+            self.velocity_K -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
 
         self.projected_velocity_K_list=[]
         for velocityProjection in velocityProjectionList:
@@ -376,16 +420,16 @@ class Velocity(Energy):
             proj1=proj1[None,None,None,None,:,:]
             proj2=proj2[None,None,None,None,:,:]
             RHam_K_proj=(proj1@self.RHam_K@proj2 + proj2@self.RHam_K@proj1)/2
-            velocity_K_proj=vectors.conj().transpose((0,1,2,3,5,4)) @ RHam_K_proj @ vectors
+            velocity_K_proj=vectors.conj().swapaxes(-2,-1) @ RHam_K_proj @ vectors
 
             r_K_proj=(proj1@r_K@proj2 + proj2@r_K@proj1)/2
-            r_K_H_proj = (vectors.conj().transpose((0,1,2,3,5,4)) @ r_K_proj @ vectors) * self.energies[...,None,None,:]
-            velocity_K_proj += -1j*(r_K_H_proj - r_K_H_proj.conj().transpose((0,1,2,3,5,4)))
+            r_K_H_proj = (vectors.conj().swapaxes(-2,-1) @ r_K_proj @ vectors) * self.energies[...,None,None,:]
+            velocity_K_proj += -1j*(r_K_H_proj - r_K_H_proj.conj().swapaxes(-2,-1))
 
             if self.model.overlap:
                 RO_K_proj=(proj1@self.RO_K@proj2 + proj2@self.RO_K@proj1)/2
-                __UdOkU = (vectors.conj().transpose((0,1,2,3,5,4)) @ RO_K_proj @ vectors)*self.energies[...,None,:,None]
-                velocity_K_proj -= (__UdOkU + __UdOkU.conj().transpose((0,1,2,3,5,4)))/2
+                __UdOkU = (vectors.conj().swapaxes(-2,-1) @ RO_K_proj @ vectors)*self.energies[...,None,:,None]
+                velocity_K_proj -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
             self.projected_velocity_K_list.append(velocity_K_proj)
 
 class Velocity_diag(FermiScan):
@@ -401,8 +445,6 @@ class Velocity_diag(FermiScan):
         idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
         '''
         super().__init__(**kwarg)
-        self.Todd = True
-        self.Iodd = True
         
         RH_R_W=self.model.RHam_R
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
@@ -457,7 +499,8 @@ class BerryCurv(Velocity):
         Indexing: BerryCurv[ik1, ik2, ik3, idrection, iband, jband]
         '''
         super().__init__(projection=projection, **kwarg)
-        self.Todd = True
+        self.Iodd = False  # inversion gives minus
+        self.Todd = True   # timereversal gives minus
 
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
@@ -477,7 +520,8 @@ class AnormalousHallConductance(BerryCurv):
 
     def __init__(self, fermiList=[], projection=None, **kwarg) -> None:
         super().__init__(projection=projection, **kwarg)
-        self.Todd = True
+        self.Iodd = False  # inversion gives minus
+        self.Todd = True   # timereversal gives minus
 
         sigma=np.zeros((len(fermiList),3,3))
 
@@ -511,18 +555,49 @@ class SpinVelocity(Velocity, Spin):
         self.spinVelocity_K_proj[iproj] gives each projected spin velocity matrix in eigen-basis.
         '''
         super().__init__(velocityProjectionList=velocityProjectionList+spinvelocityProjectionList, **kwarg)
-        self.Iodd = True
         
         __sV=self.spin_K[...,None,:,:,:] @ self.velocity_K[...,None,:,:]
-        self.spinVelocity_K = (__sV + __sV.transpose((0,1,2,3,4,6,5)).conj())/2
+        self.spinVelocity_K = (__sV + __sV.swapaxes(-2,-1).conj())/2
 
         self.projected_spinVelocity_K_list=[]
         for iproj, proj in enumerate(spinvelocityProjectionList):
             projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
             __sV=self.spin_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
-            self.projected_spinVelocity_K_list.append((__sV + __sV.transpose((0,1,2,3,4,6,5)).conj())/2)
+            self.projected_spinVelocity_K_list.append((__sV + __sV.swapaxes(-2,-1).conj())/2)
         
         if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
+
+class OrbitalVelocity(Velocity, Orbital):
+    def __init__(self, velocityProjectionList=[], orbitalvelocityProjectionList=[], **kwarg) -> None:
+        '''
+        Compute orbital velocity matrix in original basis and eigen-basis
+        and projected orbital velocity matrix.
+        Note, the projection is on the velocity component, corresponding to the orbital-currents running in specific basis.
+
+        Indexing:
+        self.ORHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives orbital velocity matrix in original basis,
+        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
+        igamma can be 0 | 1 | 2, corresponding to Lx | Ly | Lz orbital-polarization. 
+
+        self.orbitalVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives orbital velocity matrix in eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
+        igamma can be 0 | 1 | 2, corresponding to Lx | Ly | Lz orbital-polarization. 
+
+        if orbitalvelocityProjctionList is not empty
+        self.orbitalVelocity_K_proj[iproj] gives each projected orbital velocity matrix in eigen-basis.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList+orbitalvelocityProjectionList, **kwarg)
+        
+        __oV=self.orbital_K[...,None,:,:,:] @ self.velocity_K[...,None,:,:]
+        self.orbitalVelocity_K = (__oV + __oV.swapaxes(-2,-1).conj())/2
+
+        self.projected_orbitalVelocity_K_list=[]
+        for iproj, proj in enumerate(orbitalvelocityProjectionList):
+            projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
+            __oV=self.orbital_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
+            self.projected_orbitalVelocity_K_list.append((__oV + __oV.swapaxes(-2,-1).conj())/2)
+        
+        if self.verbose==2: showElapsedTime(extraInfo=f"orbital velocity in eig.-basis finished")
 
 class SpinVelocity_diag(Velocity_diag, Spin_diag):
     def __init__(self, velocityProjectionList=[], spinProjectionList=[], **kwarg) -> None:
@@ -540,7 +615,6 @@ class SpinVelocity_diag(Velocity_diag, Spin_diag):
         self.spinVelocity_K_proj[iproj] gives each projected spin velocity matrix in eigen-basis.
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, spinProjectionList=spinProjectionList, **kwarg)
-        self.Iodd = True
         
         self.spinVelocity_diag_K=self.spin_diag_K[...,None,:,:] * self.velocity_diag_K[...,None,:]
 
@@ -559,6 +633,8 @@ class SpinBerryCurv(SpinVelocity):
         Indexing: spinBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, spinvelocityProjectionList=spinvelocityProjectionList, **kwarg)
+        self.Iodd = False  # inversion gives minus
+        self.Todd = False   # timereversal gives minus
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
@@ -568,10 +644,65 @@ class SpinBerryCurv(SpinVelocity):
                 for ialpha in range(3):
                     for ibeta in range(3):
                         for igamma in range(3):
-                            self.projected_spinBerryCurv[...,ialpha,ibeta,igamma,:]=-2*np.diagonal(proj_spinVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*proj_velocity_K[...,ialpha,:,:]),0,-2,-1).imag
+                            self.projected_spinBerryCurv[ivelocity,ispinvelocty,...,ialpha,ibeta,igamma,:]=-2*np.diagonal(proj_spinVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*proj_velocity_K[...,ialpha,:,:]),0,-2,-1).imag
         
         self.spinBerryCurv=self.projected_spinBerryCurv[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
+
+class OrbitalBerryCurv(OrbitalVelocity):
+    def __init__(self, velocityProjectionList=[], orbitalvelocityProjectionList=[], **kwarg) -> None:
+        '''
+        Calc. orbital Berry curvature \Omega^{alpha,gamma}_{k,mn}.
+
+        alpha can be x, y, z, denoting the (cart.) space direction. 
+        gammma can be Lx, Ly, Lz, corresponding to the orbital-polarization. 
+        k denotes the crystal moment, m, n index the bands.
+
+        Indexing: orbitalBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, spinvelocityProjectionList=orbitalvelocityProjectionList, **kwarg)
+        self.Iodd = False  # inversion gives minus
+        self.Todd = False   # timereversal gives minus
+        self.calcDeltaEInverse()
+        dEInverse2 = self.deltaEInverse**2
+
+        self.projected_orbitalBerryCurv=np.zeros((len(velocityProjectionList)+1,len(orbitalvelocityProjectionList)+1)+self.kgrid+(3,3,3,self.model.norbs-self.ibmin))
+        for ivelocity, proj_velocity_K in enumerate([self.velocity_K]+self.projected_velocity_K_list):
+            for iorbitalvelocty, proj_orbitalVelocity_K in enumerate([self.orbitalVelocity_K]+self.projected_orbitalVelocity_K_list):
+                for ialpha in range(3):
+                    for ibeta in range(3):
+                        for igamma in range(3):
+                            self.projected_orbitalBerryCurv[ivelocity,iorbitalvelocty,...,ialpha,ibeta,igamma,:]=-2*np.diagonal(proj_orbitalVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*proj_velocity_K[...,ialpha,:,:]),0,-2,-1).imag
+        
+        self.orbitalBerryCurv=self.projected_orbitalBerryCurv[0,0]
+        if self.verbose==2: showElapsedTime(extraInfo=f"Orbital Berry curvature finished")
+
+class SpinTorqueCorrelation(SpinTorque,Velocity):
+    def __init__(self, velocityProjectionList=[], spinTorqueProjectionList=[], **kwarg) -> None:
+        '''
+        Calc. correlation func of spin torque and velocity \Omega^{alpha,gamma}_{k,mn}.
+
+        alpha can be x, y, z, denoting the (cart.) space direction. 
+        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the torque orientation. 
+        k denotes the crystal moment, m, n index the bands.
+
+        Indexing: spinBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList,spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
+        self.Iodd = True  # inversion gives minus
+        self.Todd = False   # timereversal gives minus
+        self.calcDeltaEInverse()
+        dEInverse2 = self.deltaEInverse**2
+
+        self.projected_spinTorqueCorrelation=np.zeros((len(velocityProjectionList)+1,len(spinTorqueProjectionList)+1)+self.kgrid+(3,3,self.model.norbs-self.ibmin))
+        for ivelocity, proj_velocity_K in enumerate([self.velocity_K]+self.projected_velocity_K_list):
+            for ispinTorque, proj_spinTorque_K in enumerate([self.spinTorque_K]+self.projected_spinTorque_K_list):
+                for ialpha in range(3):
+                    for ibeta in range(3):
+                        self.projected_spinTorqueCorrelation[ivelocity,ispinTorque,...,ialpha,ibeta,:]=np.diagonal(proj_spinTorque_K[...,ibeta,:,:] @ (dEInverse2*proj_velocity_K[...,ialpha,:,:]),0,-2,-1).imag
+        
+        self.spinTorqueCorrelation=self.projected_spinTorqueCorrelation[0,1]
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin torque vs. velocity correlation finished")
 
 class SpinVeloVelo(SpinVelocity):
     def __init__(self, model: System, kgrid=(1, 1, 1), phaseshift=1, verbose=0, **kwarg) -> None:
@@ -585,6 +716,8 @@ class SpinVeloVelo(SpinVelocity):
         Indexing: spinVeloVelo[ik1, ik2, ik3, ialpha, ibeta, igamma, ieig]
         '''
         super().__init__(model, kgrid, phaseshift, verbose, **kwarg)
+        self.Iodd = False  # inversion gives minus
+        self.Todd = False   # timereversal gives minus
 
         self.spinVeloVelo=np.zeros(self.kgrid+(3,3,3,model.norbs-self.ibmin))
         for ialpha in range(3):
@@ -651,6 +784,27 @@ class SpinHallConductance(SpinBerryCurv):
         #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
+class OrbitalHallConductance(OrbitalBerryCurv):
+    def __init__(self, fermiList=[], currentProjectionList=[], orbitalcurrentProjectionList=[], **kwarg) -> None:
+        '''
+        Orbital hall conductance in (S/m hbar/e)
+        '''
+        super().__init__(velocityProjectionList=currentProjectionList, orbitalvelocityProjectionList=orbitalcurrentProjectionList, **kwarg)
+
+        sigma=np.zeros((len(fermiList),3,3,3))
+
+        for ifermi, fermi in enumerate(fermiList):
+            occupy=self.energies<fermi
+            for ialpha in range(3):
+                for ibeta in range(3):
+                    for igamma in range(3):
+                        sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.orbitalBerryCurv[...,ialpha,ibeta,igamma,:][occupy])
+            #exit()
+        
+        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        if self.verbose==2: showElapsedTime(extraInfo=f"Orbital Hall conductance finished")
+
 class SpinGalvanic_diag(Velocity_diag, Spin_diag):
     def __init__(self, currentProjectionList=[], spinProjectionList=[], **kwarg) -> None:
         '''
@@ -716,4 +870,4 @@ class SpinRashibaConductance(SpinVelocity_diag):
         self.sigma *= (elementary_charge**3/hbar**2/angstrom)/self.model.Vcell/np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
-from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, SpinExpectationOnPath
+from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, SpinExpectationOnPath, SpinOrbitalExpectationOnPath

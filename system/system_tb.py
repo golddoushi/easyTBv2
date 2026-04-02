@@ -77,7 +77,68 @@ class System_tb(System):
 
         self.getRHam_R()
         self.getSpinMatrice()
+
+        # compute orbital angular moment operator
+        self.atomOrbAM=self.orbitalAngularMomentCubic()
+        self.getOrbitalMatrice()
     
+    def orbitalAngularMomentCubic(self):
+        '''
+        Orbital angular moment operator represented in the cubic hamonics (s, px, py, pz, ...)
+        in unit of \hbar
+        For now, only l=s, p, d, f was implemented
+
+        Return
+        ------
+        - Lop : list
+          Lop[l][idirection][m1, m2]. 
+          l=s, p, d, e, denoting the orbital quantum number
+          idirection=0, 1, 2, denoting the spatial orientation of x, y, z
+          m1, m2 is the magnetic quantum number
+        '''
+        orbitalAngularMomentSpherical=self.orbitalAngularMomentSpherical()
+        w=1/np.sqrt(2)
+        def orbitalAngularP():
+            '''
+            Representation of orbital angular moment in space of cubic harmonics pz, px, py
+            '''
+            L=np.array([
+                [    0, 1,    0],   # pz
+                [   -w, 0,    w],   # px 
+                [ 1j*w, 0, 1j*w],   # py
+                ])
+            return L.conj() @ orbitalAngularMomentSpherical[1] @ L.T
+
+        def orbitalAngularD():
+            '''
+            Representation of orbital angular moment in space of cubic harmonics dz2, dxz, dyz, dx2-y2, dxy
+            '''
+            L=np.array([
+                [    0,    0, 1,    0,    0],   # dz2
+                [    0,   -w, 0,    w,    0],   # dxz
+                [    0, 1j*w, 0, 1j*w,    0],   # dyz
+                [    w,    0, 0,    0,    w],   # dx2-y2
+                [-1j*w,    0, 0,    0, 1j*w],   # dxy
+                ])
+            return L.conj() @ orbitalAngularMomentSpherical[2] @ L.T
+
+        def orbitalAngularF():
+            '''
+            Representation of orbital angular moment in space of cubic harmonics fz3, fxz2, fyz2, fz(x2-y2), fxyz, fx(x2-3y2), fy(3x2-y2)
+            '''
+            L=np.array([
+                [    0,    0,    0,  1,    0,    0,    0],   # fz3
+                [    0,    0,   -w,  0,    w,    0,    0],   # fxz2
+                [    0,    0, 1j*w,  0, 1j*w,    0,    0],   # fyz2
+                [    0,    w,    0,  0,    0,    w,    0],   # fz(x2-y2)
+                [    0,-1j*w,    0,  0,    0, 1j*w,    0],   # fxyz
+                [   -w,    0,    0,  0,    0,    0,    w],   # fx(x2-3y2)
+                [ 1j*w,    0,    0,  0,    0,    0, 1j*w],   # fy(3x2-y2)
+                ])
+            
+            return L.conj() @ orbitalAngularMomentSpherical[3] @ L.T
+        return (0, orbitalAngularP(), orbitalAngularD(), orbitalAngularF())
+
     def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,-1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], print_row=(0,1,2,3,), print_col=(0,1,2,3,)):
         super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, "w90", print_row, print_col)
         self.getRHam_R()

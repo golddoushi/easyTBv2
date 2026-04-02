@@ -510,8 +510,8 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
     Produce the structured atomic orb. ids based on the projections given by Wannier90-style strings
     NOTE: only standard atomic orb s, p, d, f are supported by now.
     
-    Parameters:
-    -----------
+    Parameters
+    ----------
     - filePathOfPOSCAR : str
       The position of POSCAR
     - projections : dictionary
@@ -527,8 +527,8 @@ def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
       generate double spin tunnels. Set ispin=2 if one needs whole orbital indexes for both spin tunnels, e.g.,
       spinor Hams., spin-polarized Hams.
     
-    Returns:
-    --------
+    Returns
+    -------
     - atom_orb_info : list
        contains the information of atomic orbitals for each atom.
        atom_orb_info[iatom] gives the information of iatom, keys include:
@@ -588,8 +588,8 @@ def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[],ispin=1):
     A simple solution to produce the orbital index for each atom based on the projections
     NOTE: only standard atomic orb s, p, d, f are supported by now. And only one spin tunnel is generated
     
-    Parameters:
-    -----------
+    Parameters
+    ----------
     filePathOfPOSCAR : str
       The position of POSCAR
     projections : dictionary
@@ -601,8 +601,8 @@ def obtainProjectionsPlain(filePathOfPOSCAR:str,projections=[],ispin=1):
       }
       in which 0 is "s", 1 is "p", 2 is "d", 3 is "d" and 4 is "f". By now, only these 4 kinds are supported.
     
-    Returns:
-    --------
+    Returns
+    -------
     atom_orb_index_list : list
        atom_orb_index_list[iatom] gives the global orbital indexes relevant the the iatom
     '''
@@ -618,8 +618,8 @@ def projectionOperator(projection,atom_orb_info,norbs):
     '''
     Build projection matrix based on the selected atom shells
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     projection : list
       contains all the atom shells, with form of (atom_id, (shell_id0, shell_id1,...)).
     atom_orb_info : list
@@ -627,8 +627,8 @@ def projectionOperator(projection,atom_orb_info,norbs):
     norbs : int
       total num. of orb-basis
 
-    Returns:
-    --------
+    Returns
+    -------
     proj_mat : np.ndarray
        diagonal matrix with element = 1 or 0. The projected orbitals have 1, others are 0.
     '''
