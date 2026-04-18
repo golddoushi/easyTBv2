@@ -271,6 +271,9 @@ class System:
         '''set lattice Overlap'''
         self.overlap_R=O_R
     
+    def setFermi(self,fermi:float):
+        self.fermi=fermi
+
     def setRList(self,dRList) -> None:
         '''set dR list'''
         self.dRList=dRList
@@ -963,8 +966,322 @@ class System:
         #'''
         #exit()
     
-    def setFermi(self,fermi:float):
-        self.fermi=fermi
+    def make_supercell(self, Tmatrix):
+        """
+        Construct a supercell model directly from the primitive model.
+        
+        Parameters
+        ----------
+        Tmatrix : list or np.ndarray
+            3x3 integer matrix defining the supercell lattice.
+            The supercell lattice is defined as: lat_sc = T @ lat_pc
+        """
+        print(f"\n--- Constructing Supercell ---")
+        T = np.array(Tmatrix, dtype=int)
+        invT = np.linalg.inv(T)
+        Nsc = int(np.round(abs(np.linalg.det(T))))
+        print(f"Supercell volume ratio: {Nsc}")
+        
+        # 1. Find internal cells (primitive cell origins located inside the supercell)
+        Rmax = np.max(np.abs(T)) * 2 + 2
+        internal_cells = []
+        for i in range(-Rmax, Rmax + 1):
+            for j in range(-Rmax, Rmax + 1):
+                for k in range(-Rmax, Rmax + 1):
+                    c = np.array([i, j, k])
+                    f = c @ invT
+                    # Check if fractional coordinate is inside the [0, 1) region
+                    if np.all(f >= -1e-6) and np.all(f < 1 - 1e-6):
+                        internal_cells.append(c)
+        
+        assert len(internal_cells) == Nsc, f"Found {len(internal_cells)} internal cells, expected {Nsc}"
+        
+        def get_internal_cell_index(c_target):
+            for idx, c in enumerate(internal_cells):
+                if np.allclose(c, c_target):
+                    return idx
+            return -1
+            
+        # 2. Update structural information and orbital projections
+        new_posinfo = {
+            'lattice': T @ self.posinfo['lattice'],
+            'pos ions (frac.)': [],
+            'pos ions (cart.)': [],
+            'nions': [],
+            'label list': self.posinfo.get('label list', []),
+            'tot ions': self.posinfo['tot ions'] * Nsc
+        }
+        
+        new_atomicOrbInfoList = []
+        norbs_pc = self.norbs
+        norbs_sc = norbs_pc * Nsc
+        new_rList = np.zeros((3, norbs_sc))
+        
+        # orb_map[iorb_pc, icell] gives the new global index in the supercell
+        orb_map = np.zeros((norbs_pc, Nsc), dtype=int)
+        
+        # Maintain spin-blocking convention (e.g., all spin-up first, then all spin-down)
+        if self.ispin == 2 and self.format in ["VASP", "openmx"]:
+            half_pc = norbs_pc // 2
+            half_sc = norbs_sc // 2
+            cnt_up, cnt_dn = 0, half_sc
+            for icell in range(Nsc):
+                for iorb in range(half_pc):
+                    orb_map[iorb, icell] = cnt_up
+                    cnt_up += 1
+                for iorb in range(half_pc, norbs_pc):
+                    orb_map[iorb, icell] = cnt_dn
+                    cnt_dn += 1
+        elif self.ispin == 2:
+            print(f"ERRRO: for now, make supercell for {self.format=} is still in development.")
+            exit()
+        else: # Standard sequential formatting
+            cnt = 0
+            for icell in range(Nsc):
+                for iorb in range(norbs_pc):
+                    orb_map[iorb, icell] = cnt
+                    cnt += 1
+                    
+        # Update atoms and coordinate lists
+        for i_elem, nions in enumerate(self.posinfo['nions']):
+            new_posinfo['nions'].append(nions * Nsc)
+            
+        iatom_sc = 0
+        for icell, c in enumerate(internal_cells):
+            for iatom_pc, atom_info in enumerate(self.atomicOrbInfoList):
+                frac_pc = self.posinfo['pos ions (frac.)'][iatom_pc]
+                
+                # New fractional coordinate in supercell
+                frac_sc = (frac_pc + c) @ invT
+                frac_sc = frac_sc % 1.0 # Fold strictly into home cell
+                cart_sc = frac_sc @ new_posinfo['lattice']
+                
+                new_posinfo['pos ions (frac.)'].append(frac_sc)
+                new_posinfo['pos ions (cart.)'].append(cart_sc)
+                
+                new_atom_info = {
+                    "label": atom_info["label"],
+                    "L": atom_info["L"].copy(),
+                    "orbital index": []
+                }
+                for shell in atom_info["orbital index"]:
+                    new_shell = [orb_map[iorb, icell] for iorb in shell]
+                    new_atom_info["orbital index"].append(new_shell)
+                    
+                new_atomicOrbInfoList.append(new_atom_info)
+                iatom_sc += 1
+                
+        # Update Wannier centers / atomic coordinates
+        for icell, c in enumerate(internal_cells):
+            for iorb_pc in range(norbs_pc):
+                iorb_sc = orb_map[iorb_pc, icell]
+                new_rList[:, iorb_sc] = self.rList[:, iorb_pc] + c @ self.lattice
+                
+        # 3. Reconstruct Hamiltonian, Overlap, and Position Matrices
+        new_ham_dict = {}
+        new_overlap_dict = {} 
+        new_AA_dict = {}     
+        
+        has_overlap = getattr(self, "overlap_R", None) is not None
+        has_AA = getattr(self, "AA_R_W", None) is not None
+        has_energy = getattr(self, "energy_R", None) is not None
+        
+        print(f"Folding {self.nRvec} primitive bonds into supercell grid...")
+        for iR, R_pc in enumerate(self.iRvec):
+            for icell1, c1 in enumerate(internal_cells):
+                # The spatial shift target cell in primitive coordinates
+                target_cell_pc = c1 + R_pc
+                
+                # Decompose into a supercell vector + internal cell origin
+                frac_target = target_cell_pc @ invT
+                R_sc = np.floor(frac_target + 1e-6).astype(int)
+                c2 = np.round(target_cell_pc - R_sc @ T).astype(int)
+                
+                icell2 = get_internal_cell_index(c2)
+                assert icell2 != -1, "Target internal cell lost during folding!"
+                
+                R_sc_tuple = tuple(R_sc)
+                if R_sc_tuple not in new_ham_dict:
+                    new_ham_dict[R_sc_tuple] = np.zeros((norbs_sc, norbs_sc), dtype=complex)
+                    if has_overlap: new_overlap_dict[R_sc_tuple] = np.zeros((norbs_sc, norbs_sc), dtype=complex)
+                    if has_AA: new_AA_dict[R_sc_tuple] = np.zeros((3, norbs_sc, norbs_sc), dtype=complex)
+                        
+                # Map matrices. We use += to correctly fold multiple primitive hoppings 
+                # into the same supercell bond (e.g. self-interaction within the supercell)
+                for i_pc in range(norbs_pc):
+                    for j_pc in range(norbs_pc):
+                        I_sc = orb_map[i_pc, icell1]
+                        J_sc = orb_map[j_pc, icell2]
+                        new_ham_dict[R_sc_tuple][I_sc, J_sc] += self.ham_R[iR, i_pc, j_pc]
+                        if has_overlap: new_overlap_dict[R_sc_tuple][I_sc, J_sc] += self.overlap_R[iR, i_pc, j_pc]
+                        if has_AA: new_AA_dict[R_sc_tuple][:, I_sc, J_sc] += self.AA_R_W[iR, :, i_pc, j_pc]
+                            
+        # 4. Pack into standard System arrays
+        new_nRvec = len(new_ham_dict)
+        self.iRvec = np.empty((new_nRvec, 3), dtype=int)
+        self.iRvecIndex = {}
+        self.ham_R = np.zeros((new_nRvec, norbs_sc, norbs_sc), dtype=complex)
+        
+        if has_overlap: self.overlap_R = np.zeros((new_nRvec, norbs_sc, norbs_sc), dtype=complex)
+        if has_AA: self.AA_R_W = np.zeros((new_nRvec, 3, norbs_sc, norbs_sc), dtype=complex)
+            
+        for idx, R_sc_tuple in enumerate(new_ham_dict.keys()):
+            self.iRvec[idx] = R_sc_tuple
+            self.iRvecIndex[R_sc_tuple] = idx
+            self.ham_R[idx] = new_ham_dict[R_sc_tuple]
+            if has_overlap: self.overlap_R[idx] = new_overlap_dict[R_sc_tuple]
+            if has_AA: self.AA_R_W[idx] = new_AA_dict[R_sc_tuple]
+        Rx_max, Rx_min, Ry_max, Ry_min, Rz_max, Rz_min= self.iRvec[:,0].max(), self.iRvec[:,0].min(), self.iRvec[:,1].max(), self.iRvec[:,1].min(), self.iRvec[:,2].max(), self.iRvec[:,2].min()
+        new_mp_grid=np.array([Rx_max-Rx_min+1,Ry_max-Ry_min+1,Rz_max-Rz_min+1,])
+
+        if has_energy:
+            # For OpenMX models, energy_R is structurally identical to ham_R
+            self.energy_R = self.ham_R.copy()
+
+        # 5. Overwrite System attributes
+        self.norbs = norbs_sc
+        self.lattice = new_posinfo['lattice']
+        self.reciLattice = np.linalg.inv(self.lattice) * 2 * np.pi
+        self.posinfo = new_posinfo
+        self.atomicOrbInfoList = new_atomicOrbInfoList
+        self.rList = new_rList
+        self.nRvec = new_nRvec
+        self.mp_grid=new_mp_grid
+        
+        # 6. Reconstruct dependent operators
+        self.getRHam_R()
+        if hasattr(self, 'getRO_R'): self.getRO_R()
+        self.getSpinMatrice()
+        self.atomOrbAM = self.orbitalAngularMomentCubic()
+        self.getOrbitalMatrice()
+        
+        print(f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
+
+    def cutEdge(self, cutDir, shift=None, verbose=True):
+        """
+        Creates an open boundary condition (OBC) along the specified lattice direction.
+        Automatically finds the optimal boundary shift to minimize broken bonds.
+        
+        Parameters
+        ----------
+        cutDir : int
+            The lattice direction to cut (0, 1, or 2).
+        shift : float, optional
+            The fractional shift of the cell boundary. If None, it is auto-optimized.
+        verbose : bool
+            Print cut statistics.
+        """
+        if verbose: print(f"\n--- Cutting Edge along Direction {cutDir} ---")
+        invLattice = np.linalg.inv(self.lattice)
+        
+        # Get fractional coordinates of orbitals
+        rList_frac = invLattice @ self.rList
+        
+        # 1. Auto-optimize the boundary shift to minimize broken bonds
+        if shift is None:
+            if verbose: print(f"Optimizing cut boundary...")
+            shifts = np.linspace(0, 1, 100, endpoint=False)
+            best_shift = 0
+            min_cut_weight = float('inf')
+            
+            for s in shifts:
+                cut_weight = 0
+                # Calculate which cell each orbital belongs to after the shift
+                c_I = np.floor(rList_frac[cutDir, :] + s).astype(int)
+                
+                for iR, R in enumerate(self.iRvec):
+                    # R'_cutDir = R + c_target - c_source
+                    R_prime_cutDir = R[cutDir] + c_I[None, :] - c_I[:, None]
+                    
+                    # Any bond where R'_cutDir != 0 crosses the new boundary
+                    mask_cut = (R_prime_cutDir != 0)
+                    cut_weight += np.sum(np.abs(self.ham_R[iR])[mask_cut])
+                    
+                if cut_weight < min_cut_weight:
+                    min_cut_weight = cut_weight
+                    best_shift = s
+                    
+            shift = best_shift
+            if verbose: print(f"Optimal fractional shift found: {shift:.4f} (Broken bond weight: {min_cut_weight:.4f})")
+        else:
+            if verbose: print(f"Using provided shift: {shift:.4f}")
+            
+        # 2. Apply the chosen shift and filter the hoppings
+        c_I = np.floor(rList_frac[cutDir, :] + shift).astype(int)
+        
+        new_ham_dict = {}
+        new_overlap_dict = {}
+        new_AA_dict = {}
+        
+        has_overlap = getattr(self, "overlap_R", None) is not None
+        has_AA = getattr(self, "AA_R_W", None) is not None
+        
+        dropped_bonds = 0
+        kept_bonds = 0
+        
+        for iR, R in enumerate(self.iRvec):
+            for I in range(self.norbs):
+                for J in range(self.norbs):
+                    # The hopping vector in the shifted cell frame
+                    R_prime_cutDir = R[cutDir] + c_I[J] - c_I[I]
+                    
+                    if R_prime_cutDir != 0:
+                        if abs(self.ham_R[iR, I, J]) > 1e-6: dropped_bonds += 1
+                        continue # Bond crosses the edge; it is cut!
+                        
+                    if abs(self.ham_R[iR, I, J]) > 1e-6: kept_bonds += 1
+                        
+                    # Bond is kept. Because of the OBC, its R vector in cutDir is strictly 0.
+                    R_new = R.copy()
+                    R_new[cutDir] = 0
+                    R_new_tuple = tuple(R_new)
+                    
+                    if R_new_tuple not in new_ham_dict:
+                        new_ham_dict[R_new_tuple] = np.zeros((self.norbs, self.norbs), dtype=complex)
+                        if has_overlap: new_overlap_dict[R_new_tuple] = np.zeros((self.norbs, self.norbs), dtype=complex)
+                        if has_AA: new_AA_dict[R_new_tuple] = np.zeros((3, self.norbs, self.norbs), dtype=complex)
+                        
+                    new_ham_dict[R_new_tuple][I, J] += self.ham_R[iR, I, J]
+                    if has_overlap: new_overlap_dict[R_new_tuple][I, J] += self.overlap_R[iR, I, J]
+                    if has_AA: new_AA_dict[R_new_tuple][:, I, J] += self.AA_R_W[iR, :, I, J]
+                    
+        if verbose: print(f"Edge Cut Complete: {dropped_bonds} non-zero hoppings dropped, {kept_bonds} kept.")
+        
+        # 3. Update physical coordinates (atoms and orbitals are shifted to the new home cell)
+        for iatom, frac in enumerate(self.posinfo['pos ions (frac.)']):
+            frac[cutDir] = (frac[cutDir] + shift) % 1.0
+            self.posinfo['pos ions (frac.)'][iatom] = frac
+            self.posinfo['pos ions (cart.)'][iatom] = frac @ self.lattice
+            
+        rList_frac[cutDir, :] = (rList_frac[cutDir, :] + shift) % 1.0
+        self.rList = self.lattice @ rList_frac
+        
+        # 4. Repack the matrices into the System object
+        new_nRvec = len(new_ham_dict)
+        self.iRvec = np.empty((new_nRvec, 3), dtype=int)
+        self.iRvecIndex = {}
+        self.ham_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
+        if has_overlap: self.overlap_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
+        if has_AA: self.AA_R_W = np.zeros((new_nRvec, 3, self.norbs, self.norbs), dtype=complex)
+        
+        for idx, R_new_tuple in enumerate(new_ham_dict.keys()):
+            self.iRvec[idx] = R_new_tuple
+            self.iRvecIndex[R_new_tuple] = idx
+            self.ham_R[idx] = new_ham_dict[R_new_tuple]
+            if has_overlap: self.overlap_R[idx] = new_overlap_dict[R_new_tuple]
+            if has_AA: self.AA_R_W[idx] = new_AA_dict[R_new_tuple]
+        self.nRvec = new_nRvec
+        self.mp_grid[cutDir]=1
+        
+        # 5. Re-initialize dependent operators
+        if hasattr(self, 'energy_R') and self.energy_R is not None:
+            self.energy_R = self.ham_R.copy()
+            
+        self.getRHam_R()
+        if hasattr(self, 'getRO_R') and has_overlap: self.getRO_R()
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        self.atomOrbAM = self.orbitalAngularMomentCubic()
+        self.getOrbitalMatrice()
 
     @property
     def Vcell(self):
