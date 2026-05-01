@@ -1283,6 +1283,295 @@ class System:
         self.atomOrbAM = self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
 
+    def addExchangeSplitting(self, projection, exchange_vector, verbose=True):
+        """
+        Adds an exchange splitting (Zeeman-like term) to specified atoms and shells.
+        
+        Parameters
+        ----------
+        projection : list of tuples
+            Format: [(atom_id, (shell_id_1, shell_id_2, ...)), ...]
+            Specifies which atoms and shells to apply the splitting to.
+        exchange_vector : np.ndarray or list
+            A 3-element array [Mx, My, Mz] representing the strength of the 
+            splitting in eV for the sigma_x, sigma_y, and sigma_z directions.
+        """
+        Mx, My, Mz = exchange_vector
+        
+        if verbose:
+            print(f"\n--- Adding Exchange Splitting ---")
+            print(f"Magnetic Vector (Mx, My, Mz) = ({Mx}, {My}, {Mz}) eV")
+            
+        # 1. Locate the R=(0,0,0) home cell matrix
+        home_R_tuple = (0, 0, 0)
+        if hasattr(self, 'iRvecIndex') and home_R_tuple in self.iRvecIndex:
+            iR0 = self.iRvecIndex[home_R_tuple]
+        else:
+            iR0 = -1
+            for i, R in enumerate(self.iRvec):
+                if tuple(R) == home_R_tuple:
+                    iR0 = i
+                    break
+        assert iR0 != -1, "Could not find the R=(0,0,0) home cell in the Hamiltonian!"
+        
+        # 2. Map and apply the exchange splitting
+        half_norbs = self.norbs // 2
+        applied_orbitals = 0
+        
+        for iatom, shells in projection:
+            atom_info = self.atomicOrbInfoList[iatom]
+            for ishell in shells:
+                shell_indices = atom_info["orbital index"][ishell]
+                
+                for iorb in shell_indices:
+                    # Prevent double counting if the shell list already contains both up and down indices
+                    if iorb >= half_norbs:
+                        continue
+                        
+                    I_up = iorb
+                    I_dn = I_up + half_norbs
+                    
+                    # Apply Mz * sigma_z (Diagonal)
+                    if abs(Mz) > 1e-8:
+                        self.ham_R[iR0, I_up, I_up] += Mz
+                        self.ham_R[iR0, I_dn, I_dn] -= Mz
+                    
+                    # Apply Mx * sigma_x + My * sigma_y (Off-diagonal spin-flip terms)
+                    if abs(Mx) > 1e-8 or abs(My) > 1e-8:
+                        # H_up_dn = Mx - i My
+                        # H_dn_up = Mx + i My
+                        self.ham_R[iR0, I_up, I_dn] += (Mx - 1j * My)
+                        self.ham_R[iR0, I_dn, I_up] += (Mx + 1j * My)
+                    
+                    applied_orbitals += 1
+                    
+        if verbose:
+            print(f"Successfully applied exchange splitting to {applied_orbitals} physical spatial orbitals.")
+            
+        # 3. Synchronize dependent system matrices
+        if hasattr(self, 'energy_R') and self.energy_R is not None:
+            # For OpenMX models where energy_R tracks ham_R
+            self.energy_R[iR0, :, :] = self.ham_R[iR0, :, :].copy()
+            
+        # Rebuild dependent operators
+        self.getRHam_R()
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+
+    def rotateExchangeField(self, projection, theta, phi, verbose=True):
+        """
+        Rotates the on-site exchange field for specified orbitals.
+        Rotation is applied via Euler angles: around y-axis by theta, then z-axis by phi.
+        """
+        if verbose: 
+            print(f"\n--- Rotating Exchange Field (theta={theta:.4f}, phi={phi:.4f}) ---")
+            
+        home_R_tuple = (0, 0, 0)
+        iR0 = self.iRvecIndex.get(home_R_tuple, -1)
+        if iR0 == -1:
+            for i, R in enumerate(self.iRvec):
+                if tuple(R) == home_R_tuple:
+                    iR0 = i; break
+        assert iR0 != -1, "Could not find home cell R=(0,0,0)"
+        
+        half_norbs = self.norbs // 2
+        count = 0
+        
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+        cos_p, sin_p = np.cos(phi), np.sin(phi)
+        
+        for iatom, shells in projection:
+            atom_info = self.atomicOrbInfoList[iatom]
+            for ishell in shells:
+                for iorb in atom_info["orbital index"][ishell]:
+                    if iorb >= half_norbs: continue # Only loop over spatial orbitals once
+                    I_up = iorb
+                    I_dn = I_up + half_norbs
+                    
+                    # Extract 2x2 block
+                    H_uu = self.ham_R[iR0, I_up, I_up]
+                    H_dd = self.ham_R[iR0, I_dn, I_dn]
+                    H_ud = self.ham_R[iR0, I_up, I_dn]
+                    H_du = self.ham_R[iR0, I_dn, I_up]
+                    
+                    # Project to SU(2) Pauli basis
+                    S0 = 0.5 * (H_uu + H_dd)
+                    Sz = 0.5 * (H_uu - H_dd)
+                    Sx = 0.5 * (H_ud + H_du)
+                    Sy = 0.5j * (H_ud - H_du)
+                    
+                    # 1. Rotate around y-axis by theta
+                    Sx_p = Sx * cos_t + Sz * sin_t
+                    Sy_p = Sy
+                    Sz_p = -Sx * sin_t + Sz * cos_t
+                    
+                    # 2. Rotate around z-axis by phi
+                    Sx_pp = Sx_p * cos_p - Sy_p * sin_p
+                    Sy_pp = Sx_p * sin_p + Sy_p * cos_p
+                    Sz_pp = Sz_p
+                    
+                    # Reconstruct and replace
+                    self.ham_R[iR0, I_up, I_up] = S0 + Sz_pp
+                    self.ham_R[iR0, I_dn, I_dn] = S0 - Sz_pp
+                    self.ham_R[iR0, I_up, I_dn] = Sx_pp - 1j * Sy_pp
+                    self.ham_R[iR0, I_dn, I_up] = Sx_pp + 1j * Sy_pp
+                    count += 1
+                    
+        if verbose: print(f"Rotated exchange field for {count} spatial orbitals.")
+        
+        # Synchronize dependent matrices
+        if hasattr(self, 'energy_R') and self.energy_R is not None:
+            self.energy_R[iR0] = self.ham_R[iR0].copy()
+            
+        self.getRHam_R()
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+
+    def scaleSOC(self, projection, lam, verbose=True):
+        """
+        Scales the SOC-induced spin-flip hopping amplitudes (tx, ty, tz) by lambda,
+        leaving the charge transport hopping (t0) intact.
+        """
+        if verbose: 
+            print(f"\n--- Scaling SOC Hopping Terms by lambda={lam:.4f} ---")
+            
+        half_norbs = self.norbs // 2
+        
+        # Collect target spatial orbital indices from the projection list
+        target_orbs = []
+        for iatom, shells in projection:
+            atom_info = self.atomicOrbInfoList[iatom]
+            for ishell in shells:
+                for iorb in atom_info["orbital index"][ishell]:
+                    if iorb < half_norbs:
+                        target_orbs.append(iorb)
+        
+        count = 0
+        # Iterate over all unit cells to capture inter-cell hopping
+        for iR in range(self.nRvec):
+            # Iterate over all pairs of orbitals in the target list
+            for i_up in target_orbs:
+                for j_up in target_orbs:
+                    i_dn = i_up + half_norbs
+                    j_dn = j_up + half_norbs
+                    
+                    # Extract 2x2 inter-site hopping block
+                    H_uu = self.ham_R[iR, i_up, j_up]
+                    H_dd = self.ham_R[iR, i_dn, j_dn]
+                    H_ud = self.ham_R[iR, i_up, j_dn]
+                    H_du = self.ham_R[iR, i_dn, j_up]
+                    
+                    # Project to SU(2) Pauli basis
+                    t0 = 0.5 * (H_uu + H_dd)
+                    tz = 0.5 * (H_uu - H_dd)
+                    tx = 0.5 * (H_ud + H_du)
+                    ty = 0.5j * (H_ud - H_du)
+                    
+                    # Scale only the SOC-relevant Pauli components
+                    tz_p = tz * lam
+                    tx_p = tx * lam
+                    ty_p = ty * lam
+                    
+                    # Reconstruct and replace
+                    self.ham_R[iR, i_up, j_up] = t0 + tz_p
+                    self.ham_R[iR, i_dn, j_dn] = t0 - tz_p
+                    self.ham_R[iR, i_up, j_dn] = tx_p - 1j * ty_p
+                    self.ham_R[iR, i_dn, j_up] = tx_p + 1j * ty_p
+                    
+                    count += 1
+                    
+        if verbose: print(f"Successfully scaled {count} hopping matrix blocks.")
+        
+        # Synchronize dependent matrices
+        if hasattr(self, 'energy_R') and self.energy_R is not None:
+            self.energy_R = self.ham_R.copy()
+            
+        self.getRHam_R()
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+
+    def rotateSpinBasisToGlobal(self, alpha, beta, gamma=0.0, verbose=True):
+        """
+        Rotates the tight-binding basis from the VASP local SAXIS quantization frame 
+        back to the standard global Cartesian frame (sigma_z basis).
+        
+        Parameters:
+        -----------
+        alpha, beta, gamma : float
+            The Euler angles outputted in the VASP OUTCAR (in radians).
+        """
+        
+        if verbose:
+            print(f"\n--- Rotating Spin Basis to Global Frame ---")
+            print(f"Euler Angles: ALPHA={alpha:.6f}, BETA={beta:.6f}, GAMMA={gamma:.6f}")
+            
+        # 1. Define standard Pauli matrices
+        sz = np.array([[1, 0], [0, -1]], dtype=complex)
+        sy = np.array([[0, -1j], [1j, 0]], dtype=complex)
+        I2 = np.eye(2, dtype=complex)
+        
+        # 2. VASP spinor transformation matrix W (Local -> Global)
+        # W = exp(-i*alpha*sz/2) * exp(-i*beta*sy/2) * exp(-i*gamma*sz/2)
+        def exp_ip(theta, sigma):
+            return np.cos(theta / 2.0) * I2 - 1j * np.sin(theta / 2.0) * sigma
+            
+        W_alpha = exp_ip(alpha, sz)
+        W_beta  = exp_ip(beta, sy)
+        W_gamma = exp_ip(gamma, sz)
+        
+        W = W_alpha @ W_beta @ W_gamma
+        
+        # 3. Construct the full spatial-spin transformation block matrix (W_full = W \otimes I_spatial)
+        half_norbs = self.norbs // 2
+        W_full = np.zeros((self.norbs, self.norbs), dtype=complex)
+        
+        # Map the 2x2 SU(2) rotation onto the upper/lower spin blocks
+        W_full[:half_norbs, :half_norbs] = W[0, 0] * np.eye(half_norbs)
+        W_full[:half_norbs, half_norbs:] = W[0, 1] * np.eye(half_norbs)
+        W_full[half_norbs:, :half_norbs] = W[1, 0] * np.eye(half_norbs)
+        W_full[half_norbs:, half_norbs:] = W[1, 1] * np.eye(half_norbs)
+        
+        W_full_dag = W_full.conj().T
+        
+        # Helper function to apply the SU(2) rotation to multi-dimensional matrices
+        def transform_matrix(M):
+            if M is None: return None
+            # Using np.matmul (@) perfectly broadcasts over the leading (..., nRvec) dimensions
+            # Computing: H_global = W_full @ H_local @ W_full_dag
+            return W_full @ M @ W_full_dag
+            
+        # 4. Rotate all relevant System matrices
+        if hasattr(self, 'ham_R') and self.ham_R is not None:
+            self.ham_R = transform_matrix(self.ham_R)
+            if verbose: print("Transformed Hamiltonian (ham_R).")
+            
+        if hasattr(self, 'overlap_R') and self.overlap_R is not None:
+            self.overlap_R = transform_matrix(self.overlap_R)
+            if verbose: print("Transformed Overlap Matrix (overlap_R).")
+            
+        if hasattr(self, 'energy_R') and self.energy_R is not None:
+            self.energy_R = transform_matrix(self.energy_R)
+            if verbose: print("Transformed Energy Matrix (energy_R).")
+            
+        if hasattr(self, 'AA_R_W') and self.AA_R_W is not None:
+            self.AA_R_W = transform_matrix(self.AA_R_W)
+            if verbose: print("Transformed Position Operator (AA_R_W).")
+            
+        #if hasattr(self, 'RHam_R') and self.RHam_R is not None:
+        #    self.RHam_R = transform_matrix(self.RHam_R)
+        #    if verbose: print("Transformed Velocity Operator (RHam_R).")
+            
+        if hasattr(self, 'RO_R') and self.RO_R is not None:
+            self.RO_R = transform_matrix(self.RO_R)
+            if verbose: print("Transformed Overlap Velocity Operator (RO_R).")
+            
+        # 5. Trigger updates for internal operator dependencies
+        self.getRHam_R()
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+        
+        if verbose: print("--- Spin Basis Transformation Complete ---\n")
+
     @property
     def Vcell(self):
         return np.linalg.det(self.lattice)
