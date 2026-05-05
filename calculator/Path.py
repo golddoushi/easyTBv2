@@ -1,6 +1,7 @@
 #
 # The module is for calculations on energy, berry curv., and several types of conductances along a given k-line path
 #
+from multiprocessing import Pool
 from system import System
 import numpy as np
 from auxiliary import showElapsedTime, print_matrix
@@ -8,7 +9,7 @@ from scipy.constants import elementary_charge, hbar, angstrom
 
 class CalculatorOnPath():
 
-    def __init__(self,KPOINTS="./KPOINTS",verbose=0) -> None:
+    def __init__(self,**kwarg) -> None:
         '''
         Calculations on gamma-centered kmesh on BZ
 
@@ -24,20 +25,32 @@ class CalculatorOnPath():
         - degen : float
         The threthold two states are degenerated
         '''
-        if verbose==2: print("initializing calculator module")
-        self.model=None
-        self.eta=0.
-        self.smr_type="Lorentzian"
-        self.degen=1e-6
-        self.verbose=verbose
+        defaultSettings={
+            "model":None,
+            "KPOINTS":"./KPOINTS",
+            "eta":0.026,
+            "kBT":0.026,
+            "smr_type":"Lorentzian",
+            "degen":1e-6,
+            "verbose":0,
+        }
+        defaultSettings.update(kwarg)
+        
+        self.model=defaultSettings["model"]
+        self.eta=defaultSettings["eta"]
+        self.smr_type=defaultSettings["smr_type"]
+        self.degen=defaultSettings["degen"]
+        self.verbose=defaultSettings["verbose"]
+        self.KPOINTS=defaultSettings["KPOINTS"]
 
-        with open(KPOINTS,"r") as fin:
+        if self.verbose==2: print("initializing calculator module")
+        with open(self.KPOINTS,"r") as fin:
             data=fin.read().split("\n")
         self.nkpt=int(data[1].split()[0])
         self.kpath=np.loadtxt(data[3:3+self.nkpt])[:,:3]
 
 class EnergyOnPath(CalculatorOnPath):
-    def __init__(self, model:System, KPOINTS="./KPOINTS", verbose=0) -> None:
+    def __init__(self, **kwarg) -> None:
         '''
         Solve the eigen-eqs. to obtain eigen-vals. and vecs.
 
@@ -48,13 +61,12 @@ class EnergyOnPath(CalculatorOnPath):
 
         self.vectors[ik1, ieig, jeig] gives eigen-vecs. in ao basis.
         '''
-        super().__init__(KPOINTS, verbose)
-        self.model=model
+        super().__init__(**kwarg)
         self.ibmin=0             # ignore low-lying bands
-        self.ibmax=model.norbs   # ignore high bands
-        if verbose==2: showElapsedTime(offset=True)
+        self.ibmax=self.model.norbs   # ignore high bands
+        if self.verbose==2: showElapsedTime(offset=True)
         
-        if model.overlap:
+        if self.model.overlap:
             self.solveGeneralEigenEquation()
         else:
             self.solveEigenEquation()
@@ -154,7 +166,7 @@ class EnergyOnPath(CalculatorOnPath):
         self.ibmin=len(self.energies[0][self.energies[0]<mid_valence])
 
 class VelocityOnPath(EnergyOnPath):
-    def __init__(self, model: System, KPOINTS="./KPOINTS", verbose=0) -> None:
+    def __init__(self, **kwarg) -> None:
         '''
         Compute velocity matrix in original basis and eigen-basis
 
@@ -165,25 +177,23 @@ class VelocityOnPath(EnergyOnPath):
         self.velocity_K[ik, idirection, ieig, jeig] gives velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
         '''
-        super().__init__(model, KPOINTS, verbose)
-        self.Todd = True
-        self.Iodd = True
+        super().__init__(**kwarg)
         
-        self.RHam_K=np.zeros((self.nkpt,3,model.norbs,model.norbs),dtype=complex)
+        self.RHam_K=np.zeros((self.nkpt,3,self.model.norbs,self.model.norbs),dtype=complex)
         for ikpt, kpt in enumerate(self.kpath):
-            for Rvec, RHamR in zip(self.model.iRvec,model.RHam_R):
+            for Rvec, RHamR in zip(self.model.iRvec,self.model.RHam_R):
                 phase=np.exp(2j*np.pi*kpt@Rvec)
                 self.RHam_K[ikpt]+=1j*phase*RHamR
 
-        if verbose==2: showElapsedTime(extraInfo=f"Exp. sum. RHam_R to RHam_K to calc. velocity in ao-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"Exp. sum. RHam_R to RHam_K to calc. velocity in ao-basis finished")
         vectors=self.vectors[:,None,:,self.ibmin:]
         self.velocity_K=vectors.conj().transpose((0,1,3,2)) @ self.RHam_K @ vectors
-        if verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
 
-        if model.overlap:
-            self.RO_K=np.zeros((self.nkpt,3,model.norbs,model.norbs),dtype=complex)
+        if self.model.overlap:
+            self.RO_K=np.zeros((self.nkpt,3,self.model.norbs,self.model.norbs),dtype=complex)
             for ikpt, kpt in enumerate(self.kpath):
-                for Rvec, RO_R in zip(self.model.iRvec,model.RO_R):
+                for Rvec, RO_R in zip(self.model.iRvec,self.model.RO_R):
                     phase=np.exp(2j*np.pi*kpt@Rvec)
                     self.RO_K[ikpt]+=1j*phase*RO_R
 
@@ -191,7 +201,7 @@ class VelocityOnPath(EnergyOnPath):
 
 class BerryCurvOnPath(VelocityOnPath):
     
-    def __init__(self, model: System, KPOINTS="./KPOINTS", eta=1e-4, smr_type="Lorentzian", degen=1e-4, verbose=0) -> None:
+    def __init__(self, **kwarg) -> None:
         '''
         Calc. Berry curvature \Omega^{alpha}_{k,mn}.
 
@@ -199,23 +209,18 @@ class BerryCurvOnPath(VelocityOnPath):
 
         Indexing: BerryCurv[ik1, ik2, ik3, idrection, iband, jband]
         '''
-        super().__init__(model, KPOINTS, verbose)
-        self.Todd = True
-
-        self.eta=eta
-        self.smr_type=smr_type
-        self.degen=degen # update the degeneracy threthold
+        super().__init__(**kwarg)
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
         
-        self.BerryCurv=np.zeros((self.nkpt,3,model.norbs-self.ibmin))
+        self.BerryCurv=np.zeros((self.nkpt,3,self.model.norbs-self.ibmin))
         eps=np.arange(3)
         for ialpha in range(3):
             self.BerryCurv[...,ialpha,:]=-2*np.diagonal(self.velocity_K[...,eps[(ialpha+1)%3],:,-4:] @ (dEInverse2[...,-4:,:]*self.velocity_K[...,eps[(ialpha+2)%3],-4:,:]),0,-2,-1).imag
-        if verbose==2: showElapsedTime(extraInfo=f"Berry curvature finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"Berry curvature finished")
 
 class SpinExpectationOnPath(EnergyOnPath):
-    def __init__(self, model, KPOINTS="./KPOINTS", verbose=0):
+    def __init__(self, **kwarg):
         '''
         Compute spin matrix in eigen-basis
 
@@ -224,17 +229,16 @@ class SpinExpectationOnPath(EnergyOnPath):
         - self.spin_eig[ik, igamma, ieig, jeig] gives spin matrix in eigen-basis. 
           igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
         '''
-        super().__init__(model, KPOINTS, verbose)
-        self.Iodd = True
+        super().__init__(**kwarg)
         vectors=self.vectors[:,None,:,self.ibmin:]
-        if model.overlap:
-            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        if self.model.overlap:
+            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ model.spin[None,:,:,:] @ vectors
-        if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
 
 class OrbitalExpectationOnPath(EnergyOnPath):
-    def __init__(self, model, KPOINTS="./KPOINTS", verbose=0):
+    def __init__(self, **kwarg):
         '''
         Compute orbital matrix in eigen-basis
 
@@ -243,17 +247,16 @@ class OrbitalExpectationOnPath(EnergyOnPath):
         - self.orbital_eig[ik, igamma, ieig, jeig] gives orbital matrix in eigen-basis. 
           igamma can be 0 | 1 | 2 | 3, corresponding to L^x | L^y | L^z | L^0 orbital-polarization. 
         '''
-        super().__init__(model, KPOINTS, verbose)
-        self.Iodd = True
+        super().__init__(**kwarg)
         vectors=self.vectors[:,None,:,self.ibmin:]
-        if model.overlap:
-            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ model.orbital[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        if self.model.overlap:
+            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ model.orbital[None,:,:,:] @ vectors
-        if verbose==2: showElapsedTime(extraInfo=f"orbital op. in eig.-basis calculated")
+            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"orbital op. in eig.-basis calculated")
 
 class SpinOrbitalExpectationOnPath(SpinExpectationOnPath, OrbitalExpectationOnPath):
-    def __init__(self, model, KPOINTS="./KPOINTS", verbose=0):
+    def __init__(self, **kwarg):
         '''
         Compute spin and orbital matrix in eigen-basis
 
@@ -265,10 +268,10 @@ class SpinOrbitalExpectationOnPath(SpinExpectationOnPath, OrbitalExpectationOnPa
         - self.orbital_eig[ik, igamma, ieig, jeig] gives orbital matrix in eigen-basis. 
           igamma can be 0 | 1 | 2 | 3, corresponding to L^x | L^y | L^z | L^0 orbital-polarization. 
         '''
-        super().__init__(model, KPOINTS, verbose)
+        super().__init__(**kwarg)
 
 class SpinVelocityOnPath(VelocityOnPath):
-    def __init__(self, model: System, KPOINTS="./KPOINTS", verbose=0) -> None:
+    def __init__(self, **kwarg) -> None:
         '''
         Compute spin velocity matrix in original basis and eigen-basis
 
@@ -281,24 +284,24 @@ class SpinVelocityOnPath(VelocityOnPath):
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
         igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
         '''
-        super().__init__(model, KPOINTS,verbose)
+        super().__init__(**kwarg)
         self.Iodd = True
         #model.getSpinMatrice()
         #showElapsedTime(extraInfo=f"spin op. in ao.-basis constructed")
         vectors=self.vectors[:,None,:,self.ibmin:]
-        if model.overlap:
-            spin_eig=vectors.conj().transpose((0,1,3,2)) @ model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+        if self.model.overlap:
+            spin_eig=vectors.conj().transpose((0,1,3,2)) @ self.model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            spin_eig=vectors.conj().transpose((0,1,3,2)) @ model.spin[None,:,:,:] @ vectors
-        if verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+            spin_eig=vectors.conj().transpose((0,1,3,2)) @ self.model.spin[None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
         spin=spin_eig[...,None,:,:,:]
         velocity=self.velocity_K[...,None,:,:]
         sV=spin @ velocity
         self.spinVelocity_K = (sV + sV.transpose((0,1,2,4,3)).conj())/2#(spin @ velocity + velocity @ spin)/2
-        if verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
 class SpinBerryCurvOnPath(SpinVelocityOnPath):
-    def __init__(self, model: System, KPOINTS="./KPOINTS", eta=0.005, smr_type="Lorentzian", degen=1e-6, verbose=0) -> None:
+    def __init__(self, **kwarg) -> None:
         '''
         Calc. spin Berry curvature \Omega^{alpha,gamma}_{k,mn}.
 
@@ -308,19 +311,209 @@ class SpinBerryCurvOnPath(SpinVelocityOnPath):
 
         Indexing: spinBerryCurv[ik, ialpha, igamma, ieig]
         '''
-        super().__init__(model, KPOINTS, verbose)
-        self.degen=degen # update the degeneracy threthold
-        self.eta=eta
-        self.smr_type=smr_type
+        super().__init__(kwarg)
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
-        self.spinBerryCurv=np.zeros((self.nkpt,3,3,3,model.norbs-self.ibmin))
+        self.spinBerryCurv=np.zeros((self.nkpt,3,3,3,self.model.norbs-self.ibmin))
         #eps=np.arange(3)
         for ikpt in range(self.nkpt):
-            nvalence=sum(self.energies[ikpt]<=model.fermi)
+            nvalence=sum(self.energies[ikpt]<=self.model.fermi)
             for ialpha in range(3):
                 for ibeta in range(3):
                     for igamma in range(3):
                         self.spinBerryCurv[ikpt,ialpha,ibeta,igamma,:nvalence]=-2*np.diagonal(self.spinVelocity_K[ikpt,ibeta,igamma,:nvalence,nvalence:] @ (dEInverse2[ikpt,nvalence:,:nvalence]*self.velocity_K[ikpt,ialpha,nvalence:,:nvalence]),0,-2,-1).imag
-        if verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
+
+# --- TOP LEVEL WORKER INFRASTRUCTURE ---
+# This must be outside the class so Python can use shared memory for the global parameters
+_shared_context = {}
+
+def init_worker(shared_data):
+    """
+    Initializer function for multiprocessing.Pool.
+    Ensures that Windows (spawn) workers get the shared context.
+    """
+    global _shared_context
+    _shared_context = shared_data
+
+def _parallel_worker_for_surface_green_compute(param):
+    ikpt, kpt = param
+    
+    # Instantly access massive matrices via Linux Copy-on-Write memory sharing (Zero pickling overhead)
+    ctx = _shared_context
+    norbs = ctx['norbs']
+    omega = ctx['omega']
+    n_iter = ctx['n_iter']
+    I = np.eye(norbs, dtype=complex)
+    
+    G_bulk_k = np.zeros((len(omega), norbs, norbs), dtype=complex)
+    G_surf_L_k = np.zeros((len(omega), norbs, norbs), dtype=complex)
+    G_surf_R_k = np.zeros((len(omega), norbs, norbs), dtype=complex)
+
+    # 1. Fourier Transform the Principal Layer Blocks
+    H_00_k = np.zeros((norbs, norbs), dtype=complex)
+    for R, HR in zip(ctx['R_00'], ctx['H_00_R']):
+        H_00_k += HR * np.exp(2j * np.pi * np.dot(kpt, R))
+            
+    H_01_k = np.zeros((norbs, norbs), dtype=complex)
+    for R, HR in zip(ctx['R_01'], ctx['H_01_R']):
+        H_01_k += HR * np.exp(2j * np.pi * np.dot(kpt, R))
+            
+    H_m10_k = np.zeros((norbs, norbs), dtype=complex)
+    for R, HR in zip(ctx['R_m10'], ctx['H_m10_R']):
+        H_m10_k += HR * np.exp(2j * np.pi * np.dot(kpt, R))
+
+    # 2. Iterative Decimation for each complex frequency
+    for iomega, w in enumerate(omega):
+        alpha = H_01_k.copy()
+        beta = H_m10_k.copy()
+        eps = H_00_k.copy()
+        eps_s_L = H_00_k.copy()
+        eps_s_R = H_00_k.copy()
+            
+        for i in range(n_iter):
+            # Compute the propagator: g = (w*I - eps)^-1
+            g = np.linalg.inv(w * I - eps)
+            # Precompute heavy matrix multiplications
+            a_g = alpha @ g
+            b_g = beta @ g
+            
+            # Compute off-diagonal effective couplings
+            a_next = a_g @ alpha
+            b_next = b_g @ beta
+            
+            # Compute effective diagonal shifts
+            a_g_b = a_g @ beta
+            b_g_a = b_g @ alpha
+            
+            # Update local density potentials
+            eps_s_L = eps_s_L + a_g_b
+            eps_s_R = eps_s_R + b_g_a
+            eps = eps + a_g_b + b_g_a
+            
+            alpha = a_next
+            beta = b_next
+                
+        # 3. Final Matrix Inversions
+        G_bulk_k[iomega]   = np.linalg.inv(w * I - eps)
+        G_surf_L_k[iomega] = np.linalg.inv(w * I - eps_s_L)
+        G_surf_R_k[iomega] = np.linalg.inv(w * I - eps_s_R)
+        
+    return ikpt, G_bulk_k, G_surf_L_k, G_surf_R_k
+
+class SurfaceBulkGreenOnPath(CalculatorOnPath):
+    def __init__(self, surfaceDir: int, omega:np.ndarray|list, n_iter:int=10, ncores:int=1, **kwarg):
+        """
+        Computes the Left Surface, Right Surface, and Bulk Green's Functions via the
+        iterative decimation algorithm (Lopez Sancho et al. 1985).
+        
+        Parameters
+        ----------
+        model : System
+            The tight-binding model (must have called constructPrincipleLayer first).
+        surfaceDir : int
+            The normal direction of the surface (0, 1, or 2).
+        omega : list or np.ndarray
+            Array of complex frequencies to evaluate.
+        n_iter : int
+            Number of decimation iterations. n_iter = n simulates a slab of 2^n layers.
+        ncores : int
+            Number of cores used for the parallel computations
+        """
+        super().__init__(**kwarg)
+        self.surfaceDir = surfaceDir
+        self.omega = np.array(omega, dtype=complex)
+        self.n_iter = n_iter
+        self.ncores=ncores
+        
+        assert hasattr(self.model, 'H_00_R'), "You must call model.constructPrincipleLayer(surfaceDir) before GreenOnPath!"
+        
+        # 1. Enforce open boundary conditions in k-space
+        for ikpt, kpt in enumerate(self.kpath):
+            if abs(kpt[surfaceDir]) > 1e-6:
+                if self.verbose == 2:
+                    print(f"Warning: k-point {kpt} has non-zero component in surface normal direction {surfaceDir}. Forcing to 0.")
+                self.kpath[ikpt, surfaceDir] = 0.0
+                
+        self.nomega = len(self.omega)
+        norbs = self.model.norbs
+        
+        self.G_bulk = np.zeros((self.nkpt, self.nomega, norbs, norbs), dtype=complex)
+        self.G_surf_L = np.zeros((self.nkpt, self.nomega, norbs, norbs), dtype=complex)
+        self.G_surf_R = np.zeros((self.nkpt, self.nomega, norbs, norbs), dtype=complex)
+        
+        if self.verbose: print(f"\n--- Computing Green's Functions ({self.nkpt} k-points, {self.nomega} frequencies, {self.n_iter} iterations) ---")
+        if self.verbose == 2: showElapsedTime(offset=True)
+
+    def setOmega(self, omega:np.ndarray|list, verbose=True):
+        self.omega=omega
+        self.nomega = len(self.omega)
+        if verbose: print(f"Frequencies reset. Now {self.nomega} points are involved")
+
+    def solveGreensFunction(self, verbose=True):
+        global _shared_context
+        
+        # Pack the required data into the global dictionary before forking.
+        # This takes 0 seconds and guarantees all child processes can read it natively.
+        _shared_context = {
+            'norbs': self.model.norbs,
+            'omega': self.omega,
+            'n_iter': self.n_iter,
+            'R_00': self.model.R_00,
+            'H_00_R': self.model.H_00_R,
+            'R_01': self.model.R_01,
+            'H_01_R': self.model.H_01_R,
+            'R_m10': self.model.R_m10,
+            'H_m10_R': self.model.H_m10_R,
+        }
+
+        paramList = [(ikpt, kpt) for ikpt, kpt in enumerate(self.kpath)]
+        ncomplete=0
+
+        if self.ncores == 1:
+            for param in paramList: 
+                ikpt, Gb, GsL, GsR = _parallel_worker_for_surface_green_compute(param)
+                self.G_bulk[ikpt] = Gb
+                self.G_surf_L[ikpt] = GsL
+                self.G_surf_R[ikpt] = GsR
+                ncomplete+=1
+                if verbose: showElapsedTime(offset=False,extraInfo=f"{ncomplete}/{len(paramList):3d} finished")
+        else:
+            with Pool(processes=self.ncores, initializer=init_worker, initargs=(_shared_context,)) as pool:
+                for ikpt, Gb, GsL, GsR in pool.imap_unordered(_parallel_worker_for_surface_green_compute, paramList): 
+                    self.G_bulk[ikpt] = Gb
+                    self.G_surf_L[ikpt] = GsL
+                    self.G_surf_R[ikpt] = GsR
+                    ncomplete+=1
+                    if ncomplete % self.ncores == 1 and verbose: showElapsedTime(offset=False,extraInfo=f"{ncomplete}/{len(paramList):3d} finished")
+
+        # Clear the memory so it doesn't persist unnecessarily
+        _shared_context.clear()
+
+        if verbose: showElapsedTime(extraInfo="Surface Green's function computation finished")
+
+class SurfaceBulkSpectraOnPath(SurfaceBulkGreenOnPath):
+    def __init__(self, surfaceDir: int, fermi: np.ndarray, n_iter:int=10, ncores:int=1, **kwarg):
+        """
+        Computes the Left Surface, Right Surface, and Bulk Green's Functions via the
+        highly convergent iterative decimation algorithm (Lopez Sancho et al. 1985).
+        
+        Parameters
+        ----------
+        model : System
+            The tight-binding model (must have called constructPrincipleLayer first).
+        surfaceDir : int
+            The normal direction of the surface (0, 1, or 2).
+        fermi : np.ndarray
+            Array of real energies to evaluate.
+        n_iter : int
+            Number of decimation iterations. n_iter = n simulates a slab of 2^n layers.
+        """
+        super().__init__(surfaceDir=surfaceDir, omega=fermi, n_iter=n_iter, ncores=ncores, **kwarg)
+        self.setOmega(fermi-1j*self.eta)
+
+        self.solveGreensFunction()
+        self.A_bulk   = np.sum(np.diagonal(self.G_bulk,  axis1=-2,axis2=-1),axis=-1).imag/np.pi
+        self.A_surf_L = np.sum(np.diagonal(self.G_surf_L,axis1=-2,axis2=-1),axis=-1).imag/np.pi
+        self.A_surf_R = np.sum(np.diagonal(self.G_surf_R,axis1=-2,axis2=-1),axis=-1).imag/np.pi

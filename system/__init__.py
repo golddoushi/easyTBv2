@@ -1157,44 +1157,39 @@ class System:
         
         print(f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
 
-    def cutEdge(self, cutDir, shift=None, verbose=True):
+    def shiftOrigin(self, surfaceDir, shift=None, verbose=True):
         """
-        Creates an open boundary condition (OBC) along the specified lattice direction.
-        Automatically finds the optimal boundary shift to minimize broken bonds.
+        Shifts the origin of the unit cell along surfaceDir to minimize hoppings across the surface.
+        Reassigns the R vectors of the hoppings accordingly without deleting any bonds.
         
         Parameters
         ----------
-        cutDir : int
-            The lattice direction to cut (0, 1, or 2).
+        surfaceDir : int
+            The lattice direction to shift (0, 1, or 2).
         shift : float, optional
             The fractional shift of the cell boundary. If None, it is auto-optimized.
-        verbose : bool
-            Print cut statistics.
         """
-        if verbose: print(f"\n--- Cutting Edge along Direction {cutDir} ---")
+        if verbose: print(f"\n--- Shifting Origin along Direction {surfaceDir} ---")
         invLattice = np.linalg.inv(self.lattice)
         
         # Get fractional coordinates of orbitals
         rList_frac = invLattice @ self.rList
         
-        # 1. Auto-optimize the boundary shift to minimize broken bonds
+        # 1. Auto-optimize the boundary shift to minimize boundary-crossing bonds
         if shift is None:
-            if verbose: print(f"Optimizing cut boundary...")
+            if verbose: print(f"Optimizing cell origin to minimize boundary crossing...")
             shifts = np.linspace(0, 1, 100, endpoint=False)
             best_shift = 0
             min_cut_weight = float('inf')
             
             for s in shifts:
                 cut_weight = 0
-                # Calculate which cell each orbital belongs to after the shift
-                c_I = np.floor(rList_frac[cutDir, :] + s).astype(int)
+                c_I = np.floor(rList_frac[surfaceDir, :] + s).astype(int)
                 
                 for iR, R in enumerate(self.iRvec):
-                    # R'_cutDir = R + c_target - c_source
-                    R_prime_cutDir = R[cutDir] + c_I[None, :] - c_I[:, None]
-                    
-                    # Any bond where R'_cutDir != 0 crosses the new boundary
-                    mask_cut = (R_prime_cutDir != 0)
+                    # R'_surfaceDir = R + c_target - c_source
+                    R_prime_surfaceDir = R[surfaceDir] + c_I[None, :] - c_I[:, None]
+                    mask_cut = (R_prime_surfaceDir != 0)
                     cut_weight += np.sum(np.abs(self.ham_R[iR])[mask_cut])
                     
                 if cut_weight < min_cut_weight:
@@ -1202,12 +1197,12 @@ class System:
                     best_shift = s
                     
             shift = best_shift
-            if verbose: print(f"Optimal fractional shift found: {shift:.4f} (Broken bond weight: {min_cut_weight:.4f})")
+            if verbose: print(f"Optimal fractional shift found: {shift:.4f} (Crossing weight: {min_cut_weight:.4f})")
         else:
             if verbose: print(f"Using provided shift: {shift:.4f}")
             
-        # 2. Apply the chosen shift and filter the hoppings
-        c_I = np.floor(rList_frac[cutDir, :] + shift).astype(int)
+        # 2. Apply the chosen shift and remap the hoppings to new R vectors
+        c_I = np.floor(rList_frac[surfaceDir, :] + shift).astype(int)
         
         new_ham_dict = {}
         new_overlap_dict = {}
@@ -1216,24 +1211,16 @@ class System:
         has_overlap = getattr(self, "overlap_R", None) is not None
         has_AA = getattr(self, "AA_R_W", None) is not None
         
-        dropped_bonds = 0
-        kept_bonds = 0
-        
         for iR, R in enumerate(self.iRvec):
             for I in range(self.norbs):
                 for J in range(self.norbs):
-                    # The hopping vector in the shifted cell frame
-                    R_prime_cutDir = R[cutDir] + c_I[J] - c_I[I]
-                    
-                    if R_prime_cutDir != 0:
-                        if abs(self.ham_R[iR, I, J]) > 1e-6: dropped_bonds += 1
-                        continue # Bond crosses the edge; it is cut!
+                    # Minor optimization: skip exactly zero elements to save memory
+                    if abs(self.ham_R[iR, I, J]) < 1e-12 and (not has_overlap or abs(self.overlap_R[iR, I, J]) < 1e-12):
+                        continue
                         
-                    if abs(self.ham_R[iR, I, J]) > 1e-6: kept_bonds += 1
-                        
-                    # Bond is kept. Because of the OBC, its R vector in cutDir is strictly 0.
+                    # Reassign the R vector based on the new cell boundaries
                     R_new = R.copy()
-                    R_new[cutDir] = 0
+                    R_new[surfaceDir] = R[surfaceDir] + c_I[J] - c_I[I]
                     R_new_tuple = tuple(R_new)
                     
                     if R_new_tuple not in new_ham_dict:
@@ -1245,15 +1232,15 @@ class System:
                     if has_overlap: new_overlap_dict[R_new_tuple][I, J] += self.overlap_R[iR, I, J]
                     if has_AA: new_AA_dict[R_new_tuple][:, I, J] += self.AA_R_W[iR, :, I, J]
                     
-        if verbose: print(f"Edge Cut Complete: {dropped_bonds} non-zero hoppings dropped, {kept_bonds} kept.")
+        if verbose: print(f"Origin Shift Complete: Re-mapped into {len(new_ham_dict)} lattice vectors.")
         
         # 3. Update physical coordinates (atoms and orbitals are shifted to the new home cell)
         for iatom, frac in enumerate(self.posinfo['pos ions (frac.)']):
-            frac[cutDir] = (frac[cutDir] + shift) % 1.0
+            frac[surfaceDir] = (frac[surfaceDir] + shift) % 1.0
             self.posinfo['pos ions (frac.)'][iatom] = frac
             self.posinfo['pos ions (cart.)'][iatom] = frac @ self.lattice
             
-        rList_frac[cutDir, :] = (rList_frac[cutDir, :] + shift) % 1.0
+        rList_frac[surfaceDir, :] = (rList_frac[surfaceDir, :] + shift) % 1.0
         self.rList = self.lattice @ rList_frac
         
         # 4. Repack the matrices into the System object
@@ -1271,7 +1258,6 @@ class System:
             if has_overlap: self.overlap_R[idx] = new_overlap_dict[R_new_tuple]
             if has_AA: self.AA_R_W[idx] = new_AA_dict[R_new_tuple]
         self.nRvec = new_nRvec
-        self.mp_grid[cutDir]=1
         
         # 5. Re-initialize dependent operators
         if hasattr(self, 'energy_R') and self.energy_R is not None:
@@ -1280,8 +1266,139 @@ class System:
         self.getRHam_R()
         if hasattr(self, 'getRO_R') and has_overlap: self.getRO_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
-        self.atomOrbAM = self.orbitalAngularMomentCubic()
+        if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
+
+    def cutEdge(self, cutDir, verbose=True):
+        """
+        Creates an open boundary condition (OBC) along the specified lattice direction
+        by completely deleting any inter-cell hoppings that cross the boundary.
+        
+        NOTE: It is highly recommended to call shiftOrigin() before this to ensure 
+        the boundary is placed optimally and atoms aren't severed mid-bond.
+        """
+        if verbose: print(f"\n--- Cutting Edge (OBC) along Direction {cutDir} ---")
+        
+        new_ham_dict = {}
+        new_overlap_dict = {}
+        new_AA_dict = {}
+        
+        has_overlap = getattr(self, "overlap_R", None) is not None
+        has_AA = getattr(self, "AA_R_W", None) is not None
+        
+        dropped_blocks = 0
+        kept_blocks = 0
+        
+        # Because shiftOrigin aligned the boundary, any hopping that crosses 
+        # the boundary now strictly possesses a non-zero R component in cutDir.
+        for iR, R in enumerate(self.iRvec):
+            if R[cutDir] != 0:
+                dropped_blocks += 1
+                continue # Bond crosses the edge; it is completely dropped
+                
+            kept_blocks += 1
+            R_tuple = tuple(R)
+            
+            # Keep the entire block matrix intact
+            new_ham_dict[R_tuple] = self.ham_R[iR].copy()
+            if has_overlap: new_overlap_dict[R_tuple] = self.overlap_R[iR].copy()
+            if has_AA: new_AA_dict[R_tuple] = self.AA_R_W[iR].copy()
+                
+        if verbose: print(f"Edge Cut Complete: {dropped_blocks} inter-cell R-blocks dropped, {kept_blocks} kept.")
+        
+        # Repack the matrices into the System object
+        new_nRvec = len(new_ham_dict)
+        self.iRvec = np.empty((new_nRvec, 3), dtype=int)
+        self.iRvecIndex = {}
+        self.ham_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
+        if has_overlap: self.overlap_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
+        if has_AA: self.AA_R_W = np.zeros((new_nRvec, 3, self.norbs, self.norbs), dtype=complex)
+        
+        for idx, R_new_tuple in enumerate(new_ham_dict.keys()):
+            self.iRvec[idx] = R_new_tuple
+            self.iRvecIndex[R_new_tuple] = idx
+            self.ham_R[idx] = new_ham_dict[R_new_tuple]
+            if has_overlap: self.overlap_R[idx] = new_overlap_dict[R_new_tuple]
+            if has_AA: self.AA_R_W[idx] = new_AA_dict[R_new_tuple]
+            
+        self.nRvec = new_nRvec
+        self.mp_grid[cutDir] = 1 # Flatten the grid in the cut direction
+        
+        # Re-initialize dependent operators
+        if hasattr(self, 'energy_R') and self.energy_R is not None:
+            self.energy_R = self.ham_R.copy()
+            
+        self.getRHam_R()
+        if hasattr(self, 'getRO_R') and has_overlap: self.getRO_R()
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
+        self.getOrbitalMatrice()
+
+    def constructPrincipleLayer(self, surfaceDir, verbose=True):
+        """
+        Constructs a principal layer supercell for surface Green's function calculations.
+        The principal layer is defined such that hoppings in the surfaceDir direction 
+        only reach the immediately adjacent supercells (i.e., dR_surfaceDir = 0, +1, -1).
+        
+        Parameters
+        ----------
+        surfaceDir : int
+            The normal direction of the surface (0, 1, or 2).
+        """
+        if verbose: print(f"\n--- Constructing Principal Layer along Direction {surfaceDir} ---")
+        
+        # 1. Determine the maximum hopping range in the surface normal direction
+        max_range = 0
+        for iR, R in enumerate(self.iRvec):
+            # Only consider non-negligible hoppings
+            if np.max(np.abs(self.ham_R[iR])) > 1e-6:
+                max_range = max(max_range, abs(R[surfaceDir]))
+                
+        if verbose: print(f"Maximum hopping range in direction {surfaceDir} is {max_range} primitive cells.")
+        
+        Nsc = max(1, max_range)
+        if Nsc > 1:
+            if verbose: print(f"Creating a {Nsc}x supercell along direction {surfaceDir} to form the principal layer.")
+            Tmatrix = np.eye(3, dtype=int)
+            Tmatrix[surfaceDir, surfaceDir] = Nsc
+            self.make_supercell(Tmatrix)
+        else:
+            if verbose: print("Original cell is already a valid principal layer.")
+            
+        # 2. Partition the Hamiltonian into H_00, H_01, and H_m10
+        self.surfaceDir = surfaceDir
+        self.R_00, self.H_00_R = [], []
+        self.R_01, self.H_01_R = [], []
+        self.R_m10, self.H_m10_R = [], []
+        
+        for iR, R in enumerate(self.iRvec):
+            if abs(R[surfaceDir]) > 1:
+                # Should not happen if supercell construction was successful
+                if np.max(np.abs(self.ham_R[iR])) > 1e-6:
+                    print(f"WARNING: Found non-negligible hopping beyond principal layer at R={R}")
+            
+            if R[surfaceDir] == 0:
+                self.R_00.append(R)
+                self.H_00_R.append(self.ham_R[iR])
+            elif R[surfaceDir] == 1:
+                self.R_01.append(R)
+                self.H_01_R.append(self.ham_R[iR])
+            elif R[surfaceDir] == -1:
+                self.R_m10.append(R)
+                self.H_m10_R.append(self.ham_R[iR])
+                
+        self.R_00 = np.array(self.R_00)
+        self.H_00_R = np.array(self.H_00_R)
+        self.R_01 = np.array(self.R_01)
+        self.H_01_R = np.array(self.H_01_R)
+        self.R_m10 = np.array(self.R_m10)
+        self.H_m10_R = np.array(self.H_m10_R)
+        
+        if verbose: 
+            print(f"Principal layer partitioning complete:")
+            print(f"  H_00: {len(self.H_00_R)} hopping matrices")
+            print(f"  H_01: {len(self.H_01_R)} hopping matrices")
+            print(f"  H_10: {len(self.H_m10_R)} hopping matrices\n")
 
     def addExchangeSplitting(self, projection, exchange_vector, verbose=True):
         """
@@ -1427,7 +1544,7 @@ class System:
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
-    def scaleSOC(self, projection, lam, verbose=True):
+    def scaleSOC(self, lam=1.0, projection=[], verbose=True):
         """
         Scales the SOC-induced spin-flip hopping amplitudes (tx, ty, tz) by lambda,
         leaving the charge transport hopping (t0) intact.
@@ -1437,14 +1554,16 @@ class System:
             
         half_norbs = self.norbs // 2
         
-        # Collect target spatial orbital indices from the projection list
-        target_orbs = []
-        for iatom, shells in projection:
-            atom_info = self.atomicOrbInfoList[iatom]
-            for ishell in shells:
-                for iorb in atom_info["orbital index"][ishell]:
-                    if iorb < half_norbs:
-                        target_orbs.append(iorb)
+        if len(projection)==0: # empty projection default to the whole system
+            target_orbs = np.arange(half_norbs)    
+        else: # Collect target spatial orbital indices from the projection list
+            target_orbs = []
+            for iatom, shells in projection:
+                atom_info = self.atomicOrbInfoList[iatom]
+                for ishell in shells:
+                    for iorb in atom_info["orbital index"][ishell]:
+                        if iorb < half_norbs:
+                            target_orbs.append(iorb)
         
         count = 0
         # Iterate over all unit cells to capture inter-cell hopping

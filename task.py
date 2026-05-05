@@ -1,6 +1,6 @@
 # Module to implement the parallel tasks
 # 
-from multiprocessing import Pool, freeze_support
+from multiprocessing import Pool
 import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
