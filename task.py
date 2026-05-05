@@ -102,7 +102,8 @@ class BZGridTask:
             for result in pool.imap_unordered(taskFunc,irreducibleTask):
                 self.results.append(result)
                 if len(self.results) % ncores == 1: showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(irreducibleTask):3d} finished")
-
+            pool.close()
+            pool.join()
         showElapsedTime(extraInfo=f"integration finished")
 
     def distGamma(self, model:System, q:np.ndarray):
@@ -136,3 +137,85 @@ class BZGridTask:
         q_diff = model.pointGroup.star(q1)[:,None,:] - model.pointGroup.star(q2)[None,:,:]
         if np.linalg.norm((q_diff - np.round(q_diff)), axis=2).min() < SYMPREC: return True
         return False
+
+class BZLineTask:
+    def __init__(self, model: System,
+                 taskFunc,
+                 args: dict=dict(),
+                 KPOINTS="./KPOINTS",
+                 mode="run",
+                 ncores=1) -> None:
+        '''
+        Conduct parallel tasks along a 1D k-path defined in a KPOINTS file.
+        Splits the k-path into chunks and distributes them across cores to minimize IPC overhead.
+        
+        Parameters
+        ----------
+        - model : System
+            System object containing the Hamiltonian data.
+        - taskFunc : function
+            The function used to do the task on a chunk of the k-path.
+        - args : dict
+            Extra args passing to the taskFunc.
+        - KPOINTS : str
+            Path to the KPOINTS file.
+        - mode : "run" | "show"
+            "run" to run the tasks directly, otherwise, only show the partition info.
+        - ncores : int
+            Number of parallel processes.
+        '''
+        self.KPOINTS = KPOINTS
+        self.ncores = ncores
+        
+        # 1. Read the KPOINTS file
+        with open(self.KPOINTS, "r") as fin:
+            data = fin.read().strip().split("\n")
+        self.nkpt = int(data[1].split()[0])
+        self.kpath = np.loadtxt(data[3:3+self.nkpt])[:, :3]
+        
+        print(f"Read {self.nkpt} k-points from {self.KPOINTS}")
+        showElapsedTime()
+        
+        if mode != "run":
+            print(f"{mode=} the tasks are stopped. Set mode = 'run' to execute.")
+            exit()
+            
+        # 2. Partition the k-path based on available cores
+        # If nkpt is not perfectly divisible, array_split handles it cleanly
+        n_chunks = min(self.ncores, self.nkpt)
+        indices = np.arange(self.nkpt)
+        chunks = np.array_split(indices, n_chunks)
+        
+        tasks = []
+        for i, chunk in enumerate(chunks):
+            if len(chunk) == 0: continue
+            newTask = {
+                'chunk_id': i,
+                'indices': chunk,
+                'kpath': self.kpath[chunk],
+                'model': model,
+                'verbose': 0, # quiet by default
+            }
+            newTask.update(args)
+            tasks.append(newTask)
+            
+        print(f"Split k-path into {len(tasks)} chunks for {self.ncores} cores.")
+        
+        # 3. Execute parallel mapping
+        pool = Pool(processes=ncores)
+        self.results = []
+        
+        if ncores == 1:
+            for task in tasks:
+                task['verbose']=2 # output all information when serial run
+                result = taskFunc(task)
+                self.results.append(result)
+                showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
+        else:
+            for result in pool.imap_unordered(taskFunc, tasks):
+                self.results.append(result)
+                if len(self.results) % ncores == 1: showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
+            pool.close()
+            pool.join()
+        
+        showElapsedTime(extraInfo="1D K-Path integration finished")

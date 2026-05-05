@@ -7,14 +7,15 @@ import paramReader
 paramReader.readGlobalConst()
 import numpy as np
 
-from task import BZGridTask
+from task import BZGridTask, BZLineTask
 from system import System_omx, System_w90, System_tb
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from calculator import AnormalousHallConductance
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
-from calculator import EnergyOnPath, SpinExpectationOnPath, SpinOrbitalExpectationOnPath
+from calculator import EnergyOnPath, SpinExpectationOnPath, SpinOrbitalExpectationOnPath, SurfaceBulkSpectraOnPath
+from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
 from fileio import writeVolumeData
 
@@ -64,11 +65,14 @@ def solveStGC(param):
             "iq":param["iq"]}
 
 def solveAHC(param):
-    calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,fermiList=param['fermi'],skip_low=False)
+    calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   )
     return {"energies":calc.energies,
-            #"velocities":calc.velocity_K,
-            "Berry curv":calc.BerryCurv,
-            "sigma":calc.sigma,"iq":param["iq"]}
+            "projected Berry curv":calc.projected_BerryCurv,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
+            "iq":param["iq"]}
 
 def solveSGC(param):
     calc=SpinGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
@@ -77,7 +81,7 @@ def solveSGC(param):
                              currentProjectionList=param['projected shells for applying current'],
                              )
     return {"energies":calc.energies,
-            "spin galvanic response":calc.spinVelocityCorrelation,
+            "projected spin galvanic response":calc.projected_spinVelocityCorrelation,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
@@ -88,7 +92,7 @@ def solveSGC_diag(param):
                              currentProjectionList=param['projected shells for applying current'],
                              )
     return {"energies":calc.energies,
-            "spin galvanic response":calc.spinVelocityCorrelation_diag,
+            "projected spin galvanic response":calc.projected_spinVelocityCorrelation_diag,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
@@ -99,7 +103,7 @@ def solveOGC(param):
                              currentProjectionList=param['projected shells for applying current'],
                              )
     return {"energies":calc.energies,
-            "orbital galvanic response":calc.orbitalVelocityCorrelation,
+            "projected orbital galvanic response":calc.projected_orbitalVelocityCorrelation,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
@@ -110,7 +114,7 @@ def solveOGC_diag(param):
                              currentProjectionList=param['projected shells for applying current'],
                              )
     return {"energies":calc.energies,
-            "orbital galvanic response":calc.orbitalVelocityCorrelation_diag,
+            "projected orbital galvanic response":calc.projected_orbitalVelocityCorrelation_diag,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
@@ -126,14 +130,36 @@ def solveVelocity_diag(param):
     calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
 
+#+--------------------------+
+#| factory for BZLine tasks |
+#+--------------------------+
+def solveSurfaceSpectraTask(param):
+    calc=SurfaceBulkSpectraOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'],
+                                  surfaceDir=param['surfaceDir'], fermiAxis=param['fermiAxis'], n_iter=param['n_iter'])
+    return {
+        'indices': param['indices'],
+        'A_bulk': calc.A_bulk,
+        'A_surf_L': calc.A_surf_L,
+        'A_surf_R': calc.A_surf_R,
+    }
+
+def solveBandStructure(param):
+    calc=SpinOrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
+    return {
+        'indices': param['indices'],
+        'energies': calc.energies,
+        'spin_eig': calc.spin_eig.real,
+        'orbital_eig': calc.orbital_eig.real,
+    }
+
 def run():
     # Pbene, spin hall conductance
     mainDir="./mcalc/BN/"
     model=System_tb(
         mainDir=mainDir,
-        hamR="BNsoc",
+        #hamR="wannier90",
         #hamR="omx",
-        #hamR="BNsoc",
+        hamR="BNsoc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -142,53 +168,54 @@ def run():
             "Ge":(0,0,1,2),
             #"Mn":(0,0,0,1,1,2,),
             "Mn":(0,1,2,),
-            "Sn":(0,1,),
-            #"Sn":(0,0,0,1,1,2,),
-            "Pb":(0,1,),
-            #"Pb":(0,0,0,1,1,2,2,),
+            #"Sn":(0,1,),
+            "Sn":(0,0,0,1,1,2,),
+            #"Pb":(0,1,),
+            "Pb":(0,0,0,1,1,2,2,),
             "Pt":(0,1,2,),
             #"Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
             "Fe":(2,),
             "Mo":(2,),
             "S":(1,),
-            "Te":(1,),
+            "Bi":(0,1,),
+            "Te":(0,1,),
             #"Fe":(0,0,1,1,2,2,),
             "Cl":(1,),
             #"Cl":(0,0,1,1,2,3),
-            "H":(0,),
-            #"H":(0,0,1,),
+            #"H":(0,),
+            "H":(0,0,1,),
             "Au":(0,0,0,1,1,2,2,),
         },
         ispin=2
     )
-    
-    atomicMagMomList=[
-        #np.zeros(3),
-        #np.array([0, 0, 1]),
-        #np.array([0, 0, 1]),
-        #np.zeros(3),
-        #np.zeros(3),
-        #np.zeros(3),
-        np.zeros(3),
-    ]
+    # rotate the spin quantization axis to \sigma^z if SAXIS != 0 0 1
+    #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
+    #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
+    #atomicMagMomList=[
+    #    np.array([1, 0, 0]),
+    #]*1+[
+    #    np.array([0, 0, 0]),
+    #]*6
     #model.symmerizeHamAndOverlap(
-    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(1,2,3,),print_col=(1,2,3,),
+    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
     #)
     #exit()
+    # modulate the SOC, exchange fields, etc
+    #model.scaleSOC(lam=0)
     #'''
     # create supercell model and cut into nanoribbon
     Tmatrix=[
-        [ 1, 0, 0], # The A1 of the supercell in the frame of primitive cell
-        [10,20, 0], # The A2 of the supercell in the frame of primitive cell
+        [10, 0, 0], # The A1 of the supercell in the frame of primitive cell
+        [ 1, 2, 0], # The A2 of the supercell in the frame of primitive cell
         [ 0, 0, 1]  # The A3 of the supercell in the frame of primitive cell
     ]
     model.make_supercell(Tmatrix)
-    #'''
-    widthDirection=1
-    model.cutEdge(cutDir=widthDirection,)
+    surfaceDir=0
+    model.shiftOrigin(surfaceDir=surfaceDir,)
+    model.cutEdge(cutDir=surfaceDir,)
     # define the projections for bulk and edge regions, compatible with the format of projection in following
-    positionIndex=np.argsort(np.array(model.posinfo['pos ions (frac.)'])[:,widthDirection])
+    positionIndex=np.argsort(np.array(model.posinfo['pos ions (frac.)'])[:,surfaceDir])
     nEdgeAtoms=4 # include two atoms for each edge
     nBulkAtoms=int(model.posinfo['tot ions']*0.5) # include 50% central atoms
     edgeRegion1=[(positionIndex[iatom],(0,)) for iatom in range(nEdgeAtoms)]
@@ -210,7 +237,9 @@ def run():
     blockRegionList=[]
     for iblock in range(model.posinfo['tot ions']//nBlockAtoms):
         blockRegionList.append([(positionIndex[iblock*nBlockAtoms+iatom],(0,)) for iatom in range(nBlockAtoms)])
-    
+    # add exchange splitting for edge atoms
+    #model.addExchangeSplitting(edgeRegion1,[ 0.0, 0.5, 0.0])
+    #model.addExchangeSplitting(edgeRegion2,[ 0.0,-0.5, 0.0])
     #exit()
     #'''
     #fermi=0  # OPNEMX generated wannier model always displays zero fermi energy
@@ -224,7 +253,7 @@ def run():
     #fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
     #fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
     #fermi=-2.41861676 # VASP Sn
-    #fermi=-2.58287444 # VASP Pb
+    #fermi=-2.5 # VASP Pb
     #fermi= 5.65354180 # VASP Ta
     #fermi= 7.72024255 # VASP W
     #fermi=10.96516405 # VASP Pt
@@ -244,16 +273,49 @@ def run():
     
     fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
     model.setFermi(fermi)
-    '''
+    #'''
     # check band intepolation
-    calc=SpinOrbitalExpectationOnPath(model=model, KPOINTS=mainDir+"/KPOINTS.rect", verbose=2, )
+    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8,)
+    energies,spin_eig,orbital_eig=np.zeros((calc.nkpt,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float)
+    for result in calc.results:
+        energies[result['indices']]   =result['energies']
+        spin_eig[result['indices']]   =np.diagonal(result['spin_eig'],axis1=-2,axis2=-1)
+        orbital_eig[result['indices']]=np.diagonal(result['orbital_eig'],axis1=-2,axis2=-1)
     with open(mainDir+"./tbbands.txt","w") as fout:
         fout.write("#ikpt Energy(eV) <Sx> <Sy> <Sz> <Lx> <Ly> <Lz>\n")
         for iband in range(model.norbs):
-            for ik, (energy,spin,orbital) in enumerate(zip(calc.energies[:,iband],calc.spin_eig[:,:,iband,iband].real,calc.orbital_eig[:,:,iband,iband].real)):
+            for ik, (energy,spin,orbital) in enumerate(zip(energies[:,iband],spin_eig[:,:,iband],orbital_eig[:,:,iband])):
                 fout.write(f"{ik:5d}{energy:15.6E}{spin[0]:15.6E}{spin[1]:15.6E}{spin[2]:15.6E}{orbital[0]:15.6E}{orbital[1]:15.6E}{orbital[2]:15.6E}\n")
             fout.write("\n")
     exit()#'''
+    '''
+    # check surface spectra
+    Tmatrix=[
+        [ 1, 0, 0], # The A1 of the supercell in the frame of primitive cell
+        [ 1, 2, 0], # The A2 of the supercell in the frame of primitive cell
+        [ 0, 0, 1]  # The A3 of the supercell in the frame of primitive cell
+    ]
+    model.make_supercell(Tmatrix)
+    surfaceDir=0
+    model.shiftOrigin(surfaceDir=surfaceDir)
+    model.constructPrincipleLayer(surfaceDir=surfaceDir)
+    calc=BZLineTask(model, solveSurfaceSpectraTask, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8,
+                    args={"fermiAxis": fermiAxis, "surfaceDir": surfaceDir, "n_iter": 10},)
+    spectral=np.zeros((calc.nkpt,len(fermiAxis)),dtype=float)
+    for result in calc.results: 
+        spectral[result['indices']]=(result['A_surf_L']+result['A_surf_R'])/2-result['A_bulk']
+    with open(f"{mainDir}/SurfaceSpectra.txt","w") as fout:
+        fout.write("#ik Energy Amplitude\n")
+        for ik in range(spectral.shape[0]):
+            for ienergy, energy in enumerate(fermiAxis):
+                fout.write(f"{ik:5d}{energy:15.6E}{spectral[ik,ienergy]:15.6E}\n")
+    exit()#'''
+    '''
+    # check the topological integer
+    calc=Chern_FHS(model=model, kgrid=(51,51,1), verbose=2, )
+    calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
+    exit()#'''
+
     BZGrid=(600,1,1)
     BZSymm=False
     calc=BZGridTask(model, solveStGC, 
@@ -263,9 +325,9 @@ def run():
                            ],
                           'projected shells for detecting spincurrent':[],
                           'projected shells for detecting spin accumulation':[
-                              #{"source":edgeRegion1, "target":edgeRegion1},
-                              #{"source":edgeRegion2, "target":edgeRegion2},
-                              {"source":block, "target":block} for block in blockRegionList
+                              {"source":edgeRegion1, "target":edgeRegion1},
+                              {"source":edgeRegion2, "target":edgeRegion2},
+                              #{"source":block, "target":block} for block in blockRegionList
                           ],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
@@ -275,14 +337,7 @@ def run():
     _,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
     #energies=np.zeros(tuple(BZGrid)+(nbands,))
-    #velocity=np.zeros(tuple(BZGrid)+(3,nbands,))
-    #spinVelocity=np.zeros(tuple(BZGrid)+(3,3,nbands,))
-    #berryCurv=np.zeros(tuple(BZGrid)+(3,nbands,))
-    #spinBerryCurv=np.zeros(BZGrid+(3,3,3))
-    #spinBerryCurvOnFermi=np.zeros((BZGrid[0],BZGrid[1],len(fermiAxis),3,3,3))
-    #spinRashiba=np.zeros((len(fermiAxis),)+tuple(BZGrid)+(3,3,3,))
-    
-    #spinTorque=np.zeros(BZGrid+(3,3),dtype=complex)
+    #responseFunction = np.zeros(BZGrid+(3,3),dtype=float)
     projected_sigma=0
     sigma=0
     for result_q in calc.results:
@@ -305,6 +360,7 @@ def run():
         #_sTorque=np.sum(result_q["spin torque"]*valence[...,None,None,:],axis=(-1,))
         #spinTorque[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=_sTorque
         #spinTorque[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin torque']
+        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=np.sum(result_q['projected spin galvanic response'][0,2,...]*valence[...,None,None,:],axis=(-1,))
         #continue
         projected_sigma += result_q['projected sigma']
         if not BZSymm:  # symmetrization on the BZ is only implemented for the whole tensor
@@ -328,7 +384,7 @@ def run():
     exit()'''
     
     '''
-    # output (possibly symmetrized) 2-rank conductance
+    # output (possibly symmetrized) 3-rank conductance
     sigma/=len(calc.results)
     with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
         fout.write("Fermi(eV)")
@@ -370,49 +426,9 @@ def run():
     exit()#'''
 
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
-    '''
-    #print(f"{energies[:,:,0,27].mean()=}{energies[:,:,0,27].max()=}{energies[:,:,0,27].min()=}")
-    with open("%s/energies.txt"%mainDir,"w") as fout:
-        for ik1 in range(BZGrid[0]):
-            for ik2 in range(BZGrid[1]):
-                for ik3 in range(BZGrid[2]):
-                    kx,ky,kz=kcoor[ik1,ik2,ik3]
-                    fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(model.norbs): fout.write(f"{energies[ik1,ik2,ik3,ib]:15.6E}")
-                    fout.write("\n")
-    with open("%s/vx.txt"%mainDir,"w") as fout:
-        for ik1 in range(BZGrid[0]):
-            for ik2 in range(BZGrid[1]):
-                for ik3 in range(BZGrid[2]):
-                    kx,ky,kz=kcoor[ik1,ik2,ik3]
-                    fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(nbands): fout.write(f"{velocity[ik1,ik2,ik3,0,ib]:15.6E}")
-                    fout.write("\n")
-    with open("%s/vy.txt"%mainDir,"w") as fout:
-        for ik1 in range(BZGrid[0]):
-            for ik2 in range(BZGrid[1]):
-                for ik3 in range(BZGrid[2]):
-                    kx,ky,kz=kcoor[ik1,ik2,ik3]
-                    fout.write(f"{kx:15.6E}{ky:15.6E}{kz:15.6E}")
-                    for ib in range(nbands): fout.write(f"{velocity[ik1,ik2,ik3,1,ib]:15.6E}")
-                    fout.write("\n")
-    exit()#'''
     #'''
     import matplotlib.pyplot as plt
-    #fig=plt.figure()
-    #ax1=fig.add_subplot(1,3,1)
-    #ax1.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],spinBerryCurv[:,:,0,0,1,2],cmap="Spectral")
-    #ax1.axis('equal')
-
-    #ax2=fig.add_subplot(1,3,2)
-    #ax2.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],energies[:,:,0,-5],cmap="Spectral")
-    #ax2.axis('equal')
-
-    #ax3=fig.add_subplot(1,3,3)
-    #ax3.pcolormesh(kcoor[:,:,0,0],kcoor[:,:,0,1],energies[:,:,0,-4],cmap="Spectral")
-    #ax3.axis('equal')
-
-    data_grid=spinTorque[:,:,0,0,2].real
+    data_grid=responseFunction[:,:,0,0,2].real
     magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
     print(np.sum(data_grid))
     for G in [(0,0,0,),(-1,0,0,),(0,-1,0,),(-1,-1,0,),]:
