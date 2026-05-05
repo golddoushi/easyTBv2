@@ -502,7 +502,7 @@ class Velocity(Energy):
 
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            self.projected_velocity_K_list.append((proj1_K@self.velocity_K + self.velocity_K@proj2_K)/2)
+            self.projected_velocity_K_list.append((proj1_K@self.velocity_K@proj2_K + proj2_K@self.velocity_K@proj1_K)/2)
 
 class Velocity_diag(FermiScan):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
@@ -596,7 +596,7 @@ class SpinVelocity(Velocity, Spin):
             
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,None,:,:]
-            self.projected_spinVelocity_K_list.append((proj1_K@self.spinVelocity_K + self.spinVelocity_K@proj2_K)/2)
+            self.projected_spinVelocity_K_list.append((proj1_K@self.spinVelocity_K@proj2_K + proj2_K@self.spinVelocity_K@proj1_K)/2)
         
         if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
@@ -619,16 +619,22 @@ class OrbitalVelocity(Velocity, Orbital):
         if orbitalvelocityProjctionList is not empty
         self.orbitalVelocity_K_proj[iproj] gives each projected orbital velocity matrix in eigen-basis.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList+orbitalvelocityProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
         
         __oV=self.orbital_K[...,None,:,:,:] @ self.velocity_K[...,None,:,:]
         self.orbitalVelocity_K = (__oV + __oV.swapaxes(-2,-1).conj())/2
 
         self.projected_orbitalVelocity_K_list=[]
-        for iproj, proj in enumerate(orbitalvelocityProjectionList):
-            projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
-            __oV=self.orbital_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
-            self.projected_orbitalVelocity_K_list.append((__oV + __oV.swapaxes(-2,-1).conj())/2)
+        for iproj, orbitalvelocityProj in enumerate(orbitalvelocityProjectionList):
+            #projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
+            #__oV=self.orbital_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
+            #self.projected_orbitalVelocity_K_list.append((__oV + __oV.swapaxes(-2,-1).conj())/2)
+            proj1=projectionOperator(orbitalvelocityProj['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(orbitalvelocityProj['target'],self.model.atomicOrbInfoList,self.model.norbs)
+            
+            proj1_K=self.projectorInEigenBasis(proj1)[...,None,None,:,:]
+            proj2_K=self.projectorInEigenBasis(proj2)[...,None,None,:,:]
+            self.projected_orbitalVelocity_K_list.append((proj1_K@self.orbitalVelocity_K@proj2_K + proj2_K@self.orbitalVelocity_K@proj1_K)/2)
         
         if self.verbose==2: showElapsedTime(extraInfo=f"orbital velocity in eig.-basis finished")
 
@@ -694,46 +700,48 @@ class OrbitalVelocity_diag(Velocity, Orbital):
         
 class BerryCurv(Velocity):
     
-    def __init__(self, projection=None, **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
-        Calc. Berry curvature \Omega^{alpha}_{k,mn}.
+        Calc. Berry curvature \Omega_{alpha,beta}_{k,mn}.
 
-        alpha can be x, y, z corresponds the (cart.) space direction, k denote the crystal moment, m, n index the bands.
+        alpha and beta can be x, y, z corresponds the (cart.) space direction, k denote the crystal moment, m, n index the bands.
 
-        Indexing: BerryCurv[ik1, ik2, ik3, idrection, iband, jband]
+        Indexing: BerryCurv[ik1, ik2, ik3, ialpha, ibeta, iband, jband]
         '''
-        super().__init__(projection=projection, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
-        velocity_alpha_K=self.velocity_K
-        velocity_beta_K=self.velocity_K
-        if projection!=None:
-            velocity_alpha_K=self.velocity_K_proj
+        self.projected_BerryCurv=np.zeros((len(velocityProjectionList)+1,len(velocityProjectionList)+1)+self.kgrid+(3,3,self.model.norbs-self.ibmin))
+        for ivelocity_alpha, proj_velocity_alpha_K in enumerate([self.velocity_K]+self.projected_velocity_K_list):
+            for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K]+self.projected_velocity_K_list):
+                for ialpha in range(3):
+                    for ibeta in range(3):
+                        self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]=-2*np.diagonal(proj_velocity_beta_K[...,ibeta,:,:] @ (dEInverse2*proj_velocity_alpha_K[...,ialpha,:,:]),0,-2,-1).imag
         
-        self.BerryCurv=np.zeros(self.kgrid+(3,3,self.model.norbs-self.ibmin))
-        for ialpha in range(3):
-            for ibeta in range(3):
-                self.BerryCurv[...,ialpha,ibeta,:]=-2*np.diagonal(velocity_beta_K[...,ibeta,:,:] @ (dEInverse2*velocity_alpha_K[...,ialpha,:,:]),0,-2,-1).imag
-        if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
+        self.BerryCurv=self.projected_BerryCurv[0,0]
+        if self.verbose==2: showElapsedTime(extraInfo=f"Berry curvature finished")
 
 class AnormalousHallConductance(BerryCurv):
 
-    def __init__(self, fermiList=[], projection=None, **kwarg) -> None:
-        super().__init__(projection=projection, **kwarg)
+    def __init__(self, currentProjectionList=[], **kwarg) -> None:
+        super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
         self.Iodd = False  # inversion gives minus
         self.Todd = True   # timereversal gives minus
 
-        sigma=np.zeros((len(fermiList),3,3))
-
-        for ifermi, fermi in enumerate(fermiList):
-            #occupy=self.energies[:,:,:,self.ibmin:]<fermi
-            occupy=self.energies<fermi
-            for ialpha in range(3):
-                for ibeta in range(3):
-                    sigma[ifermi,ialpha,ibeta]=np.sum(self.BerryCurv[...,ialpha,ibeta,:][occupy])
+        nProjections=self.projected_BerryCurv.shape[:2]
+        projected_sigma=np.zeros(nProjections+(len(self.fermiList),3,3))
         
-        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom)/self.model.Vcell
+        for ifermi, fermi in enumerate(self.fermiList):
+            occupy=self.energies<fermi
+            for ivelocity_alpha in range(nProjections[0]):
+                for ivelocity_beta in range(nProjections[1]):
+                    for ialpha in range(3):
+                        for ibeta in range(3):
+                            projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:][occupy])
+        
+        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
 class SpinBerryCurv(SpinVelocity):
@@ -1114,4 +1122,164 @@ class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):
         self.projected_sigma=projected_sigma/np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"Inter-band spin Galvanic conductance finished")
 
+class Chern_FHS(Energy):
+    def __init__(self, **kwarg):
+        '''
+        Computes the exact Chern number using the Fukui-Hatsugai-Suzuki (FHS) 
+        U(N) link variable method.
+        
+        This algorithm guarantees an exact integer output and converges 
+        orders of magnitude faster than the Kubo velocity integration.
+
+        Parameters
+        ----------
+        - model : System
+            the model for computation
+        - kgrid : tuple(3)
+            kgrid for sampling the BZ
+        '''
+        # Hijack the Energy class to build the Hamiltonian and diagonalize it over the grid
+        super().__init__(**kwarg)
+        
+        # 1. Identify the occupied manifold
+        # Assuming a global gap, we find the number of occupied bands at the Gamma point
+        n_occ_Gamma = np.sum(self.energies[0, 0, 0] <= self.model.fermi)
+        n_occ = np.sum(self.energies <= self.model.fermi)//np.prod(self.kgrid)
+        assert n_occ==n_occ_Gamma, f"The occ. at Gamma {n_occ_Gamma} is inconsistent to occ. on BZ {n_occ}, recheck {self.model.fermi=}"
+        self.n_occ=n_occ
+        if self.verbose: 
+            print(f"\n--- FHS Chern Number Calculation ---")
+            print(f"Occupied bands identified: {self.n_occ} out of {self.model.norbs}")
+            
+        # Extract the occupied eigenvectors over the 2D grid
+        # Shape: (Nx, Ny, norbs, n_occ)
+        V = self.vectors[:, :, 0, :, :self.n_occ]
+        
+        # Determine the conjugate transpose, factoring in overlap if non-orthogonal
+        if self.model.overlap:
+            O_K = self.O_K_AO[:, :, 0, :, :]
+            V_dag = np.matmul(V.conj().transpose(0, 1, 3, 2), O_K)
+        else:
+            V_dag = V.conj().transpose(0, 1, 3, 2)
+            
+        # 2. Compute U(N) Link Variables
+        # Shift vectors to get adjacent k-points. np.roll natively handles the periodic boundary!
+        V_shift_x = np.roll(V, shift=-1, axis=0)
+        V_shift_y = np.roll(V, shift=-1, axis=1)
+        
+        # Overlap matrices: M_x = V^\dagger(k) V(k+dx)
+        M_x = np.matmul(V_dag, V_shift_x)
+        M_y = np.matmul(V_dag, V_shift_y)
+        
+        # Determinants of the overlap matrices
+        det_x = np.linalg.det(M_x)
+        det_y = np.linalg.det(M_y)
+        
+        # Link variables (normalized U(1) phases of the U(N) determinant)
+        U_x = det_x / np.abs(det_x)
+        U_y = det_y / np.abs(det_y)
+        
+        # 3. Compute Plaquette Flux (Lattice Berry Curvature)
+        U_x_shift_y = np.roll(U_x, shift=-1, axis=1)
+        U_y_shift_x = np.roll(U_y, shift=-1, axis=0)
+        
+        # F_12 = ln( U_1(k) * U_2(k+1) * U_1(k+2)^-1 * U_2(k)^-1 )
+        # np.log automatically takes the principal branch, wrapping the phase to (-pi, pi]
+        F_12 = np.log(U_x * U_y_shift_x * np.conj(U_x_shift_y) * np.conj(U_y))
+        
+        # The Chern number is the sum of the fluxes divided by 2*pi*i
+        self.chern_number = np.sum(F_12.imag) / (2 * np.pi)
+        
+        if self.verbose:
+            print(f"Computed Chern Number: {self.chern_number:.6f}")
+            print(f"Nearest Integer: {int(np.round(self.chern_number))}")
+            showElapsedTime(extraInfo="FHS Chern calculation finished")
+
+class Z2_FHS(Energy):
+    def __init__(self, **kwarg):
+        '''
+        Computes the Z2 topological invariant using the Spin-Chern / FHS method.
+        
+        Projects the S_z operator onto the occupied bands, dynamically splits them 
+        into '+' and '-' spin sectors, and applies the FHS algorithm to the '+' sector.
+        Z2 = C_+ mod 2.
+
+        Parameters
+        ----------
+        - model : System
+            the model for computation
+        - kgrid : tuple(3)
+            kgrid for sampling the BZ
+        '''
+        super().__init__(**kwarg)
+        
+        n_occ_Gamma = np.sum(self.energies[0, 0, 0] <= self.model.fermi)
+        n_occ = np.sum(self.energies <= self.model.fermi)//np.prod(self.kgrid)
+        assert n_occ==n_occ_Gamma, f"The occ. at Gamma {n_occ_Gamma} is inconsistent to occ. on BZ {n_occ}, recheck {self.model.fermi=}"
+        self.n_occ=n_occ
+        if self.verbose: 
+            print(f"\n--- FHS Z2 (Spin-Chern) Calculation ---")
+            print(f"Occupied bands identified: {self.n_occ} out of {self.model.norbs}")
+            
+        V = self.vectors[:, :, 0, :, :self.n_occ]
+        
+        if self.model.overlap:
+            O_K = self.O_K_AO[:, :, 0, :, :]
+            V_dag = np.matmul(V.conj().transpose(0, 1, 3, 2), O_K)
+        else:
+            V_dag = V.conj().transpose(0, 1, 3, 2)
+            
+        # 1. Project S_z onto the occupied subspace
+        Sz_op = self.model.spin[2] # sigma_z from your Spin class matrices
+        
+        # P S_z P = V^\dagger S_z V
+        Sz_matrix = np.matmul(Sz_op, V)
+        if self.model.overlap:
+            Sz_matrix = np.matmul(O_K, Sz_matrix)
+            
+        P_Sz_P = np.matmul(V_dag, Sz_matrix)
+        
+        # 2. Diagonalize the projected S_z
+        # eigh automatically sorts eigenvalues from lowest to highest
+        spin_evals, spin_evecs = np.linalg.eigh(P_Sz_P)
+        
+        # The upper half of the sorted eigenvectors belongs to the "+" spin sector
+        half_occ = self.n_occ // 2
+        V_plus_coeff = spin_evecs[:, :, :, half_occ:]
+        
+        # Rotate the occupied tight-binding vectors into the purified "+" spin sector
+        V_plus = np.matmul(V, V_plus_coeff)
+        
+        # 3. Apply FHS logic strictly to the "+" sector
+        if self.model.overlap:
+            V_plus_dag = np.matmul(V_plus.conj().transpose(0, 1, 3, 2), O_K)
+        else:
+            V_plus_dag = V_plus.conj().transpose(0, 1, 3, 2)
+            
+        V_plus_shift_x = np.roll(V_plus, shift=-1, axis=0)
+        V_plus_shift_y = np.roll(V_plus, shift=-1, axis=1)
+        
+        M_x = np.matmul(V_plus_dag, V_plus_shift_x)
+        M_y = np.matmul(V_plus_dag, V_plus_shift_y)
+        
+        det_x = np.linalg.det(M_x)
+        det_y = np.linalg.det(M_y)
+        
+        U_x = det_x / np.abs(det_x)
+        U_y = det_y / np.abs(det_y)
+        
+        U_x_shift_y = np.roll(U_x, shift=-1, axis=1)
+        U_y_shift_x = np.roll(U_y, shift=-1, axis=0)
+        
+        F_12 = np.log(U_x * U_y_shift_x * np.conj(U_x_shift_y) * np.conj(U_y))
+        
+        self.chern_plus = np.sum(F_12.imag) / (2 * np.pi)
+        self.z2_invariant = int(np.round(np.abs(self.chern_plus))) % 2
+        
+        if self.verbose:
+            print(f"Spin-Chern C_+ : {self.chern_plus:.6f}")
+            print(f"Z2 Invariant   : {self.z2_invariant}")
+            showElapsedTime(extraInfo="FHS Z2 calculation finished")
+
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, SpinExpectationOnPath, SpinOrbitalExpectationOnPath
+from .Path import SurfaceBulkSpectraOnPath
