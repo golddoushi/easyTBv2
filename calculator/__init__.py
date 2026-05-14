@@ -18,22 +18,24 @@ class Calculator():
         Parameters
         ----------
         - model : System
-        The basis system, involving the hopping, basis coordinates, lattice matrix and perharps the overlap
+            The basis system, involving the hopping, basis coordinates, lattice matrix and perharps the overlap
         - kgrid : tuple(3, dtype=int)
-        Size of kmesh
+            Size of kmesh
         - eta   : float
-        The relaxation energy, in the same unit with energy, usually eV
+            The relaxation energy, in the same unit with energy, usually eV
         - kBT  : float
-        Kinetic energy of electron, in the same unit with energy usually eV
+            Kinetic energy of electron, in the same unit with energy usually eV
         - smr_type : str, "Lorentzian"|"Gaussian"
         - degen : float
-        The threthold two states are treated to be degenerated
+            The threthold two states are treated to be degenerated
         - skip_low : bool
-        To skip lowest and seperated eigen-states IN ALL CASES
+            To skip lowest and seperated eigen-states IN ALL CASES
         - phaseshift : np.ndarray(self.model.nRvec, dtype=complex)
-        Extra phase for the Bloch states, used for hybrid FFT algorithm. Default: 1, no extra phase shift
+            Extra phase for the Bloch states, used for hybrid FFT algorithm. Default: 1, no extra phase shift
         - fermiList : np.ndarray(dtype=float)
-        Fermi levels to scan
+            Fermi levels to scan
+        - omegaList : np.ndarray(dtype=float)
+            photon's frequencies to scan
         '''
         defaultSettings={
             "model":None,
@@ -47,6 +49,8 @@ class Calculator():
             "phaseshift":1,
 
             "fermiList":np.array([0,]),
+
+            "omegaList":np.array([0,]),
 
             "verbose":0,
         }
@@ -64,6 +68,7 @@ class Calculator():
         self.phase=False
         if type(self.phaseshift)==np.ndarray: self.phase=True
         self.fermiList=defaultSettings["fermiList"]
+        self.omegaList=defaultSettings["omegaList"]
 
         self.verbose=defaultSettings["verbose"]
         if self.verbose==2: print("initializing calculator module finished")
@@ -460,7 +465,7 @@ class Velocity(Energy):
         vectors=self.vectors[:,:,:,None,:,:]
         self.velocity_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
 
-        r_K        =  1j*np.fft.ifftn(r_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+        r_K        =  np.fft.ifftn(r_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         r_K_H = (vectors.conj().swapaxes(-2,-1) @ r_K @ vectors) * self.energies[...,None,None,:]
         self.velocity_K += -1j*(r_K_H - r_K_H.conj().swapaxes(-2,-1))
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
@@ -469,7 +474,9 @@ class Velocity(Energy):
         #dconj=np.sum(abs(self.velocity_K.transpose((0,1,2,3,5,4)).conj()-self.velocity_K))
         #assert dconj<1e-4, f"Hermity of velocity is not satisfied {dconj=}"
 
+        '''
         # extra modifications to velocity due to orbital overlaps
+        # according to Gemini, this part is not necessary since the effect is automatically included in the dipole correction
         if self.model.overlap:
             RO_R_W=self.model.RO_R
             self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
@@ -480,25 +487,12 @@ class Velocity(Energy):
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
             __UdOkU = (vectors.conj().swapaxes(-2,-1) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
             self.velocity_K -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
+        '''
 
         self.projected_velocity_K_list=[]
         for velocityProjection in velocityProjectionList:
             proj1=projectionOperator(velocityProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(velocityProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            #proj1=proj1[None,None,None,None,:,:]
-            #proj2=proj2[None,None,None,None,:,:]
-            #RHam_K_proj=(proj1@self.RHam_K@proj2 + proj2@self.RHam_K@proj1)/2
-            #velocity_K_proj=vectors.conj().swapaxes(-2,-1) @ RHam_K_proj @ vectors
-
-            #r_K_proj=(proj1@r_K@proj2 + proj2@r_K@proj1)/2
-            #r_K_H_proj = (vectors.conj().swapaxes(-2,-1) @ r_K_proj @ vectors) * self.energies[...,None,None,:]
-            #velocity_K_proj += -1j*(r_K_H_proj - r_K_H_proj.conj().swapaxes(-2,-1))
-
-            #if self.model.overlap:
-            #    RO_K_proj=(proj1@self.RO_K@proj2 + proj2@self.RO_K@proj1)/2
-            #    __UdOkU = (vectors.conj().swapaxes(-2,-1) @ RO_K_proj @ vectors)*self.energies[...,None,:,None]
-            #    velocity_K_proj -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
-            #self.projected_velocity_K_list.append(velocity_K_proj)
 
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
@@ -744,6 +738,102 @@ class AnormalousHallConductance(BerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
+class VelocityVelocityVelocityCorrelation_AC(Velocity):
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Calc. the 3rd order velocity correlation function \Omega_{alpha1, alpha2,beta}_{k,mn} and the BPVE conductance
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
+        self.Iodd = True  # inversion gives minus
+        self.Todd = True  # timereversal gives minus
+
+        # inversed energy difference [nk1, nk2, nk3, 1 (for fermi), ib1, ib2]
+        den1 = self.energies[..., None, None, None, :] - self.energies[..., None, None, :, None] - 1j* self.eta # (En-Em-i\eta)
+        #dE_inv = 1 / (dE + 1j * self.eta)
+
+        # occupation number [nk1, nk2, nk3, ifermi, ib]
+        f = np.int8(self.energies[..., None, :] < self.fermiList[None, None, None, :, None])
+        # occupation number difference [nk1, nk2, nk3, ifermi, ibl, ibm, ibn]
+        fln = f[..., :, None, None] - f[..., None, None, :]
+        
+        self.projected_sigma = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1) + (len(self.fermiList), len(self.omegaList),) + (3, 3, 3))
+        
+        for iomega, Omega in enumerate(self.omegaList):
+            projected_velocityVelocityVelocityCorrelation = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1) + self.kgrid + (len(self.fermiList), 3, 3, 3))
+            for ivelocity_alpha1, proj_velocity_alpha1_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                for ivelocity_alpha2, proj_velocity_alpha2_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                    for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                        for ialpha1 in range(3):
+                            v_alpha1 = proj_velocity_alpha1_K[...,ialpha1,:,:]
+                            for ialpha2 in range(3):
+                                v_alpha2 = proj_velocity_alpha2_K[...,ialpha2,:,:]
+                                for ibeta in range(3):
+                                    v_beta = proj_velocity_beta_K[...,ibeta,:,:]
+                                    num = np.einsum('abcnl,abclm,abcmn->abclmn', v_alpha1, v_alpha2, v_beta)
+
+                                    for W in [Omega, -Omega]:
+                                        den2 = self.energies[..., None, None, None, :] - self.energies[..., None, :, None, None] - W - 1j* self.eta # (En - El - \Omega - i\eta)
+                                        projected_velocityVelocityVelocityCorrelation[ivelocity_alpha1, ivelocity_alpha2, ivelocity_beta, ..., ialpha1, ialpha2, ibeta] += -2*np.sum(fln * num[...,None,:,:,:] / (den1 * den2), axis=(-3,-2,-1)).real
+                                    
+            # Sum over the BZ grid axes (3,4,5) and divide by Omega^2
+            self.projected_sigma[..., iomega, :, :, :] = np.sum(projected_velocityVelocityVelocityCorrelation, axis=(3, 4, 5)) / (Omega**2)
+            
+        self.projected_sigma /= np.prod(self.kgrid)
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
+
+class __VelocityVelocityVelocityCorrelation_AC(Velocity):
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Calc. the 3rd order velocity correlation function \Omega_{alpha1, alpha2,beta}_{k,mn} and the BPVE conductance
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
+        self.Iodd = True  # inversion gives minus
+        self.Todd = True  # timereversal gives minus
+
+        # inversed energy difference [nk1, nk2, nk3, 1 (for fermi), ib1, ib2]
+        dE = self.energies[..., None, :, None] - self.energies[..., None, None, :]
+        dE_inv = 1 / (dE + 1j * self.eta)
+
+        # occupation number [nk1, nk2, nk3, ifermi, ib]
+        f = np.int8(self.energies[..., None, :] < self.fermiList[None, None, None, :, None])
+        # occupation number difference [nk1, nk2, nk3, ifermi, ib1, ib2]
+        df = f[..., :, None] - f[..., None, :]
+        
+        self.projected_sigma = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1) + (len(self.fermiList), len(self.omegaList),) + (3, 3, 3))
+        
+        for iomega, Omega in enumerate(self.omegaList):
+            # transition rate [nk1, nk2, nk3, ifermi, ib1, ib2]
+            t = df * (1 / (Omega + dE + 1j * self.eta) + 1 / (-Omega + dE + 1j * self.eta))
+            # dt shape: [nk1, nk2, nk3, ifermi, orbA, orbB, orbC]
+            dt = t[..., :, None, :] - t.swapaxes(-1, -2)[..., None, :, :]
+            
+            for ivelocity_alpha1, proj_velocity_alpha1_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                for ivelocity_alpha2, proj_velocity_alpha2_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                    for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                        for ialpha1 in range(3):
+                            for ialpha2 in range(3):
+                                for ibeta in range(3):
+                                    
+                                    # Extract velocity components and inject 'None' for the nfermi dimension 
+                                    # so shapes jump from 6D to 7D, perfectly aligning with dt!
+                                    v_alpha1 = proj_velocity_alpha1_K[..., None, ialpha1, None, :, :]
+                                    v_alpha2 = proj_velocity_alpha2_K.swapaxes(-1, -2)[..., None, ialpha2, :, None, :]
+                                    v_beta   = proj_velocity_beta_K[..., None, ibeta, :, :, None]
+                                    
+                                    # Sum ONLY over the 3 orbital axes (-3, -2, -1) to preserve (nk1, nk2, nk3, nfermi)
+                                    bubble_sum = np.sum(
+                                        v_beta * v_alpha1 * v_alpha2 * dE_inv[..., :, :, None] * dt, 
+                                        axis=(0, 1, 2, -3, -2, -1)
+                                    ).real
+                                    
+                                    self.projected_sigma[ivelocity_alpha1, ivelocity_alpha2, ivelocity_beta, :, iomega, ialpha1, ialpha2, ibeta] = bubble_sum
+                                    
+            # Sum over the BZ grid axes (3,4,5) and divide by Omega^2
+            #self.projected_sigma[..., iomega, :, :, :] = np.sum(self.projected_velocityVelocityVelocityCorrelation, axis=(3, 4, 5)) / (Omega**2)
+            
+        self.projected_sigma /= np.prod(self.kgrid)
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
+
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
         '''
@@ -885,8 +975,8 @@ class SpinHallConductance_diag(SpinvelocityVelocityCorrelation_diag):
                             for igamma in range(3):
                                 projected_sigma[ivelocity,ispinvelocity,ifermi,ialpha,ibeta,igamma]=np.sum(self.projected_spinvelocityVelocityCorrelation_diag[ivelocity,ispinvelocity,...,ialpha,ibeta,igamma,:]*weight)
         
-        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        #self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Intra-band spin Galvanic conductance finished")
 
 class SpinVelocityCorrelation(Spin,Velocity):
@@ -1125,7 +1215,7 @@ class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):
 class Chern_FHS(Energy):
     def __init__(self, **kwarg):
         '''
-        Computes the exact Chern number using the Fukui-Hatsugai-Suzuki (FHS) 
+        Computes the exact Chern number OF 2D MATERIAL (z-surf) using the Fukui-Hatsugai-Suzuki (FHS) 
         U(N) link variable method.
         
         This algorithm guarantees an exact integer output and converges 
@@ -1198,7 +1288,7 @@ class Chern_FHS(Energy):
 class Z2_FHS(Energy):
     def __init__(self, **kwarg):
         '''
-        Computes the Z2 topological invariant using the Spin-Chern / FHS method.
+        Computes the Z2 topological invariant OF 2D MATERIAL (z-surf) using the Spin-Chern / FHS method.
         
         Projects the S_z operator onto the occupied bands, dynamically splits them 
         into '+' and '-' spin sectors, and applies the FHS algorithm to the '+' sector.

@@ -76,7 +76,8 @@ class System:
         print(f"calculating R \dot H_R on lattice with {self.nRvec} lattice points")
         dr=self.rList[:,:,None]-self.rList[:,None,:] # distance in cell, r_source - r_target
         for iR, Rvec in enumerate(self.iRvec):
-            self.RHam_R[iR]=self.ham_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
+            #self.RHam_R[iR]=self.ham_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
+            self.RHam_R[iR]=self.ham_R[iR,None,:,:]*(Rvec@self.lattice)[:,None,None]
 
     def getSpinMatrice(self,projectedOrbIndex=[]):
         '''

@@ -162,7 +162,8 @@ class System_omx(System):
         print(f"calculating R \dot H_R on lattice with {self.nRvec} lattice points")
         dr=self.rList[:,:,None]-self.rList[:,None,:] # distance in cell, r_source - r_target
         for iR, Rvec in enumerate(self.iRvec):
-            self.RHam_R[iR]=self.energy_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
+            #self.RHam_R[iR]=self.energy_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
+            self.RHam_R[iR]=self.energy_R[iR,None,:,:]*(Rvec@self.lattice)[:,None,None]
         return 
         #'''
         # using momentum
@@ -176,7 +177,8 @@ class System_omx(System):
         print(f"calculating R \dot O_R on lattice with {self.nRvec} lattice points")
         dr=self.rList[:,:,None]-self.rList[:,None,:] # distance in cell, r_source - r_target
         for iR, Rvec in enumerate(self.iRvec):
-            self.RO_R[iR]=self.overlap_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
+            #self.RO_R[iR]=self.overlap_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
+            self.RO_R[iR]=self.overlap_R[iR,None,:,:]*(Rvec@self.lattice)[:,None,None]
     
     def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,-1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], print_row=(0,1,2,3,), print_col=(0,1,2,3,)):
         super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, "openmx", print_row, print_col)

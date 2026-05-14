@@ -433,7 +433,7 @@ class SurfaceBulkSpectraOnPath(SurfaceBulkGreenOnPath):
         Parameters
         ----------
         model : System
-            The tight-binding model (must have called constructPrincipleLayer first).
+            The model with local basis (must have called constructPrincipleLayer first).
         surfaceDir : int
             The normal direction of the surface (0, 1, or 2).
         fermiAxis : np.ndarray
