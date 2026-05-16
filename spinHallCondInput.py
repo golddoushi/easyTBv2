@@ -10,7 +10,7 @@ import numpy as np
 from task import BZGridTask, BZLineTask
 from system import System_omx, System_w90, System_tb
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance
+from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance_AC, BulkPhotovoltaicConductance_TDSE
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
@@ -73,6 +73,25 @@ def solveAHC(param):
             "projected Berry curv":calc.projected_BerryCurv,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
+
+def solveBPVE(param):
+    calc=BulkPhotovoltaicConductance_AC(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   responseOmegaIndexList=param['record frequency ids'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   )
+    return {"energies":calc.energies,
+            "projected response":calc.projected_response,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
+            "iq":param["iq"]}
+
+def solveBPVE_TDSE(param):
+    calc = BulkPhotovoltaicConductance_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   A0=0.01, # Keep this in the perturbative regime
+                                   )
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
+            "iq": param["iq"]}
 
 def solveSGC(param):
     calc=SpinGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
@@ -154,12 +173,12 @@ def solveBandStructure(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/BN/"
+    mainDir="./mcalc/1D-Chain/"
     model=System_tb(
         mainDir=mainDir,
-        #hamR="wannier90",
+        hamR="wannier90",
         #hamR="omx",
-        hamR="BNsoc",
+        #hamR="BNsoc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -168,10 +187,10 @@ def run():
             "Ge":(0,0,1,2),
             #"Mn":(0,0,0,1,1,2,),
             "Mn":(0,1,2,),
-            #"Sn":(0,1,),
-            "Sn":(0,0,0,1,1,2,),
-            #"Pb":(0,1,),
-            "Pb":(0,0,0,1,1,2,2,),
+            "Sn":(0,1,),
+            #"Sn":(0,0,0,1,1,2,),
+            "Pb":(0,1,),
+            #"Pb":(0,0,0,1,1,2,2,),
             "Pt":(0,1,2,),
             #"Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
@@ -183,8 +202,8 @@ def run():
             #"Fe":(0,0,1,1,2,2,),
             "Cl":(1,),
             #"Cl":(0,0,1,1,2,3),
-            #"H":(0,),
-            "H":(0,0,1,),
+            "H":(0,),
+            #"H":(0,0,1,),
             "Au":(0,0,0,1,1,2,2,),
         },
         ispin=2
@@ -192,18 +211,18 @@ def run():
     # rotate the spin quantization axis to \sigma^z if SAXIS != 0 0 1
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
-    #atomicMagMomList=[
-    #    np.array([1, 0, 0]),
-    #]*1+[
-    #    np.array([0, 0, 0]),
-    #]*6
+    atomicMagMomList=[
+        np.array([0, 0, 1]),
+    ]*1+[
+        np.array([0, 0, 0]),
+    ]*2
     #model.symmerizeHamAndOverlap(
     #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
     #)
     #exit()
     # modulate the SOC, exchange fields, etc
     #model.scaleSOC(lam=0)
-    #'''
+    '''
     # create supercell model and cut into nanoribbon
     Tmatrix=[
         [10, 0, 0], # The A1 of the supercell in the frame of primitive cell
@@ -271,11 +290,14 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     fermi=0            # model hamiltonian
     
-    fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
+    #fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
+    fermiAxis=np.array([fermi,])
+    omegaAxis=np.linspace(1.0,4.0,51)
     model.setFermi(fermi)
-    #'''
+    
+    '''
     # check band intepolation
-    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8,)
+    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,)
     energies,spin_eig,orbital_eig=np.zeros((calc.nkpt,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float)
     for result in calc.results:
         energies[result['indices']]   =result['energies']
@@ -312,32 +334,34 @@ def run():
     exit()#'''
     '''
     # check the topological integer
-    calc=Chern_FHS(model=model, kgrid=(51,51,1), verbose=2, )
+    #calc=Chern_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
-    exit()#'''
+    #exit()#'''
 
-    BZGrid=(600,1,1)
+    BZGrid=(48,1,1)
     BZSymm=False
-    calc=BZGridTask(model, solveStGC, 
-                    args={"fermi":fermiAxis,
+    calc=BZGridTask(model, solveBPVE, 
+                    args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
-                              {"source":bulkRegion, "target":bulkRegion},
+                              #{"source":bulkRegion, "target":bulkRegion},
                            ],
                           'projected shells for detecting spincurrent':[],
                           'projected shells for detecting spin accumulation':[
-                              {"source":edgeRegion1, "target":edgeRegion1},
-                              {"source":edgeRegion2, "target":edgeRegion2},
+                              #{"source":edgeRegion1, "target":edgeRegion1},
+                              #{"source":edgeRegion2, "target":edgeRegion2},
                               #{"source":block, "target":block} for block in blockRegionList
                           ],
+                          'omega':omegaAxis,
+                          'record frequency ids':[],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
                     ncores=8)
 
-    _,_,_,nbands=calc.results[0]["energies"].shape
+    #_,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
     #energies=np.zeros(tuple(BZGrid)+(nbands,))
-    #responseFunction = np.zeros(BZGrid+(3,3),dtype=float)
+    #responseFunction = np.zeros(BZGrid+(3,3,3),dtype=float)
     projected_sigma=0
     sigma=0
     for result_q in calc.results:
@@ -351,16 +375,8 @@ def run():
         #berryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['Berry curv']
         #valence=result_q['energies']<=fermi
         #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
-        #_sBC=np.sum(result_q["spin Berry curv"]*valence[...,None,None,None,:],axis=(-1,))
-        #spinBerryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=_sBC
-        #for ifermi, f in enumerate(fermiAxis):
-        #    valence=result_q['energies']<=f
-        #    _sBC=np.sum(result_q["spin Berry curv"]*valence[:,:,:,None,None,None,:],axis=(2,-1,))
-        #    spinBerryCurvOnFermi[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],ifermi,:,:,:] += _sBC
-        #_sTorque=np.sum(result_q["spin torque"]*valence[...,None,None,:],axis=(-1,))
-        #spinTorque[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=_sTorque
-        #spinTorque[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin torque']
-        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=np.sum(result_q['projected spin galvanic response'][0,2,...]*valence[...,None,None,:],axis=(-1,))
+        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=np.sum(result_q['spin Berry curv']*valence[...,None,None,None,:],axis=(-1,))
+        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=result_q['projected response'][0,0,0][:,:,:,0,0,:,:,:]
         #continue
         projected_sigma += result_q['projected sigma']
         if not BZSymm:  # symmetrization on the BZ is only implemented for the whole tensor
@@ -401,9 +417,9 @@ def run():
                     for gamma in range(3):
                         fout.write(f"{s[alpha,beta,gamma]:15.6E}")
             fout.write("\n")
-    exit()#'''
+    #exit()#'''
 
-    #'''
+    '''
     # output projected 2-rank conductance
     projected_sigma/=len(calc.results)
     with open("%s/spinGalvanics.txt"%mainDir,"w") as fout:
@@ -425,10 +441,38 @@ def run():
             fout.write("\n")
     exit()#'''
 
+    #'''
+    # output projected 3-ranked, frequency-dependent conductance
+    projected_sigma/=len(calc.results)
+    with open("%s/bulkPhotovoltaics.txt"%mainDir,"w") as fout:
+        fout.write("Omega(eV) Fermi(eV) ")
+        directionName=['x','y','z']
+        for iproj1 in range(projected_sigma.shape[0]):
+            for iproj2 in range(projected_sigma.shape[1]):
+                for iproj2 in range(projected_sigma.shape[2]):
+                    for alpha1 in range(3):
+                        for alpha2 in range(3):
+                            for beta in range(3):
+                                fout.write(f"            {directionName[alpha1]}{directionName[alpha2]}{directionName[beta]}")
+        fout.write("\n")
+        for iomega, omega in enumerate(omegaAxis):
+            fout.write(f"{omega:9.6f}")
+            for ifermi, fermiEnergy in enumerate(fermiAxis):
+                fout.write(f"{fermiEnergy-fermi:9.6f}")
+                for iproj1 in range(projected_sigma.shape[0]):
+                    for iproj2 in range(projected_sigma.shape[1]):
+                        for iproj3 in range(projected_sigma.shape[2]):
+                            for alpha1 in range(3):
+                                for alpha2 in range(3):
+                                    for beta in range(3):
+                                        fout.write(f"{projected_sigma[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
+                fout.write("\n")
+    exit()#'''
+
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
     #'''
     import matplotlib.pyplot as plt
-    data_grid=responseFunction[:,:,0,0,2].real
+    data_grid=responseFunction[:,:,0, 0,0,0].real
     magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
     print(np.sum(data_grid))
     for G in [(0,0,0,),(-1,0,0,),(0,-1,0,),(-1,-1,0,),]:
@@ -436,7 +480,18 @@ def run():
         plt.pcolormesh(_kcoor[:,:,0,0],_kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
     plt.colorbar()
     plt.axis("equal")
-    plt.savefig(f"{mainDir}/BZ_distr.png",dpi=300)
+    plt.savefig(f"{mainDir}/BZ_distr1.png",dpi=300)
+    plt.show()
+
+    data_grid=responseFunction[:,:,0, 0,0,1].real
+    magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
+    print(np.sum(data_grid))
+    for G in [(0,0,0,),(-1,0,0,),(0,-1,0,),(-1,-1,0,),]:
+        _kcoor=kcoor+model.reciLattice@np.array(G)
+        plt.pcolormesh(_kcoor[:,:,0,0],_kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
+    plt.colorbar()
+    plt.axis("equal")
+    plt.savefig(f"{mainDir}/BZ_distr2.png",dpi=300)
     plt.show()
     #'''
 

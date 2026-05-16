@@ -487,7 +487,7 @@ class Velocity(Energy):
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
             __UdOkU = (vectors.conj().swapaxes(-2,-1) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
             self.velocity_K -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
-        '''
+        #'''
 
         self.projected_velocity_K_list=[]
         for velocityProjection in velocityProjectionList:
@@ -738,102 +738,160 @@ class AnormalousHallConductance(BerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
-class VelocityVelocityVelocityCorrelation_AC(Velocity):
-    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+class BulkPhotovoltaicConductance_AC(Velocity):
+    def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
-        Calc. the 3rd order velocity correlation function \Omega_{alpha1, alpha2,beta}_{k,mn} and the BPVE conductance
-        '''
-        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
-        self.Iodd = True  # inversion gives minus
-        self.Todd = True  # timereversal gives minus
+        Calc. the 3rd order velocity correlation function \Omega_{alpha1, alpha2, beta}_{k,mn} and the BPVE conductance
 
-        # inversed energy difference [nk1, nk2, nk3, 1 (for fermi), ib1, ib2]
-        den1 = self.energies[..., None, None, None, :] - self.energies[..., None, None, :, None] - 1j* self.eta # (En-Em-i\eta)
-        #dE_inv = 1 / (dE + 1j * self.eta)
-
-        # occupation number [nk1, nk2, nk3, ifermi, ib]
-        f = np.int8(self.energies[..., None, :] < self.fermiList[None, None, None, :, None])
-        # occupation number difference [nk1, nk2, nk3, ifermi, ibl, ibm, ibn]
-        fln = f[..., :, None, None] - f[..., None, None, :]
-        
-        self.projected_sigma = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1) + (len(self.fermiList), len(self.omegaList),) + (3, 3, 3))
-        
-        for iomega, Omega in enumerate(self.omegaList):
-            projected_velocityVelocityVelocityCorrelation = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1) + self.kgrid + (len(self.fermiList), 3, 3, 3))
-            for ivelocity_alpha1, proj_velocity_alpha1_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
-                for ivelocity_alpha2, proj_velocity_alpha2_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
-                    for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
-                        for ialpha1 in range(3):
-                            v_alpha1 = proj_velocity_alpha1_K[...,ialpha1,:,:]
-                            for ialpha2 in range(3):
-                                v_alpha2 = proj_velocity_alpha2_K[...,ialpha2,:,:]
-                                for ibeta in range(3):
-                                    v_beta = proj_velocity_beta_K[...,ibeta,:,:]
-                                    num = np.einsum('abcnl,abclm,abcmn->abclmn', v_alpha1, v_alpha2, v_beta)
-
-                                    for W in [Omega, -Omega]:
-                                        den2 = self.energies[..., None, None, None, :] - self.energies[..., None, :, None, None] - W - 1j* self.eta # (En - El - \Omega - i\eta)
-                                        projected_velocityVelocityVelocityCorrelation[ivelocity_alpha1, ivelocity_alpha2, ivelocity_beta, ..., ialpha1, ialpha2, ibeta] += -2*np.sum(fln * num[...,None,:,:,:] / (den1 * den2), axis=(-3,-2,-1)).real
-                                    
-            # Sum over the BZ grid axes (3,4,5) and divide by Omega^2
-            self.projected_sigma[..., iomega, :, :, :] = np.sum(projected_velocityVelocityVelocityCorrelation, axis=(3, 4, 5)) / (Omega**2)
-            
-        self.projected_sigma /= np.prod(self.kgrid)
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
-
-class __VelocityVelocityVelocityCorrelation_AC(Velocity):
-    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
-        '''
-        Calc. the 3rd order velocity correlation function \Omega_{alpha1, alpha2,beta}_{k,mn} and the BPVE conductance
+        Parameters
+        ----------
+        - responseOmegaIndexList : list
+            the BZ distribution of response is only recorded for the frequencies pointed here to save memory
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
         self.Iodd = True  # inversion gives minus
         self.Todd = True  # timereversal gives minus
 
-        # inversed energy difference [nk1, nk2, nk3, 1 (for fermi), ib1, ib2]
-        dE = self.energies[..., None, :, None] - self.energies[..., None, None, :]
-        dE_inv = 1 / (dE + 1j * self.eta)
+        # energy difference, Ekm - Ekn, index: [ik1, ik2, ik3, ibm, ibn]
+        dEmn = self.energies[...,:,None] - self.energies[...,None,:]
+        # energy difference with three band axes, and fermi energy axis, 3-spatial axes 
+        # index: [ik1, ik2, ik3, 1(ifermi), 1(ialpha1), 1(ialpha2), 1(ibeta), 1(ibl), ibm, ibn]
+        dEnm    = -dEmn[..., None, None,None,None, None,:,:] - 1j* self.eta # (En-Em-i\eta)
+        dEnl    = -dEmn[..., None, None,None,None, :,None,:] - 1j* self.eta # (En-El-i\eta)
 
-        # occupation number [nk1, nk2, nk3, ifermi, ib]
+        # occupation number [ik1, ik2, ik3, ifermi, ib]
         f = np.int8(self.energies[..., None, :] < self.fermiList[None, None, None, :, None])
-        # occupation number difference [nk1, nk2, nk3, ifermi, ib1, ib2]
-        df = f[..., :, None] - f[..., None, :]
+        # occupation number difference fl - fn, index: [ik1, ik2, ik3, ifermi, 1(ialpha1), 1(ialpha2), 1(ibeta), ibl, 1(ibm), ibn]
+        fnl = f[..., None,None,None, None,None,:] - f[..., None,None,None, :,None,None]
         
-        self.projected_sigma = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1) + (len(self.fermiList), len(self.omegaList),) + (3, 3, 3))
-        
+        self.projected_sigma = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1, # iproj1, iproj2, iproj3
+                                         len(self.fermiList), len(self.omegaList),   # ifermi, iomega 
+                                         3, 3, 3), dtype=float)                      # ialpha1, ialpha2, ibeta
+        self.projected_response = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1, # iproj1, iproj2, iproj3
+                                         self.kgrid[0], self.kgrid[1], self.kgrid[2],
+                                         len(self.fermiList), len(responseOmegaIndexList),   # ifermi, iomega 
+                                         3, 3, 3), dtype=float)                      # ialpha1, ialpha2, ibeta
+        irecord=0
         for iomega, Omega in enumerate(self.omegaList):
-            # transition rate [nk1, nk2, nk3, ifermi, ib1, ib2]
-            t = df * (1 / (Omega + dE + 1j * self.eta) + 1 / (-Omega + dE + 1j * self.eta))
-            # dt shape: [nk1, nk2, nk3, ifermi, orbA, orbB, orbC]
-            dt = t[..., :, None, :] - t.swapaxes(-1, -2)[..., None, :, :]
-            
+            # compute the energy terms
+            den    = 1/dEnm * (1/(dEnl - Omega) + 1/(dEnl + Omega))
+            # compute the velocity products
             for ivelocity_alpha1, proj_velocity_alpha1_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                # index: [ik1, ik2, ik3, 1(ifermi), ialpha1, 1(ialpha2), 1(ialpha3), 1(iorbA), ibn, 1(ibm), ibl]
+                v_alpha1 = proj_velocity_alpha1_K.swapaxes(-1, -2)[..., None, :, None, None, :, None, :]
                 for ivelocity_alpha2, proj_velocity_alpha2_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                    # index: [ik1, ik2, ik3, 1(ifermi), 1(ialpha1), ialpha2, 1(ialpha3), ibl, ibm, 1(ibn)]
+                    v_alpha2 = proj_velocity_alpha2_K[..., None, None, :, None, :, :, None]
                     for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
-                        for ialpha1 in range(3):
-                            for ialpha2 in range(3):
-                                for ibeta in range(3):
-                                    
-                                    # Extract velocity components and inject 'None' for the nfermi dimension 
-                                    # so shapes jump from 6D to 7D, perfectly aligning with dt!
-                                    v_alpha1 = proj_velocity_alpha1_K[..., None, ialpha1, None, :, :]
-                                    v_alpha2 = proj_velocity_alpha2_K.swapaxes(-1, -2)[..., None, ialpha2, :, None, :]
-                                    v_beta   = proj_velocity_beta_K[..., None, ibeta, :, :, None]
-                                    
-                                    # Sum ONLY over the 3 orbital axes (-3, -2, -1) to preserve (nk1, nk2, nk3, nfermi)
-                                    bubble_sum = np.sum(
-                                        v_beta * v_alpha1 * v_alpha2 * dE_inv[..., :, :, None] * dt, 
-                                        axis=(0, 1, 2, -3, -2, -1)
-                                    ).real
-                                    
-                                    self.projected_sigma[ivelocity_alpha1, ivelocity_alpha2, ivelocity_beta, :, iomega, ialpha1, ialpha2, ibeta] = bubble_sum
-                                    
-            # Sum over the BZ grid axes (3,4,5) and divide by Omega^2
-            #self.projected_sigma[..., iomega, :, :, :] = np.sum(self.projected_velocityVelocityVelocityCorrelation, axis=(3, 4, 5)) / (Omega**2)
+                        # index: [ik1, ik2, ik3, 1(ifermi), 1(ialpha1), 1(ialpha2), ialpha3, 1(ibl), ibm, ibn]
+                        v_beta   = proj_velocity_beta_K[..., None, None, None, :, None, :, :]
+                        # Sum over the 3 band indices to compute trace
+                        bubble_sum = np.sum(
+                            v_alpha1 * v_alpha2 * v_beta * fnl * den, 
+                            axis=(0, 1, 2, -3, -2, -1)
+                        ).real
+                        
+                        # E(t) = -dA(t)/dt = -A0 (i Omega) exp(i Omega t). So, E(Omega) = -i Omega A(Omega), E(Omega)E(-Omega) = Omega^2 A(Omega) A(-Omega)
+                        self.projected_sigma[ivelocity_alpha1, ivelocity_alpha2, ivelocity_beta, :, iomega, :, :, :] = -2 * bubble_sum / (-Omega**2)
+
+                        if iomega not in responseOmegaIndexList: continue
+                        bubble_sum_k = np.sum(
+                            v_alpha1 * v_alpha2 * v_beta * fnl * den, 
+                            axis=(-3, -2, -1)
+                        ).real                        
+                        self.projected_response[ivelocity_alpha1, ivelocity_alpha2, ivelocity_beta, :, :, :, :, irecord, :, :, :] = -2 * bubble_sum_k / (-Omega**2)
+                        irecord+=1
             
         self.projected_sigma /= np.prod(self.kgrid)
         if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
 
+class BulkPhotovoltaicConductance_TDSE(Velocity):
+    def __init__(self, velocityProjectionList=[], E0=0.01, n_steps_per_cycle=100, **kwarg) -> None:
+        '''
+        Calculates the 2nd order DC photovoltaic conductance using Real-Time TDSE.
+        Evolves the density matrix using a 4th-Order Runge-Kutta (RK4) integrator.
+        
+        Outputs
+        -------
+        self.sigma_TDSE[ifermi, iomega, ialpha_drive, ibeta_measure]
+        This matches the [ialpha, ialpha, ibeta] diagonal of the Kubo AC tensor.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
+        
+        # Shape: [ifermi, iomega, ialpha(driving field), ibeta(measured current)]
+        self.sigma_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        
+        # 1. Create the unperturbed Hamiltonian diagonal matrix H0
+        H_diag = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
+        for i in range(self.model.norbs):
+            H_diag[..., i, i] = self.energies[..., i]
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            # 2. Initial equilibrium density matrix (Fermi-Dirac)
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros_like(H_diag)
+            for i in range(self.model.norbs):
+                rho0[..., i, i] = f[..., i]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                T = 2 * np.pi / Omega
+                dt = T / n_steps_per_cycle
+                
+                # Compute cycles needed for the transient to decay (e.g., 10 lifetimes)
+                t_transient = 10.0 / self.eta
+                n_cycles_transient = int(np.ceil(t_transient / T))
+                n_cycles_measure = 1
+                
+                if self.verbose:
+                    print(f"TDSE [Fermi={fermi:.2f}, Omega={Omega:.2f}]: Simulating {n_cycles_transient} transient cycles + {n_cycles_measure} measurement cycle.")
+
+                for ialpha in range(3): # Direction of the driving field
+                    v_alpha = self.velocity_K[..., ialpha, :, :]
+                    rho = rho0.copy()
+                    t = 0.0
+                    
+                    # Phase 1: Evolve through transients to reach Non-Equilibrium Steady State
+                    for _ in range(n_cycles_transient * n_steps_per_cycle):
+                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, Omega, rho0, E0)
+                        t += dt
+                        
+                    # Phase 2: Time-average the current over the final optical cycle
+                    J_dc = np.zeros(3)
+                    for _ in range(n_cycles_measure * n_steps_per_cycle):
+                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, Omega, rho0, E0)
+                        t += dt
+                        
+                        # Measure current in all 3 directions
+                        for ibeta in range(3):
+                            v_beta = self.velocity_K[..., ibeta, :, :]
+                            # Tr(rho * v) summed over all k-points and bands
+                            j_val = np.sum(rho * v_beta.swapaxes(-1, -2), axis=(-1,-2)).real
+                            J_dc[ibeta] += np.sum(j_val) / (n_cycles_measure * n_steps_per_cycle)
+                            
+                    # Conductance = J / E^2
+                    # Divide by volume/N_k
+                    self.sigma_TDSE[ifermi, iomega, ialpha, ialpha, :] = J_dc / E0**2 / np.prod(self.kgrid)
+        self.projected_sigma=self.sigma_TDSE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE BPVE finished")
+
+    def _rk4_step(self, rho, t, dt, H_diag, v_alpha, Omega, rho0, E0):
+        # A(t) = A0 exp(-iwt)
+        # E(t) = -dA/dt = (iw) A0 exp(-iw)
+        # E(w) = iw A(w), A(w) = (-i/w) E(w)
+        # Assuming real electric field: E(W) = E(-W) = E0, E(t) = E(W) exp(-iWt) + E(-W) exp(iWt) = 2 E0 cos(Wt)
+        # A(t) = A(W) exp(-iWt) + A(-W) exp(iWt) = (-i/W) E(W) exp(-iWt) + (i/W) E(-W) exp(iWt) = -2 E0/W sin(Wt)
+        def dRho_dt(rho_state, time_val):
+            A_t = -2 * E0/Omega * np.sin(Omega * time_val)
+            H_t = H_diag - A_t * v_alpha
+            comm = H_t @ rho_state - rho_state @ H_t
+            return -1j * comm - self.eta * (rho_state - rho0)
+
+        k1 = dRho_dt(rho, t)
+        k2 = dRho_dt(rho + 0.5 * dt * k1, t + 0.5 * dt)
+        k3 = dRho_dt(rho + 0.5 * dt * k2, t + 0.5 * dt)
+        k4 = dRho_dt(rho + dt * k3, t + dt)
+        return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+    
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
         '''
