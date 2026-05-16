@@ -10,7 +10,7 @@ import numpy as np
 from task import BZGridTask, BZLineTask
 from system import System_omx, System_w90, System_tb
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance_AC, BulkPhotovoltaicConductance_TDSE
+from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_TDSE
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
@@ -75,7 +75,7 @@ def solveAHC(param):
             "iq":param["iq"]}
 
 def solveBPVE(param):
-    calc=BulkPhotovoltaicConductance_AC(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],

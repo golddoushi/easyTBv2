@@ -738,7 +738,7 @@ class AnormalousHallConductance(BerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
-class BulkPhotovoltaicConductance_AC(Velocity):
+class BulkPhotovoltaicConductance(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
         Calc. the 3rd order velocity correlation function \Omega_{alpha1, alpha2, beta}_{k,mn} and the BPVE conductance
