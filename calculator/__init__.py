@@ -434,7 +434,7 @@ class Orbital_diag(FermiScan):
             self.projected_orbital_diag_K_list.append(projected_orbital_diag_K)
 
 class Velocity(Energy):
-    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], highOrderVelocity=False, **kwarg) -> None:
         '''
         Compute velocity matrix in original basis and eigen-basis
         And the velocity projected in specific basis
@@ -463,11 +463,12 @@ class Velocity(Energy):
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
         vectors=self.vectors[:,:,:,None,:,:]
-        self.velocity_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
+        velocity_bare_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
 
         r_K        =  np.fft.ifftn(r_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        r_K_H = (vectors.conj().swapaxes(-2,-1) @ r_K @ vectors) * self.energies[...,None,None,:]
-        self.velocity_K += -1j*(r_K_H - r_K_H.conj().swapaxes(-2,-1))
+        position_K = vectors.conj().swapaxes(-2,-1) @ r_K @ vectors # position matrix in eigen representation
+        r_K_H = position_K * self.energies[...,None,None,:]
+        self.velocity_K = velocity_bare_K -1j*(r_K_H - r_K_H.conj().swapaxes(-2,-1))
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
         # check hermity
@@ -497,6 +498,69 @@ class Velocity(Energy):
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_velocity_K_list.append((proj1_K@self.velocity_K@proj2_K + proj2_K@self.velocity_K@proj1_K)/2)
+
+        if highOrderVelocity:
+            RRH_R_W  = getattr(self.model, "RRHam_R", None)
+            RRRH_R_W = getattr(self.model, "RRRHam_R", None)
+            assert RRH_R_W is not None,  "RRHam_R is required for high order velocity,  execute getRRHam_R first"
+            assert RRRH_R_W is not None, "RRRHam_R is required for high order velocity, execute getRRRHam_R first"
+        
+            RRH_R_intepolated  = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
+            RRRH_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
+        
+            if self.phase:
+                RRH_R_W  = RRH_R_W  * self.phaseshift[:, None, None, None, None]
+                RRRH_R_W = RRRH_R_W * self.phaseshift[:, None, None, None, None, None]
+                
+            for iR, Rvec in enumerate(self.model.iRvec):
+                RRH_R_intepolated[ tuple(Rvec)] = RRH_R_W[iR]
+                RRRH_R_intepolated[tuple(Rvec)] = RRRH_R_W[iR]
+                
+            # w_K = d^2H/dk^2
+            RRHam_K  = -1 * np.fft.ifftn(RRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
+            vectors=self.vectors[:,:,:,None,None,:,:]
+            self.w_K = vectors.conj().swapaxes(-2,-1) @ RRHam_K @ vectors
+        
+            # u_K = d^3H/dk^3
+            RRRHam_K = -1j * np.fft.ifftn(RRRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
+            vectors=self.vectors[:,:,:,None,None,None,:,:]
+            self.u_K = vectors.conj().swapaxes(-2,-1) @ RRRHam_K @ vectors
+
+            # ==========================================================
+            # Gauge-Covariant Geometric Corrections
+            # ==========================================================
+            def comm(A, B):
+                # Helper to compute commutator [A, B] broadcasting over k-grid
+                return A @ B - B @ A
+
+            # Store the bare spatial moments
+            H1 = velocity_bare_K #self.RHam_K
+            H2 = self.w_K.copy()
+
+            # 1. Correct w_K
+            # w_ab = H^(2)_ab - i[r_a, H^(1)_b] - i[r_b, v_a]
+            for a in range(3):
+                for b in range(3):
+                    c1 = comm(position_K[..., a, :, :], H1[..., b, :, :])
+                    c2 = comm(position_K[..., b, :, :], self.velocity_K[..., a, :, :])
+                    self.w_K[..., a, b, :, :] = H2[..., a, b, :, :] - 1j * c1 - 1j * c2
+
+            # 2. Correct u_K
+            # u_abc = H^(3)_abc - i[r_a, H^(2)_bc] - i[r_b, H^(2)_ac] - [r_b, [r_a, H^(1)_c]] - i[r_c, w_ab]
+            H3 = self.u_K.copy()
+            for a in range(3):
+                for b in range(3):
+                    for c in range(3):
+                        c1 = comm(position_K[..., a, :, :], H2[..., b, c, :, :])
+                        c2 = comm(position_K[..., b, :, :], H2[..., a, c, :, :])
+                        
+                        c3_inner = comm(position_K[..., a, :, :], H1[..., c, :, :])
+                        c3 = comm(position_K[..., b, :, :], c3_inner)
+                        
+                        # Note: This explicitly uses the CORRECTED w_K calculated above
+                        c4 = comm(position_K[..., c, :, :], self.w_K[..., a, b, :, :])
+
+                        self.u_K[..., a, b, c, :, :] = H3[..., a, b, c, :, :] - 1j*c1 - 1j*c2 - c3 - 1j*c4
 
 class Velocity_diag(FermiScan):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
@@ -805,8 +869,191 @@ class BulkPhotovoltaicConductance(Velocity):
         self.projected_sigma /= np.prod(self.kgrid)
         if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
 
+class BulkPhotovoltaicConductance_VG_Full(Velocity):
+    def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
+        '''
+        Calculates the COMPLETE Velocity Gauge BPVE by summing all four Feynman diagrams.
+        Rewritten using np.einsum to guarantee exact quantum mechanical index tracking.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        
+        self.projected_response = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1, # iproj1, iproj2, iproj3
+                                         self.kgrid[0], self.kgrid[1], self.kgrid[2],
+                                         len(self.fermiList), len(responseOmegaIndexList),   # ifermi, iomega 
+                                         3, 3, 3), dtype=float)                      # ialpha1, ialpha2, ibeta
+        self.sigma_VG_Full = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        
+        # 3D energy array, index (ik1, ik2, ik3, m, n, l)
+        E_m = self.energies[..., :, None, None]
+        E_n = self.energies[..., None, :, None]
+        E_l = self.energies[..., None, None, :]
+        D_nm = 1.0 / (E_n - E_m - 1j * self.eta)
+
+        # 2D energy arrays, index [ik1, ik2, ik3, m, n]
+        E_m_2 = self.energies[..., :, None]
+        E_n_2 = self.energies[..., None, :]
+        D_nm_2 = 1.0 / (E_n_2 - E_m_2 - 1j * self.eta)
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            # occupation number: index [ik1, ik2, ik3, ib]
+            f = np.int8(self.energies < fermi)
+            # 3D occupation arrays
+            f_n =             f[..., None, :, None]
+            f_l =             f[..., None, None, :]
+            f_nl= f_n - f_l
+
+            # 2D occupation arrays
+            f_m_2 =             f[..., :, None]
+            f_n_2 =             f[..., None, :]
+            f_mn_2= f_m_2 - f_n_2    
+
+            for iomega, Omega in enumerate(self.omegaList):
+                # Resonant Denominators
+                S2_pos = 1.0 / (E_n - E_l - Omega - 1j * self.eta)
+                S2_neg = 1.0 / (E_n - E_l + Omega - 1j * self.eta)
+                Gw_mnl = f_nl * D_nm * (S2_pos + S2_neg)
+            
+                S_nm_pos = 1.0 / (E_n_2 - E_m_2 - Omega - 1j * self.eta)
+                S_nm_neg = 1.0 / (E_n_2 - E_m_2 + Omega - 1j * self.eta)
+                Gw_mn_2  = f_mn_2 * (S_nm_pos + S_nm_neg)
+                G_mn_2= f_mn_2 * D_nm_2
+            
+                for a in range(3):
+                    for b in range(3):
+                        for c in range(3):
+                        
+                            # Flatten to (Nk, norbs, norbs)
+                            v_a = self.velocity_K[..., a, :, :]
+                            v_b = self.velocity_K[..., b, :, :]
+                            v_c = self.velocity_K[..., c, :, :]
+                        
+                            w_ab = self.w_K[..., a, b, :, :]
+                            w_ca = self.w_K[..., c, a, :, :]
+                            w_cb = self.w_K[..., c, b, :, :]
+                        
+                            u_cab = self.u_K[..., c, a, b, :, :]
+                        
+                            # =======================================================
+                            # 1. Three-Point Bubble: Tr[ v^c v^a v^b ]
+                            # =======================================================
+                            # Einsum maps: v^c_{mn} * v^a_{nl} * v^b_{lm}
+                            vvv = np.einsum('abcmn, abcnl, abclm -> abcmnl', v_c, v_a, v_b)
+                            I3 = 2* np.sum(vvv * Gw_mnl, axis=(-3, -2, -1)).real
+                        
+                            # =======================================================
+                            # 2. Two-Point Bubble A (Diamagnetic Perturbation): Tr[ v^c w^{ab} ]
+                            # =======================================================
+                            rho_w = w_ab * G_mn_2
+                            I2A = np.einsum('abcmn, abcnm -> abc', v_c, rho_w).real
+                        
+                            # =======================================================
+                            # 3. Two-Point Bubble B (Diamagnetic Current): Tr[ w^{ca} v^b ]
+                            # =======================================================
+                            rho_v_b = v_b * Gw_mn_2
+                            rho_v_a = v_a * Gw_mn_2
+                        
+                            # Symmetrize driving fields
+                            I2B = 0.5 * np.einsum('abcmn, abcnm -> abc', w_ca, rho_v_b).real + \
+                                  0.5 * np.einsum('abcmn, abcnm -> abc', w_cb, rho_v_a).real
+                        
+                            # =======================================================
+                            # 4. One-Point Bubble (Ground State): Tr[ u^{cab} ]
+                            # =======================================================
+                            u_nn = np.einsum('abcnn -> abcn', u_cab)
+                            I1 = np.einsum('abcn, abcn -> abc', u_nn, f).real
+                        
+                            # =======================================================
+                            # Total Summation
+                            # =======================================================
+                            sigma_total_k = (I3 + I2A + I2B + I1) / Omega**2
+
+                            # BZ integration
+                            self.sigma_VG_Full[ifermi, iomega, a, b, c] = np.sum(sigma_total_k) / np.prod(self.kgrid)
+                            
+                            # saving BZ response 
+                            for irecord, iomega_record in enumerate(responseOmegaIndexList):
+                                if iomega_record == iomega: break
+                            else:
+                                continue
+                            self.projected_response[0, 0, 0, :, :, :, ifermi, irecord, a, b, c] = sigma_total_k
+                            irecord+=1
+
+        self.projected_sigma = self.sigma_VG_Full[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Full Velocity Gauge BPVE finished")
+
+class BulkPhotovoltaicConductance_LG(Velocity):
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Calculates the exact Shift Current (BPVE) using the Sipe-Shkrebtii Length Gauge formalism.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        self.calcDeltaEInverse()
+
+        omega_nm = self.deltaE 
+        inv_omega = self.deltaEInverse
+        norbs = self.model.norbs - self.ibmin
+        off_diag = 1.0 - np.eye(norbs)
+        
+        # Output Tensor: [ifermi, iomega, ialpha(drive), ibeta(drive), igamma(current)]
+        self.sigma_shift = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+
+        # 1. Compute Dipole Matrices (r^a_nm)
+        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
+
+        # 2. Compute Group Velocity Differences (Delta^a_nm)
+        v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1) 
+        Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :] 
+
+        for iomega, Omega in enumerate(self.omegaList):
+            L_nm_pos = (1/np.pi) * self.eta / ((omega_nm - Omega)**2 + self.eta**2)
+            L_nm_neg = (1/np.pi) * self.eta / ((omega_nm + Omega)**2 + self.eta**2)
+            L_nm = L_nm_pos + L_nm_neg
+
+            for ialpha in range(3): # Drive E-field a
+                for ibeta in range(3): # Drive E-field b
+                    for igamma in range(3): # Measured Current c
+                        
+                        v_a = self.velocity_K[..., ialpha, :, :]
+                        v_b = self.velocity_K[..., ibeta, :, :]
+                        v_c = self.velocity_K[..., igamma, :, :]  # Corrected to v_c!
+                        
+                        r_a = r_K[..., ialpha, :, :]
+                        r_b = r_K[..., ibeta, :, :]
+                        r_c = r_K[..., igamma, :, :]
+                        
+                        w_ca = self.w_K[..., igamma, ialpha, :, :]
+                        w_cb = self.w_K[..., igamma, ibeta, :, :]
+                        
+                        Delta_a = Delta_v[..., ialpha, :, :]
+                        Delta_b = Delta_v[..., ibeta, :, :]
+                        
+                        # Generalized Derivative w.r.t 'a'
+                        comm_rv_a = r_c @ v_a - v_a @ r_c
+                        r_c_deriv_a = (w_ca - v_c * Delta_a * inv_omega - comm_rv_a) * inv_omega / 1j * off_diag
+                        
+                        # Generalized Derivative w.r.t 'b' (Required for Sipe permutation symmetry)
+                        comm_rv_b = r_c @ v_b - v_b @ r_c
+                        r_c_deriv_b = (w_cb - v_c * Delta_b * inv_omega - comm_rv_b) * inv_omega / 1j * off_diag
+                        
+                        # Sipe Shift Integrand: I^{cab}_mn
+                        # Symmetrized: 0.5 * Im [ r^b_mn (r^c_nm);a + r^a_mn (r^c_nm);b ]
+                        # r_b.conj() safely extracts r^b_mn due to Hermiticity
+                        I_mn = 0.5 * (r_b.conj() * r_c_deriv_a + r_a.conj() * r_c_deriv_b).imag
+                        
+                        for ifermi, fermi in enumerate(self.fermiList):
+                            f = np.int8(self.energies < fermi)
+                            f_nm = f[..., :, None] - f[..., None, :] 
+                            
+                            shift_integrand = f_nm * I_mn * L_nm
+                            shift_sum = np.sum(shift_integrand) * np.pi
+                            
+                            self.sigma_shift[ifermi, iomega, ialpha, ibeta, igamma] = shift_sum / np.prod(self.kgrid)
+
+        self.projected_sigma = self.sigma_shift[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Shift Current finished")
+
 class BulkPhotovoltaicConductance_TDSE(Velocity):
-    def __init__(self, velocityProjectionList=[], E0=0.01, n_steps_per_cycle=100, **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], E0=0.01, n_steps_per_cycle=100, highOrderVelocity=True, **kwarg) -> None:
         '''
         Calculates the 2nd order DC photovoltaic conductance using Real-Time TDSE.
         Evolves the density matrix using a 4th-Order Runge-Kutta (RK4) integrator.
@@ -816,7 +1063,7 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         self.sigma_TDSE[ifermi, iomega, ialpha_drive, ibeta_measure]
         This matches the [ialpha, ialpha, ibeta] diagonal of the Kubo AC tensor.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=highOrderVelocity, **kwarg)
         
         # Shape: [ifermi, iomega, ialpha(driving field), ibeta(measured current)]
         self.sigma_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
@@ -847,25 +1094,36 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
 
                 for ialpha in range(3): # Direction of the driving field
                     v_alpha = self.velocity_K[..., ialpha, :, :]
+                    w_alpha_alpha = self.w_K[..., ialpha, ialpha, :, :]
+                    u_alpha_alpha_alpha = self.u_K[..., ialpha, ialpha, ialpha, :, :]
+
                     rho = rho0.copy()
                     t = 0.0
                     
                     # Phase 1: Evolve through transients to reach Non-Equilibrium Steady State
                     for _ in range(n_cycles_transient * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, Omega, rho0, E0)
+                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, u_alpha_alpha_alpha, Omega, rho0, E0)
                         t += dt
                         
                     # Phase 2: Time-average the current over the final optical cycle
                     J_dc = np.zeros(3)
                     for _ in range(n_cycles_measure * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, Omega, rho0, E0)
+                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, u_alpha_alpha_alpha, Omega, rho0, E0)
                         t += dt
+
+                        A_t = -2 * E0/Omega * np.sin(Omega * t)
                         
                         # Measure current in all 3 directions
                         for ibeta in range(3):
                             v_beta = self.velocity_K[..., ibeta, :, :]
+                            w_alpha_beta = self.w_K[..., ialpha, ibeta, :, :]
+                            u_alpha_alpha_beta = self.u_K[..., ialpha, ialpha, ibeta, :, :]
+
+                            # Full Current Operator: J = v - A*w + 1/2 A^2 u
+                            J_op = v_beta - A_t * w_alpha_beta + 0.5 * (A_t**2) * u_alpha_alpha_beta
+
                             # Tr(rho * v) summed over all k-points and bands
-                            j_val = np.sum(rho * v_beta.swapaxes(-1, -2), axis=(-1,-2)).real
+                            j_val = np.sum(rho * J_op.swapaxes(-1, -2), axis=(-1,-2)).real
                             J_dc[ibeta] += np.sum(j_val) / (n_cycles_measure * n_steps_per_cycle)
                             
                     # Conductance = J / E^2
@@ -874,7 +1132,7 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         self.projected_sigma=self.sigma_TDSE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE BPVE finished")
 
-    def _rk4_step(self, rho, t, dt, H_diag, v_alpha, Omega, rho0, E0):
+    def _rk4_step(self, rho, t, dt, H_diag, v_alpha, w_alpha_alpha, u_alpha_alpha_alpha, Omega, rho0, E0):
         # A(t) = A0 exp(-iwt)
         # E(t) = -dA/dt = (iw) A0 exp(-iw)
         # E(w) = iw A(w), A(w) = (-i/w) E(w)
@@ -882,7 +1140,11 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         # A(t) = A(W) exp(-iWt) + A(-W) exp(iWt) = (-i/W) E(W) exp(-iWt) + (i/W) E(-W) exp(iWt) = -2 E0/W sin(Wt)
         def dRho_dt(rho_state, time_val):
             A_t = -2 * E0/Omega * np.sin(Omega * time_val)
-            H_t = H_diag - A_t * v_alpha
+            #H_t = H_diag - A_t * v_alpha
+            # Full Minimal Coupling: H = H0 - A*v + 1/2 A^2 w - 1/6 A^3 u
+            H_t = (H_diag - A_t * v_alpha 
+                   + 1./2 * (A_t**2) * w_alpha_alpha 
+                   - 1./6 * (A_t**3) * u_alpha_alpha_alpha)
             comm = H_t @ rho_state - rho_state @ H_t
             return -1j * comm - self.eta * (rho_state - rho0)
 

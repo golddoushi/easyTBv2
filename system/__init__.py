@@ -31,6 +31,8 @@ class System:
         self.overlap_R:np.ndarray=None
         # position x Hamitonian
         self.RHam_R:np.ndarray=None
+        self.RRHam_R:np.ndarray=None
+        self.RRRHam_R:np.ndarray=None
         self.AA_R_W:np.ndarray=None # Berry connection, the expectation of position r
         # spin convention, "VASP" collect the same spin at one block, while "QE" collect the same orbital at one small block
         self.format="VASP"
@@ -78,6 +80,24 @@ class System:
         for iR, Rvec in enumerate(self.iRvec):
             #self.RHam_R[iR]=self.ham_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
             self.RHam_R[iR]=self.ham_R[iR,None,:,:]*(Rvec@self.lattice)[:,None,None]
+
+    def getRRHam_R(self):
+        # 2nd derivative spatial moment (w)
+        self.RRHam_R = np.zeros((self.nRvec, 3, 3, self.norbs, self.norbs), dtype=complex)
+        print(f"calculating R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
+        for iR, Rvec in enumerate(self.iRvec):
+            R_cart = Rvec @ self.lattice
+            R_tensor2 = R_cart[:, None] * R_cart[None, :]
+            self.RRHam_R[iR] = self.ham_R[iR, None, None, :, :] * R_tensor2[:, :, None, None]
+
+    def getRRRHam_R(self):
+        # 3rd derivative spatial moment (u)
+        print(f"calculating R \dot R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
+        self.RRRHam_R = np.zeros((self.nRvec, 3, 3, 3, self.norbs, self.norbs), dtype=complex)
+        for iR, Rvec in enumerate(self.iRvec):
+            R_cart = Rvec @ self.lattice
+            R_tensor3 = R_cart[:, None, None] * R_cart[None, :, None] * R_cart[None, None, :]
+            self.RRRHam_R[iR] = self.ham_R[iR, None, None, None, :, :] * R_tensor3[:, :, :, None, None]
 
     def getSpinMatrice(self,projectedOrbIndex=[]):
         '''
@@ -1151,10 +1171,13 @@ class System:
         
         # 6. Reconstruct dependent operators
         self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getRO_R'): self.getRO_R()
         self.getSpinMatrice()
         self.atomOrbAM = self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
+        
         
         print(f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
 
@@ -1265,6 +1288,8 @@ class System:
             self.energy_R = self.ham_R.copy()
             
         self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getRO_R') and has_overlap: self.getRO_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
@@ -1330,6 +1355,8 @@ class System:
             self.energy_R = self.ham_R.copy()
             
         self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getRO_R') and has_overlap: self.getRO_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
@@ -1473,6 +1500,8 @@ class System:
             
         # Rebuild dependent operators
         self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
@@ -1542,6 +1571,8 @@ class System:
             self.energy_R[iR0] = self.ham_R[iR0].copy()
             
         self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
@@ -1607,6 +1638,8 @@ class System:
             self.energy_R = self.ham_R.copy()
             
         self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
@@ -1687,6 +1720,8 @@ class System:
             
         # 5. Trigger updates for internal operator dependencies
         self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
         

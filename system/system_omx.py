@@ -89,6 +89,8 @@ class System_omx(System):
         self.reciLattice=np.linalg.inv(self.lattice)*np.pi*2
 
         self.getRHam_R()
+        self.getRRHam_R()
+        self.getRRRHam_R()
         self.getRO_R()
         self.getSpinMatrice()
 
@@ -169,6 +171,24 @@ class System_omx(System):
         # using momentum
         self.RHam_R=self.momentum_R.transpose((1,0,2,3)) 
     
+    def getRRHam_R(self):
+        # 2nd derivative spatial moment (w)
+        self.RRHam_R = np.zeros((self.nRvec, 3, 3, self.norbs, self.norbs), dtype=complex)
+        print(f"calculating R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
+        for iR, Rvec in enumerate(self.iRvec):
+            R_cart = Rvec @ self.lattice
+            R_tensor2 = R_cart[:, None] * R_cart[None, :]
+            self.RRHam_R[iR] = self.energy_R[iR, None, None, :, :] * R_tensor2[:, :, None, None]
+
+    def getRRRHam_R(self):
+        # 3rd derivative spatial moment (u)
+        print(f"calculating R \dot R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
+        self.RRRHam_R = np.zeros((self.nRvec, 3, 3, 3, self.norbs, self.norbs), dtype=complex)
+        for iR, Rvec in enumerate(self.iRvec):
+            R_cart = Rvec @ self.lattice
+            R_tensor3 = R_cart[:, None, None] * R_cart[None, :, None] * R_cart[None, None, :]
+            self.RRRHam_R[iR] = self.energy_R[iR, None, None, None, :, :] * R_tensor3[:, :, :, None, None]
+    
     def getRO_R(self):
         #return super().getRHam_R()
         #'''
@@ -183,4 +203,6 @@ class System_omx(System):
     def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,-1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], print_row=(0,1,2,3,), print_col=(0,1,2,3,)):
         super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, "openmx", print_row, print_col)
         self.getRHam_R()
+        self.getRRHam_R()
+        self.getRRRHam_R()
         self.getRO_R()

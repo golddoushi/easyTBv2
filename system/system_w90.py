@@ -188,8 +188,10 @@ class System_w90(System):
             if Rvec@Rvec==0: 
                 for iorb in range(self.norbs): self.AA_R_W[iRvec,:,iorb,iorb]=self.rList[:,iorb]
         #'''
-        # 12. compute the [r, Ham]
+        # 12. compute the R H_R, R \otimes R H_R and R \otimes R \otimes R H_R, for the further calcs. on velocities 
         self.getRHam_R()
+        self.getRRHam_R()
+        self.getRRRHam_R()
         self.getSpinMatrice()
         # 13. compute orbital angular moment operator
         self.atomOrbAM=self.orbitalAngularMomentCubic()
@@ -210,24 +212,6 @@ class System_w90(System):
         v2 = chk.v_matrix[ik2].T
         
         return v1@mat@v2
-
-    def getRHam_R(self):
-        super().getRHam_R() # for now, it is unecessary to compute the real velocity but the tight-binding velocity
-        return 
-    
-        nR1,nR2,nR3,norbs,norbs=self.ham_R.shape
-        self.RHam_R=np.zeros((nR1,nR2,nR3,3,norbs,norbs),dtype=complex)
-        print(f"calculating R \dot H_R on lattice {nR1}x{nR2}x{nR3} with lattice points {len(self.dRList)=}")
-        
-        for d in self.dRList:
-            d_xyz=np.array(d)@self.lattice
-            self.RHam_R[d[0],d[1],d[2]]=self.ham_R[d[0],d[1],d[2],None,:,:]*d_xyz[None,None,None,:,None,None]
-            for v in self.dRList_r:
-                d_minus_v=(d[0]-v[0],d[1]-v[1],d[2]-v[2])
-                if d_minus_v in self.dRList:
-                    t_d_minus_v = self.ham_R[d_minus_v[0],d_minus_v[1],d_minus_v[2],None,:,:]
-                    r_v=self.r_R[v[0],v[1],v[2]]
-                    self.RHam_R[d[0],d[1],d[2]] += t_d_minus_v@r_v - r_v@t_d_minus_v
     
     def getSpinMatrice(self):
         super().getSpinMatrice()
@@ -359,3 +343,5 @@ class System_w90(System):
         else:
             super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, 'w90', print_row, print_col)
         self.getRHam_R()
+        self.getRRHam_R()
+        self.getRRRHam_R()

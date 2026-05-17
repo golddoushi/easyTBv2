@@ -10,7 +10,7 @@ import numpy as np
 from task import BZGridTask, BZLineTask
 from system import System_omx, System_w90, System_tb
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_TDSE
+from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_VG_Full, BulkPhotovoltaicConductance_LG, BulkPhotovoltaicConductance_TDSE
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
@@ -74,14 +74,25 @@ def solveAHC(param):
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
-def solveBPVE(param):
-    calc=BulkPhotovoltaicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+def solveBPVE_VG(param):
+    calc=BulkPhotovoltaicConductance_VG_Full(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],
                                    )
     return {"energies":calc.energies,
             "projected response":calc.projected_response,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
+            "iq":param["iq"]}
+
+def solveBPVE_LG(param):
+    calc=BulkPhotovoltaicConductance_LG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   responseOmegaIndexList=param['record frequency ids'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   )
+    return {"energies":calc.energies,
+            #"projected response":calc.projected_response,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
             "iq":param["iq"]}
 
@@ -173,7 +184,7 @@ def solveBandStructure(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/1D-Chain/"
+    mainDir="./mcalc/FeCl2/"
     model=System_tb(
         mainDir=mainDir,
         hamR="wannier90",
@@ -216,9 +227,9 @@ def run():
     ]*1+[
         np.array([0, 0, 0]),
     ]*2
-    #model.symmerizeHamAndOverlap(
-    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
-    #)
+    model.symmerizeHamAndOverlap(
+        atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
+    )
     #exit()
     # modulate the SOC, exchange fields, etc
     #model.scaleSOC(lam=0)
@@ -278,7 +289,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-2.1         # VASP 2H-FeCl2
+    fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -288,7 +299,7 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
     
     #fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
     fermiAxis=np.array([fermi,])
@@ -338,9 +349,9 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(48,1,1)
+    BZGrid=(56,56,1)
     BZSymm=False
-    calc=BZGridTask(model, solveBPVE, 
+    calc=BZGridTask(model, solveBPVE_VG, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -352,7 +363,7 @@ def run():
                               #{"source":block, "target":block} for block in blockRegionList
                           ],
                           'omega':omegaAxis,
-                          'record frequency ids':[],
+                          'record frequency ids':[19,],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
@@ -361,7 +372,7 @@ def run():
     #_,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
     #energies=np.zeros(tuple(BZGrid)+(nbands,))
-    #responseFunction = np.zeros(BZGrid+(3,3,3),dtype=float)
+    responseFunction = np.zeros(BZGrid+(3,3,3),dtype=float)
     projected_sigma=0
     sigma=0
     for result_q in calc.results:
@@ -376,7 +387,7 @@ def run():
         #valence=result_q['energies']<=fermi
         #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
         #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=np.sum(result_q['spin Berry curv']*valence[...,None,None,None,:],axis=(-1,))
-        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=result_q['projected response'][0,0,0][:,:,:,0,0,:,:,:]
+        responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=result_q['projected response'][0,0,0][:,:,:,0,0,:,:,:]
         #continue
         projected_sigma += result_q['projected sigma']
         if not BZSymm:  # symmetrization on the BZ is only implemented for the whole tensor
@@ -467,7 +478,7 @@ def run():
                                     for beta in range(3):
                                         fout.write(f"{projected_sigma[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
                 fout.write("\n")
-    exit()#'''
+    #exit()#'''
 
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
     #'''

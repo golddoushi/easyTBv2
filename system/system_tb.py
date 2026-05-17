@@ -76,6 +76,8 @@ class System_tb(System):
         self.reciLattice=np.linalg.inv(self.lattice)*np.pi*2
 
         self.getRHam_R()
+        self.getRRHam_R()
+        self.getRRRHam_R()
         self.getSpinMatrice()
 
         # compute orbital angular moment operator
@@ -142,3 +144,5 @@ class System_tb(System):
     def symmerizeHamAndOverlap(self, spinor=False, saxis: np.ndarray = np.array([0,0,-1]), spin_basis: np.ndarray = np.zeros((2,2)), symOpSelection: list = [], atomicMagMomList: list = [], print_row=(0,1,2,3,), print_col=(0,1,2,3,)):
         super().symmerizeHamAndOverlap(spinor, saxis, spin_basis, symOpSelection, atomicMagMomList, "w90", print_row, print_col)
         self.getRHam_R()
+        self.getRRHam_R()
+        self.getRRRHam_R()
