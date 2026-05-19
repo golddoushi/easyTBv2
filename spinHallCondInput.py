@@ -478,7 +478,7 @@ def run():
                                     for beta in range(3):
                                         fout.write(f"{projected_sigma[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
                 fout.write("\n")
-    #exit()#'''
+    exit()#'''
 
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
     #'''

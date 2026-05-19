@@ -64,6 +64,8 @@ class System:
         self.fermi:float
         # symmetry group
         self.pointGroup=Group([Symmetry(np.eye(3))],real_lattice=None,recip_lattice=None)
+        # refractive index
+        self.refractive_index:float = 1.0
     
     def getRHam_R(self):
         '''

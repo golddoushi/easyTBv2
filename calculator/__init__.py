@@ -867,6 +867,14 @@ class BulkPhotovoltaicConductance(Velocity):
                         irecord+=1
             
         self.projected_sigma /= np.prod(self.kgrid)
+        # unit conversion
+        factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
+        if self.model.ispin==1: factor_SI*=2
+        self.projected_sigma *= factor_SI # in unit A / V^2
+
+        # to responsibity (uA/W)
+        #factor_responsivity = (753.46 / self.model.refractive_index) * 1e6 # 1e6 for micro-Amps
+        #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
 
 class BulkPhotovoltaicConductance_VG_Full(Velocity):
@@ -979,6 +987,14 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
                             irecord+=1
 
         self.projected_sigma = self.sigma_VG_Full[None,None,None,...]
+        # unit conversion
+        factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
+        if self.model.ispin==1: factor_SI*=2
+        self.projected_sigma *= factor_SI # in unit A / V^2
+
+        # to responsibity (uA/W)
+        #factor_responsivity = (753.46 / self.model.refractive_index) * 1e6 # 1e6 for micro-Amps
+        #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Full Velocity Gauge BPVE finished")
 
 class BulkPhotovoltaicConductance_LG(Velocity):
@@ -1050,6 +1066,14 @@ class BulkPhotovoltaicConductance_LG(Velocity):
                             self.sigma_shift[ifermi, iomega, ialpha, ibeta, igamma] = shift_sum / np.prod(self.kgrid)
 
         self.projected_sigma = self.sigma_shift[None,None,None,...]
+        # unit conversion
+        factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
+        if self.model.ispin==1: factor_SI*=2
+        self.projected_sigma *= factor_SI # in unit A / V^2
+
+        # to responsibity (uA/W)
+        #factor_responsivity = (753.46 / self.model.refractive_index) * 1e6 # 1e6 for micro-Amps
+        #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Shift Current finished")
 
 class BulkPhotovoltaicConductance_TDSE(Velocity):
@@ -1130,6 +1154,14 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
                     # Divide by volume/N_k
                     self.sigma_TDSE[ifermi, iomega, ialpha, ialpha, :] = J_dc / E0**2 / np.prod(self.kgrid)
         self.projected_sigma=self.sigma_TDSE[None,None,None,...]
+        # unit conversion
+        factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
+        if self.model.ispin==1: factor_SI*=2
+        self.projected_sigma *= factor_SI # in unit A / V^2
+
+        # to responsibity (uA/W)
+        #factor_responsivity = (753.46 / self.model.refractive_index) * 1e6 # 1e6 for micro-Amps
+        #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE BPVE finished")
 
     def _rk4_step(self, rho, t, dt, H_diag, v_alpha, w_alpha_alpha, u_alpha_alpha_alpha, Omega, rho0, E0):
