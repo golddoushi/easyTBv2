@@ -2,7 +2,12 @@
 #include<stdio.h>
 #include<complex.h>
 #include<Python.h>
+#ifdef MKL_ILP64
+#define MKL_Complex16 complex double
+#include<mkl.h>
+#else
 #include<lapacke.h>
+#endif
 #include<time.h>
 #include<fftw3.h>
 
