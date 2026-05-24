@@ -465,10 +465,15 @@ class Velocity(Energy):
         vectors=self.vectors[:,:,:,None,:,:]
         velocity_bare_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
 
+        # ==========================================================
+        # Gauge-Covariant Geometric Corrections for velocity
+        # ==========================================================
+        # v_a = H^(1)_a - i[r_a, H^(0)]
         r_K        =  np.fft.ifftn(r_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        position_K = vectors.conj().swapaxes(-2,-1) @ r_K @ vectors # position matrix in eigen representation
-        r_K_H = position_K * self.energies[...,None,None,:]
+        self.position_K = vectors.conj().swapaxes(-2,-1) @ r_K @ vectors # position matrix in eigen representation
+        r_K_H = self.position_K * self.energies[...,None,None,:]
         self.velocity_K = velocity_bare_K -1j*(r_K_H - r_K_H.conj().swapaxes(-2,-1))
+
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
         # check hermity
@@ -541,8 +546,8 @@ class Velocity(Energy):
             # w_ab = H^(2)_ab - i[r_a, H^(1)_b] - i[r_b, v_a]
             for a in range(3):
                 for b in range(3):
-                    c1 = comm(position_K[..., a, :, :], H1[..., b, :, :])
-                    c2 = comm(position_K[..., b, :, :], self.velocity_K[..., a, :, :])
+                    c1 = comm(self.position_K[..., a, :, :], H1[..., b, :, :])
+                    c2 = comm(self.position_K[..., b, :, :], self.velocity_K[..., a, :, :])
                     self.w_K[..., a, b, :, :] = H2[..., a, b, :, :] - 1j * c1 - 1j * c2
 
             # 2. Correct u_K
@@ -551,14 +556,14 @@ class Velocity(Energy):
             for a in range(3):
                 for b in range(3):
                     for c in range(3):
-                        c1 = comm(position_K[..., a, :, :], H2[..., b, c, :, :])
-                        c2 = comm(position_K[..., b, :, :], H2[..., a, c, :, :])
+                        c1 = comm(self.position_K[..., a, :, :], H2[..., b, c, :, :])
+                        c2 = comm(self.position_K[..., b, :, :], H2[..., a, c, :, :])
                         
-                        c3_inner = comm(position_K[..., a, :, :], H1[..., c, :, :])
-                        c3 = comm(position_K[..., b, :, :], c3_inner)
+                        c3_inner = comm(self.position_K[..., a, :, :], H1[..., c, :, :])
+                        c3 = comm(self.position_K[..., b, :, :], c3_inner)
                         
                         # Note: This explicitly uses the CORRECTED w_K calculated above
-                        c4 = comm(position_K[..., c, :, :], self.w_K[..., a, b, :, :])
+                        c4 = comm(self.position_K[..., c, :, :], self.w_K[..., a, b, :, :])
 
                         self.u_K[..., a, b, c, :, :] = H3[..., a, b, c, :, :] - 1j*c1 - 1j*c2 - c3 - 1j*c4
 
@@ -888,8 +893,8 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
         self.projected_response = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1, # iproj1, iproj2, iproj3
                                          self.kgrid[0], self.kgrid[1], self.kgrid[2],
                                          len(self.fermiList), len(responseOmegaIndexList),   # ifermi, iomega 
-                                         3, 3, 3), dtype=float)                      # ialpha1, ialpha2, ibeta
-        self.sigma_VG_Full = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+                                         3, 3, 3), dtype=complex)                      # ialpha1, ialpha2, ibeta
+        self.sigma_VG_Full = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
         
         # 3D energy array, index (ik1, ik2, ik3, m, n, l)
         E_m = self.energies[..., :, None, None]
@@ -900,7 +905,7 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
         # 2D energy arrays, index [ik1, ik2, ik3, m, n]
         E_m_2 = self.energies[..., :, None]
         E_n_2 = self.energies[..., None, :]
-        D_nm_2 = 1.0 / (E_n_2 - E_m_2 - 1j * self.eta)
+        D_mn_2 = 1.0 / (E_m_2 - E_n_2 - 1j * self.eta)
 
         for ifermi, fermi in enumerate(self.fermiList):
             # occupation number: index [ik1, ik2, ik3, ib]
@@ -921,10 +926,10 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
                 S2_neg = 1.0 / (E_n - E_l + Omega - 1j * self.eta)
                 Gw_mnl = f_nl * D_nm * (S2_pos + S2_neg)
             
-                S_nm_pos = 1.0 / (E_n_2 - E_m_2 - Omega - 1j * self.eta)
-                S_nm_neg = 1.0 / (E_n_2 - E_m_2 + Omega - 1j * self.eta)
-                Gw_mn_2  = f_mn_2 * (S_nm_pos + S_nm_neg)
-                G_mn_2= f_mn_2 * D_nm_2
+                S_mn_pos = 1.0 / (E_m_2 - E_n_2 - Omega - 1j * self.eta)
+                S_mn_neg = 1.0 / (E_m_2 - E_n_2 + Omega - 1j * self.eta)
+                Gw_mn_2  = f_mn_2 * (S_mn_pos + S_mn_neg)
+                G_mn_2= f_mn_2 * D_mn_2
             
                 for a in range(3):
                     for b in range(3):
@@ -940,20 +945,20 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
                             w_cb = self.w_K[..., c, b, :, :]
                         
                             u_cab = self.u_K[..., c, a, b, :, :]
-                        
+                            
                             # =======================================================
                             # 1. Three-Point Bubble: Tr[ v^c v^a v^b ]
                             # =======================================================
                             # Einsum maps: v^c_{mn} * v^a_{nl} * v^b_{lm}
                             vvv = np.einsum('abcmn, abcnl, abclm -> abcmnl', v_c, v_a, v_b)
-                            I3 = 2* np.sum(vvv * Gw_mnl, axis=(-3, -2, -1)).real
-                        
+                            I3 = 2* np.sum(vvv * Gw_mnl, axis=(-3, -2, -1))
+                            
                             # =======================================================
                             # 2. Two-Point Bubble A (Diamagnetic Perturbation): Tr[ v^c w^{ab} ]
                             # =======================================================
                             rho_w = w_ab * G_mn_2
-                            I2A = np.einsum('abcmn, abcnm -> abc', v_c, rho_w).real
-                        
+                            I2A = np.einsum('abcmn, abcnm -> abc', v_c, rho_w)
+                            
                             # =======================================================
                             # 3. Two-Point Bubble B (Diamagnetic Current): Tr[ w^{ca} v^b ]
                             # =======================================================
@@ -961,19 +966,21 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
                             rho_v_a = v_a * Gw_mn_2
                         
                             # Symmetrize driving fields
-                            I2B = 0.5 * np.einsum('abcmn, abcnm -> abc', w_ca, rho_v_b).real + \
-                                  0.5 * np.einsum('abcmn, abcnm -> abc', w_cb, rho_v_a).real
-                        
+                            I2B = 0.5 * np.einsum('abcmn, abcnm -> abc', w_ca, rho_v_b) + \
+                                  0.5 * np.einsum('abcmn, abcnm -> abc', w_cb, rho_v_a)
+                            
                             # =======================================================
                             # 4. One-Point Bubble (Ground State): Tr[ u^{cab} ]
                             # =======================================================
                             u_nn = np.einsum('abcnn -> abcn', u_cab)
-                            I1 = np.einsum('abcn, abcn -> abc', u_nn, f).real
-                        
+                            I1 = np.einsum('abcn, abcn -> abc', u_nn, f)
+                            
                             # =======================================================
                             # Total Summation
                             # =======================================================
                             sigma_total_k = (I3 + I2A + I2B + I1) / Omega**2
+                            # only the paramagentic contribution
+                            sigma_total_k = I1 / Omega**2
 
                             # BZ integration
                             self.sigma_VG_Full[ifermi, iomega, a, b, c] = np.sum(sigma_total_k) / np.prod(self.kgrid)
@@ -988,30 +995,39 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
 
         self.projected_sigma = self.sigma_VG_Full[None,None,None,...]
         # unit conversion
-        factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
-        if self.model.ispin==1: factor_SI*=2
-        self.projected_sigma *= factor_SI # in unit A / V^2
+        #factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
+        #if self.model.ispin==1: factor_SI*=2
+        #self.projected_sigma *= factor_SI # in unit A / V^2
 
         # to responsibity (uA/W)
         #factor_responsivity = (753.46 / self.model.refractive_index) * 1e6 # 1e6 for micro-Amps
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Full Velocity Gauge BPVE finished")
 
-class BulkPhotovoltaicConductance_LG(Velocity):
+class BulkPhotovoltaicConductance_LG_Shift(Velocity):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
-        Calculates the exact Shift Current (BPVE) using the Sipe-Shkrebtii Length Gauge formalism.
+        Calculates the Universal Shift Current (BPVE) using the Sipe-Shkrebtii Length Gauge.
+        Natively evaluates BOTH the Linear Shift Current and Circular Shift Current.
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
-        self.calcDeltaEInverse()
+        #self.calcDeltaEInverse()
+        #omega_nm = self.deltaE 
+        #inv_omega = self.deltaEInverse
 
-        omega_nm = self.deltaE 
-        inv_omega = self.deltaEInverse
+        # 2D energy arrays, index [ik1, ik2, ik3, m, n]
+        E_m_2 = self.energies[..., :, None]
+        E_n_2 = self.energies[..., None, :]
+        omega_mn = E_m_2 - E_n_2
+        nondegenerate=abs(omega_mn)>self.degen
+        inv_omega = np.zeros_like(omega_mn,dtype=float)
+        inv_omega[nondegenerate]=1/(omega_mn[nondegenerate])
+
         norbs = self.model.norbs - self.ibmin
         off_diag = 1.0 - np.eye(norbs)
         
-        # Output Tensor: [ifermi, iomega, ialpha(drive), ibeta(drive), igamma(current)]
-        self.sigma_shift = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        # Tensor Shape: [ifermi, iomega, ialpha(drive), ibeta(drive), igamma(current)]
+        self.sigma_shift = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
         # 1. Compute Dipole Matrices (r^a_nm)
         r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
@@ -1021,63 +1037,129 @@ class BulkPhotovoltaicConductance_LG(Velocity):
         Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :] 
 
         for iomega, Omega in enumerate(self.omegaList):
-            L_nm_pos = (1/np.pi) * self.eta / ((omega_nm - Omega)**2 + self.eta**2)
-            L_nm_neg = (1/np.pi) * self.eta / ((omega_nm + Omega)**2 + self.eta**2)
-            L_nm = L_nm_pos + L_nm_neg
+            L_mn_pos = (1/np.pi) * self.eta / ((omega_mn - Omega)**2 + self.eta**2)
+            L_mn_neg = (1/np.pi) * self.eta / ((omega_mn + Omega)**2 + self.eta**2)
+            L_mn = L_mn_pos + L_mn_neg
 
             for ialpha in range(3): # Drive E-field a
                 for ibeta in range(3): # Drive E-field b
                     for igamma in range(3): # Measured Current c
                         
                         v_a = self.velocity_K[..., ialpha, :, :]
-                        v_b = self.velocity_K[..., ibeta, :, :]
-                        v_c = self.velocity_K[..., igamma, :, :]  # Corrected to v_c!
+                        v_c = self.velocity_K[..., igamma, :, :]  
                         
-                        r_a = r_K[..., ialpha, :, :]
                         r_b = r_K[..., ibeta, :, :]
                         r_c = r_K[..., igamma, :, :]
                         
                         w_ca = self.w_K[..., igamma, ialpha, :, :]
-                        w_cb = self.w_K[..., igamma, ibeta, :, :]
-                        
                         Delta_a = Delta_v[..., ialpha, :, :]
-                        Delta_b = Delta_v[..., ibeta, :, :]
                         
-                        # Generalized Derivative w.r.t 'a'
+                        # Generalized Derivative w.r.t 'a' (Only 'a' is needed now!)
                         comm_rv_a = r_c @ v_a - v_a @ r_c
                         r_c_deriv_a = (w_ca - v_c * Delta_a * inv_omega - comm_rv_a) * inv_omega / 1j * off_diag
                         
-                        # Generalized Derivative w.r.t 'b' (Required for Sipe permutation symmetry)
-                        comm_rv_b = r_c @ v_b - v_b @ r_c
-                        r_c_deriv_b = (w_cb - v_c * Delta_b * inv_omega - comm_rv_b) * inv_omega / 1j * off_diag
-                        
-                        # Sipe Shift Integrand: I^{cab}_mn
-                        # Symmetrized: 0.5 * Im [ r^b_mn (r^c_nm);a + r^a_mn (r^c_nm);b ]
-                        # r_b.conj() safely extracts r^b_mn due to Hermiticity
-                        I_mn = 0.5 * (r_b.conj() * r_c_deriv_a + r_a.conj() * r_c_deriv_b).imag
+                        # Universal Complex Shift Integrand: I^{cab}_mn
+                        # The factor of -1j rotates the complex plane so that:
+                        # 1. Re[I_mn] matches Sipe's original Im[...] formula for Linear Shift
+                        # 2. Im[I_mn] cleanly isolates the Circular Shift Current
+                        I_mn = -1j * r_b.conj() * r_c_deriv_a
                         
                         for ifermi, fermi in enumerate(self.fermiList):
                             f = np.int8(self.energies < fermi)
                             f_nm = f[..., :, None] - f[..., None, :] 
                             
-                            shift_integrand = f_nm * I_mn * L_nm
+                            shift_integrand = f_nm * I_mn * L_mn
                             shift_sum = np.sum(shift_integrand) * np.pi
                             
                             self.sigma_shift[ifermi, iomega, ialpha, ibeta, igamma] = shift_sum / np.prod(self.kgrid)
 
         self.projected_sigma = self.sigma_shift[None,None,None,...]
-        # unit conversion
-        factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
-        if self.model.ispin==1: factor_SI*=2
-        self.projected_sigma *= factor_SI # in unit A / V^2
+        
+        # Unit conversion (Ensure it supports complex broadcasting)
+        #factor_SI = 4 * elementary_charge**2 / hbar / self.model.Vcell 
+        #if self.model.ispin == 1: factor_SI *= 2
+        #self.projected_sigma *= factor_SI # in unit A / V^2
 
-        # to responsibity (uA/W)
-        #factor_responsivity = (753.46 / self.model.refractive_index) * 1e6 # 1e6 for micro-Amps
-        #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Shift Current finished")
 
+class BulkPhotovoltaicConductance_LG_Injection(Velocity):
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Calculates the Circular Injection Current (Circular BPVE) using the 
+        Sipe-Shkrebtii Length Gauge formalism.
+        '''
+        # No high order velocity needed! This makes LG much faster than VG.
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
+        
+        # 2D energy arrays, index [ik1, ik2, ik3, m, n]
+        E_m_2 = self.energies[..., :, None]
+        E_n_2 = self.energies[..., None, :]
+        omega_mn = E_m_2 - E_n_2
+        nondegenerate=abs(omega_mn)>self.degen
+        inv_omega = np.zeros_like(omega_mn,dtype=float)
+        inv_omega[nondegenerate]=1/(omega_mn[nondegenerate])
+        
+        norbs = self.model.norbs - self.ibmin
+        off_diag = 1.0 - np.eye(norbs)
+        
+        # Tensor Shape: [ifermi, iomega, ialpha(drive), ibeta(drive), igamma(current)]
+        # Must be COMPLEX because the Circular BPVE susceptibility is purely imaginary!
+        self.sigma_inj = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        # 1. Compute Interband Dipole Matrices (r^a_nm)
+        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
+
+        # 2. Compute Group Velocity Differences (Delta^c_nm)
+        v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1) 
+        Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :] 
+
+        # 3. Relaxation Time (tau = 1 / 2\eta in natural units)
+        # Injection current scales linearly with the scattering time!
+        tau = 1.0 / (2.0 * self.eta)
+
+        for iomega, Omega in enumerate(self.omegaList):
+            # Energy conservation delta functions (Lorentzians)
+            L_mn_pos = (1/np.pi) * self.eta / ((omega_mn - Omega)**2 + self.eta**2)
+            L_mn_neg = (1/np.pi) * self.eta / ((omega_mn + Omega)**2 + self.eta**2)
+            L_mn = L_mn_pos + L_mn_neg
+
+            for ialpha in range(3): # Drive E-field a
+                r_a = r_K[..., ialpha, :, :]
+                
+                for ibeta in range(3): # Drive E-field b
+                    r_b = r_K[..., ibeta, :, :]
+                    
+                    # Full Complex Optical Transition Tensor
+                    # Real part drives Linear Injection (if magnetic)
+                    # Imaginary part drives Circular Injection
+                    rho_ab = r_a * r_b.conj()
+                    
+                    for igamma in range(3): # Measured Current c
+                        Delta_c = Delta_v[..., igamma, :, :]
+                        
+                        # Universal Sipe Injection Integrand
+                        I_mn = tau * Delta_c * rho_ab
+                        
+                        for ifermi, fermi in enumerate(self.fermiList):
+                            f = np.int8(self.energies < fermi)
+                            f_mn = f[..., :, None] - f[..., None, :] 
+                            
+                            inj_integrand = f_mn * I_mn * L_mn
+                            inj_sum = np.sum(inj_integrand) * (-2 * np.pi)
+                            
+                            self.sigma_inj[ifermi, iomega, ialpha, ibeta, igamma] = inj_sum / np.prod(self.kgrid)
+
+        self.projected_sigma = self.sigma_inj[None,None,None,...]
+        
+        # Unit conversion
+        #factor_SI = 4 * elementary_charge**2 / hbar / self.model.Vcell 
+        #if self.model.ispin == 1: factor_SI *= 2
+        #self.projected_sigma *= factor_SI # in unit A / V^2
+
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Injection Current finished")
+
 class BulkPhotovoltaicConductance_TDSE(Velocity):
-    def __init__(self, velocityProjectionList=[], E0=0.01, n_steps_per_cycle=100, highOrderVelocity=True, **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, highOrderVelocity=True, **kwarg) -> None:
         '''
         Calculates the 2nd order DC photovoltaic conductance using Real-Time TDSE.
         Evolves the density matrix using a 4th-Order Runge-Kutta (RK4) integrator.
@@ -1145,6 +1227,8 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
 
                             # Full Current Operator: J = v - A*w + 1/2 A^2 u
                             J_op = v_beta - A_t * w_alpha_beta + 0.5 * (A_t**2) * u_alpha_alpha_beta
+                            # only the paramagnetic current
+                            #J_op = 0.5 * (A_t**2) * u_alpha_alpha_beta
 
                             # Tr(rho * v) summed over all k-points and bands
                             j_val = np.sum(rho * J_op.swapaxes(-1, -2), axis=(-1,-2)).real
@@ -1155,9 +1239,9 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
                     self.sigma_TDSE[ifermi, iomega, ialpha, ialpha, :] = J_dc / E0**2 / np.prod(self.kgrid)
         self.projected_sigma=self.sigma_TDSE[None,None,None,...]
         # unit conversion
-        factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
-        if self.model.ispin==1: factor_SI*=2
-        self.projected_sigma *= factor_SI # in unit A / V^2
+        #factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
+        #if self.model.ispin==1: factor_SI*=2
+        #self.projected_sigma *= factor_SI # in unit A / V^2
 
         # to responsibity (uA/W)
         #factor_responsivity = (753.46 / self.model.refractive_index) * 1e6 # 1e6 for micro-Amps
@@ -1174,9 +1258,11 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
             A_t = -2 * E0/Omega * np.sin(Omega * time_val)
             #H_t = H_diag - A_t * v_alpha
             # Full Minimal Coupling: H = H0 - A*v + 1/2 A^2 w - 1/6 A^3 u
-            H_t = (H_diag - A_t * v_alpha 
-                   + 1./2 * (A_t**2) * w_alpha_alpha 
-                   - 1./6 * (A_t**3) * u_alpha_alpha_alpha)
+            H_t = (H_diag 
+                   - A_t * v_alpha                           # paramagentic drive
+                   + 1./2 * (A_t**2) * w_alpha_alpha         # diamagentic drive 
+                   #- 1./6 * (A_t**3) * u_alpha_alpha_alpha  # Fermi sea drive
+                   )
             comm = H_t @ rho_state - rho_state @ H_t
             return -1j * comm - self.eta * (rho_state - rho0)
 
@@ -1186,6 +1272,86 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
     
+class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Calculates the Inverse Faraday Effect (IFE) Susceptibility Tensor.
+        Utilizes the Length Gauge to ensure absolute stability at low frequencies.
+        
+        Parameters:
+        - ife_type: "total", "spin", or "orbital" (Selects the magnetization operator)
+        '''
+        # highOrderVelocity=False because Length Gauge does NOT need the w_K or u_K diamagnetic tensors!
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
+        
+        norbs = self.model.norbs
+        
+        # =======================================================
+        # 1. Fetch Magnetic Moment Operator (M = L + g_s S)
+        # =======================================================
+        M_K = np.zeros(self.kgrid+(3, norbs, norbs), dtype=complex)
+        
+        if ife_type in ["total", "spin"]:
+            # the spin matrice is constructed with sigma matrix which is the double of real spin matrice
+            # so there is no need for the extra factor 2
+            M_K += self.spin_K
+            if self.verbose: print("IFE: Spin Magnetization Operator Loaded.")
+            
+        if ife_type in ["total", "orbital"]:
+            M_K += self.orbital_K
+            if self.verbose: print("IFE: Orbital Magnetization Operator Loaded.")
+        
+        # =======================================================
+        # 2. Setup Energy Denominators
+        # =======================================================
+        E_m = self.energies[..., :, None, None]
+        E_n = self.energies[..., None, :, None]
+        E_l = self.energies[..., None, None, :]
+        
+        D_nm = 1.0 / (E_n - E_m - 1j * self.eta)
+        
+        # Tensor Shape: [ifermi, iomega, c(Magnetization), a(E-field 1), b(E-field 2)]
+        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        
+        for iomega, Omega in enumerate(self.omegaList):
+            
+            # Sipe Interband Perturbation Denominators
+            S_lm_pos = 1.0 / (E_l - E_m + Omega - 1j * self.eta)
+            S_nl_pos = 1.0 / (E_n - E_l + Omega - 1j * self.eta)
+            S_lm_neg = 1.0 / (E_l - E_m - Omega - 1j * self.eta)
+            S_nl_neg = 1.0 / (E_n - E_l - Omega - 1j * self.eta)
+            
+            for c in range(3): # Measurement Direction (M_c)
+                M_c = M_K[..., c, :, :]
+                for a in range(3): # Drive Field 1 (E_a)
+                    r_a = self.position_K[..., a, :, :]
+                    for b in range(3): # Drive Field 2 (E_b)
+                        r_b = self.position_K[..., b, :, :]
+                        
+                        # Execute the exact Tr[ M r_b r_a ] and Tr[ M r_a r_b ] operators
+                        Mrr_ba = np.einsum('ijkmn, ijknl, ijklm -> ijkmnl', M_c, r_b, r_a)
+                        Mrr_ab = np.einsum('ijkmn, ijknl, ijklm -> ijkmnl', M_c, r_a, r_b)
+                        
+                        for ifermi, fermi in enumerate(self.fermiList):
+                            f   = np.int8(self.energies < fermi)
+                            f_m = f[..., :, None, None]
+                            f_n = f[..., None, :, None]
+                            f_l = f[..., None, None, :]
+                            
+                            f_lm = f_l - f_m
+                            f_nl = f_n - f_l
+                            
+                            # Liouville Density Matrix Commutator terms
+                            term_ba = D_nm * (-f_lm * S_lm_pos + f_nl * S_nl_neg)
+                            term_ab = D_nm * ( f_nl * S_nl_pos - f_lm * S_lm_neg)
+                            
+                            integrand = Mrr_ba * term_ba + Mrr_ab * term_ab
+                            
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(integrand) / np.prod(self.kgrid)
+
+        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
+
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
         '''

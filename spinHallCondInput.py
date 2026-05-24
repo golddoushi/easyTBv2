@@ -10,7 +10,7 @@ import numpy as np
 from task import BZGridTask, BZLineTask
 from system import System_omx, System_w90, System_tb
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_VG_Full, BulkPhotovoltaicConductance_LG, BulkPhotovoltaicConductance_TDSE
+from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_VG_Full, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_TDSE
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
@@ -85,8 +85,19 @@ def solveBPVE_VG(param):
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
             "iq":param["iq"]}
 
-def solveBPVE_LG(param):
-    calc=BulkPhotovoltaicConductance_LG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+def solveBPVE_LG_Shift(param):
+    calc=BulkPhotovoltaicConductance_LG_Shift(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   responseOmegaIndexList=param['record frequency ids'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   )
+    return {"energies":calc.energies,
+            #"projected response":calc.projected_response,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
+            "iq":param["iq"]}
+
+def solveBPVE_LG_Inject(param):
+    calc=BulkPhotovoltaicConductance_LG_Injection(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],
@@ -184,12 +195,12 @@ def solveBandStructure(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
+    mainDir="./mcalc/BN/"
     model=System_tb(
         mainDir=mainDir,
-        hamR="wannier90",
+        #hamR="wannier90",
         #hamR="omx",
-        #hamR="BNsoc",
+        hamR="BN_fm_soc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -222,14 +233,14 @@ def run():
     # rotate the spin quantization axis to \sigma^z if SAXIS != 0 0 1
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
-    atomicMagMomList=[
-        np.array([0, 0, 1]),
-    ]*1+[
-        np.array([0, 0, 0]),
-    ]*2
-    model.symmerizeHamAndOverlap(
-        atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
-    )
+    #atomicMagMomList=[
+    #    np.array([0, 0, 1]),
+    #]*1+[
+    #    np.array([0, 0, 0]),
+    #]*2
+    #model.symmerizeHamAndOverlap(
+    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
+    #)
     #exit()
     # modulate the SOC, exchange fields, etc
     #model.scaleSOC(lam=0)
@@ -289,7 +300,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.1         # VASP 2H-FeCl2
+    #fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -299,11 +310,11 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    #fermi=0            # model hamiltonian
+    fermi=0            # model hamiltonian
     
     #fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.linspace(1.0,4.0,51)
+    omegaAxis=np.linspace(0.5,4.0,51)
     model.setFermi(fermi)
     
     '''
@@ -349,7 +360,7 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(56,56,1)
+    BZGrid=(48,48,1)
     BZSymm=False
     calc=BZGridTask(model, solveBPVE_VG, 
                     args={"fermi":fermiAxis, 
@@ -363,31 +374,23 @@ def run():
                               #{"source":block, "target":block} for block in blockRegionList
                           ],
                           'omega':omegaAxis,
-                          'record frequency ids':[19,],
+                          'record frequency ids':[],
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
                     ncores=8)
-
+    #exit()
     #_,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
     #energies=np.zeros(tuple(BZGrid)+(nbands,))
-    responseFunction = np.zeros(BZGrid+(3,3,3),dtype=float)
+    #responseFunction = np.zeros(BZGrid+(3,3,3),dtype=float)
     projected_sigma=0
     sigma=0
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
-        #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=np.diagonal(result_q['velocities'],axis1=-2,axis2=-1)
-        #velocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['velocities'] # obtained by Velocity_diag
-        #spinVelocity[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin velocities'] # obtained by spinVelocity_diag
-        #spinGalvanic[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin galvanic response'] # obtained by spinVelocity_diag
-        #spinRashiba[:,result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=result_q['spin Rashiba response'] # obtained by SpinRashibaConductance
-        #berryCurv[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['Berry curv']
-        #valence=result_q['energies']<=fermi
-        #f_E=(1/(result_q['energies']-fermi+0.026j)).imag#-1/0.026*exp/(1+exp)**2
         #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=np.sum(result_q['spin Berry curv']*valence[...,None,None,None,:],axis=(-1,))
-        responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=result_q['projected response'][0,0,0][:,:,:,0,0,:,:,:]
+        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=result_q['projected response'][0,0,0][:,:,:,0,0,:,:,:]
         #continue
         projected_sigma += result_q['projected sigma']
         if not BZSymm:  # symmetrization on the BZ is only implemented for the whole tensor
@@ -453,7 +456,8 @@ def run():
     exit()#'''
 
     #'''
-    # output projected 3-ranked, frequency-dependent conductance
+    # output projected 3-ranked, frequency-dependent complex conductance
+    projected_sigma=projected_sigma.real
     projected_sigma/=len(calc.results)
     with open("%s/bulkPhotovoltaics.txt"%mainDir,"w") as fout:
         fout.write("Omega(eV) Fermi(eV) ")
