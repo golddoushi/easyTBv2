@@ -10,7 +10,8 @@ import numpy as np
 from task import BZGridTask, BZLineTask
 from system import System_omx, System_w90, System_tb
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_VG_Full, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_TDSE
+from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_VG_Full, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
+from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_LG
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
@@ -110,9 +111,39 @@ def solveBPVE_LG_Inject(param):
 def solveBPVE_TDSE(param):
     calc = BulkPhotovoltaicConductance_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   A0=0.01, # Keep this in the perturbative regime
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
+            "iq": param["iq"]}
+
+def solveBPVE_TDSE_LG(param):
+    calc = BulkPhotovoltaicConductance_TDSE_LG_Naive(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   )
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
+            "iq": param["iq"]}
+
+def solveIFE_VG(param):
+    calc = InverseFaradayEffect_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   ife_type=param['IFE type'],
+                                   )
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
+            "iq": param["iq"]}
+
+def solveIFE_LG(param):
+    calc = InverseFaradayEffect_LG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   ife_type=param['IFE type'],
+                                   )
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
+            "iq": param["iq"]}
+
+def solveIFE_TDSE(param):
+    calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   ife_type=param['IFE type'],
+                                   )
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE, 
             "iq": param["iq"]}
 
 def solveSGC(param):
@@ -195,12 +226,12 @@ def solveBandStructure(param):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/BN/"
+    mainDir="./mcalc/FeCl2/"
     model=System_tb(
         mainDir=mainDir,
-        #hamR="wannier90",
+        hamR="wannier90",
         #hamR="omx",
-        hamR="BN_fm_soc",
+        #hamR="BN_fm_soc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -300,7 +331,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-2.1         # VASP 2H-FeCl2
+    fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -310,7 +341,7 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
     
     #fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
     fermiAxis=np.array([fermi,])
@@ -360,9 +391,9 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(48,48,1)
+    BZGrid=(56,56,1)
     BZSymm=False
-    calc=BZGridTask(model, solveBPVE_VG, 
+    calc=BZGridTask(model, solveIFE_VG, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -375,6 +406,8 @@ def run():
                           ],
                           'omega':omegaAxis,
                           'record frequency ids':[],
+
+                          "IFE type": "total", # Type of Inversed Faraday effect, can be spin | orbital | total
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',

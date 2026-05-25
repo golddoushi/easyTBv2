@@ -935,7 +935,7 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
                     for b in range(3):
                         for c in range(3):
                         
-                            # Flatten to (Nk, norbs, norbs)
+                            # (ik1, ik2, ik3, norbs, norbs)
                             v_a = self.velocity_K[..., a, :, :]
                             v_b = self.velocity_K[..., b, :, :]
                             v_c = self.velocity_K[..., c, :, :]
@@ -980,7 +980,7 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
                             # =======================================================
                             sigma_total_k = (I3 + I2A + I2B + I1) / Omega**2
                             # only the paramagentic contribution
-                            sigma_total_k = I1 / Omega**2
+                            #sigma_total_k = I1 / Omega**2
 
                             # BZ integration
                             self.sigma_VG_Full[ifermi, iomega, a, b, c] = np.sum(sigma_total_k) / np.prod(self.kgrid)
@@ -1272,7 +1272,85 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
     
-class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
+class BulkPhotovoltaicConductance_TDSE_LG_Naive(Velocity):
+    def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, **kwarg) -> None:
+        '''
+        Calculates the LG DC response using isolated k-point TDSE.
+        WARNING: Because it lacks the k-derivative (Nabla_k rho), this will ONLY capture 
+        the Injection-like optical transitions. It will FAIL to reproduce the Shift current.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
+        
+        self.sigma_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        
+        # 1. Diagonal Hamiltonian
+        H_diag = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
+        for i in range(self.model.norbs):
+            H_diag[..., i, i] = self.energies[..., i]
+
+        # 2. Interband Dipole Matrix r_{nm} = v_{nm} / (i * omega_{mn})
+        omega_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        inv_omega = np.zeros_like(omega_mn, dtype=float)
+        nondegenerate = abs(omega_mn) > self.degen
+        inv_omega[nondegenerate] = 1.0 / omega_mn[nondegenerate]
+        
+        off_diag = 1.0 - np.eye(self.model.norbs)
+        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros_like(H_diag)
+            for i in range(self.model.norbs):
+                rho0[..., i, i] = f[..., i]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                T = 2 * np.pi / Omega
+                dt = T / n_steps_per_cycle
+                
+                n_cycles_transient = int(np.ceil((10.0 / self.eta) / T))
+                n_cycles_measure = 1
+
+                for ialpha in range(3): # Direction of the driving E-field
+                    r_alpha = r_K[..., ialpha, :, :]
+                    rho = rho0.copy()
+                    t = 0.0
+                    
+                    for _ in range(n_cycles_transient * n_steps_per_cycle):
+                        rho = self._rk4_step_LG(rho, t, dt, H_diag, r_alpha, Omega, rho0, E0)
+                        t += dt
+                        
+                    J_dc = np.zeros(3)
+                    for _ in range(n_cycles_measure * n_steps_per_cycle):
+                        rho = self._rk4_step_LG(rho, t, dt, H_diag, r_alpha, Omega, rho0, E0)
+                        t += dt
+
+                        for ibeta in range(3):
+                            v_beta = self.velocity_K[..., ibeta, :, :]
+                            # Current Operator in LG is strictly just 'v'
+                            j_val = np.sum(rho * v_beta.swapaxes(-1, -2), axis=(-1,-2)).real
+                            J_dc[ibeta] += np.sum(j_val) / (n_cycles_measure * n_steps_per_cycle)
+                            
+                    self.sigma_TDSE[ifermi, iomega, ialpha, ialpha, :] = J_dc / E0**2 / np.prod(self.kgrid)
+        
+        self.projected_sigma = self.sigma_TDSE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE Naive LG finished")
+
+    def _rk4_step_LG(self, rho, t, dt, H_diag, r_alpha, Omega, rho0, E0):
+        def dRho_dt(rho_state, time_val):
+            # A(t) = -2E0/Omega * sin(Omega t) -> E(t) = -dA/dt = 2*E0*cos(Omega t)
+            E_t = 2.0 * E0 * np.cos(Omega * time_val)
+            H_t = H_diag - E_t * r_alpha
+            
+            comm = H_t @ rho_state - rho_state @ H_t
+            return -1j * comm - self.eta * (rho_state - rho0)
+
+        k1 = dRho_dt(rho, t)
+        k2 = dRho_dt(rho + 0.5 * dt * k1, t + 0.5 * dt)
+        k3 = dRho_dt(rho + 0.5 * dt * k2, t + 0.5 * dt)
+        k4 = dRho_dt(rho + dt * k3, t + dt)
+        return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+
+class __InverseFaradayEffect_LG(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
         Calculates the Inverse Faraday Effect (IFE) Susceptibility Tensor.
@@ -1351,6 +1429,219 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
+
+class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
+        
+        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        if ife_type in ["total", "spin"]: M_K += self.spin_K
+        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
+
+        omega_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        inv_omega = np.zeros_like(omega_mn, dtype=float)
+        nondegenerate = abs(omega_mn) > self.degen
+        inv_omega[nondegenerate] = 1.0 / omega_mn[nondegenerate]
+        
+        off_diag = 1.0 - np.eye(self.model.norbs - self.ibmin)
+        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
+
+        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        E_n_3D = self.energies[..., :, None, None]
+        E_m_3D = self.energies[..., None, :, None]
+        E_l_3D = self.energies[..., None, None, :]
+        D_nm_3D = 1.0 / (E_n_3D - E_m_3D - 1j * self.eta)
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            f_n_3D = f[..., :, None, None]
+            f_m_3D = f[..., None, :, None]
+            f_l_3D = f[..., None, None, :]
+            
+            f_lm = f_l_3D - f_m_3D
+            f_nl = f_n_3D - f_l_3D
+
+            for iomega, Omega in enumerate(self.omegaList):
+                S_lm_pos = 1.0 / (E_l_3D - E_m_3D + Omega - 1j * self.eta)
+                S_nl_pos = 1.0 / (E_n_3D - E_l_3D + Omega - 1j * self.eta)
+                S_lm_neg = 1.0 / (E_l_3D - E_m_3D - Omega - 1j * self.eta)
+                S_nl_neg = 1.0 / (E_n_3D - E_l_3D - Omega - 1j * self.eta)
+                
+                term_ba = D_nm_3D * (-f_lm * S_lm_pos + f_nl * S_nl_neg)
+                term_ab = D_nm_3D * ( f_nl * S_nl_pos - f_lm * S_lm_neg)
+
+                for c in range(3):
+                    M_c = M_K[..., c, :, :].swapaxes(-1, -2)
+                    for a in range(3):
+                        r_a = r_K[..., a, :, :]
+                        for b in range(3):
+                            r_b = r_K[..., b, :, :]
+                            
+                            # Exact Traces strictly locked to n, m, l grids
+                            Mrr_ba = np.einsum('...ij, ...jk, ...ki -> ...ijk', M_c, r_b, r_a)
+                            Mrr_ab = np.einsum('...ij, ...jk, ...ki -> ...ijk', M_c, r_a, r_b)
+                            
+                            integrand = Mrr_ba * term_ba + Mrr_ab * term_ab
+                            
+                            # CORRECTED: np.sum() now integrates over all bands AND the k-grid
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(integrand) / np.prod(self.kgrid)
+
+        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
+
+class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        
+        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        if ife_type in ["total", "spin"]: M_K += self.spin_K
+        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
+
+        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        
+        E_n = self.energies[..., :, None, None]
+        E_m = self.energies[..., None, :, None]
+        E_l = self.energies[..., None, None, :]
+        D_nm = 1.0 / (E_n - E_m - 1j * self.eta)
+
+        E_m_2 = self.energies[..., :, None]
+        E_n_2 = self.energies[..., None, :]
+        D_mn_2 = 1.0 / (E_m_2 - E_n_2 - 1j * self.eta)
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            # 3D occupation arrays
+            f_n =             f[..., None, :, None]
+            f_l =             f[..., None, None, :]
+            f_nl= f_n - f_l
+
+            # 2D occupation arrays
+            f_m_2 =             f[..., :, None]
+            f_n_2 =             f[..., None, :]
+            f_mn_2= f_m_2 - f_n_2  
+
+            for iomega, Omega in enumerate(self.omegaList):
+                # Resonant Denominators
+                S2_pos = 1.0 / (E_n - E_l - Omega - 1j * self.eta)
+                S2_neg = 1.0 / (E_n - E_l + Omega - 1j * self.eta)
+                Gw_mnl = f_nl * D_nm * (S2_pos + S2_neg)
+            
+                S_mn_pos = 1.0 / (E_m_2 - E_n_2 - Omega - 1j * self.eta)
+                S_mn_neg = 1.0 / (E_m_2 - E_n_2 + Omega - 1j * self.eta)
+                Gw_mn_2  = f_mn_2 * (S_mn_pos + S_mn_neg)
+                G_mn_2= f_mn_2 * D_mn_2
+
+                for c in range(3):
+                    # FIX: Transpose M to M_mn to evaluate the correct physical trace
+                    M_c_mn = M_K[..., c, :, :].swapaxes(-1, -2)
+                    for a in range(3):
+                        v_a = self.velocity_K[..., a, :, :]
+                        for b in range(3):
+                            v_b = self.velocity_K[..., b, :, :]
+                            w_ab = self.w_K[..., a, b, :, :]
+                            
+                            # =======================================================
+                            # 1. Three-Point Bubble: Tr[ M^c v^a v^b ]
+                            # =======================================================
+                            # Einsum maps: v^c_{mn} * v^a_{nl} * v^b_{lm}
+                            Mvv = np.einsum('ijkmn, ijknl, ijklm -> ijkmnl', M_c_mn, v_a, v_b)
+                            I3 = 2* np.sum(Mvv * Gw_mnl, axis=(-3, -2, -1))
+                            
+                            # =======================================================
+                            # 2. Two-Point Bubble A (Diamagnetic Perturbation): Tr[ M^c w^{ab} ]
+                            # =======================================================
+                            rho_w = w_ab * G_mn_2
+                            I2A = np.einsum('ijkmn, ijknm -> ijk', M_c_mn, rho_w)
+
+                            # =======================================================
+                            # Total Summation
+                            # =======================================================
+                            sigma_total_k = (I3 + I2A) / Omega**2
+                            
+                            
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_total_k) / np.prod(self.kgrid)
+
+        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
+
+class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, **kwarg) -> None:
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        
+        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        if ife_type in ["total", "spin"]: M_K += self.spin_K
+        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
+
+        self.chi_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        
+        H_diag = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
+        for i in range(self.model.norbs):
+            H_diag[..., i, i] = self.energies[..., i]
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros_like(H_diag)
+            for i in range(self.model.norbs):
+                rho0[..., i, i] = f[..., i]
+
+            # =======================================================
+            # Fix: Calculate Unperturbed Ground State Magnetization M0
+            # =======================================================
+            M0 = np.zeros(3)
+            for ic in range(3):
+                M_val0 = np.sum(rho0 * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1,-2)).real
+                M0[ic] = np.sum(M_val0)
+
+            for iomega, Omega in enumerate(self.omegaList):
+                T = 2 * np.pi / Omega
+                dt = T / n_steps_per_cycle
+                
+                n_cycles_transient = int(np.ceil((10.0 / self.eta) / T))
+                n_cycles_measure = 1
+
+                for ialpha in range(3): 
+                    v_alpha = self.velocity_K[..., ialpha, :, :]
+                    w_alpha_alpha = self.w_K[..., ialpha, ialpha, :, :]
+
+                    rho = rho0.copy()
+                    t = 0.0
+                    
+                    for _ in range(n_cycles_transient * n_steps_per_cycle):
+                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, Omega, rho0, E0)
+                        t += dt
+                        
+                    M_dc = np.zeros(3)
+                    for _ in range(n_cycles_measure * n_steps_per_cycle):
+                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, Omega, rho0, E0)
+                        t += dt
+
+                        for ic in range(3):
+                            M_val = np.sum(rho * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1,-2)).real
+                            M_dc[ic] += np.sum(M_val) / (n_cycles_measure * n_steps_per_cycle)
+                            
+                    # Fix: Subtract M0 to get the pure Opto-Magnetic Response (\Delta M)
+                    self.chi_TDSE[ifermi, iomega, :, ialpha, ialpha] = (M_dc - M0) / E0**2 / np.prod(self.kgrid)
+        
+        self.projected_sigma = self.chi_TDSE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE IFE finished")
+
+    def _rk4_step(self, rho, t, dt, H_diag, v_alpha, w_alpha_alpha, Omega, rho0, E0):
+        def dRho_dt(rho_state, time_val):
+            A_t = -2 * E0/Omega * np.sin(Omega * time_val)
+            H_t = (H_diag 
+                   - A_t * v_alpha                   # paramagnetic drive
+                   + 0.5 * (A_t**2) * w_alpha_alpha  # diamagnetic drive
+                   )
+            comm = H_t @ rho_state - rho_state @ H_t
+            return -1j * comm - self.eta * (rho_state - rho0)
+
+        k1 = dRho_dt(rho, t)
+        k2 = dRho_dt(rho + 0.5 * dt * k1, t + 0.5 * dt)
+        k3 = dRho_dt(rho + 0.5 * dt * k2, t + 0.5 * dt)
+        k4 = dRho_dt(rho + dt * k3, t + dt)
+        return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+
 
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
