@@ -553,3 +553,18 @@ class W90CHK:
         del u_matrix, m_matrix
         print(f"self.v_matrix:{self.v_matrix.shape}")
 
+class DOSCAR:
+    def __init__(self,filePath='DOSCAR'):
+        '''
+        For now, only use to read the Fermi energy from the DOSCAR
+        '''
+        with open(filePath,"r") as fin:
+            data=fin.read().split("\n")
+        emax, emin, NEDOS, fermi, _ = data[5].split()
+        self.emax, self.emin, self.fermi = float(emax), float(emin), float(fermi)
+        self.NEDOS=int(NEDOS)
+        print(f"DOSCAR in {filePath} has been read.")
+        print(f"Energy window: {self.emin} - {self.emax}")
+        print(f"Sampling grid points: {self.NEDOS=}")
+        print(f"{self.fermi=}")
+        
