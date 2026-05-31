@@ -6,232 +6,35 @@ from multiprocessing import freeze_support
 import paramReader
 paramReader.readGlobalConst()
 import numpy as np
-
-from task import BZGridTask, BZLineTask
 from system import System_omx, System_w90, System_tb
-from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_VG_Full, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
-from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_LG
-from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
-from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
-from calculator import SpinTorque, SpintorqueGalvanicConductance
-from calculator import EnergyOnPath, SpinExpectationOnPath, SpinOrbitalExpectationOnPath, SurfaceBulkSpectraOnPath
+from task import BZGridTask, BZLineTask
+#+------------+
+#| Bulk tasks |
+#+------------+
+from task import solvePDOS, solveVelocity, solveVelocity_diag
+from task import solveSHC, solveSHC_diag, solveOHC, solveStGC, solveAHC
+from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
+from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject
+from task import solveIFE_TDSE, solveIFE_VG, solveIFE_LG
+#+------------+
+#| Line tasks |
+#+------------+
+from task import solveSurfaceSpectraTask, solveBandStructure
+#+---------------------------+
+#| Tasks free from interface |
+#+---------------------------+
 from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
 from fileio import writeVolumeData
 
-def solveSHC(param):
-    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             currentProjectionList    =param['projected shells for applying current'],
-                             spincurrentProjectionList=param['projected shells for detecting spincurrent'],
-                             )
-    return {"energies":calc.energies,
-            #"velocities":calc.velocity_K,
-            "spin Berry curv":calc.spinBerryCurv,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveSHC_diag(param):
-    calc=SpinHallConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             currentProjectionList    =param['projected shells for applying current'],
-                             spincurrentProjectionList=param['projected shells for detecting spincurrent'],
-                             )
-    return {"energies":calc.energies,
-            #"velocities":calc.velocity_K,
-            "spin Berry curv":calc.spinvelocityVelocityCorrelation_diag,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveOHC(param):
-    calc=OrbitalHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             currentProjectionList    =param['projected shells for applying current'],
-                             orbitalcurrentProjectionList=param['projected shells for detecting spincurrent'],
-                             )
-    return {"energies":calc.energies,
-            #"velocities":calc.velocity_K,
-            "orbital Berry curv":calc.orbitalBerryCurv,
-            "sigma":calc.sigma,"iq":param["iq"]}
-
-def solveStGC(param):
-    calc=SpintorqueGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             spinTorqueProjectionList=param['projected shells for detecting spin accumulation'],
-                             currentProjectionList  =param['projected shells for applying current'],
-                             )
-    return {"energies":calc.energies,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveAHC(param):
-    calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
-                                   fermiList=param['fermi'],
-                                   currentProjectionList    =param['projected shells for applying current'],
-                                   )
-    return {"energies":calc.energies,
-            "projected Berry curv":calc.projected_BerryCurv,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveBPVE_VG(param):
-    calc=BulkPhotovoltaicConductance_VG_Full(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],
-                                   )
-    return {"energies":calc.energies,
-            "projected response":calc.projected_response,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
-            "iq":param["iq"]}
-
-def solveBPVE_LG_Shift(param):
-    calc=BulkPhotovoltaicConductance_LG_Shift(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],
-                                   )
-    return {"energies":calc.energies,
-            #"projected response":calc.projected_response,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
-            "iq":param["iq"]}
-
-def solveBPVE_LG_Inject(param):
-    calc=BulkPhotovoltaicConductance_LG_Injection(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],
-                                   )
-    return {"energies":calc.energies,
-            #"projected response":calc.projected_response,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
-            "iq":param["iq"]}
-
-def solveBPVE_TDSE(param):
-    calc = BulkPhotovoltaicConductance_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
-            "iq": param["iq"]}
-
-def solveBPVE_TDSE_LG(param):
-    calc = BulkPhotovoltaicConductance_TDSE_LG_Naive(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
-            "iq": param["iq"]}
-
-def solveIFE_VG(param):
-    calc = InverseFaradayEffect_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
-                                   )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
-            "iq": param["iq"]}
-
-def solveIFE_LG(param):
-    calc = InverseFaradayEffect_LG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
-                                   )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
-            "iq": param["iq"]}
-
-def solveIFE_TDSE(param):
-    calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
-                                   )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE, 
-            "iq": param["iq"]}
-
-def solveSGC(param):
-    calc=SpinGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             spinProjectionList=param['projected shells for detecting spin accumulation'],
-                             currentProjectionList=param['projected shells for applying current'],
-                             )
-    return {"energies":calc.energies,
-            "projected spin galvanic response":calc.projected_spinVelocityCorrelation,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveSGC_diag(param):
-    calc=SpinGalvanicConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             spinProjectionList=param['projected shells for detecting spin accumulation'],
-                             currentProjectionList=param['projected shells for applying current'],
-                             )
-    return {"energies":calc.energies,
-            "projected spin galvanic response":calc.projected_spinVelocityCorrelation_diag,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveOGC(param):
-    calc=OrbitalGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             orbitalProjectionList=param['projected shells for detecting spin accumulation'],
-                             currentProjectionList=param['projected shells for applying current'],
-                             )
-    return {"energies":calc.energies,
-            "projected orbital galvanic response":calc.projected_orbitalVelocityCorrelation,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveOGC_diag(param):
-    calc=OrbitalGalvanicConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             orbitalProjectionList=param['projected shells for detecting spin accumulation'],
-                             currentProjectionList=param['projected shells for applying current'],
-                             )
-    return {"energies":calc.energies,
-            "projected orbital galvanic response":calc.projected_orbitalVelocityCorrelation_diag,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solvePDOS(param):
-    calc=PDOS(energyAxis=param['fermi'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,model=param['model'],)
-    return {"energies":calc.energies,"PDOS":calc.pdos,"iq":param["iq"]}
-
-def solveVelocity(param):
-    calc=Velocity(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
-    return {"energies":calc.energies,"velocities":calc.velocity_K,"iq":param["iq"]}
-
-def solveVelocity_diag(param):
-    calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
-    return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
-
-#+--------------------------+
-#| factory for BZLine tasks |
-#+--------------------------+
-def solveSurfaceSpectraTask(param):
-    calc=SurfaceBulkSpectraOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'],
-                                  surfaceDir=param['surfaceDir'], fermiAxis=param['fermiAxis'], n_iter=param['n_iter'])
-    return {
-        'indices': param['indices'],
-        'A_bulk': calc.A_bulk,
-        'A_surf_L': calc.A_surf_L,
-        'A_surf_R': calc.A_surf_R,
-    }
-
-def solveBandStructure(param):
-    calc=SpinOrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
-    return {
-        'indices': param['indices'],
-        'energies': calc.energies,
-        'spin_eig': calc.spin_eig.real,
-        'orbital_eig': calc.orbital_eig.real,
-    }
-
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
+    mainDir="./mcalc/BN/"
     model=System_tb(
         mainDir=mainDir,
-        hamR="wannier90",
+        #hamR="wannier90",
         #hamR="omx",
-        #hamR="BN_fm_soc",
+        hamR="BNsoc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -331,7 +134,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.1         # VASP 2H-FeCl2
+    #fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -341,10 +144,10 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    #fermi=0            # model hamiltonian
+    fermi=0            # model hamiltonian
     
-    #fermiAxis=np.linspace(fermi-1.5,fermi+1.5,101)
-    fermiAxis=np.array([fermi,])
+    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
+    #fermiAxis=np.array([fermi,])
     omegaAxis=np.linspace(0.5,4.0,51)
     model.setFermi(fermi)
     
@@ -363,27 +166,26 @@ def run():
                 fout.write(f"{ik:5d}{energy:15.6E}{spin[0]:15.6E}{spin[1]:15.6E}{spin[2]:15.6E}{orbital[0]:15.6E}{orbital[1]:15.6E}{orbital[2]:15.6E}\n")
             fout.write("\n")
     exit()#'''
-    '''
+    #'''
     # check surface spectra
-    Tmatrix=[
-        [ 1, 0, 0], # The A1 of the supercell in the frame of primitive cell
-        [ 1, 2, 0], # The A2 of the supercell in the frame of primitive cell
-        [ 0, 0, 1]  # The A3 of the supercell in the frame of primitive cell
-    ]
-    model.make_supercell(Tmatrix)
-    surfaceDir=0
-    model.shiftOrigin(surfaceDir=surfaceDir)
-    model.constructPrincipleLayer(surfaceDir=surfaceDir)
     calc=BZLineTask(model, solveSurfaceSpectraTask, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8,
-                    args={"fermiAxis": fermiAxis, "surfaceDir": surfaceDir, "n_iter": 10},)
-    spectral=np.zeros((calc.nkpt,len(fermiAxis)),dtype=float)
+                    args={"fermiAxis": fermiAxis, "n_iter": 10, "cutoff":0.01, "eta":0.01,
+                          "Tmatrix":[
+                            [ 1, 0, 0], # The A1 of the supercell in the frame of primitive cell
+                            [ 1, 2, 0], # The A2 of the supercell in the frame of primitive cell
+                            [ 0, 0, 1]  # The A3 of the supercell in the frame of primitive cell
+                            ], "surfaceDir": 0, # select the lattice vector normal to surface (from the transformed cell via Tmatrix)
+                            },)
+    spectral=np.zeros((3,calc.nkpt,len(fermiAxis)),dtype=float) # ikind, ik, iE
     for result in calc.results: 
-        spectral[result['indices']]=(result['A_surf_L']+result['A_surf_R'])/2-result['A_bulk']
+        spectral[0,result['indices']]=result['A_bulk']    # bulk
+        spectral[1,result['indices']]=result['A_surf_L']  # left surface
+        spectral[2,result['indices']]=result['A_surf_R']  # right surface
     with open(f"{mainDir}/SurfaceSpectra.txt","w") as fout:
-        fout.write("#ik Energy Amplitude\n")
-        for ik in range(spectral.shape[0]):
-            for ienergy, energy in enumerate(fermiAxis):
-                fout.write(f"{ik:5d}{energy:15.6E}{spectral[ik,ienergy]:15.6E}\n")
+        fout.write("#ik Energy Amplitude_bulk Amplitude_surf_L Amplitude_surf_R\n")
+        for ik in range(spectral.shape[1]):
+            for ienergy, energy in enumerate(fermiAxis-model.fermi):
+                fout.write(f"{ik:5d}{energy:15.6E}{spectral[0,ik,ienergy]:15.6E}{spectral[1,ik,ienergy]:15.6E}{spectral[2,ik,ienergy]:15.6E}\n")
     exit()#'''
     '''
     # check the topological integer
@@ -428,8 +230,8 @@ def run():
         projected_sigma += result_q['projected sigma']
         if not BZSymm:  # symmetrization on the BZ is only implemented for the whole tensor
             sigma += result_q['sigma']
-        else:
-            sigma += model.pointGroup.symmetrize_tensor(result_q['sigma'],Iodd=SpinHallConductance.Iodd,TRodd=SpinHallConductance.Todd,rank=3)
+        #else:
+        #    sigma += model.pointGroup.symmetrize_tensor(result_q['sigma'],Iodd=SpinHallConductance.Iodd,TRodd=SpinHallConductance.Todd,rank=3)
     '''
     pdos/=len(irreducibleTask)
     with open("%s/pdos.txt"%mainDir,"w") as fout:

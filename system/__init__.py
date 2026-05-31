@@ -66,6 +66,9 @@ class System:
         self.pointGroup=Group([Symmetry(np.eye(3))],real_lattice=None,recip_lattice=None)
         # refractive index
         self.refractive_index:float = 1.0
+
+        # reporting tag
+        self.verbose:bool=True
     
     def getRHam_R(self):
         '''
@@ -77,7 +80,7 @@ class System:
         So, the matrix element of (R+d) * H_R is R t_{d+R}. Since R+d is rank-1 and 3-d, R t_{d+R} is also 3-d.
         '''
         self.RHam_R=np.zeros((self.nRvec,3,self.norbs,self.norbs),dtype=complex)
-        print(f"calculating R \dot H_R on lattice with {self.nRvec} lattice points")
+        if self.verbose: print(f"calculating R \dot H_R on lattice with {self.nRvec} lattice points")
         dr=self.rList[:,:,None]-self.rList[:,None,:] # distance in cell, r_source - r_target
         for iR, Rvec in enumerate(self.iRvec):
             #self.RHam_R[iR]=self.ham_R[iR,None,:,:]*((Rvec@self.lattice)[:,None,None] - dr)
@@ -86,7 +89,7 @@ class System:
     def getRRHam_R(self):
         # 2nd derivative spatial moment (w)
         self.RRHam_R = np.zeros((self.nRvec, 3, 3, self.norbs, self.norbs), dtype=complex)
-        print(f"calculating R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
+        if self.verbose: print(f"calculating R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
         for iR, Rvec in enumerate(self.iRvec):
             R_cart = Rvec @ self.lattice
             R_tensor2 = R_cart[:, None] * R_cart[None, :]
@@ -94,7 +97,7 @@ class System:
 
     def getRRRHam_R(self):
         # 3rd derivative spatial moment (u)
-        print(f"calculating R \dot R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
+        if self.verbose: print(f"calculating R \dot R \dot R \dot H_R on lattice with {self.nRvec} lattice points")
         self.RRRHam_R = np.zeros((self.nRvec, 3, 3, 3, self.norbs, self.norbs), dtype=complex)
         for iR, Rvec in enumerate(self.iRvec):
             R_cart = Rvec @ self.lattice
@@ -999,11 +1002,11 @@ class System:
             3x3 integer matrix defining the supercell lattice.
             The supercell lattice is defined as: lat_sc = T @ lat_pc
         """
-        print(f"\n--- Constructing Supercell ---")
+        if self.verbose: print(f"\n--- Constructing Supercell ---")
         T = np.array(Tmatrix, dtype=int)
         invT = np.linalg.inv(T)
         Nsc = int(np.round(abs(np.linalg.det(T))))
-        print(f"Supercell volume ratio: {Nsc}")
+        if self.verbose: print(f"Supercell volume ratio: {Nsc}")
         
         # 1. Find internal cells (primitive cell origins located inside the supercell)
         Rmax = np.max(np.abs(T)) * 2 + 2
@@ -1109,7 +1112,7 @@ class System:
         has_AA = getattr(self, "AA_R_W", None) is not None
         has_energy = getattr(self, "energy_R", None) is not None
         
-        print(f"Folding {self.nRvec} primitive bonds into supercell grid...")
+        if self.verbose: print(f"Folding {self.nRvec} primitive bonds into supercell grid...")
         for iR, R_pc in enumerate(self.iRvec):
             for icell1, c1 in enumerate(internal_cells):
                 # The spatial shift target cell in primitive coordinates
@@ -1181,9 +1184,9 @@ class System:
         self.getOrbitalMatrice()
         
         
-        print(f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
+        if self.verbose: print(f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
 
-    def shiftOrigin(self, surfaceDir, shift=None, verbose=True):
+    def shiftOrigin(self, surfaceDir, shift=None):
         """
         Shifts the origin of the unit cell along surfaceDir to minimize hoppings across the surface.
         Reassigns the R vectors of the hoppings accordingly without deleting any bonds.
@@ -1195,7 +1198,7 @@ class System:
         shift : float, optional
             The fractional shift of the cell boundary. If None, it is auto-optimized.
         """
-        if verbose: print(f"\n--- Shifting Origin along Direction {surfaceDir} ---")
+        if self.verbose: print(f"\n--- Shifting Origin along Direction {surfaceDir} ---")
         invLattice = np.linalg.inv(self.lattice)
         
         # Get fractional coordinates of orbitals
@@ -1203,7 +1206,7 @@ class System:
         
         # 1. Auto-optimize the boundary shift to minimize boundary-crossing bonds
         if shift is None:
-            if verbose: print(f"Optimizing cell origin to minimize boundary crossing...")
+            if self.verbose: print(f"Optimizing cell origin to minimize boundary crossing...")
             shifts = np.linspace(0, 1, 100, endpoint=False)
             best_shift = 0
             min_cut_weight = float('inf')
@@ -1223,9 +1226,9 @@ class System:
                     best_shift = s
                     
             shift = best_shift
-            if verbose: print(f"Optimal fractional shift found: {shift:.4f} (Crossing weight: {min_cut_weight:.4f})")
+            if self.verbose: print(f"Optimal fractional shift found: {shift:.4f} (Crossing weight: {min_cut_weight:.4f})")
         else:
-            if verbose: print(f"Using provided shift: {shift:.4f}")
+            if self.verbose: print(f"Using provided shift: {shift:.4f}")
             
         # 2. Apply the chosen shift and remap the hoppings to new R vectors
         c_I = np.floor(rList_frac[surfaceDir, :] + shift).astype(int)
@@ -1258,7 +1261,7 @@ class System:
                     if has_overlap: new_overlap_dict[R_new_tuple][I, J] += self.overlap_R[iR, I, J]
                     if has_AA: new_AA_dict[R_new_tuple][:, I, J] += self.AA_R_W[iR, :, I, J]
                     
-        if verbose: print(f"Origin Shift Complete: Re-mapped into {len(new_ham_dict)} lattice vectors.")
+        if self.verbose: print(f"Origin Shift Complete: Re-mapped into {len(new_ham_dict)} lattice vectors.")
         
         # 3. Update physical coordinates (atoms and orbitals are shifted to the new home cell)
         for iatom, frac in enumerate(self.posinfo['pos ions (frac.)']):
@@ -1297,7 +1300,7 @@ class System:
         if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
 
-    def cutEdge(self, cutDir, verbose=True):
+    def cutEdge(self, cutDir):
         """
         Creates an open boundary condition (OBC) along the specified lattice direction
         by completely deleting any inter-cell hoppings that cross the boundary.
@@ -1305,7 +1308,7 @@ class System:
         NOTE: It is highly recommended to call shiftOrigin() before this to ensure 
         the boundary is placed optimally and atoms aren't severed mid-bond.
         """
-        if verbose: print(f"\n--- Cutting Edge (OBC) along Direction {cutDir} ---")
+        if self.verbose: print(f"\n--- Cutting Edge (OBC) along Direction {cutDir} ---")
         
         new_ham_dict = {}
         new_overlap_dict = {}
@@ -1332,7 +1335,7 @@ class System:
             if has_overlap: new_overlap_dict[R_tuple] = self.overlap_R[iR].copy()
             if has_AA: new_AA_dict[R_tuple] = self.AA_R_W[iR].copy()
                 
-        if verbose: print(f"Edge Cut Complete: {dropped_blocks} inter-cell R-blocks dropped, {kept_blocks} kept.")
+        if self.verbose: print(f"Edge Cut Complete: {dropped_blocks} inter-cell R-blocks dropped, {kept_blocks} kept.")
         
         # Repack the matrices into the System object
         new_nRvec = len(new_ham_dict)
@@ -1364,7 +1367,7 @@ class System:
         if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
 
-    def constructPrincipleLayer(self, surfaceDir, verbose=True):
+    def constructPrincipleLayer(self, surfaceDir):
         """
         Constructs a principal layer supercell for surface Green's function calculations.
         The principal layer is defined such that hoppings in the surfaceDir direction 
@@ -1375,7 +1378,7 @@ class System:
         surfaceDir : int
             The normal direction of the surface (0, 1, or 2).
         """
-        if verbose: print(f"\n--- Constructing Principal Layer along Direction {surfaceDir} ---")
+        if self.verbose: print(f"\n--- Constructing Principal Layer along Direction {surfaceDir} ---")
         
         # 1. Determine the maximum hopping range in the surface normal direction
         max_range = 0
@@ -1384,16 +1387,16 @@ class System:
             if np.max(np.abs(self.ham_R[iR])) > 1e-6:
                 max_range = max(max_range, abs(R[surfaceDir]))
                 
-        if verbose: print(f"Maximum hopping range in direction {surfaceDir} is {max_range} primitive cells.")
+        if self.verbose: print(f"Maximum hopping range in direction {surfaceDir} is {max_range} primitive cells.")
         
         Nsc = max(1, max_range)
         if Nsc > 1:
-            if verbose: print(f"Creating a {Nsc}x supercell along direction {surfaceDir} to form the principal layer.")
+            if self.verbose: print(f"Creating a {Nsc}x supercell along direction {surfaceDir} to form the principal layer.")
             Tmatrix = np.eye(3, dtype=int)
             Tmatrix[surfaceDir, surfaceDir] = Nsc
             self.make_supercell(Tmatrix)
         else:
-            if verbose: print("Original cell is already a valid principal layer.")
+            if self.verbose: print("Original cell is already a valid principal layer.")
             
         # 2. Partition the Hamiltonian into H_00, H_01, and H_m10
         self.surfaceDir = surfaceDir
@@ -1424,13 +1427,13 @@ class System:
         self.R_m10 = np.array(self.R_m10)
         self.H_m10_R = np.array(self.H_m10_R)
         
-        if verbose: 
+        if self.verbose:
             print(f"Principal layer partitioning complete:")
             print(f"  H_00: {len(self.H_00_R)} hopping matrices")
             print(f"  H_01: {len(self.H_01_R)} hopping matrices")
             print(f"  H_10: {len(self.H_m10_R)} hopping matrices\n")
 
-    def addExchangeSplitting(self, projection, exchange_vector, verbose=True):
+    def addExchangeSplitting(self, projection, exchange_vector):
         """
         Adds an exchange splitting (Zeeman-like term) to specified atoms and shells.
         
@@ -1445,7 +1448,7 @@ class System:
         """
         Mx, My, Mz = exchange_vector
         
-        if verbose:
+        if self.verbose: 
             print(f"\n--- Adding Exchange Splitting ---")
             print(f"Magnetic Vector (Mx, My, Mz) = ({Mx}, {My}, {Mz}) eV")
             
@@ -1492,7 +1495,7 @@ class System:
                     
                     applied_orbitals += 1
                     
-        if verbose:
+        if self.verbose: 
             print(f"Successfully applied exchange splitting to {applied_orbitals} physical spatial orbitals.")
             
         # 3. Synchronize dependent system matrices
@@ -1507,12 +1510,12 @@ class System:
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
-    def rotateExchangeField(self, projection, theta, phi, verbose=True):
+    def rotateExchangeField(self, projection, theta, phi):
         """
         Rotates the on-site exchange field for specified orbitals.
         Rotation is applied via Euler angles: around y-axis by theta, then z-axis by phi.
         """
-        if verbose: 
+        if self.verbose: 
             print(f"\n--- Rotating Exchange Field (theta={theta:.4f}, phi={phi:.4f}) ---")
             
         home_R_tuple = (0, 0, 0)
@@ -1566,7 +1569,7 @@ class System:
                     self.ham_R[iR0, I_dn, I_up] = Sx_pp + 1j * Sy_pp
                     count += 1
                     
-        if verbose: print(f"Rotated exchange field for {count} spatial orbitals.")
+        if self.verbose: print(f"Rotated exchange field for {count} spatial orbitals.")
         
         # Synchronize dependent matrices
         if hasattr(self, 'energy_R') and self.energy_R is not None:
@@ -1578,12 +1581,12 @@ class System:
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
-    def scaleSOC(self, lam=1.0, projection=[], verbose=True):
+    def scaleSOC(self, lam=1.0, projection=[]):
         """
         Scales the SOC-induced spin-flip hopping amplitudes (tx, ty, tz) by lambda,
         leaving the charge transport hopping (t0) intact.
         """
-        if verbose: 
+        if self.verbose: 
             print(f"\n--- Scaling SOC Hopping Terms by lambda={lam:.4f} ---")
             
         half_norbs = self.norbs // 2
@@ -1633,7 +1636,7 @@ class System:
                     
                     count += 1
                     
-        if verbose: print(f"Successfully scaled {count} hopping matrix blocks.")
+        if self.verbose: print(f"Successfully scaled {count} hopping matrix blocks.")
         
         # Synchronize dependent matrices
         if hasattr(self, 'energy_R') and self.energy_R is not None:
@@ -1645,7 +1648,7 @@ class System:
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
-    def rotateSpinBasisToGlobal(self, alpha, beta, gamma=0.0, verbose=True):
+    def rotateSpinBasisToGlobal(self, alpha, beta, gamma=0.0):
         """
         Rotates the tight-binding basis from the VASP local SAXIS quantization frame 
         back to the standard global Cartesian frame (sigma_z basis).
@@ -1656,7 +1659,7 @@ class System:
             The Euler angles outputted in the VASP OUTCAR (in radians).
         """
         
-        if verbose:
+        if self.verbose: 
             print(f"\n--- Rotating Spin Basis to Global Frame ---")
             print(f"Euler Angles: ALPHA={alpha:.6f}, BETA={beta:.6f}, GAMMA={gamma:.6f}")
             
@@ -1698,19 +1701,19 @@ class System:
         # 4. Rotate all relevant System matrices
         if hasattr(self, 'ham_R') and self.ham_R is not None:
             self.ham_R = transform_matrix(self.ham_R)
-            if verbose: print("Transformed Hamiltonian (ham_R).")
+            if self.verbose: print("Transformed Hamiltonian (ham_R).")
             
         if hasattr(self, 'overlap_R') and self.overlap_R is not None:
             self.overlap_R = transform_matrix(self.overlap_R)
-            if verbose: print("Transformed Overlap Matrix (overlap_R).")
+            if self.verbose: print("Transformed Overlap Matrix (overlap_R).")
             
         if hasattr(self, 'energy_R') and self.energy_R is not None:
             self.energy_R = transform_matrix(self.energy_R)
-            if verbose: print("Transformed Energy Matrix (energy_R).")
+            if self.verbose: print("Transformed Energy Matrix (energy_R).")
             
         if hasattr(self, 'AA_R_W') and self.AA_R_W is not None:
             self.AA_R_W = transform_matrix(self.AA_R_W)
-            if verbose: print("Transformed Position Operator (AA_R_W).")
+            if self.verbose: print("Transformed Position Operator (AA_R_W).")
             
         #if hasattr(self, 'RHam_R') and self.RHam_R is not None:
         #    self.RHam_R = transform_matrix(self.RHam_R)
@@ -1718,7 +1721,7 @@ class System:
             
         if hasattr(self, 'RO_R') and self.RO_R is not None:
             self.RO_R = transform_matrix(self.RO_R)
-            if verbose: print("Transformed Overlap Velocity Operator (RO_R).")
+            if self.verbose: print("Transformed Overlap Velocity Operator (RO_R).")
             
         # 5. Trigger updates for internal operator dependencies
         self.getRHam_R()
@@ -1727,7 +1730,7 @@ class System:
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
         
-        if verbose: print("--- Spin Basis Transformation Complete ---\n")
+        if self.verbose: print("--- Spin Basis Transformation Complete ---\n")
 
     @property
     def Vcell(self):
