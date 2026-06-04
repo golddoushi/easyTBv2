@@ -1500,8 +1500,10 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
         
-        E_n = self.energies[..., :, None, None]
-        E_m = self.energies[..., None, :, None]
+        # The response tensor below is built as M_{mn} v_{nl} v_{lm}, so
+        # the three band axes are ordered as (m, n, l).
+        E_m = self.energies[..., :, None, None]
+        E_n = self.energies[..., None, :, None]
         E_l = self.energies[..., None, None, :]
         D_nm = 1.0 / (E_n - E_m - 1j * self.eta)
 
@@ -1533,8 +1535,7 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
                 G_mn_2= f_mn_2 * D_mn_2
 
                 for c in range(3):
-                    # FIX: Transpose M to M_mn to evaluate the correct physical trace
-                    M_c_mn = M_K[..., c, :, :].swapaxes(-1, -2)
+                    M_c_mn = M_K[..., c, :, :]
                     for a in range(3):
                         v_a = self.velocity_K[..., a, :, :]
                         for b in range(3):
