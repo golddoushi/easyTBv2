@@ -25,16 +25,16 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
-from fileio import writeVolumeData
+from fileio import writeVolumeData, output3rdFreqDenpendentData
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/BN/"
+    mainDir="./mcalc/1D-chain-3orb/"
     model=System_tb(
         mainDir=mainDir,
-        #hamR="wannier90",
+        hamR="wannier90",
         #hamR="omx",
-        hamR="BNsoc",
+        #hamR="BNsoc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -146,8 +146,8 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     fermi=0            # model hamiltonian
     
-    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
-    #fermiAxis=np.array([fermi,])
+    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
+    fermiAxis=np.array([fermi,])
     omegaAxis=np.linspace(0.5,4.0,51)
     model.setFermi(fermi)
     
@@ -166,7 +166,7 @@ def run():
                 fout.write(f"{ik:5d}{energy:15.6E}{spin[0]:15.6E}{spin[1]:15.6E}{spin[2]:15.6E}{orbital[0]:15.6E}{orbital[1]:15.6E}{orbital[2]:15.6E}\n")
             fout.write("\n")
     exit()#'''
-    #'''
+    '''
     # check surface spectra
     calc=BZLineTask(model, solveSurfaceSpectraTask, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8,
                     args={"fermiAxis": fermiAxis, "n_iter": 10, "cutoff":0.01, "eta":0.01,
@@ -193,9 +193,9 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(56,56,1)
+    BZGrid=(48,1,1)
     BZSymm=False
-    calc=BZGridTask(model, solveIFE_VG, 
+    calc=BZGridTask(model, solveIFE_LG, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -292,31 +292,11 @@ def run():
 
     #'''
     # output projected 3-ranked, frequency-dependent complex conductance
-    projected_sigma=projected_sigma.real
-    projected_sigma/=len(calc.results)
-    with open("%s/bulkPhotovoltaics.txt"%mainDir,"w") as fout:
-        fout.write("Omega(eV) Fermi(eV) ")
-        directionName=['x','y','z']
-        for iproj1 in range(projected_sigma.shape[0]):
-            for iproj2 in range(projected_sigma.shape[1]):
-                for iproj2 in range(projected_sigma.shape[2]):
-                    for alpha1 in range(3):
-                        for alpha2 in range(3):
-                            for beta in range(3):
-                                fout.write(f"            {directionName[alpha1]}{directionName[alpha2]}{directionName[beta]}")
-        fout.write("\n")
-        for iomega, omega in enumerate(omegaAxis):
-            fout.write(f"{omega:9.6f}")
-            for ifermi, fermiEnergy in enumerate(fermiAxis):
-                fout.write(f"{fermiEnergy-fermi:9.6f}")
-                for iproj1 in range(projected_sigma.shape[0]):
-                    for iproj2 in range(projected_sigma.shape[1]):
-                        for iproj3 in range(projected_sigma.shape[2]):
-                            for alpha1 in range(3):
-                                for alpha2 in range(3):
-                                    for beta in range(3):
-                                        fout.write(f"{projected_sigma[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
-                fout.write("\n")
+    output3rdFreqDenpendentData(projected_sigma.real/len(calc.results), fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis, 
+                                filePath="%s/thirdOrderFreqDependent.real.txt"%mainDir)
+    output3rdFreqDenpendentData(projected_sigma.imag/len(calc.results), fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis, 
+                                filePath="%s/thirdOrderFreqDependent.imag.txt"%mainDir)
+    
     exit()#'''
 
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])

@@ -1448,15 +1448,17 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
-        E_n_3D = self.energies[..., :, None, None]
-        E_m_3D = self.energies[..., None, :, None]
+        # Band-axis convention below is (m, n, l), matching
+        # Tr[M rho^(2)] = sum_mn M_mn rho^(2)_nm.
+        E_m_3D = self.energies[..., :, None, None]
+        E_n_3D = self.energies[..., None, :, None]
         E_l_3D = self.energies[..., None, None, :]
         D_nm_3D = 1.0 / (E_n_3D - E_m_3D - 1j * self.eta)
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
-            f_n_3D = f[..., :, None, None]
-            f_m_3D = f[..., None, :, None]
+            f_m_3D = f[..., :, None, None]
+            f_n_3D = f[..., None, :, None]
             f_l_3D = f[..., None, None, :]
             
             f_lm = f_l_3D - f_m_3D
@@ -1472,15 +1474,14 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
                 term_ab = D_nm_3D * ( f_nl * S_nl_pos - f_lm * S_lm_neg)
 
                 for c in range(3):
-                    M_c = M_K[..., c, :, :].swapaxes(-1, -2)
+                    M_c = M_K[..., c, :, :]
                     for a in range(3):
                         r_a = r_K[..., a, :, :]
                         for b in range(3):
                             r_b = r_K[..., b, :, :]
                             
-                            # Exact Traces strictly locked to n, m, l grids
-                            Mrr_ba = np.einsum('...ij, ...jk, ...ki -> ...ijk', M_c, r_b, r_a)
-                            Mrr_ab = np.einsum('...ij, ...jk, ...ki -> ...ijk', M_c, r_a, r_b)
+                            Mrr_ba = np.einsum('...mn, ...nl, ...lm -> ...mnl', M_c, r_b, r_a)
+                            Mrr_ab = np.einsum('...mn, ...nl, ...lm -> ...mnl', M_c, r_a, r_b)
                             
                             integrand = Mrr_ba * term_ba + Mrr_ab * term_ab
                             
