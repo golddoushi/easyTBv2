@@ -1010,6 +1010,75 @@ class BulkPhotovoltaicConductance_VG(Velocity):
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Full Velocity Gauge BPVE finished")
 
+class BulkPhotovoltaicConductance_VG_DM(Velocity):
+    def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
+        '''
+        Calculates the Velocity Gauge BPVE using the frequency-domain
+        Liouville density-matrix approach.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+
+        self.projected_response = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1,
+                                         self.kgrid[0], self.kgrid[1], self.kgrid[2],
+                                         len(self.fermiList), len(responseOmegaIndexList),
+                                         3, 3, 3), dtype=complex)
+        self.sigma_VG_DM = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
+            for iband in range(self.model.norbs):
+                rho0[..., iband, iband] = f[..., iband]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                def rho1(v, frequency):
+                    source = v @ rho0 - rho0 @ v
+                    return source / (deltaE_mn - frequency - 1j * self.eta)
+
+                rho1_cache = {
+                    (direction, sign): rho1(self.velocity_K[..., direction, :, :], sign * Omega)
+                    for direction in range(3)
+                    for sign in (-1, 1)
+                }
+
+                for a in range(3):
+                    v_a = self.velocity_K[..., a, :, :]
+                    for b in range(3):
+                        v_b = self.velocity_K[..., b, :, :]
+                        w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
+
+                        source_para = (
+                            v_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ v_b
+                            + v_a @ rho1_cache[(b, 1)] - rho1_cache[(b, 1)] @ v_a
+                        )
+                        source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
+                        rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta)
+
+                        for c in range(3):
+                            v_c_nm = self.velocity_K[..., c, :, :].swapaxes(-1, -2)
+                            w_ca_nm = self.w_K[..., c, a, :, :].swapaxes(-1, -2)
+                            w_cb_nm = self.w_K[..., c, b, :, :].swapaxes(-1, -2)
+                            u_cab = 0.5 * (self.u_K[..., c, a, b, :, :] + self.u_K[..., c, b, a, :, :])
+                            u_cab_nn = np.einsum('...nn -> ...n', u_cab)
+
+                            I3 = np.sum(v_c_nm * rho2_mn, axis=(-2, -1))
+                            I2B = -np.sum(w_cb_nm * rho1_cache[(a, -1)], axis=(-2, -1)) \
+                                  -np.sum(w_ca_nm * rho1_cache[(b, 1)], axis=(-2, -1))
+                            I1 = np.sum(u_cab_nn * f, axis=-1)
+
+                            sigma_total_k = (I3 + I2B + I1) / Omega**2
+                            self.sigma_VG_DM[ifermi, iomega, a, b, c] = np.sum(sigma_total_k) / np.prod(self.kgrid)
+
+                            for irecord, iomega_record in enumerate(responseOmegaIndexList):
+                                if iomega_record == iomega:
+                                    self.projected_response[0, 0, 0, :, :, :, ifermi, irecord, a, b, c] = sigma_total_k
+                                    break
+
+        self.projected_sigma = self.sigma_VG_DM[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge BPVE density matrix finished")
+
 class BulkPhotovoltaicConductance_LG_Shift(Velocity):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
