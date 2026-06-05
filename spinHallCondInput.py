@@ -14,7 +14,7 @@ from task import BZGridTask, BZLineTask
 from task import solvePDOS, solveVelocity, solveVelocity_diag
 from task import solveSHC, solveSHC_diag, solveOHC, solveStGC, solveAHC
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
-from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject
+from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG
 #+------------+
 #| Line tasks |
@@ -195,7 +195,7 @@ def run():
 
     BZGrid=(48,48,1)
     BZSymm=False
-    calc=BZGridTask(model, solveBPVE_LG_Shift, 
+    calc=BZGridTask(model, solveBPVE_LG_DM, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

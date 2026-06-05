@@ -1240,6 +1240,98 @@ class BulkPhotovoltaicConductance_LG_Injection(Velocity):
 
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Injection Current finished")
 
+class BulkPhotovoltaicConductance_LG_DM(Velocity):
+    def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
+        '''
+        Calculates the length-gauge BPVE using the frequency-domain Liouville
+        density-matrix equation with an analytic covariant derivative.
+
+        This is the finite-eta density-matrix counterpart of the resonant
+        shift/injection formulas. It keeps the full complex denominators, so it
+        is not expected to be identical to the Lorentzian-only LG formulas away
+        from the clean resonant limit.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+
+        self.projected_response = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1,
+                                         self.kgrid[0], self.kgrid[1], self.kgrid[2],
+                                         len(self.fermiList), len(responseOmegaIndexList),
+                                         3, 3, 3), dtype=complex)
+        self.sigma_LG_DM = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        norbs = self.energies.shape[-1]
+        off_diag = 1.0 - np.eye(norbs)
+        diag = np.eye(norbs)
+
+        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        nondegenerate = abs(deltaE_mn) > self.degen
+        inv_deltaE = np.zeros_like(deltaE_mn, dtype=float)
+        inv_deltaE[nondegenerate] = 1.0 / deltaE_mn[nondegenerate]
+
+        r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
+
+        v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1)
+        Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :]
+
+        r_deriv_K = np.zeros(self.kgrid + (3, 3, norbs, norbs), dtype=complex)
+        for ideriv in range(3):
+            r_deriv = r_K[..., ideriv, :, :]
+            Delta_deriv = Delta_v[..., ideriv, :, :]
+            for idir in range(3):
+                v_dir = self.velocity_K[..., idir, :, :]
+                comm = r_deriv @ v_dir - v_dir @ r_deriv
+                r_deriv_K[..., ideriv, idir, :, :] = (
+                    self.w_K[..., ideriv, idir, :, :]
+                    - v_dir * Delta_deriv * inv_deltaE
+                    - 1j * comm
+                ) * inv_deltaE / 1j * off_diag
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            f_nm_source = f[..., None, :] - f[..., :, None]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                def rho1(idir, frequency):
+                    denominator = deltaE_mn - frequency - 1j * self.eta
+                    return f_nm_source * r_K[..., idir, :, :] / denominator
+
+                def covariant_derivative_rho1(ideriv, idir, frequency):
+                    denominator = deltaE_mn - frequency - 1j * self.eta
+                    numerator = f_nm_source * r_K[..., idir, :, :]
+                    rho = numerator / denominator
+
+                    offdiag_part = (
+                        f_nm_source * r_deriv_K[..., ideriv, idir, :, :] / denominator
+                        - numerator * Delta_v[..., ideriv, :, :] / denominator**2
+                    ) * off_diag
+
+                    # The diagonal covariant derivative is not captured by the
+                    # off-diagonal generalized derivative. This is the density
+                    # population source that produces injection current.
+                    diag_part = -1j * (r_K[..., ideriv, :, :] @ rho - rho @ r_K[..., ideriv, :, :]) * diag
+                    return offdiag_part + diag_part
+
+                for a in range(3):
+                    for b in range(3):
+                        source = (
+                            covariant_derivative_rho1(b, a, -Omega)
+                            + covariant_derivative_rho1(a, b,  Omega)
+                        )
+                        rho2 = 1j * source / (deltaE_mn - 1j * self.eta)
+
+                        for c in range(3):
+                            v_c_nm = self.velocity_K[..., c, :, :].swapaxes(-1, -2)
+                            sigma_total_k = np.sum(v_c_nm * rho2, axis=(-2, -1))
+                            self.sigma_LG_DM[ifermi, iomega, a, b, c] = np.sum(sigma_total_k) / np.prod(self.kgrid)
+
+                            for irecord, iomega_record in enumerate(responseOmegaIndexList):
+                                if iomega_record == iomega:
+                                    self.projected_response[0, 0, 0, :, :, :, ifermi, irecord, a, b, c] = sigma_total_k
+                                    break
+
+        self.projected_sigma = self.sigma_LG_DM[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge BPVE density matrix finished")
+
 class BulkPhotovoltaicConductance_TDSE(Velocity):
     def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100,
                  highOrderVelocity=True, include_offdiag=True, **kwarg) -> None:

@@ -5,7 +5,7 @@ import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
+from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM ,InverseFaradayEffect_LG
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
@@ -323,6 +323,17 @@ def solveBPVE_LG_Inject(param):
                                    )
     return {"energies":calc.energies,
             #"projected response":calc.projected_response,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
+            "iq":param["iq"]}
+
+def solveBPVE_LG_DM(param):
+    calc=BulkPhotovoltaicConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   responseOmegaIndexList=param['record frequency ids'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   )
+    return {"energies":calc.energies,
+            "projected response":calc.projected_response,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
             "iq":param["iq"]}
 
