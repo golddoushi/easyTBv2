@@ -1500,40 +1500,25 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
-        
-        # The response tensor below is built as M_{mn} v_{nl} v_{lm}, so
-        # the three band axes are ordered as (m, n, l).
-        E_m = self.energies[..., :, None, None]
-        E_n = self.energies[..., None, :, None]
-        E_l = self.energies[..., None, None, :]
-        D_nm = 1.0 / (E_n - E_m - 1j * self.eta)
-
-        E_m_2 = self.energies[..., :, None]
-        E_n_2 = self.energies[..., None, :]
-        D_mn_2 = 1.0 / (E_m_2 - E_n_2 - 1j * self.eta)
+        # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
+        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
-            # 3D occupation arrays
-            f_n =             f[..., None, :, None]
-            f_l =             f[..., None, None, :]
-            f_nl= f_n - f_l
-
-            # 2D occupation arrays
-            f_m_2 =             f[..., :, None]
-            f_n_2 =             f[..., None, :]
-            f_mn_2= f_m_2 - f_n_2  
+            rho0 = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
+            for iband in range(self.model.norbs):
+                rho0[..., iband, iband] = f[..., iband]
 
             for iomega, Omega in enumerate(self.omegaList):
-                # Resonant Denominators
-                S2_pos = 1.0 / (E_n - E_l - Omega - 1j * self.eta)
-                S2_neg = 1.0 / (E_n - E_l + Omega - 1j * self.eta)
-                Gw_mnl = f_nl * D_nm * (S2_pos + S2_neg)
-            
-                S_mn_pos = 1.0 / (E_m_2 - E_n_2 - Omega - 1j * self.eta)
-                S_mn_neg = 1.0 / (E_m_2 - E_n_2 + Omega - 1j * self.eta)
-                Gw_mn_2  = f_mn_2 * (S_mn_pos + S_mn_neg)
-                G_mn_2= f_mn_2 * D_mn_2
+                def rho1(v, frequency):
+                    source = v @ rho0 - rho0 @ v
+                    return source / (deltaE_mn - frequency - 1j * self.eta)
+
+                rho1_cache = {
+                    (direction, sign): rho1(self.velocity_K[..., direction, :, :], sign * Omega)
+                    for direction in range(3)
+                    for sign in (-1, 1)
+                }
 
                 for c in range(3):
                     M_c_mn = M_K[..., c, :, :]
@@ -1541,28 +1526,18 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
                         v_a = self.velocity_K[..., a, :, :]
                         for b in range(3):
                             v_b = self.velocity_K[..., b, :, :]
-                            w_ab = self.w_K[..., a, b, :, :]
-                            
-                            # =======================================================
-                            # 1. Three-Point Bubble: Tr[ M^c v^a v^b ]
-                            # =======================================================
-                            # Einsum maps: v^c_{mn} * v^a_{nl} * v^b_{lm}
-                            Mvv = np.einsum('ijkmn, ijknl, ijklm -> ijkmnl', M_c_mn, v_a, v_b)
-                            I3 = 2* np.sum(Mvv * Gw_mnl, axis=(-3, -2, -1))
-                            
-                            # =======================================================
-                            # 2. Two-Point Bubble A (Diamagnetic Perturbation): Tr[ M^c w^{ab} ]
-                            # =======================================================
-                            rho_w = w_ab * G_mn_2
-                            I2A = np.einsum('ijkmn, ijknm -> ijk', M_c_mn, rho_w)
+                            w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
 
-                            # =======================================================
-                            # Total Summation
-                            # =======================================================
-                            sigma_total_k = (I3 + I2A) / Omega**2
-                            
-                            
-                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_total_k) / np.prod(self.kgrid)
+                            # Keep the two frequency orderings explicit. Collapsing
+                            # them into one M v_a v_b term is valid only for a == b.
+                            source_para = (
+                                v_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ v_b
+                                + v_a @ rho1_cache[(b, 1)] - rho1_cache[(b, 1)] @ v_a
+                            )
+                            source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
+                            rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
+                            sigma_k = np.sum(rho2_mn * M_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_k) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
@@ -1643,7 +1618,8 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
                             
                             # Same-phase driving gives Re[chi_ab + chi_ba]. With the
                             # beta field shifted by -pi/2, the real DC signal gives
-                            # the phase-sensitive circular cross response.
+                            # a circular cross response; for an antisymmetric pair,
+                            # chi_TDSE[alpha,beta] estimates Im[chi_alpha_beta].
                             self.chi_TDSE[ifermi, iomega, :, ialpha, ibeta] = 0.5 * (cross_symmetric - cross_quadrature)
                             self.chi_TDSE[ifermi, iomega, :, ibeta, ialpha] = 0.5 * (cross_symmetric + cross_quadrature)
         
