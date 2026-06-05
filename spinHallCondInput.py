@@ -29,12 +29,12 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/1D-chain-3orb/"
+    mainDir="./mcalc/2D-random-spin-ife/"
     model=System_tb(
         mainDir=mainDir,
         hamR="wannier90",
         #hamR="omx",
-        #hamR="BNsoc",
+        #hamR="BN_fm_rashiba",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -193,9 +193,9 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(48,1,1)
+    BZGrid=(48,48,1)
     BZSymm=False
-    calc=BZGridTask(model, solveIFE_LG, 
+    calc=BZGridTask(model, solveBPVE_TDSE, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

@@ -810,7 +810,8 @@ class AnormalousHallConductance(BerryCurv):
 class BulkPhotovoltaicConductance(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
-        Calc. the 3rd order velocity correlation function \Omega_{alpha1, alpha2, beta}_{k,mn} and the BPVE conductance
+        Only the I3 contribution, the Tr {va vb vc} term
+        The projections are implemented.
 
         Parameters
         ----------
@@ -882,11 +883,10 @@ class BulkPhotovoltaicConductance(Velocity):
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
 
-class BulkPhotovoltaicConductance_VG_Full(Velocity):
+class BulkPhotovoltaicConductance_VG(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
-        Calculates the COMPLETE Velocity Gauge BPVE by summing all four Feynman diagrams.
-        Rewritten using np.einsum to guarantee exact quantum mechanical index tracking.
+        Calculates the COMPLETE Velocity Gauge BPVE by summing all four Feynman diagrams, using resonator denominator approach
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         
@@ -900,7 +900,7 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
         E_m = self.energies[..., :, None, None]
         E_n = self.energies[..., None, :, None]
         E_l = self.energies[..., None, None, :]
-        D_nm = 1.0 / (E_n - E_m - 1j * self.eta)
+        D_mn = 1.0 / (E_m - E_n - 1j * self.eta)
 
         # 2D energy arrays, index [ik1, ik2, ik3, m, n]
         E_m_2 = self.energies[..., :, None]
@@ -911,9 +911,11 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
             # occupation number: index [ik1, ik2, ik3, ib]
             f = np.int8(self.energies < fermi)
             # 3D occupation arrays
+            f_m =             f[..., :, None, None]
             f_n =             f[..., None, :, None]
             f_l =             f[..., None, None, :]
             f_nl= f_n - f_l
+            f_lm= f_l - f_m
 
             # 2D occupation arrays
             f_m_2 =             f[..., :, None]
@@ -922,13 +924,16 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
 
             for iomega, Omega in enumerate(self.omegaList):
                 # Resonant Denominators
-                S2_pos = 1.0 / (E_n - E_l - Omega - 1j * self.eta)
-                S2_neg = 1.0 / (E_n - E_l + Omega - 1j * self.eta)
-                Gw_mnl = f_nl * D_nm * (S2_pos + S2_neg)
+                S_ln_pos = 1.0 / (E_l - E_n + Omega - 1j * self.eta)
+                S_ln_neg = 1.0 / (E_l - E_n - Omega - 1j * self.eta)
+                S_ml_pos = 1.0 / (E_m - E_l + Omega - 1j * self.eta)
+                S_ml_neg = 1.0 / (E_m - E_l - Omega - 1j * self.eta)
+
+                term_ba = D_mn * (f_nl * S_ln_pos - f_lm * S_ml_neg)
+                term_ab = D_mn * (f_nl * S_ln_neg - f_lm * S_ml_pos)
             
                 S_mn_pos = 1.0 / (E_m_2 - E_n_2 - Omega - 1j * self.eta)
                 S_mn_neg = 1.0 / (E_m_2 - E_n_2 + Omega - 1j * self.eta)
-                Gw_mn_2  = f_mn_2 * (S_mn_pos + S_mn_neg)
                 G_mn_2= f_mn_2 * D_mn_2
             
                 for a in range(3):
@@ -939,35 +944,36 @@ class BulkPhotovoltaicConductance_VG_Full(Velocity):
                             v_a = self.velocity_K[..., a, :, :]
                             v_b = self.velocity_K[..., b, :, :]
                             v_c = self.velocity_K[..., c, :, :]
+                            v_c_nm = v_c.swapaxes(-1, -2)
                         
-                            w_ab = self.w_K[..., a, b, :, :]
+                            w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
                             w_ca = self.w_K[..., c, a, :, :]
                             w_cb = self.w_K[..., c, b, :, :]
+                            w_ca_nm = w_ca.swapaxes(-1, -2)
+                            w_cb_nm = w_cb.swapaxes(-1, -2)
                         
-                            u_cab = self.u_K[..., c, a, b, :, :]
+                            u_cab = 0.5 * (self.u_K[..., c, a, b, :, :] + self.u_K[..., c, b, a, :, :])
                             
                             # =======================================================
                             # 1. Three-Point Bubble: Tr[ v^c v^a v^b ]
                             # =======================================================
-                            # Einsum maps: v^c_{mn} * v^a_{nl} * v^b_{lm}
-                            vvv = np.einsum('abcmn, abcnl, abclm -> abcmnl', v_c, v_a, v_b)
-                            I3 = 2* np.sum(vvv * Gw_mnl, axis=(-3, -2, -1))
+                            vvv_ba = np.einsum('abcmn, abcml, abcln -> abcmnl', v_c_nm, v_b, v_a)
+                            vvv_ab = np.einsum('abcmn, abcml, abcln -> abcmnl', v_c_nm, v_a, v_b)
+                            I3 = np.sum(vvv_ba * term_ba + vvv_ab * term_ab, axis=(-3, -2, -1))
                             
                             # =======================================================
                             # 2. Two-Point Bubble A (Diamagnetic Perturbation): Tr[ v^c w^{ab} ]
                             # =======================================================
                             rho_w = w_ab * G_mn_2
-                            I2A = np.einsum('abcmn, abcnm -> abc', v_c, rho_w)
+                            I2A = np.einsum('abcmn, abcmn -> abc', v_c_nm, rho_w)
                             
                             # =======================================================
                             # 3. Two-Point Bubble B (Diamagnetic Current): Tr[ w^{ca} v^b ]
                             # =======================================================
-                            rho_v_b = v_b * Gw_mn_2
-                            rho_v_a = v_a * Gw_mn_2
-                        
-                            # Symmetrize driving fields
-                            I2B = 0.5 * np.einsum('abcmn, abcnm -> abc', w_ca, rho_v_b) + \
-                                  0.5 * np.einsum('abcmn, abcnm -> abc', w_cb, rho_v_a)
+                            rho_v_a = v_a * f_mn_2 * S_mn_neg
+                            rho_v_b = v_b * f_mn_2 * S_mn_pos
+                            I2B = np.einsum('abcmn, abcmn -> abc', w_cb_nm, rho_v_a) + \
+                                  np.einsum('abcmn, abcmn -> abc', w_ca_nm, rho_v_b)
                             
                             # =======================================================
                             # 4. One-Point Bubble (Ground State): Tr[ u^{cab} ]
@@ -1159,20 +1165,21 @@ class BulkPhotovoltaicConductance_LG_Injection(Velocity):
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Injection Current finished")
 
 class BulkPhotovoltaicConductance_TDSE(Velocity):
-    def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, highOrderVelocity=True, **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100,
+                 highOrderVelocity=True, include_offdiag=True, **kwarg) -> None:
         '''
         Calculates the 2nd order DC photovoltaic conductance using Real-Time TDSE.
         Evolves the density matrix using a 4th-Order Runge-Kutta (RK4) integrator.
         
         Outputs
         -------
-        self.sigma_TDSE[ifermi, iomega, ialpha_drive, ibeta_measure]
-        This matches the [ialpha, ialpha, ibeta] diagonal of the Kubo AC tensor.
+        self.sigma_TDSE[ifermi, iomega, ialpha_drive_1, ialpha_drive_2, ibeta_measure]
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=highOrderVelocity, **kwarg)
         
-        # Shape: [ifermi, iomega, ialpha(driving field), ibeta(measured current)]
         self.sigma_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        self.sigma_TDSE_symmetric = np.zeros_like(self.sigma_TDSE, dtype=float)
+        self.sigma_TDSE_quadrature = np.zeros_like(self.sigma_TDSE, dtype=float)
         
         # 1. Create the unperturbed Hamiltonian diagonal matrix H0
         H_diag = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
@@ -1186,6 +1193,11 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
             for i in range(self.model.norbs):
                 rho0[..., i, i] = f[..., i]
 
+            J0 = np.zeros(3)
+            for ibeta in range(3):
+                j0_val = np.sum(rho0 * self.velocity_K[..., ibeta, :, :].swapaxes(-1, -2), axis=(-1, -2)).real
+                J0[ibeta] = np.sum(j0_val)
+
             for iomega, Omega in enumerate(self.omegaList):
                 T = 2 * np.pi / Omega
                 dt = T / n_steps_per_cycle
@@ -1198,45 +1210,65 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
                 if self.verbose:
                     print(f"TDSE [Fermi={fermi:.2f}, Omega={Omega:.2f}]: Simulating {n_cycles_transient} transient cycles + {n_cycles_measure} measurement cycle.")
 
-                for ialpha in range(3): # Direction of the driving field
-                    v_alpha = self.velocity_K[..., ialpha, :, :]
-                    w_alpha_alpha = self.w_K[..., ialpha, ialpha, :, :]
-                    u_alpha_alpha_alpha = self.u_K[..., ialpha, ialpha, ialpha, :, :]
-
+                def run_drive(directions, phases):
                     rho = rho0.copy()
                     t = 0.0
                     
                     # Phase 1: Evolve through transients to reach Non-Equilibrium Steady State
                     for _ in range(n_cycles_transient * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, u_alpha_alpha_alpha, Omega, rho0, E0)
+                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
                         t += dt
                         
                     # Phase 2: Time-average the current over the final optical cycle
                     J_dc = np.zeros(3)
                     for _ in range(n_cycles_measure * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, u_alpha_alpha_alpha, Omega, rho0, E0)
+                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
                         t += dt
 
-                        A_t = -2 * E0/Omega * np.sin(Omega * t)
+                        A_t = [-2 * E0 / Omega * np.sin(Omega * t + phase) for phase in phases]
                         
                         # Measure current in all 3 directions
                         for ibeta in range(3):
-                            v_beta = self.velocity_K[..., ibeta, :, :]
-                            w_alpha_beta = self.w_K[..., ialpha, ibeta, :, :]
-                            u_alpha_alpha_beta = self.u_K[..., ialpha, ialpha, ibeta, :, :]
-
-                            # Full Current Operator: J = v - A*w + 1/2 A^2 u
-                            J_op = v_beta - A_t * w_alpha_beta + 0.5 * (A_t**2) * u_alpha_alpha_beta
-                            # only the paramagnetic current
-                            #J_op = 0.5 * (A_t**2) * u_alpha_alpha_beta
+                            J_op = self.velocity_K[..., ibeta, :, :]
+                            for i, A_i in enumerate(A_t):
+                                J_op = J_op - A_i * self.w_K[..., ibeta, directions[i], :, :]
+                            for i, A_i in enumerate(A_t):
+                                for j, A_j in enumerate(A_t):
+                                    J_op = J_op + 0.5 * A_i * A_j * self.u_K[..., ibeta, directions[i], directions[j], :, :]
 
                             # Tr(rho * v) summed over all k-points and bands
                             j_val = np.sum(rho * J_op.swapaxes(-1, -2), axis=(-1,-2)).real
                             J_dc[ibeta] += np.sum(j_val) / (n_cycles_measure * n_steps_per_cycle)
-                            
+
+                    return (J_dc - J0) / E0**2 / np.prod(self.kgrid)
+
+                diagonal_response = np.zeros((3, 3))
+                for ialpha in range(3): # Direction of the driving field
+                    response = run_drive((ialpha,), (0.0,))
                     # Conductance = J / E^2
                     # Divide by volume/N_k
-                    self.sigma_TDSE[ifermi, iomega, ialpha, ialpha, :] = J_dc / E0**2 / np.prod(self.kgrid)
+                    self.sigma_TDSE[ifermi, iomega, ialpha, ialpha, :] = response
+                    self.sigma_TDSE_symmetric[ifermi, iomega, ialpha, ialpha, :] = response
+                    diagonal_response[ialpha] = response
+
+                if include_offdiag:
+                    for ialpha in range(3):
+                        for ibeta in range(ialpha + 1, 3):
+                            same_phase = run_drive((ialpha, ibeta), (0.0, 0.0))
+                            cross_symmetric = same_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
+
+                            quadrature_phase = run_drive((ialpha, ibeta), (0.0, -np.pi / 2))
+                            cross_quadrature = quadrature_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
+
+                            self.sigma_TDSE_symmetric[ifermi, iomega, ialpha, ibeta, :] = cross_symmetric
+                            self.sigma_TDSE_symmetric[ifermi, iomega, ibeta, ialpha, :] = cross_symmetric
+                            self.sigma_TDSE_quadrature[ifermi, iomega, ialpha, ibeta, :] = cross_quadrature
+                            self.sigma_TDSE_quadrature[ifermi, iomega, ibeta, ialpha, :] = -cross_quadrature
+
+                            # Same-phase driving gives Re[chi_ab + chi_ba]. The
+                            # quadrature drive gives the phase-sensitive cross term.
+                            self.sigma_TDSE[ifermi, iomega, ialpha, ibeta, :] = 0.5 * (cross_symmetric - cross_quadrature)
+                            self.sigma_TDSE[ifermi, iomega, ibeta, ialpha, :] = 0.5 * (cross_symmetric + cross_quadrature)
         self.projected_sigma=self.sigma_TDSE[None,None,None,...]
         # unit conversion
         #factor_SI = 4*elementary_charge**2/hbar/self.model.Vcell 
@@ -1248,21 +1280,21 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE BPVE finished")
 
-    def _rk4_step(self, rho, t, dt, H_diag, v_alpha, w_alpha_alpha, u_alpha_alpha_alpha, Omega, rho0, E0):
+    def _rk4_step(self, rho, t, dt, H_diag, directions, phases, Omega, rho0, E0):
         # A(t) = A0 exp(-iwt)
         # E(t) = -dA/dt = (iw) A0 exp(-iw)
         # E(w) = iw A(w), A(w) = (-i/w) E(w)
         # Assuming real electric field: E(W) = E(-W) = E0, E(t) = E(W) exp(-iWt) + E(-W) exp(iWt) = 2 E0 cos(Wt)
         # A(t) = A(W) exp(-iWt) + A(-W) exp(iWt) = (-i/W) E(W) exp(-iWt) + (i/W) E(-W) exp(iWt) = -2 E0/W sin(Wt)
         def dRho_dt(rho_state, time_val):
-            A_t = -2 * E0/Omega * np.sin(Omega * time_val)
-            #H_t = H_diag - A_t * v_alpha
+            A_t = [-2 * E0 / Omega * np.sin(Omega * time_val + phase) for phase in phases]
             # Full Minimal Coupling: H = H0 - A*v + 1/2 A^2 w - 1/6 A^3 u
-            H_t = (H_diag 
-                   - A_t * v_alpha                           # paramagentic drive
-                   + 1./2 * (A_t**2) * w_alpha_alpha         # diamagentic drive 
-                   #- 1./6 * (A_t**3) * u_alpha_alpha_alpha  # Fermi sea drive
-                   )
+            H_t = H_diag
+            for i, A_i in enumerate(A_t):
+                H_t = H_t - A_i * self.velocity_K[..., directions[i], :, :]
+            for i, A_i in enumerate(A_t):
+                for j, A_j in enumerate(A_t):
+                    H_t = H_t + 0.5 * A_i * A_j * self.w_K[..., directions[i], directions[j], :, :]
             comm = H_t @ rho_state - rho_state @ H_t
             return -1j * comm - self.eta * (rho_state - rho0)
 

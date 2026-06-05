@@ -5,7 +5,7 @@ import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance, BulkPhotovoltaicConductance_VG_Full, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
+from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_LG
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
@@ -283,7 +283,7 @@ def solveAHC(param):
             "iq":param["iq"]}
 
 def solveBPVE_VG(param):
-    calc=BulkPhotovoltaicConductance_VG_Full(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicConductance_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],
@@ -317,8 +317,9 @@ def solveBPVE_LG_Inject(param):
 
 def solveBPVE_TDSE(param):
     calc = BulkPhotovoltaicConductance_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   )
+                                    fermiList=param['fermi'],omegaList=param['omega'],
+                                    include_offdiag=param.get('include offdiag', True),
+                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
             "iq": param["iq"]}
 
@@ -349,6 +350,7 @@ def solveIFE_TDSE(param):
     calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['IFE type'],
+                                   include_offdiag=param.get('include offdiag', True),
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE, 
             "iq": param["iq"]}
