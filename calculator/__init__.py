@@ -1491,8 +1491,11 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
 
-class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
+class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Computing IFE with velocity-gauge (vector potential/current coupling), using frequency-domain density matrix approach
+        '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         
         M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
@@ -1537,6 +1540,68 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
                             source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
                             rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
                             sigma_k = np.sum(rho2_mn * M_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_k) / np.prod(self.kgrid)
+
+        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
+
+class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Computing IFE with velocity-gauge (vector potential/current coupling), using resonator denominator approach
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        
+        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        if ife_type in ["total", "spin"]: M_K += self.spin_K
+        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
+
+        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
+        E_m = self.energies[..., :, None, None]
+        E_n = self.energies[..., None, :, None]
+        E_l = self.energies[..., None, None, :]
+        D_mn = 1.0 / (E_m - E_n - 1j * self.eta)
+
+        E_m_2D = self.energies[..., :, None]
+        E_n_2D = self.energies[..., None, :]
+        D_mn_2D = 1.0 / (E_m_2D - E_n_2D - 1j * self.eta)
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            f_m = f[..., :, None, None]
+            f_n = f[..., None, :, None]
+            f_l = f[..., None, None, :]
+            f_nl = f_n - f_l
+            f_lm = f_l - f_m
+            f_mn_2D = f[..., :, None] - f[..., None, :]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                S_ln_pos = 1.0 / (E_l - E_n + Omega - 1j * self.eta)
+                S_ln_neg = 1.0 / (E_l - E_n - Omega - 1j * self.eta)
+                S_ml_pos = 1.0 / (E_m - E_l + Omega - 1j * self.eta)
+                S_ml_neg = 1.0 / (E_m - E_l - Omega - 1j * self.eta)
+
+                term_ba = D_mn * (f_nl * S_ln_pos - f_lm * S_ml_neg)
+                term_ab = D_mn * (f_nl * S_ln_neg - f_lm * S_ml_pos)
+
+                for c in range(3):
+                    M_c_mn = M_K[..., c, :, :]
+                    M_c_nm = M_c_mn.swapaxes(-1, -2)
+                    for a in range(3):
+                        v_a = self.velocity_K[..., a, :, :]
+                        for b in range(3):
+                            v_b = self.velocity_K[..., b, :, :]
+                            w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
+
+                            # Keep the two frequency orderings explicit. Collapsing
+                            # them into one M v_a v_b term is valid only for a == b.
+                            Mvv_ba = np.einsum('...mn, ...ml, ...ln -> ...mnl', M_c_nm, v_b, v_a)
+                            Mvv_ab = np.einsum('...mn, ...ml, ...ln -> ...mnl', M_c_nm, v_a, v_b)
+                            para_k = np.sum(Mvv_ba * term_ba + Mvv_ab * term_ab, axis=(-3, -2, -1))
+
+                            dia_k = np.sum(M_c_nm * w_ab * f_mn_2D * D_mn_2D, axis=(-2, -1))
+                            sigma_k = (para_k + dia_k) / Omega**2
                             self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_k) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
