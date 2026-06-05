@@ -1117,27 +1117,32 @@ class BulkPhotovoltaicConductance_LG_Shift(Velocity):
             L_mn = L_mn_pos + L_mn_neg
 
             for ialpha in range(3): # Drive E-field a
+                v_a = self.velocity_K[..., ialpha, :, :]
+                r_a = r_K[..., ialpha, :, :]
                 for ibeta in range(3): # Drive E-field b
+                    v_b = self.velocity_K[..., ibeta, :, :]
+                    r_b = r_K[..., ibeta, :, :]
                     for igamma in range(3): # Measured Current c
-                        
-                        v_a = self.velocity_K[..., ialpha, :, :]
-                        v_c = self.velocity_K[..., igamma, :, :]  
-                        
-                        r_b = r_K[..., ibeta, :, :]
                         r_c = r_K[..., igamma, :, :]
-                        
-                        w_ca = self.w_K[..., igamma, ialpha, :, :]
-                        Delta_a = Delta_v[..., ialpha, :, :]
-                        
-                        # Generalized Derivative w.r.t 'a' (Only 'a' is needed now!)
-                        comm_rv_a = r_c @ v_a - v_a @ r_c
-                        r_c_deriv_a = (w_ca - v_c * Delta_a * inv_omega - comm_rv_a) * inv_omega / 1j * off_diag
-                        
-                        # Universal Complex Shift Integrand: I^{cab}_mn
-                        # The factor of -1j rotates the complex plane so that:
-                        # 1. Re[I_mn] matches Sipe's original Im[...] formula for Linear Shift
-                        # 2. Im[I_mn] cleanly isolates the Circular Shift Current
-                        I_mn = -1j * r_b.conj() * r_c_deriv_a
+                        Delta_c = Delta_v[..., igamma, :, :]
+
+                        # Generalized derivatives of the optical matrix elements
+                        # along the measured-current direction.
+                        comm_a = r_c @ v_a - v_a @ r_c
+                        comm_b = r_c @ v_b - v_b @ r_c
+                        r_a_deriv_c = (
+                            self.w_K[..., igamma, ialpha, :, :]
+                            - v_a * Delta_c * inv_omega
+                            - 1j * comm_a
+                        ) * inv_omega / 1j * off_diag
+                        r_b_deriv_c = (
+                            self.w_K[..., igamma, ibeta, :, :]
+                            - v_b * Delta_c * inv_omega
+                            - 1j * comm_b
+                        ) * inv_omega / 1j * off_diag
+
+                        # Shift current is symmetric in the two optical fields.
+                        I_mn = -0.5j * (r_b.conj() * r_a_deriv_c + r_a.conj() * r_b_deriv_c)
                         
                         for ifermi, fermi in enumerate(self.fermiList):
                             f = np.int8(self.energies < fermi)
@@ -1195,8 +1200,10 @@ class BulkPhotovoltaicConductance_LG_Injection(Velocity):
         for iomega, Omega in enumerate(self.omegaList):
             # Energy conservation delta functions (Lorentzians)
             L_mn_pos = (1/np.pi) * self.eta / ((omega_mn - Omega)**2 + self.eta**2)
-            L_mn_neg = (1/np.pi) * self.eta / ((omega_mn + Omega)**2 + self.eta**2)
-            L_mn = L_mn_pos + L_mn_neg
+            # Use the positive-frequency transition once, with the explicit
+            # factor two from the two optical time orderings. Adding the
+            # reverse transition here would cancel the ordered circular phase.
+            L_mn = 2.0 * L_mn_pos
 
             for ialpha in range(3): # Drive E-field a
                 r_a = r_K[..., ialpha, :, :]
@@ -1207,7 +1214,7 @@ class BulkPhotovoltaicConductance_LG_Injection(Velocity):
                     # Full Complex Optical Transition Tensor
                     # Real part drives Linear Injection (if magnetic)
                     # Imaginary part drives Circular Injection
-                    rho_ab = r_a * r_b.conj()
+                    rho_ab = r_a.conj() * r_b
                     
                     for igamma in range(3): # Measured Current c
                         Delta_c = Delta_v[..., igamma, :, :]
