@@ -1568,7 +1568,7 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
 
 class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
-    def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         
         M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
@@ -1576,6 +1576,8 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         self.chi_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        self.chi_TDSE_symmetric = np.zeros_like(self.chi_TDSE, dtype=float)
+        self.chi_TDSE_quadrature = np.zeros_like(self.chi_TDSE, dtype=float)
         
         H_diag = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
         for i in range(self.model.norbs):
@@ -1587,9 +1589,7 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
             for i in range(self.model.norbs):
                 rho0[..., i, i] = f[..., i]
 
-            # =======================================================
-            # Fix: Calculate Unperturbed Ground State Magnetization M0
-            # =======================================================
+            # Calculate Unperturbed Ground State Magnetization M0
             M0 = np.zeros(3)
             for ic in range(3):
                 M_val0 = np.sum(rho0 * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1,-2)).real
@@ -1602,39 +1602,67 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
                 n_cycles_transient = int(np.ceil((10.0 / self.eta) / T))
                 n_cycles_measure = 1
 
-                for ialpha in range(3): 
-                    v_alpha = self.velocity_K[..., ialpha, :, :]
-                    w_alpha_alpha = self.w_K[..., ialpha, ialpha, :, :]
-
+                def run_drive(directions, phases):
                     rho = rho0.copy()
                     t = 0.0
-                    
                     for _ in range(n_cycles_transient * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, Omega, rho0, E0)
+                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
                         t += dt
                         
                     M_dc = np.zeros(3)
                     for _ in range(n_cycles_measure * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, v_alpha, w_alpha_alpha, Omega, rho0, E0)
+                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
                         t += dt
 
                         for ic in range(3):
                             M_val = np.sum(rho * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1,-2)).real
                             M_dc[ic] += np.sum(M_val) / (n_cycles_measure * n_steps_per_cycle)
+
+                    return (M_dc - M0) / E0**2 / np.prod(self.kgrid)
+
+                diagonal_response = np.zeros((3, 3))
+                for ialpha in range(3): 
+                    response = run_drive((ialpha,), (0.0,))
+                    diagonal_response[ialpha] = response
+                    self.chi_TDSE[ifermi, iomega, :, ialpha, ialpha] = response
+                    self.chi_TDSE_symmetric[ifermi, iomega, :, ialpha, ialpha] = response
+
+                if include_offdiag:
+                    for ialpha in range(3):
+                        for ibeta in range(ialpha + 1, 3):
+                            same_phase = run_drive((ialpha, ibeta), (0.0, 0.0))
+                            cross_symmetric = same_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
                             
-                    # Fix: Subtract M0 to get the pure Opto-Magnetic Response (\Delta M)
-                    self.chi_TDSE[ifermi, iomega, :, ialpha, ialpha] = (M_dc - M0) / E0**2 / np.prod(self.kgrid)
+                            quadrature_phase = run_drive((ialpha, ibeta), (0.0, -np.pi / 2))
+                            cross_quadrature = quadrature_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
+                            
+                            self.chi_TDSE_symmetric[ifermi, iomega, :, ialpha, ibeta] = cross_symmetric
+                            self.chi_TDSE_symmetric[ifermi, iomega, :, ibeta, ialpha] = cross_symmetric
+                            self.chi_TDSE_quadrature[ifermi, iomega, :, ialpha, ibeta] = cross_quadrature
+                            self.chi_TDSE_quadrature[ifermi, iomega, :, ibeta, ialpha] = -cross_quadrature
+                            
+                            # Same-phase driving gives Re[chi_ab + chi_ba]. With the
+                            # beta field shifted by -pi/2, the real DC signal gives
+                            # the phase-sensitive circular cross response.
+                            self.chi_TDSE[ifermi, iomega, :, ialpha, ibeta] = 0.5 * (cross_symmetric - cross_quadrature)
+                            self.chi_TDSE[ifermi, iomega, :, ibeta, ialpha] = 0.5 * (cross_symmetric + cross_quadrature)
         
         self.projected_sigma = self.chi_TDSE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE IFE finished")
 
-    def _rk4_step(self, rho, t, dt, H_diag, v_alpha, w_alpha_alpha, Omega, rho0, E0):
+    def _rk4_step(self, rho, t, dt, H_diag, directions, phases, Omega, rho0, E0):
+        v_drives = [self.velocity_K[..., direction, :, :] for direction in directions]
+        w_drives = [[self.w_K[..., direction_i, direction_j, :, :]
+                     for direction_j in directions] for direction_i in directions]
+        
         def dRho_dt(rho_state, time_val):
-            A_t = -2 * E0/Omega * np.sin(Omega * time_val)
-            H_t = (H_diag 
-                   - A_t * v_alpha                   # paramagnetic drive
-                   + 0.5 * (A_t**2) * w_alpha_alpha  # diamagnetic drive
-                   )
+            A_t = [-2 * E0 / Omega * np.sin(Omega * time_val + phase) for phase in phases]
+            H_t = H_diag
+            for i, A_i in enumerate(A_t):
+                H_t = H_t - A_i * v_drives[i]
+            for i, A_i in enumerate(A_t):
+                for j, A_j in enumerate(A_t):
+                    H_t = H_t + 0.5 * A_i * A_j * w_drives[i][j]
             comm = H_t @ rho_state - rho_state @ H_t
             return -1j * comm - self.eta * (rho_state - rho0)
 
