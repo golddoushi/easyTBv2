@@ -807,6 +807,52 @@ class AnormalousHallConductance(BerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
+class AnormalousHallConductance_LG_DM(Velocity):
+
+    def __init__(self, currentProjectionList=[], match_resonator=False, **kwarg) -> None:
+        '''
+        Calc. AHE from the dc length-gauge Liouville density matrix.
+
+        The default denominator uses the physical interband dipole convention,
+        1 / (DeltaE * (DeltaE - i eta)). With match_resonator=True it uses
+        1 / (DeltaE - i eta)^2, matching BerryCurv exactly at finite eta.
+        '''
+        super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
+        self.Iodd = False  # inversion gives minus
+        self.Todd = True   # timereversal gives minus
+
+        nProjections = (len(currentProjectionList)+1, len(currentProjectionList)+1)
+        projected_sigma = np.zeros(nProjections + (len(self.fermiList), 3, 3))
+
+        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        nondegenerate = abs(deltaE_mn) > self.degen
+
+        response_factor_base = np.zeros_like(deltaE_mn, dtype=complex)
+        if match_resonator:
+            response_factor_base[nondegenerate] = 1.0 / (deltaE_mn[nondegenerate] - 1j * self.eta)**2
+        else:
+            response_factor_base[nondegenerate] = 1.0 / deltaE_mn[nondegenerate] / (deltaE_mn[nondegenerate] - 1j * self.eta)
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            f_nm_source = f[..., None, :] - f[..., :, None]
+            response_factor = 1j * f_nm_source * response_factor_base
+
+            for ivelocity_alpha, proj_velocity_alpha_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
+                    for ialpha in range(3):
+                        rho1_alpha = response_factor * proj_velocity_alpha_K[..., ialpha, :, :]
+                        for ibeta in range(3):
+                            current_k = np.sum(
+                                proj_velocity_beta_K[..., ibeta, :, :].swapaxes(-1, -2) * rho1_alpha,
+                                axis=(-2, -1)
+                            ).real
+                            projected_sigma[ivelocity_alpha, ivelocity_beta, ifermi, ialpha, ibeta] = np.sum(current_k)
+
+        self.projected_sigma = projected_sigma * (2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2])))
+        self.sigma = self.projected_sigma[0, 0]
+        if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix AHE finished")
+
 class BulkPhotovoltaicConductance(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
@@ -1610,6 +1656,64 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
+
+class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Computing IFE with length gauge, using frequency-domain density matrix
+        approach.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
+
+        norbs = self.energies.shape[-1]
+        M_K = np.zeros(self.kgrid + (3, norbs, norbs), dtype=complex)
+        if ife_type in ["total", "spin"]: M_K += self.spin_K
+        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
+
+        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        inv_deltaE = np.zeros_like(deltaE_mn, dtype=float)
+        nondegenerate = abs(deltaE_mn) > self.degen
+        inv_deltaE[nondegenerate] = 1.0 / deltaE_mn[nondegenerate]
+
+        off_diag = 1.0 - np.eye(norbs)
+        r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
+
+        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros(self.energies.shape + (norbs,), dtype=complex)
+            for iband in range(norbs):
+                rho0[..., iband, iband] = f[..., iband]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                def rho1(r, frequency):
+                    source = r @ rho0 - rho0 @ r
+                    return source / (deltaE_mn - frequency - 1j * self.eta)
+
+                rho1_cache = {
+                    (direction, sign): rho1(r_K[..., direction, :, :], sign * Omega)
+                    for direction in range(3)
+                    for sign in (-1, 1)
+                }
+
+                for c in range(3):
+                    M_c_nm = M_K[..., c, :, :].swapaxes(-1, -2)
+                    for a in range(3):
+                        r_a = r_K[..., a, :, :]
+                        for b in range(3):
+                            r_b = r_K[..., b, :, :]
+
+                            source = (
+                                r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
+                                + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
+                            )
+                            rho2_mn = source / (deltaE_mn - 1j * self.eta)
+                            chi_k = np.sum(rho2_mn * M_c_nm, axis=(-2, -1))
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(chi_k) / np.prod(self.kgrid)
+
+        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE density matrix finished")
 
 class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:

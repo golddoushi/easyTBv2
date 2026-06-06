@@ -5,8 +5,8 @@ import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
-from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM ,InverseFaradayEffect_LG
+from calculator import AnormalousHallConductance, AnormalousHallConductance_LG_DM, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
+from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
@@ -282,6 +282,16 @@ def solveAHC(param):
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
+def solveAHC_LG_DM(param):
+    calc=AnormalousHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   match_resonator=param.get('match resonator', False),
+                                   )
+    return {"energies":calc.energies,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
+            "iq":param["iq"]}
+
 def solveBPVE_VG(param):
     calc=BulkPhotovoltaicConductance_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
@@ -374,6 +384,14 @@ def solveIFE_LG(param):
                                    ife_type=param['IFE type'],
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
+            "iq": param["iq"]}
+
+def solveIFE_LG_DM(param):
+    calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   ife_type=param['IFE type'],
+                                   )
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
             "iq": param["iq"]}
 
 def solveIFE_TDSE(param):
