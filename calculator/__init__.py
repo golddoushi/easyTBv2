@@ -363,6 +363,33 @@ class SpinTorque(Spin):
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_spinTorque_K_list.append((proj1_K@self.spinTorque_K + self.spinTorque_K@proj2_K)/2)
 
+class OrbitalTorque(Orbital):
+    def __init__(self, orbitalTorqueProjectionList=[], **kwarg):
+        '''
+        Compute orbital torque matrix in eigen-basis
+
+        T = (-i/\hbar) [L, H]
+
+        In eigen-basis, H is diagonalized eigen-energy, L is computed in parent Orbital class. So, the only work is matrix product
+
+        Indexing
+        --------
+        self.orbitalTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives orbital torque matrix in eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to L_x | L_y | L_z.
+        '''
+        super().__init__(**kwarg)
+
+        self.orbitalTorque_K=-1j*(self.orbital_K*self.energies[...,None,None,:] - self.orbital_K*self.energies[...,None,:,None])
+        if self.verbose==2: showElapsedTime(extraInfo=f"orbital torque in eig.-basis finished")
+        self.projected_orbitalTorque_K_list=[]
+        
+        for orbitalTorqueProjection in orbitalTorqueProjectionList:
+            proj1=projectionOperator(orbitalTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(orbitalTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
+            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
+            self.projected_orbitalTorque_K_list.append((proj1_K@self.orbitalTorque_K + self.orbitalTorque_K@proj2_K)/2)
+
 class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], **kwarg):
         '''
@@ -1936,6 +1963,120 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
         k3 = dRho_dt(rho + 0.5 * dt * k2, t + 0.5 * dt)
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+
+class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
+    def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], **kwarg) -> None:
+        '''
+        Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, 
+                         spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+
+        nbasis = self.energies.shape[-1]
+        T_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]: T_K += self.spinTorque_K
+        if ife_type in ["total", "orbital"]: T_K += self.orbitalTorque_K
+
+        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        inv_deltaE = np.zeros_like(deltaE_mn, dtype=float)
+        nondegenerate = abs(deltaE_mn) > self.degen
+        inv_deltaE[nondegenerate] = 1.0 / deltaE_mn[nondegenerate]
+
+        off_diag = 1.0 - np.eye(nbasis)
+        r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
+
+        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+            for iband in range(nbasis):
+                rho0[..., iband, iband] = f[..., iband]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                def rho1(r, frequency):
+                    source = r @ rho0 - rho0 @ r
+                    return source / (deltaE_mn - frequency - 1j * self.eta)
+
+                rho1_cache = {
+                    (direction, sign): rho1(r_K[..., direction, :, :], sign * Omega)
+                    for direction in range(3)
+                    for sign in (-1, 1)
+                }
+                
+                for a in range(3):
+                    r_a = r_K[..., a, :, :]
+                    for b in range(3):
+                        r_b = r_K[..., b, :, :]
+
+                        source = (
+                            r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
+                            + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
+                        )
+                        rho2_mn = source / (deltaE_mn - 1j * self.eta)
+                        for c in range(3):
+                            T_c_nm = T_K[..., c, :, :].swapaxes(-1, -2)
+                            chi_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(chi_k) / np.prod(self.kgrid)
+
+        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
+
+class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
+    def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[], **kwarg) -> None:
+        '''
+        Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, 
+                         spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        
+        nbasis=self.energies.shape[-1]
+        T_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]: T_K += self.spinTorque_K
+        if ife_type in ["total", "orbital"]: T_K += self.orbitalTorque_K
+
+        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
+        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+            for iband in range(nbasis):
+                rho0[..., iband, iband] = f[..., iband]
+
+            for iomega, Omega in enumerate(self.omegaList):
+                def rho1(v, frequency):
+                    source = v @ rho0 - rho0 @ v
+                    return source / (deltaE_mn - frequency - 1j * self.eta)
+
+                rho1_cache = {
+                    (direction, sign): rho1(self.velocity_K[..., direction, :, :], sign * Omega)
+                    for direction in range(3)
+                    for sign in (-1, 1)
+                }
+
+                for a in range(3):
+                    v_a = self.velocity_K[..., a, :, :]
+                    for b in range(3):
+                        v_b = self.velocity_K[..., b, :, :]
+                        w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
+
+                        # Keep the two frequency orderings explicit. Collapsing
+                        # them into one M v_a v_b term is valid only for a == b.
+                        source_para = (
+                            v_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ v_b
+                            + v_a @ rho1_cache[(b, 1)] - rho1_cache[(b, 1)] @ v_a
+                        )
+                        source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
+                        rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
+                        for c in range(3):
+                            T_c_mn = T_K[..., c, :, :]
+                            sigma_k = np.sum(rho2_mn * T_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
+                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_k) / np.prod(self.kgrid)
+
+        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFT density matrix finished")
 
 
 class SpinBerryCurv(SpinVelocity):

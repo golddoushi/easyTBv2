@@ -16,6 +16,7 @@ from task import solveSHC, solveSHC_diag, solveOHC, solveStGC, solveAHC, solveAH
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
+from task import solveIFTorque_VG_DM, solveIFTorque_LG_DM
 #+------------+
 #| Line tasks |
 #+------------+
@@ -78,6 +79,7 @@ def run():
     #exit()
     # modulate the SOC, exchange fields, etc
     #model.scaleSOC(lam=0)
+    #model.rotateExchangeField(projection=[(0,(0,)),(1,(0,))], theta=np.pi, phi=0.)
     '''
     # create supercell model and cut into nanoribbon
     Tmatrix=[
@@ -195,7 +197,7 @@ def run():
 
     BZGrid=(48,48,1)
     BZSymm=False
-    calc=BZGridTask(model, solveIFE_LG_DM, 
+    calc=BZGridTask(model, solveIFTorque_LG_DM, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
