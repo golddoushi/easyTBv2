@@ -1625,9 +1625,17 @@ class BulkPhotovoltaicConductance_TDSE_LG_Naive(Velocity):
 
 class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Computing IFE with length gauge, using resonator denominator approach.
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
+        '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
         
-        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        nbasis=self.energies.shape[-1]
+        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
@@ -1636,7 +1644,7 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
         nondegenerate = abs(omega_mn) > self.degen
         inv_omega[nondegenerate] = 1.0 / omega_mn[nondegenerate]
         
-        off_diag = 1.0 - np.eye(self.model.norbs - self.ibmin)
+        off_diag = 1.0 - np.eye(nbasis)
         r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
@@ -1679,7 +1687,7 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
                             integrand = Mrr_ba * term_ba + Mrr_ab * term_ab
                             
                             # CORRECTED: np.sum() now integrates over all bands AND the k-grid
-                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(integrand) / np.prod(self.kgrid)
+                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(integrand) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
@@ -1687,13 +1695,16 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
 class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
-        Computing IFE with length gauge, using frequency-domain density matrix
-        approach.
+        Computing IFE with length gauge, using frequency-domain density matrix approach.
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
 
-        norbs = self.energies.shape[-1]
-        M_K = np.zeros(self.kgrid + (3, norbs, norbs), dtype=complex)
+        nbasis = self.energies.shape[-1]
+        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
@@ -1702,15 +1713,15 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
         nondegenerate = abs(deltaE_mn) > self.degen
         inv_deltaE[nondegenerate] = 1.0 / deltaE_mn[nondegenerate]
 
-        off_diag = 1.0 - np.eye(norbs)
+        off_diag = 1.0 - np.eye(nbasis)
         r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
-            rho0 = np.zeros(self.energies.shape + (norbs,), dtype=complex)
-            for iband in range(norbs):
+            rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+            for iband in range(nbasis):
                 rho0[..., iband, iband] = f[..., iband]
 
             for iomega, Omega in enumerate(self.omegaList):
@@ -1724,20 +1735,19 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
                     for sign in (-1, 1)
                 }
 
-                for c in range(3):
-                    M_c_nm = M_K[..., c, :, :].swapaxes(-1, -2)
-                    for a in range(3):
-                        r_a = r_K[..., a, :, :]
-                        for b in range(3):
-                            r_b = r_K[..., b, :, :]
-
-                            source = (
-                                r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
-                                + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
-                            )
-                            rho2_mn = source / (deltaE_mn - 1j * self.eta)
+                for a in range(3):
+                    r_a = r_K[..., a, :, :]
+                    for b in range(3):
+                        r_b = r_K[..., b, :, :]
+                        source = (
+                            r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
+                            + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
+                        )
+                        rho2_mn = source / (deltaE_mn - 1j * self.eta)
+                        for c in range(3):
+                            M_c_nm = M_K[..., c, :, :].swapaxes(-1, -2)
                             chi_k = np.sum(rho2_mn * M_c_nm, axis=(-2, -1))
-                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(chi_k) / np.prod(self.kgrid)
+                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE density matrix finished")
@@ -1746,10 +1756,15 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
         Computing IFE with velocity-gauge (vector potential/current coupling), using frequency-domain density matrix approach
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         
-        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        nbasis=self.energies.shape[-1]
+        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
@@ -1759,8 +1774,8 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
-            rho0 = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
-            for iband in range(self.model.norbs):
+            rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+            for iband in range(nbasis):
                 rho0[..., iband, iband] = f[..., iband]
 
             for iomega, Omega in enumerate(self.omegaList):
@@ -1774,24 +1789,23 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
                     for sign in (-1, 1)
                 }
 
-                for c in range(3):
-                    M_c_mn = M_K[..., c, :, :]
-                    for a in range(3):
-                        v_a = self.velocity_K[..., a, :, :]
-                        for b in range(3):
-                            v_b = self.velocity_K[..., b, :, :]
-                            w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
+                for a in range(3):
+                    v_a = self.velocity_K[..., a, :, :]
+                    for b in range(3):
+                        v_b = self.velocity_K[..., b, :, :]
+                        w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
 
-                            # Keep the two frequency orderings explicit. Collapsing
-                            # them into one M v_a v_b term is valid only for a == b.
-                            source_para = (
-                                v_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ v_b
-                                + v_a @ rho1_cache[(b, 1)] - rho1_cache[(b, 1)] @ v_a
-                            )
-                            source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
-                            rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
+                        source_para = (
+                            v_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ v_b
+                            + v_a @ rho1_cache[(b, 1)] - rho1_cache[(b, 1)] @ v_a
+                        )
+                        source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
+                        rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
+                        for c in range(3):
+                            M_c_mn = M_K[..., c, :, :]
+
                             sigma_k = np.sum(rho2_mn * M_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
-                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_k) / np.prod(self.kgrid)
+                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
@@ -1800,10 +1814,15 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
         Computing IFE with velocity-gauge (vector potential/current coupling), using resonator denominator approach
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         
-        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        nbasis=self.energies.shape[-1]
+        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
@@ -1836,33 +1855,42 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
                 term_ba = D_mn * (f_nl * S_ln_pos - f_lm * S_ml_neg)
                 term_ab = D_mn * (f_nl * S_ln_neg - f_lm * S_ml_pos)
 
-                for c in range(3):
-                    M_c_mn = M_K[..., c, :, :]
-                    M_c_nm = M_c_mn.swapaxes(-1, -2)
-                    for a in range(3):
-                        v_a = self.velocity_K[..., a, :, :]
-                        for b in range(3):
-                            v_b = self.velocity_K[..., b, :, :]
-                            w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
+                
+                for a in range(3):
+                    v_a = self.velocity_K[..., a, :, :]
+                    for b in range(3):
+                        v_b = self.velocity_K[..., b, :, :]
+                        w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
+                        for c in range(3):
+                            M_c_mn = M_K[..., c, :, :]
+                            M_c_nm = M_c_mn.swapaxes(-1, -2)
 
-                            # Keep the two frequency orderings explicit. Collapsing
-                            # them into one M v_a v_b term is valid only for a == b.
                             Mvv_ba = np.einsum('...mn, ...ml, ...ln -> ...mnl', M_c_nm, v_b, v_a)
                             Mvv_ab = np.einsum('...mn, ...ml, ...ln -> ...mnl', M_c_nm, v_a, v_b)
                             para_k = np.sum(Mvv_ba * term_ba + Mvv_ab * term_ab, axis=(-3, -2, -1))
 
                             dia_k = np.sum(M_c_nm * w_ab * f_mn_2D * D_mn_2D, axis=(-2, -1))
                             sigma_k = (para_k + dia_k) / Omega**2
-                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_k) / np.prod(self.kgrid)
+                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
 
 class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
+        '''
+        Computing IFE with velocity-gauge (vector potential/current coupling), using time-dependent density matrix propagation approach
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=float)
+            off-diagonal of chi_IFE in TDSE is different from freq-domain case. 
+            chi_IFE[0,0,x,y,z] + chi_IFE[0,0,y,x,z] gives symmetric part, while chi_IFE[0,0,x,y,z] - chi_IFE[0,0,y,x,z] gives anti-symmetric part
+        '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         
-        M_K = np.zeros(self.kgrid + (3, self.model.norbs, self.model.norbs), dtype=complex)
+        nbasis=self.energies.shape[-1]
+        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
@@ -1870,14 +1898,14 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
         self.chi_TDSE_symmetric = np.zeros_like(self.chi_TDSE, dtype=float)
         self.chi_TDSE_quadrature = np.zeros_like(self.chi_TDSE, dtype=float)
         
-        H_diag = np.zeros(self.energies.shape + (self.model.norbs,), dtype=complex)
-        for i in range(self.model.norbs):
-            H_diag[..., i, i] = self.energies[..., i]
+        H_diag = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+        for iband in range(nbasis):
+            H_diag[..., iband, iband] = self.energies[..., iband]
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
             rho0 = np.zeros_like(H_diag)
-            for i in range(self.model.norbs):
+            for i in range(nbasis):
                 rho0[..., i, i] = f[..., i]
 
             # Calculate Unperturbed Ground State Magnetization M0
@@ -1915,8 +1943,8 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
                 for ialpha in range(3): 
                     response = run_drive((ialpha,), (0.0,))
                     diagonal_response[ialpha] = response
-                    self.chi_TDSE[ifermi, iomega, :, ialpha, ialpha] = response
-                    self.chi_TDSE_symmetric[ifermi, iomega, :, ialpha, ialpha] = response
+                    self.chi_TDSE[ifermi, iomega, ialpha, ialpha, :] = response
+                    self.chi_TDSE_symmetric[ifermi, iomega, ialpha, ialpha, :] = response
 
                 if include_offdiag:
                     for ialpha in range(3):
@@ -1927,17 +1955,17 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
                             quadrature_phase = run_drive((ialpha, ibeta), (0.0, -np.pi / 2))
                             cross_quadrature = quadrature_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
                             
-                            self.chi_TDSE_symmetric[ifermi, iomega, :, ialpha, ibeta] = cross_symmetric
-                            self.chi_TDSE_symmetric[ifermi, iomega, :, ibeta, ialpha] = cross_symmetric
-                            self.chi_TDSE_quadrature[ifermi, iomega, :, ialpha, ibeta] = cross_quadrature
-                            self.chi_TDSE_quadrature[ifermi, iomega, :, ibeta, ialpha] = -cross_quadrature
+                            self.chi_TDSE_symmetric[ifermi, iomega, ialpha, ibeta, :] = cross_symmetric
+                            self.chi_TDSE_symmetric[ifermi, iomega, ibeta, ialpha, :] = cross_symmetric
+                            self.chi_TDSE_quadrature[ifermi, iomega, ialpha, ibeta, :] = cross_quadrature
+                            self.chi_TDSE_quadrature[ifermi, iomega, ibeta, ialpha, :] = -cross_quadrature
                             
                             # Same-phase driving gives Re[chi_ab + chi_ba]. With the
                             # beta field shifted by -pi/2, the real DC signal gives
                             # a circular cross response; for an antisymmetric pair,
                             # chi_TDSE[alpha,beta] estimates Im[chi_alpha_beta].
-                            self.chi_TDSE[ifermi, iomega, :, ialpha, ibeta] = 0.5 * (cross_symmetric - cross_quadrature)
-                            self.chi_TDSE[ifermi, iomega, :, ibeta, ialpha] = 0.5 * (cross_symmetric + cross_quadrature)
+                            self.chi_TDSE[ifermi, iomega, ialpha, ibeta, :] = 0.5 * (cross_symmetric - cross_quadrature)
+                            self.chi_TDSE[ifermi, iomega, ibeta, ialpha, :] = 0.5 * (cross_symmetric + cross_quadrature)
         
         self.projected_sigma = self.chi_TDSE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE IFE finished")
@@ -1968,6 +1996,10 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, 
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
@@ -2017,7 +2049,7 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                         for c in range(3):
                             T_c_nm = T_K[..., c, :, :].swapaxes(-1, -2)
                             chi_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
-                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(chi_k) / np.prod(self.kgrid)
+                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
@@ -2026,6 +2058,10 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[], **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, 
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
@@ -2073,7 +2109,7 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
                         for c in range(3):
                             T_c_mn = T_K[..., c, :, :]
                             sigma_k = np.sum(rho2_mn * T_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
-                            self.chi_IFE[ifermi, iomega, c, a, b] = np.sum(sigma_k) / np.prod(self.kgrid)
+                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFT density matrix finished")

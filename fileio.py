@@ -295,7 +295,7 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
         directionName=['x','y','z']
         for iproj1 in range(tensor_data.shape[0]):
             for iproj2 in range(tensor_data.shape[1]):
-                for iproj2 in range(tensor_data.shape[2]):
+                for iproj3 in range(tensor_data.shape[2]):
                     for alpha1 in range(3):
                         for alpha2 in range(3):
                             for beta in range(3):
