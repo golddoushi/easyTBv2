@@ -341,7 +341,7 @@ class SpinTorque(Spin):
         '''
         Compute spin torque matrix in eigen-basis
 
-        T = (-i/\hbar) [S, H]
+        T = -i [S, H]
 
         In eigen-basis, H is diagonalized eigen-energy, S is computed in parent Spin class. So, the only work is matrix product
 
@@ -362,6 +362,41 @@ class SpinTorque(Spin):
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_spinTorque_K_list.append((proj1_K@self.spinTorque_K + self.spinTorque_K@proj2_K)/2)
+
+    def buildHighOrderSpinTorque(self, spinTorqueProjectionList=[]):
+        '''
+        Build vector-potential torque vertices for velocity-gauge calculations.
+
+        With H(A) = H0 - A_a v_a + 1/2 A_a A_b w_ab,
+        T(A) = -i[S,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
+        '''
+        nbasis = self.energies.shape[-1]
+        self.spinTorqueA_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        self.spinTorqueAA_K = np.zeros(self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
+
+        for c in range(3):
+            S_c = self.spin_K[..., c, :, :]
+            for a in range(3):
+                v_a = self.velocity_K[..., a, :, :]
+                self.spinTorqueA_K[..., c, a, :, :] = 1j * (S_c @ v_a - v_a @ S_c)
+                for b in range(3):
+                    w_ab = self.w_K[..., a, b, :, :]
+                    self.spinTorqueAA_K[..., c, a, b, :, :] = -1j * (S_c @ w_ab - w_ab @ S_c)
+
+        self.projected_spinTorqueA_K_list = []
+        self.projected_spinTorqueAA_K_list = []
+        for spinTorqueProjection in spinTorqueProjectionList:
+            proj1 = projectionOperator(spinTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj2 = projectionOperator(spinTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj1_K = self.projectorInEigenBasis(proj1)
+            proj2_K = self.projectorInEigenBasis(proj2)
+            self.projected_spinTorqueA_K_list.append(
+                (proj1_K[..., None, None, :, :] @ self.spinTorqueA_K + self.spinTorqueA_K @ proj2_K[..., None, None, :, :]) / 2
+            )
+            self.projected_spinTorqueAA_K_list.append(
+                (proj1_K[..., None, None, None, :, :] @ self.spinTorqueAA_K + self.spinTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
+            )
+        if self.verbose==2: showElapsedTime(extraInfo=f"high-order spin torque in eig.-basis finished")
 
 class OrbitalTorque(Orbital):
     def __init__(self, orbitalTorqueProjectionList=[], **kwarg):
@@ -389,6 +424,41 @@ class OrbitalTorque(Orbital):
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_orbitalTorque_K_list.append((proj1_K@self.orbitalTorque_K + self.orbitalTorque_K@proj2_K)/2)
+
+    def buildHighOrderOrbitalTorque(self, orbitalTorqueProjectionList=[]):
+        '''
+        Build vector-potential torque vertices for velocity-gauge calculations.
+
+        With H(A) = H0 - A_a v_a + 1/2 A_a A_b w_ab,
+        T(A) = -i[L,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
+        '''
+        nbasis = self.energies.shape[-1]
+        self.orbitalTorqueA_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        self.orbitalTorqueAA_K = np.zeros(self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
+
+        for c in range(3):
+            L_c = self.orbital_K[..., c, :, :]
+            for a in range(3):
+                v_a = self.velocity_K[..., a, :, :]
+                self.orbitalTorqueA_K[..., c, a, :, :] = 1j * (L_c @ v_a - v_a @ L_c)
+                for b in range(3):
+                    w_ab = self.w_K[..., a, b, :, :]
+                    self.orbitalTorqueAA_K[..., c, a, b, :, :] = -1j * (L_c @ w_ab - w_ab @ L_c)
+
+        self.projected_orbitalTorqueA_K_list = []
+        self.projected_orbitalTorqueAA_K_list = []
+        for orbitalTorqueProjection in orbitalTorqueProjectionList:
+            proj1 = projectionOperator(orbitalTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj2 = projectionOperator(orbitalTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj1_K = self.projectorInEigenBasis(proj1)
+            proj2_K = self.projectorInEigenBasis(proj2)
+            self.projected_orbitalTorqueA_K_list.append(
+                (proj1_K[..., None, None, :, :] @ self.orbitalTorqueA_K + self.orbitalTorqueA_K @ proj2_K[..., None, None, :, :]) / 2
+            )
+            self.projected_orbitalTorqueAA_K_list.append(
+                (proj1_K[..., None, None, None, :, :] @ self.orbitalTorqueAA_K + self.orbitalTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
+            )
+        if self.verbose==2: showElapsedTime(extraInfo=f"high-order orbital torque in eig.-basis finished")
 
 class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], **kwarg):
@@ -2005,14 +2075,26 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        if ife_type in ["total", "spin"]: self.buildHighOrderSpinTorque(torqueProjectionList)
+        if ife_type in ["total", "orbital"]: self.buildHighOrderOrbitalTorque(torqueProjectionList)
 
         nbasis = self.energies.shape[-1]
         proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        proj_TA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        proj_TAA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: proj_T_K[0] += self.spinTorque_K
         if ife_type in ["total", "orbital"]: proj_T_K[0] += self.orbitalTorque_K
+        if ife_type in ["total", "spin"]: proj_TA_K[0] += self.spinTorqueA_K
+        if ife_type in ["total", "orbital"]: proj_TA_K[0] += self.orbitalTorqueA_K
+        if ife_type in ["total", "spin"]: proj_TAA_K[0] += self.spinTorqueAA_K
+        if ife_type in ["total", "orbital"]: proj_TAA_K[0] += self.orbitalTorqueAA_K
         for iproj in range(len(torqueProjectionList)):
             if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
             if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
+            if ife_type in ["total", "spin"]: proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
+            if ife_type in ["total", "orbital"]: proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
+            if ife_type in ["total", "spin"]: proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
+            if ife_type in ["total", "orbital"]: proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
 
         self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
         self.chi_TDSE_symmetric = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
@@ -2051,10 +2133,17 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
                     for _ in range(n_cycles_measure * n_steps_per_cycle):
                         rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
                         t += dt
+                        A_t = [-2 * E0 / Omega * np.sin(Omega * t + phase) for phase in phases]
 
                         for iproj_T, T_K in enumerate(proj_T_K):
                             for ic in range(3):
-                                T_val = np.sum(rho * T_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1, -2)).real
+                                T_op = T_K[..., ic, :, :].copy()
+                                for i, A_i in enumerate(A_t):
+                                    T_op = T_op + A_i * proj_TA_K[iproj_T, ..., ic, directions[i], :, :]
+                                for i, A_i in enumerate(A_t):
+                                    for j, A_j in enumerate(A_t):
+                                        T_op = T_op + 0.5 * A_i * A_j * proj_TAA_K[iproj_T, ..., ic, directions[i], directions[j], :, :]
+                                T_val = np.sum(rho * T_op.swapaxes(-1, -2), axis=(-1, -2)).real
                                 T_dc[iproj_T, ic] += np.sum(T_val) / (n_cycles_measure * n_steps_per_cycle)
 
                     return (T_dc - T0) / E0**2 / np.prod(self.kgrid)
@@ -2168,14 +2257,26 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, 
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        if ife_type in ["total", "spin"]: self.buildHighOrderSpinTorque(torqueProjectionList)
+        if ife_type in ["total", "orbital"]: self.buildHighOrderOrbitalTorque(torqueProjectionList)
         
         nbasis=self.energies.shape[-1]
         proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        proj_TA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        proj_TAA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: proj_T_K[0] += self.spinTorque_K
         if ife_type in ["total", "orbital"]: proj_T_K[0] += self.orbitalTorque_K
+        if ife_type in ["total", "spin"]: proj_TA_K[0] += self.spinTorqueA_K
+        if ife_type in ["total", "orbital"]: proj_TA_K[0] += self.orbitalTorqueA_K
+        if ife_type in ["total", "spin"]: proj_TAA_K[0] += self.spinTorqueAA_K
+        if ife_type in ["total", "orbital"]: proj_TAA_K[0] += self.orbitalTorqueAA_K
         for iproj in range(len(torqueProjectionList)):
             if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
             if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
+            if ife_type in ["total", "spin"]: proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
+            if ife_type in ["total", "orbital"]: proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
+            if ife_type in ["total", "spin"]: proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
+            if ife_type in ["total", "orbital"]: proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
 
         self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
         # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
@@ -2215,7 +2316,16 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
                         for iproj_T, T_K in enumerate(proj_T_K):
                             for c in range(3):
                                 T_c_mn = T_K[..., c, :, :]
-                                sigma_k = np.sum(rho2_mn * T_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
+                                T1_c_b_nm = proj_TA_K[iproj_T, ..., c, b, :, :].swapaxes(-1, -2)
+                                T1_c_a_nm = proj_TA_K[iproj_T, ..., c, a, :, :].swapaxes(-1, -2)
+                                T2_c_ab = 0.5 * (proj_TAA_K[iproj_T, ..., c, a, b, :, :] + proj_TAA_K[iproj_T, ..., c, b, a, :, :])
+                                T2_c_ab_nm = T2_c_ab.swapaxes(-1, -2)
+
+                                obs2_k = np.sum(rho2_mn * T_c_mn.swapaxes(-1, -2), axis=(-1, -2))
+                                obs1_k = np.sum(rho1_cache[(a, -1)] * T1_c_b_nm + rho1_cache[(b, 1)] * T1_c_a_nm, axis=(-1, -2))
+                                obs0_k = np.sum(rho0 * T2_c_ab_nm, axis=(-1, -2))
+                                sigma_k = (obs2_k + obs1_k + obs0_k) / Omega**2
+                                #sigma_k = obs2_k / Omega**2 # only include obs2_k the naive term
                                 self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
 
         self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
