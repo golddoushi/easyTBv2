@@ -197,7 +197,7 @@ def run():
 
     BZGrid=(48,48,1)
     BZSymm=False
-    calc=BZGridTask(model, solveIFTorque_LG_DM, 
+    calc=BZGridTask(model, solveIFTorque_VG_DM, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

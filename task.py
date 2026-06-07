@@ -411,7 +411,7 @@ def solveIFTorque_VG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
+    return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT, 
             "iq": param["iq"]}
 
 def solveIFTorque_LG_DM(param):
@@ -421,7 +421,7 @@ def solveIFTorque_LG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
+    return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}
 
 def solveSGC(param):

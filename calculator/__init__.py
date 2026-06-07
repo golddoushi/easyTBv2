@@ -2005,9 +2005,13 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
 
         nbasis = self.energies.shape[-1]
-        T_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: T_K += self.spinTorque_K
-        if ife_type in ["total", "orbital"]: T_K += self.orbitalTorque_K
+        # Slot 0 is the full torque; following slots are projected torque operators.
+        proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]: proj_T_K[0] += self.spinTorque_K
+        if ife_type in ["total", "orbital"]: proj_T_K[0] += self.orbitalTorque_K
+        for iproj in range(len(torqueProjectionList)):
+            if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
+            if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
 
         deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
         inv_deltaE = np.zeros_like(deltaE_mn, dtype=float)
@@ -2017,7 +2021,7 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
         off_diag = 1.0 - np.eye(nbasis)
         r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
 
-        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
@@ -2046,12 +2050,13 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                             + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
                         )
                         rho2_mn = source / (deltaE_mn - 1j * self.eta)
-                        for c in range(3):
-                            T_c_nm = T_K[..., c, :, :].swapaxes(-1, -2)
-                            chi_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
-                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
+                        for iproj_T, T_K in enumerate(proj_T_K):
+                            for c in range(3):
+                                T_c_nm = T_K[..., c, :, :].swapaxes(-1, -2)
+                                chi_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
+                                self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
 
-        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
 class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
@@ -2067,11 +2072,14 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
         
         nbasis=self.energies.shape[-1]
-        T_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: T_K += self.spinTorque_K
-        if ife_type in ["total", "orbital"]: T_K += self.orbitalTorque_K
+        proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]: proj_T_K[0] += self.spinTorque_K
+        if ife_type in ["total", "orbital"]: proj_T_K[0] += self.orbitalTorque_K
+        for iproj in range(len(torqueProjectionList)):
+            if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
+            if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
 
-        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
         # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
         deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
 
@@ -2106,12 +2114,13 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
                         )
                         source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
                         rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
-                        for c in range(3):
-                            T_c_mn = T_K[..., c, :, :]
-                            sigma_k = np.sum(rho2_mn * T_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
-                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
+                        for iproj_T, T_K in enumerate(proj_T_K):
+                            for c in range(3):
+                                T_c_mn = T_K[..., c, :, :]
+                                sigma_k = np.sum(rho2_mn * T_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
+                                self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
 
-        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFT density matrix finished")
 
 
