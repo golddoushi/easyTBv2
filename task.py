@@ -7,7 +7,7 @@ from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from calculator import AnormalousHallConductance, AnormalousHallConductance_LG_DM, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
-from calculator import InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
+from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
@@ -402,6 +402,19 @@ def solveIFE_TDSE(param):
                                    include_offdiag=param.get('include offdiag', True),
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE, 
+            "iq": param["iq"]}
+
+def solveIFTorque_TDSE(param):
+    torqueProjectionList = param.get('projected shells for detecting torque',
+                                     param.get('projected shells for detecting spin accumulation', []))
+    calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
+                                   include_offdiag=param.get('include offdiag', True),
+                                   E0=param.get('E0', 0.001),
+                                   n_steps_per_cycle=param.get('n steps per cycle', 100),
+                                   )
+    return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}
 
 def solveIFTorque_VG_DM(param):
