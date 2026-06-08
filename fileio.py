@@ -314,34 +314,43 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
                                         fout.write(f"{tensor_data[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
                 fout.write("\n")
 
-def outputBZDistributionData(kpoints, tensor_data, filePath, componentLabels=None):
+def outputBZDistributionData(tensor_data, filePath, reciLattice, componentLabels=None,
+                             bzRepeat=(0, 0, 0)):
     '''
     Output the k-resolved distribution of a tensor response on the Brillouin zone.
 
     Parameters
     ----------
-    - kpoints : np.ndarray, shape (*kgrid, 3)
-        Cartesian coordinates of the sampled k-points.
-    - tensor_data : np.ndarray, shape (*kgrid, 3, ..., 3)
-        Tensor data at each k-point. Rank-2 and rank-3 tensors are the usual
-        use cases, but any positive tensor rank is accepted.
     - filePath : str
         Target output file.
+    - reciLattice : np.ndarray(3, 3)
+        Reciprocal lattice matrix. The first three axes of tensor_data are
+        interpreted as the regular BZ grid, and k = reciLattice @ frac_k.
+    - tensor_data : np.ndarray, shape (Nk1, Nk2, Nk3, 3, ..., 3)
+        Tensor data at each k-point. Rank-2 and rank-3 tensors are the usual
+        use cases, but any positive tensor rank is accepted.
     - componentLabels : list[str] | None
         Optional axis labels. Defaults to ['x', 'y', 'z'].
+    - bzRepeat : int | tuple(3, int)
+        Number of reciprocal periods to write around Gamma. For example,
+        bzRepeat=(1, 1, 0) writes a 2D map from -G1,-G2 to +G1,+G2
+        with Gamma at the center. The default (0,0,0) preserves the one-BZ
+        output.
     '''
-    kpoints = np.asarray(kpoints)
     tensor_data = np.asarray(tensor_data)
-    assert kpoints.shape[-1] == 3, f"expect kpoints last axis to be 3 but {kpoints.shape=}"
-    kgrid = kpoints.shape[:-1]
-    assert tensor_data.shape[:len(kgrid)] == kgrid, (
-        f"expect tensor_data leading axes to match k grid, but {kpoints.shape=}, {tensor_data.shape=}"
-    )
+    reciLattice = np.asarray(reciLattice)
+    assert reciLattice.shape == (3, 3), f"expect reciLattice shape (3, 3) but {reciLattice.shape=}"
+    assert tensor_data.ndim >= 4, f"expect tensor_data shape (Nk1, Nk2, Nk3, components...) but {tensor_data.shape=}"
+    kgrid = tensor_data.shape[:3]
 
-    tensor_shape = tensor_data.shape[len(kgrid):]
+    tensor_shape = tensor_data.shape[3:]
     assert len(tensor_shape) > 0, "expect at least one tensor/component axis"
     if componentLabels is None:
         componentLabels = ['x', 'y', 'z']
+    if np.isscalar(bzRepeat):
+        bzRepeat = (int(bzRepeat), int(bzRepeat), int(bzRepeat))
+    else:
+        bzRepeat = tuple(int(x) for x in bzRepeat)
 
     component_indices = list(np.ndindex(tensor_shape))
     component_names = [
@@ -360,8 +369,21 @@ def outputBZDistributionData(kpoints, tensor_data, filePath, componentLabels=Non
                 fout.write(f"            {component_name}")
         fout.write("\n")
 
-        for ik in np.ndindex(kgrid):
-            fout.write(f"{kpoints[ik][0]:15.6E}{kpoints[ik][1]:15.6E}{kpoints[ik][2]:15.6E}")
+        axis_ranges = []
+        for iaxis, ngrid in enumerate(kgrid):
+            if bzRepeat[iaxis] > 0:
+                axis_ranges.append(range(-bzRepeat[iaxis] * ngrid, bzRepeat[iaxis] * ngrid + 1))
+            else:
+                axis_ranges.append(range(ngrid))
+
+        for ik_extended in np.ndindex(tuple(len(axis_range) for axis_range in axis_ranges)):
+            fractional_index = np.array([axis_ranges[iaxis][ik_extended[iaxis]] for iaxis in range(len(kgrid))])
+            ik = tuple(int(fractional_index[iaxis] % kgrid[iaxis]) for iaxis in range(len(kgrid)))
+            frac = np.zeros(3)
+            for iaxis, ngrid in enumerate(kgrid):
+                frac[iaxis] = fractional_index[iaxis] / ngrid
+            kpoint = reciLattice @ frac
+            fout.write(f"{kpoint[0]:15.6E}{kpoint[1]:15.6E}{kpoint[2]:15.6E}")
             for component_index in component_indices:
                 value = tensor_data[ik + component_index]
                 if is_complex:

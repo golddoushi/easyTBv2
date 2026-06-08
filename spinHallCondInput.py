@@ -199,6 +199,7 @@ def run():
     BZSymm=False
     recordOmegaIndexList=[41]
     recordFermiIndexList=[0]
+    BZDistributionRepeat=(1,1,0)
     calc=BZGridTask(model, solveIFTorque_VG_DM, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
@@ -311,17 +312,17 @@ def run():
                                 filePath="%s/thirdOrderFreqDependent.imag.txt"%mainDir)
 
     if responseFunction is not None:
-        kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
         for iproj1 in range(responseFunction.shape[0]):
             for iproj2 in range(responseFunction.shape[1]):
                 for iproj3 in range(responseFunction.shape[2]):
                     for irecord_fermi, ifermi in enumerate(recordFermiIndexList):
                         for irecord_omega, iomega in enumerate(recordOmegaIndexList):
                             outputBZDistributionData(
-                                kcoor,
                                 responseFunction[iproj1, iproj2, iproj3, :, :, :, irecord_fermi, irecord_omega, :, :, :],
                                 filePath=(f"{mainDir}/BZDistribution.proj{iproj1}-{iproj2}-{iproj3}."
-                                          f"fermi{ifermi}.omega{iomega}.txt")
+                                          f"fermi{ifermi}.omega{iomega}.txt"),
+                                reciLattice=model.reciLattice,
+                                bzRepeat=BZDistributionRepeat
                             )
     
     exit()#'''
