@@ -1697,6 +1697,7 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
         Computing IFE with length gauge, using resonator denominator approach.
+        unit: \muB / (V/\angst.)^2
 
         Indexing
         --------
@@ -1766,6 +1767,7 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
         Computing IFE with length gauge, using frequency-domain density matrix approach.
+        unit: \muB / (V/\angst.)^2
 
         Indexing
         --------
@@ -1826,6 +1828,7 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
         Computing IFE with velocity-gauge (vector potential/current coupling), using frequency-domain density matrix approach
+        unit: \muB / (V/\angst.)^2
 
         Indexing
         --------
@@ -1884,6 +1887,7 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
         '''
         Computing IFE with velocity-gauge (vector potential/current coupling), using resonator denominator approach
+        unit: \muB / (V/\angst.)^2
 
         Indexing
         --------
@@ -2184,6 +2188,7 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
+        unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
 
         Indexing
         --------
@@ -2252,6 +2257,7 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[], **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
+        unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
 
         Indexing
         --------
