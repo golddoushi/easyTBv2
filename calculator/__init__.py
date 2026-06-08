@@ -1950,6 +1950,7 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
         '''
         Computing IFE with velocity-gauge (vector potential/current coupling), using time-dependent density matrix propagation approach
+        unit: \muB / (V/\angst.)^2
 
         Indexing
         --------
@@ -2066,6 +2067,7 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity-gauge time-dependent density matrix propagation.
+        unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
 
         Indexing
         --------
