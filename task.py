@@ -367,32 +367,44 @@ def solveIFE_VG(param):
     calc = InverseFaradayEffect_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['IFE type'],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
+    return {"projected response": calc.projected_response,
+            "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
             "iq": param["iq"]}
 
 def solveIFE_VG_DM(param):
     calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['IFE type'],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
+    return {"projected response": calc.projected_response,
+            "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
             "iq": param["iq"]}
 
 def solveIFE_LG(param):
     calc = InverseFaradayEffect_LG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['IFE type'],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE, 
+    return {"projected response": calc.projected_response,
+            "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
             "iq": param["iq"]}
 
 def solveIFE_LG_DM(param):
     calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['IFE type'],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
+    return {"projected response": calc.projected_response,
+            "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
             "iq": param["iq"]}
 
 def solveIFE_TDSE(param):
@@ -423,8 +435,11 @@ def solveIFTorque_VG_DM(param):
     calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
                                    )
-    return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT, 
+    return {"projected response": calc.projected_response,
+            "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}
 
 def solveIFTorque_LG_DM(param):
@@ -433,8 +448,11 @@ def solveIFTorque_LG_DM(param):
     calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
                                    )
-    return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
+    return {"projected response": calc.projected_response,
+            "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}
 
 def solveSGC(param):

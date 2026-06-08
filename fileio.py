@@ -314,6 +314,62 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
                                         fout.write(f"{tensor_data[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
                 fout.write("\n")
 
+def outputBZDistributionData(kpoints, tensor_data, filePath, componentLabels=None):
+    '''
+    Output the k-resolved distribution of a tensor response on the Brillouin zone.
+
+    Parameters
+    ----------
+    - kpoints : np.ndarray, shape (*kgrid, 3)
+        Cartesian coordinates of the sampled k-points.
+    - tensor_data : np.ndarray, shape (*kgrid, 3, ..., 3)
+        Tensor data at each k-point. Rank-2 and rank-3 tensors are the usual
+        use cases, but any positive tensor rank is accepted.
+    - filePath : str
+        Target output file.
+    - componentLabels : list[str] | None
+        Optional axis labels. Defaults to ['x', 'y', 'z'].
+    '''
+    kpoints = np.asarray(kpoints)
+    tensor_data = np.asarray(tensor_data)
+    assert kpoints.shape[-1] == 3, f"expect kpoints last axis to be 3 but {kpoints.shape=}"
+    kgrid = kpoints.shape[:-1]
+    assert tensor_data.shape[:len(kgrid)] == kgrid, (
+        f"expect tensor_data leading axes to match k grid, but {kpoints.shape=}, {tensor_data.shape=}"
+    )
+
+    tensor_shape = tensor_data.shape[len(kgrid):]
+    assert len(tensor_shape) > 0, "expect at least one tensor/component axis"
+    if componentLabels is None:
+        componentLabels = ['x', 'y', 'z']
+
+    component_indices = list(np.ndindex(tensor_shape))
+    component_names = [
+        ''.join(componentLabels[index] if index < len(componentLabels) else str(index)
+                for index in component_index)
+        for component_index in component_indices
+    ]
+    is_complex = np.iscomplexobj(tensor_data)
+
+    with open(filePath, "w") as fout:
+        fout.write("kx ky kz")
+        for component_name in component_names:
+            if is_complex:
+                fout.write(f"            Re_{component_name}            Im_{component_name}")
+            else:
+                fout.write(f"            {component_name}")
+        fout.write("\n")
+
+        for ik in np.ndindex(kgrid):
+            fout.write(f"{kpoints[ik][0]:15.6E}{kpoints[ik][1]:15.6E}{kpoints[ik][2]:15.6E}")
+            for component_index in component_indices:
+                value = tensor_data[ik + component_index]
+                if is_complex:
+                    fout.write(f"{value.real:15.6E}{value.imag:15.6E}")
+                else:
+                    fout.write(f"{value:15.6E}")
+            fout.write("\n")
+
 class FortranFileR(fortio.FortranFile):
 
     def __init__(self, filename):

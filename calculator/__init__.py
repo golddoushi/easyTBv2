@@ -1693,8 +1693,14 @@ class BulkPhotovoltaicConductance_TDSE_LG_Naive(Velocity):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
+def _normalize_response_index_list(index_list, axis_length):
+    if index_list is None:
+        return []
+    return [int(index) for index in index_list if 0 <= int(index) < axis_length]
+
 class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
-    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
+                 responseFermiIndexList=None, **kwarg) -> None:
         '''
         Computing IFE with length gauge, using resonator denominator approach.
         unit: \muB / (V/\angst.)^2
@@ -1720,6 +1726,16 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
+        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
+        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
+            responseFermiIndexList = range(len(self.fermiList))
+        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
+        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
+        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
+        self.projected_response = np.zeros((1, 1, 1) + self.kgrid +
+                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
+                                           dtype=complex)
+
         # Band-axis convention below is (m, n, l), matching
         # Tr[M rho^(2)] = sum_mn M_mn rho^(2)_nm.
         E_m_3D = self.energies[..., :, None, None]
@@ -1744,6 +1760,7 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
                 
                 term_ba = D_nm_3D * (-f_lm * S_lm_pos + f_nl * S_nl_neg)
                 term_ab = D_nm_3D * ( f_nl * S_nl_pos - f_lm * S_lm_neg)
+                irecord_omega = responseOmegaRecord.get(iomega)
 
                 for c in range(3):
                     M_c = M_K[..., c, :, :]
@@ -1756,15 +1773,18 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
                             Mrr_ab = np.einsum('...mn, ...nl, ...lm -> ...mnl', M_c, r_a, r_b)
                             
                             integrand = Mrr_ba * term_ba + Mrr_ab * term_ab
-                            
-                            # CORRECTED: np.sum() now integrates over all bands AND the k-grid
-                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(integrand) / np.prod(self.kgrid)
+                            chi_k = np.sum(integrand, axis=(-3, -2, -1))
+                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
+                            irecord_fermi = responseFermiRecord.get(ifermi)
+                            if irecord_fermi is not None and irecord_omega is not None:
+                                self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c] = chi_k
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
 
 class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
-    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
+                 responseFermiIndexList=None, **kwarg) -> None:
         '''
         Computing IFE with length gauge, using frequency-domain density matrix approach.
         unit: \muB / (V/\angst.)^2
@@ -1790,6 +1810,16 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
+        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
+        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
+            responseFermiIndexList = range(len(self.fermiList))
+        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
+        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
+        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
+        self.projected_response = np.zeros((1, 1, 1) + self.kgrid +
+                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
+                                           dtype=complex)
+
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
             rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
@@ -1797,6 +1827,7 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
                 rho0[..., iband, iband] = f[..., iband]
 
             for iomega, Omega in enumerate(self.omegaList):
+                irecord_omega = responseOmegaRecord.get(iomega)
                 def rho1(r, frequency):
                     source = r @ rho0 - rho0 @ r
                     return source / (deltaE_mn - frequency - 1j * self.eta)
@@ -1820,12 +1851,16 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
                             M_c_nm = M_K[..., c, :, :].swapaxes(-1, -2)
                             chi_k = np.sum(rho2_mn * M_c_nm, axis=(-2, -1))
                             self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
+                            irecord_fermi = responseFermiRecord.get(ifermi)
+                            if irecord_fermi is not None and irecord_omega is not None:
+                                self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c] = chi_k
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE density matrix finished")
 
 class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
-    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
+                 responseFermiIndexList=None, **kwarg) -> None:
         '''
         Computing IFE with velocity-gauge (vector potential/current coupling), using frequency-domain density matrix approach
         unit: \muB / (V/\angst.)^2
@@ -1842,6 +1877,16 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
+        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
+            responseFermiIndexList = range(len(self.fermiList))
+        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
+        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
+        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
+        self.projected_response = np.zeros((1, 1, 1) + self.kgrid +
+                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
+                                           dtype=complex)
         # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
         deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
 
@@ -1852,6 +1897,7 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
                 rho0[..., iband, iband] = f[..., iband]
 
             for iomega, Omega in enumerate(self.omegaList):
+                irecord_omega = responseOmegaRecord.get(iomega)
                 def rho1(v, frequency):
                     source = v @ rho0 - rho0 @ v
                     return source / (deltaE_mn - frequency - 1j * self.eta)
@@ -1879,12 +1925,16 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
 
                             sigma_k = np.sum(rho2_mn * M_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
                             self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
+                            irecord_fermi = responseFermiRecord.get(ifermi)
+                            if irecord_fermi is not None and irecord_omega is not None:
+                                self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c] = sigma_k
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
 
 class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
-    def __init__(self, ife_type="total", velocityProjectionList=[], **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
+                 responseFermiIndexList=None, **kwarg) -> None:
         '''
         Computing IFE with velocity-gauge (vector potential/current coupling), using resonator denominator approach
         unit: \muB / (V/\angst.)^2
@@ -1901,6 +1951,16 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+
+        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
+        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
+            responseFermiIndexList = range(len(self.fermiList))
+        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
+        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
+        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
+        self.projected_response = np.zeros((1, 1, 1) + self.kgrid +
+                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
+                                           dtype=complex)
         # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
         E_m = self.energies[..., :, None, None]
         E_n = self.energies[..., None, :, None]
@@ -1921,6 +1981,7 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
             f_mn_2D = f[..., :, None] - f[..., None, :]
 
             for iomega, Omega in enumerate(self.omegaList):
+                irecord_omega = responseOmegaRecord.get(iomega)
                 S_ln_pos = 1.0 / (E_l - E_n + Omega - 1j * self.eta)
                 S_ln_neg = 1.0 / (E_l - E_n - Omega - 1j * self.eta)
                 S_ml_pos = 1.0 / (E_m - E_l + Omega - 1j * self.eta)
@@ -1946,6 +2007,9 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
                             dia_k = np.sum(M_c_nm * w_ab * f_mn_2D * D_mn_2D, axis=(-2, -1))
                             sigma_k = (para_k + dia_k) / Omega**2
                             self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
+                            irecord_fermi = responseFermiRecord.get(ifermi)
+                            if irecord_fermi is not None and irecord_omega is not None:
+                                self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c] = sigma_k
 
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
@@ -2185,7 +2249,8 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
     _rk4_step = InverseFaradayEffect_TDSE._rk4_step
 
 class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
-    def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
+                 responseOmegaIndexList=[], responseFermiIndexList=None, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
@@ -2215,6 +2280,15 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
         r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
 
         self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
+        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
+            responseFermiIndexList = range(len(self.fermiList))
+        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
+        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
+        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
+        self.projected_response = np.zeros((1, 1, len(torqueProjectionList)+1) + self.kgrid +
+                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
+                                           dtype=complex)
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
@@ -2223,6 +2297,7 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                 rho0[..., iband, iband] = f[..., iband]
 
             for iomega, Omega in enumerate(self.omegaList):
+                irecord_omega = responseOmegaRecord.get(iomega)
                 def rho1(r, frequency):
                     source = r @ rho0 - rho0 @ r
                     return source / (deltaE_mn - frequency - 1j * self.eta)
@@ -2248,13 +2323,17 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                                 T_c_nm = T_K[..., c, :, :].swapaxes(-1, -2)
                                 chi_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
                                 self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
+                                irecord_fermi = responseFermiRecord.get(ifermi)
+                                if irecord_fermi is not None and irecord_omega is not None:
+                                    self.projected_response[0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, c] = chi_k
 
         self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
         self.projected_sigma = self.projected_chi_IFT
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
 class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
-    def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[], **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[],
+                 responseOmegaIndexList=[], responseFermiIndexList=None, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
@@ -2265,28 +2344,42 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, 
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
-        if ife_type in ["total", "spin"]: self.buildHighOrderSpinTorque(torqueProjectionList)
-        if ife_type in ["total", "orbital"]: self.buildHighOrderOrbitalTorque(torqueProjectionList)
         
         nbasis=self.energies.shape[-1]
         proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
         proj_TA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         proj_TAA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: proj_T_K[0] += self.spinTorque_K
-        if ife_type in ["total", "orbital"]: proj_T_K[0] += self.orbitalTorque_K
-        if ife_type in ["total", "spin"]: proj_TA_K[0] += self.spinTorqueA_K
-        if ife_type in ["total", "orbital"]: proj_TA_K[0] += self.orbitalTorqueA_K
-        if ife_type in ["total", "spin"]: proj_TAA_K[0] += self.spinTorqueAA_K
-        if ife_type in ["total", "orbital"]: proj_TAA_K[0] += self.orbitalTorqueAA_K
+        if ife_type in ["total", "spin"]: 
+            self.buildHighOrderSpinTorque(torqueProjectionList)
+            proj_T_K[0] += self.spinTorque_K
+            proj_TA_K[0] += self.spinTorqueA_K
+            proj_TAA_K[0] += self.spinTorqueAA_K
+        if ife_type in ["total", "orbital"]: 
+            self.buildHighOrderOrbitalTorque(torqueProjectionList)
+            proj_T_K[0] += self.orbitalTorque_K
+            proj_TA_K[0] += self.orbitalTorqueA_K
+            proj_TAA_K[0] += self.orbitalTorqueAA_K
         for iproj in range(len(torqueProjectionList)):
-            if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
-            if ife_type in ["total", "spin"]: proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
-            if ife_type in ["total", "spin"]: proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
+            if ife_type in ["total", "spin"]: 
+                proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
+                proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
+                proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
+            if ife_type in ["total", "orbital"]: 
+                proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
+                proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
+                proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
 
         self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        
+        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
+        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
+            responseFermiIndexList = range(len(self.fermiList))
+        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
+        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
+        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
+        self.projected_response = np.zeros((1, 1, len(torqueProjectionList)+1) + self.kgrid +
+                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
+                                           dtype=complex)
         # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
         deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
 
@@ -2297,6 +2390,7 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
                 rho0[..., iband, iband] = f[..., iband]
 
             for iomega, Omega in enumerate(self.omegaList):
+                irecord_omega = responseOmegaRecord.get(iomega)
                 def rho1(v, frequency):
                     source = v @ rho0 - rho0 @ v
                     return source / (deltaE_mn - frequency - 1j * self.eta)
@@ -2335,6 +2429,9 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
                                 sigma_k = (obs2_k + obs1_k + obs0_k) / Omega**2
                                 #sigma_k = obs2_k / Omega**2 # only include obs2_k the naive term
                                 self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
+                                irecord_fermi = responseFermiRecord.get(ifermi)
+                                if irecord_fermi is not None and irecord_omega is not None:
+                                    self.projected_response[0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, c] = sigma_k
 
         self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
         self.projected_sigma = self.projected_chi_IFT

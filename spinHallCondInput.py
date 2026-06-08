@@ -26,7 +26,7 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
-from fileio import writeVolumeData, output3rdFreqDenpendentData
+from fileio import writeVolumeData, output3rdFreqDenpendentData, outputBZDistributionData
 
 def run():
     # Pbene, spin hall conductance
@@ -197,6 +197,8 @@ def run():
 
     BZGrid=(48,48,1)
     BZSymm=False
+    recordOmegaIndexList=[41]
+    recordFermiIndexList=[0]
     calc=BZGridTask(model, solveIFTorque_VG_DM, 
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
@@ -209,7 +211,8 @@ def run():
                               #{"source":block, "target":block} for block in blockRegionList
                           ],
                           'omega':omegaAxis,
-                          'record frequency ids':[],
+                          'record frequency ids':recordOmegaIndexList,
+                          'record fermi ids':recordFermiIndexList,
 
                           "IFE type": "total", # Type of Inversed Faraday effect, can be spin | orbital | total
                     }, 
@@ -220,14 +223,22 @@ def run():
     #_,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
     #energies=np.zeros(tuple(BZGrid)+(nbands,))
-    #responseFunction = np.zeros(BZGrid+(3,3,3),dtype=float)
+    responseFunction = None
     projected_sigma=0
     sigma=0
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
-        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:]=np.sum(result_q['spin Berry curv']*valence[...,None,None,None,:],axis=(-1,))
-        #responseFunction[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2],:,:,:]=result_q['projected response'][0,0,0][:,:,:,0,0,:,:,:]
+        if 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
+            if responseFunction is None:
+                local_response = result_q['projected response']
+                responseFunction = np.zeros(local_response.shape[:3] + tuple(BZGrid) + local_response.shape[6:],
+                                            dtype=local_response.dtype)
+            responseFunction[:, :, :,
+                             result_q['iq'][0]::calc.QGrid[0],
+                             result_q['iq'][1]::calc.QGrid[1],
+                             result_q['iq'][2]::calc.QGrid[2],
+                             :, :, :, :, :] = result_q['projected response']
         #continue
         projected_sigma += result_q['projected sigma']
         if not BZSymm:  # symmetrization on the BZ is only implemented for the whole tensor
@@ -298,6 +309,20 @@ def run():
                                 filePath="%s/thirdOrderFreqDependent.real.txt"%mainDir)
     output3rdFreqDenpendentData(projected_sigma.imag/len(calc.results), fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis, 
                                 filePath="%s/thirdOrderFreqDependent.imag.txt"%mainDir)
+
+    if responseFunction is not None:
+        kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
+        for iproj1 in range(responseFunction.shape[0]):
+            for iproj2 in range(responseFunction.shape[1]):
+                for iproj3 in range(responseFunction.shape[2]):
+                    for irecord_fermi, ifermi in enumerate(recordFermiIndexList):
+                        for irecord_omega, iomega in enumerate(recordOmegaIndexList):
+                            outputBZDistributionData(
+                                kcoor,
+                                responseFunction[iproj1, iproj2, iproj3, :, :, :, irecord_fermi, irecord_omega, :, :, :],
+                                filePath=(f"{mainDir}/BZDistribution.proj{iproj1}-{iproj2}-{iproj3}."
+                                          f"fermi{ifermi}.omega{iomega}.txt")
+                            )
     
     exit()#'''
 
