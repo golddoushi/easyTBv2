@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import linalg
 from auxiliary import showElapsedTime, pseudoRotation, print_matrix, getWholeSymmetryOperator
+from auxiliary import PauliBlockSigmaNorm
 from auxiliary import SYMPREC
 from math import acos, sin, sqrt, cos
 
@@ -303,6 +304,161 @@ class System:
     def setRList(self,dRList) -> None:
         '''set dR list'''
         self.dRList=dRList
+
+    def getSpatialOrbitalIndexList(self, atom_id:int, shells=None) -> list:
+        '''
+        Return the spatial-orbital indexes of one atom.
+
+        For spinful models in the VASP/openmx convention, only the first spin
+        block is returned. The second spin block is obtained by adding
+        ``self.norbs//2`` when needed.
+        '''
+        atom_info = self.atomicOrbInfoList[atom_id]
+        if shells is None:
+            shells = range(len(atom_info["orbital index"]))
+        half_norbs = self.norbs//2 if self.ispin == 2 else self.norbs
+        orb_list = []
+        for ishell in shells:
+            for iorb in atom_info["orbital index"][ishell]:
+                if iorb < half_norbs:
+                    orb_list.append(int(iorb))
+        return orb_list
+
+    def getAtomicSelfEnergy(self, spatial_orbital_index_list:list) -> np.ndarray:
+        '''
+        Extract the local magnetic self-energy of selected spatial orbitals.
+
+        The result follows the old exchange-coupling convention: the home-cell
+        onsite block is decomposed into Pauli blocks, and the spin-direction
+        normalized magnetic part is returned in the spatial-orbital basis.
+        '''
+        assert self.ispin == 2, "exchange self-energy requires a spinful model with ispin=2"
+        assert self.norbs % 2 == 0, f"spinful model should have even basis size, but {self.norbs=}"
+        iR0 = self.iRvecIndex.get((0,0,0), -1)
+        assert iR0 >= 0, "cannot find home-cell R=(0,0,0) matrix"
+
+        half_norbs = self.norbs//2
+        spatial_orbital_index_list = [int(iorb) for iorb in spatial_orbital_index_list]
+        full_orbital_index_list = spatial_orbital_index_list + [iorb + half_norbs for iorb in spatial_orbital_index_list]
+
+        if self.overlap:
+            local_matrix = self.energy_R[iR0][full_orbital_index_list,:][:,full_orbital_index_list]
+        else:
+            local_matrix = self.ham_R[iR0][full_orbital_index_list,:][:,full_orbital_index_list]
+        return PauliBlockSigmaNorm(local_matrix)
+
+    def classifyExchangeRoutes(self, sourceAtoms=None, projection=None, pbc=(0,1,2),
+                               maxRange=3, calRange=1, tolerance=SYMPREC,
+                               includeAllRoutes=False, verbose=True):
+        '''
+        Search and classify exchange routes between selected magnetic atoms.
+
+        Parameters
+        ----------
+        sourceAtoms : list[int] | None
+            Magnetic atom indexes. If None, all atoms are used.
+        projection : list[tuple[int, tuple[int]]] | None
+            Optional atom-shell selection in the same style as other System
+            projection APIs, e.g. ``[(0, (2,)), (1, (2,))]``. If None, all
+            shells of each selected atom are used.
+        pbc : tuple[int]
+            Lattice-vector axes to search. Axes absent from this tuple are fixed
+            to zero translation.
+        maxRange : int
+            Search translations from ``-maxRange`` to ``maxRange`` on PBC axes.
+        calRange : int
+            Number of distance shells to return.
+        tolerance : float
+            Distances differing by less than this value are grouped together.
+        includeAllRoutes : bool
+            If False, inverse duplicates such as i->j[R] and j->i[-R] are
+            removed. If True, all directed routes are kept.
+
+        Returns
+        -------
+        list[list[dict]]
+            Exchange routes grouped by increasing bond length.
+        '''
+        if sourceAtoms is None:
+            sourceAtoms = list(range(self.posinfo['tot ions']))
+        sourceAtoms = [int(iatom) for iatom in sourceAtoms]
+        pbc = tuple(int(axis) for axis in pbc)
+        assert all(axis in (0,1,2) for axis in pbc), f"pbc axes should be chosen from 0, 1, 2, but {pbc=}"
+        assert maxRange >= 0, f"{maxRange=} should be non-negative"
+        assert calRange > 0, f"{calRange=} should be positive"
+
+        projection_by_atom = {}
+        if projection is not None:
+            for atom_id, shells in projection:
+                projection_by_atom[int(atom_id)] = tuple(shells)
+
+        atom_orbitals = {}
+        for atom_id in sourceAtoms:
+            shells = projection_by_atom.get(atom_id, None)
+            orb_list = self.getSpatialOrbitalIndexList(atom_id, shells=shells)
+            if len(orb_list) > 0:
+                atom_orbitals[atom_id] = orb_list
+        sourceAtoms = [iatom for iatom in sourceAtoms if iatom in atom_orbitals]
+        assert len(sourceAtoms) > 0, "no source atom with selected orbitals was found"
+
+        axis_ranges = []
+        for axis in range(3):
+            if axis in pbc:
+                axis_ranges.append(range(-maxRange, maxRange+1))
+            else:
+                axis_ranges.append((0,))
+
+        routes = []
+        inverse_seen = set()
+        for isource, source_atom in enumerate(sourceAtoms):
+            target_start = 0 if includeAllRoutes else isource
+            source_frac = self.posinfo['pos ions (frac.)'][source_atom]
+            for target_atom in sourceAtoms[target_start:]:
+                target_frac = self.posinfo['pos ions (frac.)'][target_atom]
+                for R0 in axis_ranges[0]:
+                    for R1 in axis_ranges[1]:
+                        for R2 in axis_ranges[2]:
+                            overlat = (int(R0), int(R1), int(R2))
+                            if source_atom == target_atom and overlat == (0,0,0):
+                                continue
+                            route_key = (source_atom, target_atom) + overlat
+                            inverse_key = (target_atom, source_atom, -overlat[0], -overlat[1], -overlat[2])
+                            if not includeAllRoutes and inverse_key in inverse_seen:
+                                continue
+                            inverse_seen.add(route_key)
+
+                            bond_vec_frac = target_frac + np.array(overlat) - source_frac
+                            bond_vec_cart = bond_vec_frac @ self.lattice
+                            bond_length = float(np.linalg.norm(bond_vec_cart))
+                            routes.append({
+                                "source_atom": source_atom,
+                                "target_atom": target_atom,
+                                "overlat": np.array(overlat, dtype=int),
+                                "bond_vector_frac": bond_vec_frac,
+                                "bond_vector_cart": bond_vec_cart,
+                                "bond_length": bond_length,
+                                "source_orbitals": atom_orbitals[source_atom],
+                                "target_orbitals": atom_orbitals[target_atom],
+                            })
+
+        routes.sort(key=lambda route: route["bond_length"])
+        route_groups = []
+        for route in routes:
+            if len(route_groups) == 0 or route["bond_length"] > route_groups[-1][0]["bond_length"] + tolerance:
+                if len(route_groups) >= calRange:
+                    break
+                route_groups.append([])
+            route["route_type"] = len(route_groups)-1
+            route["route_id"] = sum(len(group) for group in route_groups)
+            route_groups[-1].append(route)
+
+        self.exchangeRoutes = route_groups
+        if verbose:
+            print(f"Classified {sum(len(group) for group in route_groups)} exchange routes in {len(route_groups)} distance shells")
+            for igroup, group in enumerate(route_groups):
+                route0 = group[0]
+                print(f"route shell {igroup}: length {route0['bond_length']:.6f}, routes {len(group)}")
+        return route_groups
     
     def symmerizeTensorInAtomicBasis(self,tensor:np.ndarray,axisRep=("iRvec","atomic orb","atomic orb"),
                         spinor=False,saxis:np.ndarray=np.array([0,0,-1]),spin_basis:np.ndarray=np.zeros((2,2),dtype=complex),

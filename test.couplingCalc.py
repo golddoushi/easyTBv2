@@ -14,11 +14,12 @@ import couplingCalc as cc
 from auxiliary import obtainProjectionsPlain, obtainProjections
 
 # 1. define the basic structure information
-mainDir='./mcalc/BN/'
+mainDir='./mcalc/1D-chain-3orb/'
 pR.readPOS(mainDir+'POSCAR')
 projections={
     "B":(0,),
     "N":(0,),
+    "H":(0,),
 }
 atomicMagMomList=[np.zeros(3)]*0+[
     np.array([0,0,1]),
@@ -27,7 +28,7 @@ atomicMagMomList=[np.zeros(3)]*0+[
 ]
 # 2. read in Hamiltonian 
 hr=reader.Hr()
-hr.readSingleFileV2(mainDir+'BN_fm_rashiba_hr.dat',ignoreImagPart=False,cutoff=-1e-2,)
+hr.readSingleFileV2(mainDir+'wannier90_hr.dat',ignoreImagPart=False,cutoff=-1e-2,)
 # 3. (optional) symmerize Hamiltonian, saxis=(0,0,-1) for w90, saxis=(0,0,-1) for w90
 atomicOrbInfoList=obtainProjections(mainDir+'POSCAR',projections,ispin=2)
 '''
@@ -47,13 +48,13 @@ hr.symmerizeHamAndOverlap(atomicOrbInfoList=atomicOrbInfoList,atomicMagMomList=a
 # 4. assign the orbitals of spin-up tunnels to atoms (no need to change)
 wann_list=obtainProjectionsPlain(mainDir+'POSCAR',projections)
 # 5. set the iatom of magnetic atoms to source_list, set ini_S for ALL atoms
-cc.classifyBonds(mainDir, source_list=[0,], 
+cc.classifyBonds(mainDir, source_list=[2,], 
            wann_list=wann_list, 
-           ini_S=[1]*1+[0]*1,
+           ini_S=[0]*2+[1]*1,
            includeAllBonds=False)
 # 5. set overlap, set supercell size, set fermi level, set erange, etc.
 E0=0.0
 fermiAxis=[E0]#np.linspace(E0-0.1,E0+0.1,11)
 cc.calcJFull_GaussianQuadrature(hr,mainDir,nthreads=8,overlap=True,
-    sc=[28,28,1],fermiAxis=fermiAxis,
+    sc=[28,1,1],fermiAxis=fermiAxis,
     eta=0.0001,erange=(-100,100),lowOrder=60,highOrder=80,Jcvg=-1e-4)

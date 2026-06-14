@@ -1,117 +1,30 @@
-import sys
-import paramReader
-paramReader.readGlobalConst()
-import hrReader as reader
-import ham as hamilton
-import numpy as np
-import posReader as pR
-import couplingCalc as cc
-import matplotlib.pyplot as plt
-class Logger(object):
-    def __init__(self, filename="Default.log"):
-        self.terminal = sys.stdout
-        self.filename=filename
-        self.log = open(filename, 'w')
- 
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-        self.log.close()
-        self.log=open(self.filename,'a')
-    
-    def flush(self):
-        self.terminal.flush()
-        self.log=open(self.filename,'w')
-        self.log.close()
-sys.stdout = Logger('log')
+from system import System_tb
+from calculator import ExchangeCoupling
 
-#cc.classifyBonds(mainDir='./mcalc/Co5Gd/', source_list=[0,1,2,3,4,5], wann_list=[[0,1,2,3,4]], ini_S=[1.5,0.,0.],completelyConfine=True)
-#cc.calcIsotropicJ(mainDir='./mcalc/FeTeI/a_0.00U3K80/',sc=[100,100,1],fermi=-0.72909361,eta=0.0001,emptySpace=5, spinList=[1.5,0.,0.], MAE=0.0007215)
-#exit()
+mainDir="./mcalc/1D-chain-3orb/"
+model = System_tb(
+        mainDir=mainDir,
+        #hamR="BN_fm_soc",
+        cutoff=-0.002,
+        poscar="POSCAR",
+        projections={
+            "B":(0,),
+            "N":(0,),
+            "H":(0,),
+        },
+        ispin=2
+)
+fermiAxis=[0,]
+routes=model.classifyExchangeRoutes(sourceAtoms=[2,], pbc=(0,), maxRange=5, calRange=5, )
+exCoup = ExchangeCoupling(model=model, kgrid=(28, 1, 1), 
+                          fermiAxis = fermiAxis, eta=0.0001,
+                          exchangeRoutes = routes, symmetricExchangeSign=1,
+                          lowOrder=60,highOrder=80,Jcvg=-1e-4)
 
-#'''
-pR.readPOS('./mcalc/spinchain/POSCAR')
-hr=reader.Hr()
-hr.readDoubleFiles('./mcalc/spinchain/hr.up.dat','./mcalc/spinchain/hr.dn.dat',ignoreImagPart=False)
-gr=hamilton.Green()
-Lx,Ly,Lz,GammaMode=30,1,1,1
-#J=gr.calcJFourState(hr,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[0,1,2,3,4],targetR=[1,1,0],theta=np.pi/20,eta=0.0001,energyRange=(-11.671486,-0.0353),Lx=10,Ly=10,Lz=1)
-nkpt,c_kmesh_addr,c_Hk_addr=gr.getCTypeKMeshAndHk(hr,Lx=Lx,Ly=Ly,Lz=Lz,GammaMode=GammaMode)
-J=gr.calcJFourState_CDLL(hr,nkpt,c_kmesh_addr,c_Hk_addr,
-    sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[1],targetR=[0,0,0],
-    eta=0.0001,energyRange=(-10,0),Lx=Lx,Ly=Ly,Lz=Lz,nthreads=1)
-exit()
-#'''
-
-pR.readPOS('./mcalc/graphene/POSCAR')
-hr_g=reader.Hr()
-hr_g.readDoubleFiles('./mcalc/graphene/hr.up.dat','./mcalc/graphene/hr.dn.dat')
-#hr_g.readSingleFile('./mcalc/CrI3/soc/nscf_mz/wannier90_hr.dat',ignoreImagPart=False)
-gr=hamilton.Green()
-#gr.calcFullBands(hr_g,fermi=0.75,mainDir='./mcalc/spinchain/',saveFig=True)
-#gr.calcBands(hr_g,orbList=[0,1,2,3],spin_polarized=True,fermi=0.0,eta=0.05,mainDir='./mcalc/graphene/',resolution=100)
-#exit()
-#L=20
-#kmesh=[np.array([k1,0,0]) for k1 in np.linspace(0,1,L,endpoint=False)]
-#gr.calcFullDOS(hr_g,fermi=0.7,eta=0.0001,NEDOS=1000,kmesh=kmesh,mainDir='./mcalc/spinchain/')
-#gr.calcFullBands(hr_g,fermi=0.7,mainDir='./mcalc/spinchain/')
-#exit()
-#scatterList=[[[np.array([0,0,0]),0],[np.array([0,0,0]),2], 0.5],
-#             [[np.array([0,0,0]),1],[np.array([0,0,0]),3], 0.5],
-#             [[np.array([1,0,0]),0],[np.array([1,0,0]),2], 0.5],
-#             [[np.array([1,0,0]),1],[np.array([1,0,0]),3], 0.5],
-             #[[np.array([0,0,0]),0],[np.array([0,-1,0]),1], 0.5],
-             #[[np.array([0,-1,0]),1],[np.array([0,0,0]),0], 0.5],
-#             ]
-#theta=np.pi/2
-#scatterList=[[[np.array([0,0,0]),0],[np.array([0,0,0]),2],1.0*np.sin(theta)],
-#             [[np.array([0,0,0]),2],[np.array([0,0,0]),0],1.0*np.sin(theta)],
-#             [[np.array([0,0,0]),0],[np.array([0,0,0]),0],1.0*(np.cos(theta)-1)],
-#             [[np.array([0,0,0]),2],[np.array([0,0,0]),2],-1.0*(np.cos(theta)-1)],
-#             [[np.array([1,0,0]),0],[np.array([1,0,0]),2],1.0*np.sin(theta)],
-#             [[np.array([1,0,0]),2],[np.array([1,0,0]),0],1.0*np.sin(theta)],
-#             [[np.array([1,0,0]),0],[np.array([1,0,0]),0],1.0*(np.cos(theta)-1)],
-#             [[np.array([1,0,0]),2],[np.array([1,0,0]),2],-1.0*(np.cos(theta)-1)],
-#             ]
-
-#gr.calcMatrixPerturbatedDOSViaExact(hr_g,scatterList,eta=0.01,energyRange=(-7.5,0),NEDOS=500,Lx=5,Ly=5,Lz=1)
-#gr.calcMatrixPerturbatedDOSViaFourier(hr_gd,scatterList,eta=0.01,energyRange=(-3.5,3.5),NEDOS=500,Lx=5,Ly=5,Lz=1,globalCutOrder=12,diverseCutOrder=2,skipOdds=True)
-#E_exact=gr.calcMatrixPerturbatedEnergyViaExact(hr_g,scatterList,eta=0.0001,energyRange=(-5.,0.7),Lx=10,Ly=1,Lz=1)
-#print(E_exact)
-#E_fourier=gr.calcMatrixPerturbatedEnergyViaFourier(hr_g,[],eta=0.0001,energyRange=(-12.,-1.8),Lx=6,Ly=6,Lz=1,globalCutOrder=0,diverseCutOrder=2,skipOdds=False,onlyPerturbatedEnergy=False)
-#print(E_fourier)
-
-#J=gr.calcJ(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],eta=0.0001,energyRange=(-15.0,0.0),Lx=7,Ly=7,Lz=1,globalCutOrder=8,diverseCutOrder=2,linearPerturb=True)
-#J=gr.calcJFourState(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-15.0,0.0),Lx=20,Ly=20,Lz=1)
-#J=gr.calcJFourState_Numba(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-15.0,0.0),Lx=20,Ly=20,Lz=1)
-nkpt,c_kmesh,c_Hk_addr=gr.getCTypeKMeshAndHk(hr_g,Lx=10,Ly=10,Lz=1)
-J=gr.calcJFourState_CDLL(hr_g,nkpt,c_kmesh,c_Hk_addr,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi,eta=0.0001,energyRange=(-15.0,0.0),Lx=10,Ly=10,Lz=1)
-
-#J=gr.calcJExact(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],eta=0.0001,energyRange=(-5.0,0.7),Lx=10,Ly=1,Lz=1)
-#J=gr.calcAnisotropicJ(hr_g,sourceOrbList=[0,1,2,3,4],sourceR=[0,0,0],targetOrbList=[5,6,7,8,9],targetR=[0,0,0],eta=0.0001,energyRange=(-12.0,-1.8),Lx=6,Ly=6,Lz=1)
-print(J*1000)
-
-'''
-L=10
-JList=[]
-for a in range(1,6):
-    J=gr.calcJExact(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[a,0,0],eta=0.0001,energyRange=(-5.0,0.7),Lx=L,Ly=1,Lz=1)
-    JList.append(J*1000)
-for iJ, J in enumerate(JList):
-    print('%d %.6f'%(iJ+1,J))
-'''
-'''
-#J=gr.calcJExact(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],eta=0.0001,energyRange=(-5.0,0.7),Lx=20,Ly=1,Lz=1)
-#print(J*1000)
-#J=gr.calcJExactWithTheta(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi/10,eta=0.0001,energyRange=(-5.0,0.7),Lx=20,Ly=1,Lz=1)
-J=gr.calcJExactFourStateWithTheta(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=np.pi/2,eta=0.0001,energyRange=(-5.0,0.7),Lx=20,Ly=1,Lz=1)
-exit()
-JList=[]
-NTheta=10
-dtheta=np.pi/NTheta
-for a in range(1,NTheta):
-    J=gr.calcJExactFourStateWithTheta(hr_g,sourceOrbList=[0],sourceR=[0,0,0],targetOrbList=[0],targetR=[1,0,0],theta=a*dtheta,eta=0.0001,energyRange=(-5.0,0.7),Lx=20,Ly=1,Lz=1)
-    JList.append(J*1000)
-for iJ, J in enumerate(JList):
-    print('%d %.6f'%(iJ+1,J))
-'''
+for ifermi, fermi in enumerate(fermiAxis):
+    print(f"{fermi=:.4f}")
+    for ibondType, ex in enumerate(exCoup.exchangeRoutes):
+        print("bondType%d ifermi%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f"%(
+                        ex["route_type"],ifermi,ex["source_atom"],ex["target_atom"],*ex["overlat"],ex["bond_length"],
+                        ex["exchangeEnergy"][ifermi]/2*1000,ex["Jani"][ifermi,0,0]/2*1000,ex["Jani"][ifermi,1,1]/2*1000,
+                        ex["Jani"][ifermi,0,1]/2*1000,ex["DMI"][ifermi,0]/2*1000,ex["DMI"][ifermi,1]/2*1000))

@@ -4,6 +4,8 @@
 from system import System
 import numpy as np
 from auxiliary import showElapsedTime, print_matrix, projectionOperator
+from auxiliary import PauliBlock, semiCirle
+from scipy.special import p_roots
 from scipy.constants import elementary_charge, hbar, angstrom
 from scipy.constants import k as kB
 
@@ -2974,6 +2976,254 @@ class Z2_FHS(Energy):
             print(f"Spin-Chern C_+ : {self.chern_plus:.6f}")
             print(f"Z2 Invariant   : {self.z2_invariant}")
             showElapsedTime(extraInfo="FHS Z2 calculation finished")
+
+class RetardedLatticeGreenFunc(Energy):
+    def __init__(self, latVecList=None, relevantOrbitalIndexList=None, calcGreen=False, **kwarg) -> None:
+        '''
+        Compute retarded lattice Green's functions on selected real-space
+        lattice vectors and selected local orbitals.
+
+        Indexing:
+        self.rG_w_lat[iomega, ilat, iorb, jorb]
+
+        The orbital indexes of the last two axes follow
+        self.relevantOrbitalIndexList.
+        '''
+        super().__init__(**kwarg)
+        self.rG_w_lat = None
+        self.latVecList = None
+        self.relevantOrbitalIndexList = None
+        self.orbitalIndexMap = None
+        if calcGreen:
+            assert latVecList is not None, "latVecList is required when calcGreen=True"
+            assert relevantOrbitalIndexList is not None, "relevantOrbitalIndexList is required when calcGreen=True"
+            self.calcRetardedLatticeGreenFunc(
+                omegaList=self.omegaList,
+                latVecList=latVecList,
+                relevantOrbitalIndexList=relevantOrbitalIndexList,
+            )
+
+    def calcRetardedLatticeGreenFunc(self, omegaList, latVecList, relevantOrbitalIndexList):
+        '''
+        Calculate G_R(z) = 1/Nk sum_k exp(-i k.R) G_k(z).
+
+        Parameters
+        ----------
+        omegaList : array-like(complex)
+            Complex energy points.
+        latVecList : array-like(int), shape (nLat, 3)
+            Bravais lattice vectors where the Green's function is needed.
+        relevantOrbitalIndexList : array-like(int)
+            Local-basis orbital indexes retained in the Green's function.
+        '''
+        omegaList = np.atleast_1d(np.asarray(omegaList, dtype=complex))
+        latVecList = np.asarray(latVecList, dtype=int).reshape((-1,3))
+        relevantOrbitalIndexList = np.asarray(relevantOrbitalIndexList, dtype=int)
+
+        self.omegaList = omegaList
+        self.latVecList = latVecList
+        self.relevantOrbitalIndexList = relevantOrbitalIndexList
+        self.orbitalIndexMap = np.zeros(self.model.norbs, dtype=int) - 1
+        for iorb_reduced, iorb in enumerate(relevantOrbitalIndexList):
+            self.orbitalIndexMap[iorb] = iorb_reduced
+
+        nkpt = int(np.prod(self.kgrid))
+        nlat = len(latVecList)
+        norb_reduced = len(relevantOrbitalIndexList)
+        nbands = self.energies.shape[-1]
+
+        energies = self.energies.reshape((nkpt, nbands))
+        vectors = self.vectors.reshape((nkpt, self.model.norbs, nbands))
+        selected_vectors = vectors[:, relevantOrbitalIndexList, :]
+
+        k_index = np.indices(self.kgrid).reshape((3, nkpt)).T
+        k_frac = k_index / np.array(self.kgrid)[None,:]
+        lattice_factors = np.exp(-2j*np.pi*(k_frac @ latVecList.T)).T
+
+        rG_w_lat = np.zeros((len(omegaList), nlat, norb_reduced, norb_reduced), dtype=complex)
+        for iomega, omega in enumerate(omegaList):
+            denominator = 1.0/(omega - energies + 1j*self.eta)
+            G_k = np.einsum('kai,ki,kbi->kab', selected_vectors, denominator, selected_vectors.conj(), optimize=True)
+            rG_w_lat[iomega] = np.einsum('lk,kab->lab', lattice_factors, G_k, optimize=True) / nkpt
+
+        self.rG_w_lat = rG_w_lat
+        if self.verbose==2:
+            showElapsedTime(extraInfo=f"retarded lattice Green function on {len(omegaList)} energies, {nlat} lattice vectors finished")
+        return rG_w_lat
+
+class ExchangeCoupling(RetardedLatticeGreenFunc):
+    def __init__(self, exchangeRoutes=None, erange=(-500,500), extraEnergyEmpty=5.0,
+                 lowOrder=5, highOrder=20, Jcvg=1e-3,
+                 symmetricExchangeSign=-1.0, dmiSign=1.0, **kwarg) -> None:
+        '''
+        Compute exchange couplings from retarded lattice Green's functions.
+
+        Parameters
+        ----------
+        exchangeRoutes : list[dict] | list[list[dict]]
+            Routes returned by ``System.classifyExchangeRoutes``. A flat route
+            list is also accepted.
+        erange : tuple(float, float)
+            Hard energy integration window. The upper bound is also clipped by
+            each Fermi level.
+        extraEnergyEmpty : float
+            Extra energy margin below the band bottom.
+        lowOrder, highOrder : int
+            Gaussian-quadrature orders tested sequentially. The interval is
+            ``range(lowOrder, highOrder)``.
+        Jcvg : float
+            Convergence threshold for all computed couplings. Negative values
+            disable convergence checking and use the first quadrature order.
+        symmetricExchangeSign, dmiSign : float
+            Sign-convention factors. The default symmetric-exchange sign matches
+            the historical ``couplingCalc.py`` output for the current route and
+            Green-function convention.
+        '''
+        self.exchangeRoutes = self._flattenExchangeRoutes(exchangeRoutes)
+        self.erange = erange
+        self.extraEnergyEmpty = extraEnergyEmpty
+        self.lowOrder = lowOrder
+        self.highOrder = highOrder
+        self.Jcvg = Jcvg
+        self.symmetricExchangeSign = symmetricExchangeSign
+        self.dmiSign = dmiSign
+        super().__init__(**kwarg)
+        assert self.model.ispin == 2, "ExchangeCoupling requires a spinful model with ispin=2"
+        assert len(self.exchangeRoutes) > 0, "no exchange route is provided"
+        self.calcExchangeCoupling()
+
+    @staticmethod
+    def _flattenExchangeRoutes(exchangeRoutes):
+        if exchangeRoutes is None:
+            return []
+        if len(exchangeRoutes) == 0:
+            return []
+        if isinstance(exchangeRoutes[0], dict):
+            return list(exchangeRoutes)
+        routes = []
+        for group in exchangeRoutes:
+            routes.extend(group)
+        return routes
+
+    def _prepareRouteMaps(self):
+        overlat_set = {(0,0,0)}
+        relevant_orbitals = set()
+        half_norbs = self.model.norbs//2
+        for route in self.exchangeRoutes:
+            overlat = tuple(int(x) for x in route["overlat"])
+            overlat_set.add(overlat)
+            overlat_set.add(tuple(-np.array(overlat, dtype=int)))
+            for iorb in route["source_orbitals"]:
+                relevant_orbitals.add(int(iorb))
+                relevant_orbitals.add(int(iorb) + half_norbs)
+            for iorb in route["target_orbitals"]:
+                relevant_orbitals.add(int(iorb))
+                relevant_orbitals.add(int(iorb) + half_norbs)
+
+        self.overlatList = np.array(sorted(overlat_set), dtype=int)
+        self.overlatIndex = {tuple(overlat): ilat for ilat, overlat in enumerate(self.overlatList)}
+        self.relevantOrbitalIndexList = np.array(sorted(relevant_orbitals), dtype=int)
+
+    def _routeOrbitalIndexes(self, route):
+        half_norbs = self.model.norbs//2
+        source_up = [int(iorb) for iorb in route["source_orbitals"]]
+        target_up = [int(iorb) for iorb in route["target_orbitals"]]
+        source_full = source_up + [iorb + half_norbs for iorb in source_up]
+        target_full = target_up + [iorb + half_norbs for iorb in target_up]
+        source_reduced = list(self.orbitalIndexMap[source_full])
+        target_reduced = list(self.orbitalIndexMap[target_full])
+        return source_reduced, target_reduced
+
+    @staticmethod
+    def _contractExchange(p_source, p_target, G_forward, G_backward):
+        G_forward_blocks = PauliBlock(G_forward)
+        G_backward_blocks = PauliBlock(G_backward)
+        AMat = np.zeros((4,4), dtype=complex)
+        for i in range(4):
+            route1 = p_source @ G_forward_blocks[i]
+            for j in range(4):
+                route2 = p_target @ G_backward_blocks[j]
+                AMat[i,j] = np.sum(route1 * route2.T)
+        return AMat
+
+    def calcExchangeCoupling(self):
+        self._prepareRouteMaps()
+        nfermi = len(self.fermiList)
+        nroutes = len(self.exchangeRoutes)
+        self.exchangeEnergy = np.zeros((nfermi, nroutes))
+        self.Jani = np.zeros((nfermi, nroutes, 2, 2))
+        self.DMI = np.zeros((nfermi, nroutes, 2))
+        self.exchangeInfo = []
+
+        bandEnergyMin = float(self.energies.min())
+        emin = max(self.erange[0], bandEnergyMin) - self.extraEnergyEmpty
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            emax = min(self.erange[1], float(fermi))
+            J_old = np.zeros((nroutes, 3, 3))
+            for iteration_num, gaussianOrder in enumerate(range(self.lowOrder, self.highOrder)):
+                points, weights = p_roots(gaussianOrder)
+                omega_path, domega_path = semiCirle(emin, emax, points)
+                self.calcRetardedLatticeGreenFunc(
+                    omegaList=omega_path,
+                    latVecList=self.overlatList,
+                    relevantOrbitalIndexList=self.relevantOrbitalIndexList,
+                )
+
+                J_new = np.zeros((nroutes, 3, 3))
+                for iroute, route in enumerate(self.exchangeRoutes):
+                    overlat = np.array(route["overlat"], dtype=int)
+                    i_overlat_forward = self.overlatIndex[tuple(overlat)]
+                    i_overlat_backward = self.overlatIndex[tuple(-overlat)]
+                    source_reduced, target_reduced = self._routeOrbitalIndexes(route)
+                    p_source = self.model.getAtomicSelfEnergy(route["source_orbitals"])
+                    p_target = self.model.getAtomicSelfEnergy(route["target_orbitals"])
+
+                    J = 0j
+                    J_a_xx = 0j
+                    J_a_yy = 0j
+                    J_a_xy = 0j
+                    DMI = np.zeros(3, dtype=complex)
+                    for iomega in range(len(omega_path)):
+                        G_forward = self.rG_w_lat[iomega, i_overlat_forward][source_reduced,:][:,target_reduced]
+                        G_backward = self.rG_w_lat[iomega, i_overlat_backward][target_reduced,:][:,source_reduced]
+                        AMat = self._contractExchange(p_source, p_target, G_forward, G_backward)
+
+                        weight = domega_path[iomega] * weights[iomega]
+                        J += 2*(AMat[0,0]-AMat[1,1]-AMat[2,2]-AMat[3,3]) * weight
+                        J_a_xx += 2*(AMat[1,1]+AMat[1,1]) * weight
+                        J_a_yy += 2*(AMat[2,2]+AMat[2,2]) * weight
+                        J_a_xy += 2*(AMat[1,2]+AMat[2,1]) * weight
+                        DMI[0] += 2j*(AMat[0,1]-AMat[1,0]) * weight
+                        DMI[1] += 2j*(AMat[0,2]-AMat[2,0]) * weight
+
+                    self.exchangeEnergy[ifermi, iroute] = self.symmetricExchangeSign * J.imag/2
+                    self.Jani[ifermi, iroute] = self.symmetricExchangeSign * np.array([[J_a_xx, J_a_xy], [J_a_xy, J_a_yy]]).imag/2
+                    self.DMI[ifermi, iroute] = self.dmiSign * DMI[:2].imag/2
+                    J_new[iroute] = np.diag([self.exchangeEnergy[ifermi, iroute]]*3)
+
+                dJ_max = float(np.max(np.abs(J_new - J_old)))
+                if self.verbose:
+                    print(f"ExchangeCoupling fermi {fermi:.6f}, Gaussian order {gaussianOrder}, max dJ {dJ_max:.6e}")
+                if self.Jcvg < 0:
+                    break
+                if iteration_num > 0 and dJ_max < self.Jcvg:
+                    break
+                J_old = J_new.copy()
+
+            self.exchangeInfo.append({
+                "fermi": float(fermi),
+                "emin": float(emin),
+                "emax": float(emax),
+                "gaussianOrder": int(gaussianOrder),
+                "max_dJ": dJ_max,
+            })
+
+        for iroute, route in enumerate(self.exchangeRoutes):
+            route["exchangeEnergy"] = self.exchangeEnergy[:, iroute]
+            route["Jani"] = self.Jani[:, iroute]
+            route["DMI"] = self.DMI[:, iroute]
+        return self.exchangeEnergy
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, SpinExpectationOnPath, SpinOrbitalExpectationOnPath
 from .Path import SurfaceBulkSpectraOnPath
