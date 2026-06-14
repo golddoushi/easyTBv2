@@ -50,7 +50,7 @@ class Hr:
         self.bondList=[]
         nbonds=0
         for iline, bondInfo in enumerate(data):
-            if(iline+1)%(nlines//50)==0: print('>',end='',flush=True) # process bar
+            if nlines>50 and (iline+1)%(nlines//50)==0: print('>',end='',flush=True) # process bar
 
             # unpack the bond info
             source, target = int(bondInfo[3])-1,int(bondInfo[4])-1

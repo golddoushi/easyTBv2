@@ -1,5 +1,7 @@
 import os
-os.add_dll_directory("C:/Program Files/mingw64/bin")
+os.add_dll_directory("D:/Documents/mingW/mingw64/bin")  # temporary adding path of .dll on Windows
+os.add_dll_directory("D:/Documents/fftw3/bin")
+os.add_dll_directory("D:/Documents/lapack/bin")
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -12,11 +14,11 @@ import couplingCalc as cc
 from auxiliary import obtainProjectionsPlain, obtainProjections
 
 # 1. define the basic structure information
-mainDir='./mcalc/FeCl2/'
+mainDir='./mcalc/BN/'
 pR.readPOS(mainDir+'POSCAR')
 projections={
-    "Fe":(0,0,1,1,2,2),
-    "Cl":(0,0,1,1,2,3),
+    "B":(0,),
+    "N":(0,),
 }
 atomicMagMomList=[np.zeros(3)]*0+[
     np.array([0,0,1]),
@@ -25,7 +27,7 @@ atomicMagMomList=[np.zeros(3)]*0+[
 ]
 # 2. read in Hamiltonian 
 hr=reader.Hr()
-hr.readSingleFileV2(mainDir+'wannier90_hr.omx.dat',ignoreImagPart=False,cutoff=1e-2,)
+hr.readSingleFileV2(mainDir+'BN_fm_soc_hr.dat',ignoreImagPart=False,cutoff=-1e-2,)
 # 3. (optional) symmerize Hamiltonian, saxis=(0,0,-1) for w90, saxis=(0,0,-1) for w90
 atomicOrbInfoList=obtainProjections(mainDir+'POSCAR',projections,ispin=2)
 '''
@@ -47,11 +49,11 @@ wann_list=obtainProjectionsPlain(mainDir+'POSCAR',projections)
 # 5. set the iatom of magnetic atoms to source_list, set ini_S for ALL atoms
 cc.classifyBonds(mainDir, source_list=[0,], 
            wann_list=wann_list, 
-           ini_S=[1]*1+[0]*2,
+           ini_S=[1]*1+[0]*1,
            includeAllBonds=False)
 # 5. set overlap, set supercell size, set fermi level, set erange, etc.
-E0=-0.19908723865958*27.2113845
-fermiAxis=np.linspace(E0-0.1,E0+0.1,11)
+E0=0.0
+fermiAxis=[E0]#np.linspace(E0-0.1,E0+0.1,11)
 cc.calcJFull_GaussianQuadrature(hr,mainDir,nthreads=8,overlap=True,
     sc=[28,28,1],fermiAxis=fermiAxis,
     eta=0.0001,erange=(-100,100),lowOrder=60,highOrder=80,Jcvg=-1e-4)
