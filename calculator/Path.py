@@ -46,6 +46,8 @@ class CalculatorOnPath():
         self.nkpt=len(self.kpath)
 
         if self.verbose==2: print("initializing calculator module")
+        # sychronize verbose with model
+        self.model.verbose = self.verbose
 
 class EnergyOnPath(CalculatorOnPath):
     def __init__(self, **kwarg) -> None:
@@ -324,7 +326,7 @@ class SpinBerryCurvOnPath(SpinVelocityOnPath):
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class SurfaceBulkGreenOnPath(CalculatorOnPath):
-    def __init__(self, surfaceDir: int, omega:np.ndarray|list, n_iter:int=10, **kwarg):
+    def __init__(self, surfaceDir: int, omega:np.ndarray|list, n_iter:int=10, Tmatrix=np.eye(3), cutoff=1e-6, diag=False, **kwarg):
         """
         Computes the Left Surface, Right Surface, and Bulk Green's Functions via the
         iterative decimation algorithm (Lopez Sancho et al. 1985).
@@ -339,29 +341,43 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
             Array of complex frequencies to evaluate.
         n_iter : int
             Number of decimation iterations. n_iter = n simulates a slab of 2^n layers.
+        diag : bool
+            if True, only compute the diagonal elements of surf/bulk GFs (for evaluations on spectral func.)
+        Tmatrix: np.ndarray(3)
+            The transformation matrix to construct rect cell from the (possible) non-rect bulk
         ncores : int
             Number of cores used for the parallel computations
         """
         super().__init__(**kwarg)
-        self.surfaceDir = surfaceDir
-        self.omega = np.array(omega, dtype=complex)
-        self.n_iter = n_iter
-        
-        assert hasattr(self.model, 'H_00_R'), "You must call model.constructPrincipleLayer(surfaceDir) before GreenOnPath!"
-        
-        # 1. Enforce open boundary conditions in k-space
+        # construct principal layer
+        self.model.make_supercell(Tmatrix)
+        self.model.shiftOrigin(surfaceDir=surfaceDir)
+        self.model.constructPrincipleLayer(surfaceDir=surfaceDir)
+
+        # Enforce open boundary conditions in k-space
         for ikpt, kpt in enumerate(self.kpath):
-            if abs(kpt[surfaceDir]) > 1e-6:
+            if abs(kpt[surfaceDir]) > cutoff:
                 if self.verbose == 2:
                     print(f"Warning: k-point {kpt} has non-zero component in surface normal direction {surfaceDir}. Forcing to 0.")
                 self.kpath[ikpt, surfaceDir] = 0.0
-                
-        self.nomega = len(self.omega)
-        norbs = self.model.norbs
         
-        self.G_bulk = np.zeros((self.nkpt, self.nomega, norbs, norbs), dtype=complex)
-        self.G_surf_L = np.zeros((self.nkpt, self.nomega, norbs, norbs), dtype=complex)
-        self.G_surf_R = np.zeros((self.nkpt, self.nomega, norbs, norbs), dtype=complex)
+        # initialize surface and bulk Green's function
+        assert hasattr(self.model, 'H_00_R'), "You must call model.constructPrincipleLayer(surfaceDir) before GreenOnPath!"
+        
+        self.omega = np.array(omega, dtype=complex)
+        self.nomega = len(self.omega)
+        self.diag= diag
+        if diag:
+            self.G_bulk_diag = np.zeros((self.nkpt, self.nomega, self.model.norbs), dtype=complex)
+            self.G_surf_L_diag = np.zeros((self.nkpt, self.nomega, self.model.norbs), dtype=complex)
+            self.G_surf_R_diag = np.zeros((self.nkpt, self.nomega, self.model.norbs), dtype=complex)
+        else:
+            self.G_bulk = np.zeros((self.nkpt, self.nomega, self.model.norbs, self.model.norbs), dtype=complex)
+            self.G_surf_L = np.zeros((self.nkpt, self.nomega, self.model.norbs, self.model.norbs), dtype=complex)
+            self.G_surf_R = np.zeros((self.nkpt, self.nomega, self.model.norbs, self.model.norbs), dtype=complex)
+
+        self.surfaceDir = surfaceDir
+        self.n_iter = n_iter
         
         if self.verbose: print(f"\n--- Computing Green's Functions ({self.nkpt} k-points, {self.nomega} frequencies, {self.n_iter} iterations) ---")
         if self.verbose == 2: showElapsedTime(offset=True)
@@ -373,21 +389,26 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
 
     def solveGreensFunction(self):
         II = np.eye(self.model.norbs, dtype=complex)
+        if self.verbose: 
+            showElapsedTime(extraInfo="Start solving Surface Green's function")
+            #for itag in range(len(self.kpath)): print("-",end="")
+            #print("",flush=True)
         for ikpt, kpt in enumerate(self.kpath):
             # 1. Fourier Transform the Principal Layer Blocks
             H_00_k = np.zeros((self.model.norbs, self.model.norbs), dtype=complex)
             for R, HR in zip(self.model.R_00, self.model.H_00_R):
-                H_00_k += HR * np.exp(2j * np.pi * np.dot(kpt, R))
+                H_00_k += HR * np.exp(2j * np.pi * kpt @ R)
             
             H_01_k = np.zeros((self.model.norbs, self.model.norbs), dtype=complex)
             for R, HR in zip(self.model.R_01, self.model.H_01_R):
-                H_01_k += HR * np.exp(2j * np.pi * np.dot(kpt, R))
+                H_01_k += HR * np.exp(2j * np.pi * kpt @ R)
             
             H_m10_k = np.zeros((self.model.norbs, self.model.norbs), dtype=complex)
             for R, HR in zip(self.model.R_m10, self.model.H_m10_R):
-                H_m10_k += HR * np.exp(2j * np.pi * np.dot(kpt, R))
+                H_m10_k += HR * np.exp(2j * np.pi * kpt @ R)
 
             # 2. Iterative Decimation for each complex frequency
+            '''
             for iomega, w in enumerate(self.omega):
                 alpha = H_01_k.copy()
                 beta = H_m10_k.copy()
@@ -413,21 +434,71 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
                     # Update local density potentials
                     eps_s_L = eps_s_L + a_g_b
                     eps_s_R = eps_s_R + b_g_a
-                    eps = eps + a_g_b + b_g_a
+                    eps     = eps + a_g_b + b_g_a
             
                     alpha = a_next
                     beta = b_next
                 
                 # 3. Final Matrix Inversions
-                self.G_bulk[ikpt, iomega]   = np.linalg.inv(w * II - eps)
-                self.G_surf_L[ikpt, iomega] = np.linalg.inv(w * II - eps_s_L)
-                self.G_surf_R[ikpt, iomega] = np.linalg.inv(w * II - eps_s_R)
-        if self.verbose: showElapsedTime(extraInfo="Surface Green's function computation finished")
+                if self.diag:
+                    self.G_bulk_diag[ikpt, iomega]   = np.diag(np.linalg.inv(w * II - eps))
+                    self.G_surf_L_diag[ikpt, iomega] = np.diag(np.linalg.inv(w * II - eps_s_L))
+                    self.G_surf_R_diag[ikpt, iomega] = np.diag(np.linalg.inv(w * II - eps_s_R))
+                else:
+                    self.G_bulk[ikpt, iomega]   = np.linalg.inv(w * II - eps)
+                    self.G_surf_L[ikpt, iomega] = np.linalg.inv(w * II - eps_s_L)
+                    self.G_surf_R[ikpt, iomega] = np.linalg.inv(w * II - eps_s_R)
+            '''
+            
+            alpha = H_01_k[None,:,:]
+            beta = H_m10_k[None,:,:]
+            eps = H_00_k[None,:,:]
+            eps_s_L = H_00_k[None,:,:]
+            eps_s_R = H_00_k[None,:,:]
+            w=self.omega[:,None,None] * II[None,:,:]
+            if self.verbose: showElapsedTime(extraInfo=f"ik {ikpt+1}/{len(self.kpath)} Fourier transform finished")
+            for i in range(self.n_iter):
+                # Compute the propagator: g = (w*I - eps)^-1
+                g = np.linalg.inv(w - eps)
+                # Precompute heavy matrix multiplications
+                a_g = alpha @ g
+                b_g = beta @ g
+            
+                # Compute off-diagonal effective couplings
+                a_next = a_g @ alpha
+                b_next = b_g @ beta
+            
+                # Compute effective diagonal shifts
+                a_g_b = a_g @ beta
+                b_g_a = b_g @ alpha
+            
+                # Update local density potentials
+                eps_s_L = eps_s_L + a_g_b
+                eps_s_R = eps_s_R + b_g_a
+                eps     = eps + a_g_b + b_g_a
+            
+                alpha = a_next
+                beta = b_next
+
+                if self.verbose: print(">",end="",flush=True)
+            if self.verbose: showElapsedTime(extraInfo=f"\nik {ikpt+1}/{len(self.kpath)} Surface GFs iteration finished")
+            # 3. Final Matrix Inversions
+            if self.diag:
+                self.G_bulk_diag[ikpt,...]   = np.diagonal(np.linalg.inv(w - eps),     axis1=-2,axis2=-1)
+                self.G_surf_L_diag[ikpt,...] = np.diagonal(np.linalg.inv(w - eps_s_L), axis1=-2,axis2=-1)
+                self.G_surf_R_diag[ikpt,...] = np.diagonal(np.linalg.inv(w - eps_s_R), axis1=-2,axis2=-1)
+            else:
+                self.G_bulk[ikpt,...]   = np.linalg.inv(w - eps)
+                self.G_surf_L[ikpt,...] = np.linalg.inv(w - eps_s_L)
+                self.G_surf_R[ikpt,...] = np.linalg.inv(w - eps_s_R)
+
+        if self.verbose: showElapsedTime(extraInfo="\nSurface Green's function computation finished")
 
 class SurfaceBulkSpectraOnPath(SurfaceBulkGreenOnPath):
-    def __init__(self, surfaceDir: int, fermiAxis: np.ndarray, n_iter:int=10, **kwarg):
+    def __init__(self, surfaceDir: int, fermiAxis: np.ndarray, n_iter:int=10, Tmatrix=np.eye(3), cutoff=1e-6, **kwarg):
         """
-        Computes the Left Surface, Right Surface, and Bulk Green's Functions via the
+        Construct the principal layer model from the bulk model, 
+        then computes the Left Surface, Right Surface, and Bulk Green's Functions via the
         highly convergent iterative decimation algorithm (Lopez Sancho et al. 1985).
         
         Parameters
@@ -440,12 +511,14 @@ class SurfaceBulkSpectraOnPath(SurfaceBulkGreenOnPath):
             Array of real energies to evaluate.
         n_iter : int
             Number of decimation iterations. n_iter = n simulates a slab of 2^n layers.
+        Tmatrix: np.ndarray(3)
+            The transformation matrix to construct rect cell from the (possible) non-rect bulk
         """
-        super().__init__(surfaceDir=surfaceDir, omega=fermiAxis, n_iter=n_iter, **kwarg)
+        super().__init__(Tmatrix=Tmatrix, surfaceDir=surfaceDir, omega=fermiAxis, n_iter=n_iter, cutoff=cutoff, diag=True, **kwarg)
         self.setOmega(fermiAxis-1j*self.eta)
 
         self.solveGreensFunction()
-        self.A_bulk   = np.sum(np.diagonal(self.G_bulk,  axis1=-2,axis2=-1),axis=-1).imag/np.pi
-        self.A_surf_L = np.sum(np.diagonal(self.G_surf_L,axis1=-2,axis2=-1),axis=-1).imag/np.pi
-        self.A_surf_R = np.sum(np.diagonal(self.G_surf_R,axis1=-2,axis2=-1),axis=-1).imag/np.pi
+        self.A_bulk   = np.sum(self.G_bulk_diag,axis=-1).imag/np.pi
+        self.A_surf_L = np.sum(self.G_surf_L_diag,axis=-1).imag/np.pi
+        self.A_surf_R = np.sum(self.G_surf_R_diag,axis=-1).imag/np.pi
         if self.verbose: showElapsedTime(extraInfo="Surface and bulk spectra solved")
