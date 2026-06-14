@@ -6,16 +6,11 @@ check something
 #
 # Use to calculate the magnetic coupling via AFM-FM method
 #
-import re
-#import subprocess
 import paramReader as param
 import posReader as pR
 import auxiliary as aux
-import shutil
 import numpy as np
 from scipy.special.orthogonal import p_roots
-import time
-#import WannierKit
 import hrReader as reader
 import ham as hamilton
 import fileio

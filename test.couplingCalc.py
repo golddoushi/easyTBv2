@@ -27,7 +27,7 @@ atomicMagMomList=[np.zeros(3)]*0+[
 ]
 # 2. read in Hamiltonian 
 hr=reader.Hr()
-hr.readSingleFileV2(mainDir+'BN_fm_soc_hr.dat',ignoreImagPart=False,cutoff=-1e-2,)
+hr.readSingleFileV2(mainDir+'BN_fm_rashiba_hr.dat',ignoreImagPart=False,cutoff=-1e-2,)
 # 3. (optional) symmerize Hamiltonian, saxis=(0,0,-1) for w90, saxis=(0,0,-1) for w90
 atomicOrbInfoList=obtainProjections(mainDir+'POSCAR',projections,ispin=2)
 '''
