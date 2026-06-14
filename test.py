@@ -14,14 +14,14 @@ model = System_tb(
         },
         ispin=2
 )
-fermiAxis=[0,]
+fermiList=[0,]
 routes=model.classifyExchangeRoutes(sourceAtoms=[2,], pbc=(0,), maxRange=5, calRange=5, )
 exCoup = ExchangeCoupling(model=model, kgrid=(28, 1, 1), 
-                          fermiAxis = fermiAxis, eta=0.0001,
+                          fermiList = fermiList, eta=0.0001,
                           exchangeRoutes = routes, symmetricExchangeSign=1,
                           lowOrder=60,highOrder=80,Jcvg=-1e-4)
 
-for ifermi, fermi in enumerate(fermiAxis):
+for ifermi, fermi in enumerate(fermiList):
     print(f"{fermi=:.4f}")
     for ibondType, ex in enumerate(exCoup.exchangeRoutes):
         print("bondType%d ifermi%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f"%(

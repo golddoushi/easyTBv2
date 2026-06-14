@@ -3152,7 +3152,7 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
         nroutes = len(self.exchangeRoutes)
         self.exchangeEnergy = np.zeros((nfermi, nroutes))
         self.Jani = np.zeros((nfermi, nroutes, 2, 2))
-        self.DMI = np.zeros((nfermi, nroutes, 2))
+        self.DMI = np.zeros((nfermi, nroutes, 3))
         self.exchangeInfo = []
 
         bandEnergyMin = float(self.energies.min())
@@ -3196,10 +3196,11 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
                         J_a_xy += 2*(AMat[1,2]+AMat[2,1]) * weight
                         DMI[0] += 2j*(AMat[0,1]-AMat[1,0]) * weight
                         DMI[1] += 2j*(AMat[0,2]-AMat[2,0]) * weight
+                        DMI[2] += 2*(AMat[0,0]-AMat[3,3]) * weight
 
                     self.exchangeEnergy[ifermi, iroute] = self.symmetricExchangeSign * J.imag/2
                     self.Jani[ifermi, iroute] = self.symmetricExchangeSign * np.array([[J_a_xx, J_a_xy], [J_a_xy, J_a_yy]]).imag/2
-                    self.DMI[ifermi, iroute] = self.dmiSign * DMI[:2].imag/2
+                    self.DMI[ifermi, iroute] = self.dmiSign * DMI.imag/2
                     J_new[iroute] = np.diag([self.exchangeEnergy[ifermi, iroute]]*3)
 
                 dJ_max = float(np.max(np.abs(J_new - J_old)))
