@@ -3146,6 +3146,30 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
                 AMat[i,j] = np.sum(route1 * route2.T)
         return AMat
 
+    @staticmethod
+    def _spinVertex(p_mat, iaxis):
+        norb = p_mat.shape[0]
+        vertex = np.zeros((2*norb, 2*norb), dtype=complex)
+        if iaxis == 0:
+            vertex[:norb, norb:] = p_mat
+            vertex[norb:, :norb] = p_mat
+        elif iaxis == 1:
+            vertex[:norb, norb:] = -1j * p_mat
+            vertex[norb:, :norb] = 1j * p_mat
+        elif iaxis == 2:
+            vertex[:norb, :norb] = p_mat
+            vertex[norb:, norb:] = -p_mat
+        else:
+            raise ValueError(f"spin vertex axis should be 0, 1, or 2, got {iaxis}")
+        return vertex
+
+    @classmethod
+    def _contractSpinRotation(cls, p_source, iaxis_source, p_target, iaxis_target,
+                              G_forward, G_backward):
+        vertex_source = cls._spinVertex(p_source, iaxis_source)
+        vertex_target = cls._spinVertex(p_target, iaxis_target)
+        return np.trace(vertex_source @ G_forward @ vertex_target @ G_backward)
+
     def calcExchangeCoupling(self):
         self._prepareRouteMaps()
         nfermi = len(self.fermiList)
@@ -3153,6 +3177,7 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
         self.exchangeEnergy = np.zeros((nfermi, nroutes))
         self.Jani = np.zeros((nfermi, nroutes, 2, 2))
         self.DMI = np.zeros((nfermi, nroutes, 3))
+        self.rotationCurvature = np.zeros((nfermi, nroutes, 3, 3))
         self.exchangeInfo = []
 
         bandEnergyMin = float(self.energies.min())
@@ -3183,6 +3208,8 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
                     J_a_xx = 0j
                     J_a_yy = 0j
                     J_a_xy = 0j
+                    C_xy = 0j
+                    C_yx = 0j
                     DMI = np.zeros(3, dtype=complex)
                     for iomega in range(len(omega_path)):
                         G_forward = self.rG_w_lat[iomega, i_overlat_forward][source_reduced,:][:,target_reduced]
@@ -3196,10 +3223,14 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
                         J_a_xy += 2*(AMat[1,2]+AMat[2,1]) * weight
                         DMI[0] += 2j*(AMat[0,1]-AMat[1,0]) * weight
                         DMI[1] += 2j*(AMat[0,2]-AMat[2,0]) * weight
-                        DMI[2] += 2*(AMat[0,0]-AMat[3,3]) * weight
+                        C_xy += self._contractSpinRotation(p_source, 0, p_target, 1, G_forward, G_backward) * weight
+                        C_yx += self._contractSpinRotation(p_source, 1, p_target, 0, G_forward, G_backward) * weight
 
                     self.exchangeEnergy[ifermi, iroute] = self.symmetricExchangeSign * J.imag/2
                     self.Jani[ifermi, iroute] = self.symmetricExchangeSign * np.array([[J_a_xx, J_a_xy], [J_a_xy, J_a_yy]]).imag/2
+                    self.rotationCurvature[ifermi, iroute, 0, 1] = self.symmetricExchangeSign * C_xy.imag/2
+                    self.rotationCurvature[ifermi, iroute, 1, 0] = self.symmetricExchangeSign * C_yx.imag/2
+                    DMI[2] = 0.5 * (C_yx - C_xy)
                     self.DMI[ifermi, iroute] = self.dmiSign * DMI.imag/2
                     J_new[iroute] = np.diag([self.exchangeEnergy[ifermi, iroute]]*3)
 
