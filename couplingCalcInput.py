@@ -36,7 +36,7 @@ showElapsedTime(extraInfo="Exchange coupling calc. start")
 exCoup = ExchangeCoupling(model=model, kgrid=kgrid, 
                           fermiList = fermiList, eta=0.0001,
                           exchangeRoutes = routes, symmetricExchangeSign=1,
-                          lowOrder=60,highOrder=80,Jcvg=-1e-4)
+                          lowOrder=60,highOrder=80,Jcvg=-1e-4,verbose=True)
 
 showElapsedTime(extraInfo="Exchange coupling calc. finished")
 

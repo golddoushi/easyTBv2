@@ -3016,6 +3016,7 @@ class RetardedLatticeGreenFunc(Energy):
         relevantOrbitalIndexList : array-like(int)
             Local-basis orbital indexes retained in the Green's function.
         '''
+        if self.verbose: showElapsedTime("start computations on retarded lattice Green's function")
         omegaList = np.atleast_1d(np.asarray(omegaList, dtype=complex))
         latVecList = np.asarray(latVecList, dtype=int).reshape((-1,3))
         relevantOrbitalIndexList = np.asarray(relevantOrbitalIndexList, dtype=int)
@@ -3030,6 +3031,7 @@ class RetardedLatticeGreenFunc(Energy):
         nkpt = int(np.prod(self.kgrid))
         nlat = len(latVecList)
         nbands = self.energies.shape[-1]
+        norb_reduced = len(relevantOrbitalIndexList)
 
         energies = self.energies.reshape((nkpt, nbands))
         vectors = self.vectors.reshape((nkpt, self.model.norbs, nbands))
@@ -3039,11 +3041,13 @@ class RetardedLatticeGreenFunc(Energy):
         k_frac = k_index / np.array(self.kgrid)[None,:]
         lattice_factors = np.exp(-2j*np.pi*(k_frac @ latVecList.T)).T
 
-        denominator = 1.0/(omegaList[:,None,None] - energies[None,:,:] + 1j*self.eta)
-        G_k = np.einsum('kai,wki,kbi->wkab', selected_vectors, denominator, selected_vectors.conj(), optimize=True)
-        self.rG_w_lat = np.einsum('lk,wkab->wlab', lattice_factors, G_k, optimize=True) / nkpt
-
-        if self.verbose==2:
+        self.rG_w_lat = np.zeros((len(omegaList), nlat, norb_reduced, norb_reduced), dtype=complex)
+        for iw, w in enumerate(omegaList):
+            denominator = 1.0/(w - energies + 1j*self.eta)
+            G_k = np.einsum('kai,ki,kbi->kab', selected_vectors, denominator, selected_vectors.conj(), optimize=True)
+            self.rG_w_lat[iw]=np.einsum('lk,kab->lab', lattice_factors, G_k, optimize=True) / nkpt
+        
+        if self.verbose:
             showElapsedTime(extraInfo=f"retarded lattice Green function on {len(omegaList)} energies, {nlat} lattice vectors finished")
         return self.rG_w_lat
 
