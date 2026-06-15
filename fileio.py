@@ -4,7 +4,7 @@ import numpy as np
 import fortio, scipy.io
 
 global version
-version='0.1'
+version='0.2'
 
 def readPOSCAR(filePath="./POSCAR"):
     '''
@@ -236,7 +236,22 @@ def writeJmat(mainDir, bondList, supercellSize):
                     fJ.write('%14.6e%3d%7.3f%4d%4d%4d%4d%4d%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e\n'%(
                         bond.fermi[ifermi], (ibondType+1), bond.bondLen, bond.sourceOrb.id, bond.targetOrb.id, *bond.overLat,  
                         bond.exchangeEnergy[ifermi],bond.Jani[ifermi][0,0],bond.Jani[ifermi][1,1],bond.Jani[ifermi][0,1],bond.DMI[ifermi][0],bond.DMI[ifermi][1]))
-                
+
+def writeJmatV2(mainDir, exch, supercellSize):
+    global version
+    with open(mainDir+'J.txt','w') as fJ:
+        fJ.write(f'Anisotropic exchange energy J*S^2, calculated by Greens function. version: {version}\n')
+        fJ.write('evaluated in %dx%dx%d supercell\n'%(*supercellSize,))
+        fJ.write('#Fermi          NN   dis.  is  it  Rx  Ry  Rz             J          Ja_x          Ja_y         Ja_yx            Dx            Dy            Dz\n')
+
+        for iroute, route in enumerate(exch.exchangeRoutes):
+            for ifermi, fermi in enumerate(exch.fermiList):
+                fJ.write('%14.6e%3d%7.3f%4d%4d%4d%4d%4d%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e\n'%(
+                    fermi, (iroute+1), route["bond_length"], route["source_atom"], route["target_atom"], *route["overlat"],  
+                    exch.exchangeEnergy[ifermi,iroute],
+                    exch.Jani[ifermi,iroute,0,0],exch.Jani[ifermi,iroute,1,1],exch.Jani[ifermi,iroute,0,1],
+                    *exch.DMI[ifermi,iroute,:]))
+
 def writeVolumeData(filePath:str,lat: list | np.ndarray,grid_size:tuple | list | np.ndarray,grid_data:np.ndarray):
     '''
     output volume data in the format of CHGCAR

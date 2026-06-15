@@ -1,5 +1,6 @@
 from system import System_tb
 from calculator import ExchangeCoupling
+from fileio import writeJmatV2
 
 mainDir="./mcalc/1D-chain-3orb/"
 model = System_tb(
@@ -14,12 +15,15 @@ model = System_tb(
         },
         ispin=2
 )
+kgrid=(28, 1, 1)
 fermiList=[0,]
 routes=model.classifyExchangeRoutes(sourceAtoms=[2,], pbc=(0,), maxRange=5, calRange=5, )
-exCoup = ExchangeCoupling(model=model, kgrid=(28, 1, 1), 
+exCoup = ExchangeCoupling(model=model, kgrid=kgrid, 
                           fermiList = fermiList, eta=0.0001,
                           exchangeRoutes = routes, symmetricExchangeSign=1,
                           lowOrder=60,highOrder=80,Jcvg=-1e-4)
+
+writeJmatV2(mainDir, exCoup, kgrid)
 
 for ifermi, fermi in enumerate(fermiList):
     print(f"{fermi=:.4f}")
