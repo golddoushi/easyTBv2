@@ -3029,7 +3029,6 @@ class RetardedLatticeGreenFunc(Energy):
 
         nkpt = int(np.prod(self.kgrid))
         nlat = len(latVecList)
-        norb_reduced = len(relevantOrbitalIndexList)
         nbands = self.energies.shape[-1]
 
         energies = self.energies.reshape((nkpt, nbands))
@@ -3040,16 +3039,13 @@ class RetardedLatticeGreenFunc(Energy):
         k_frac = k_index / np.array(self.kgrid)[None,:]
         lattice_factors = np.exp(-2j*np.pi*(k_frac @ latVecList.T)).T
 
-        rG_w_lat = np.zeros((len(omegaList), nlat, norb_reduced, norb_reduced), dtype=complex)
-        for iomega, omega in enumerate(omegaList):
-            denominator = 1.0/(omega - energies + 1j*self.eta)
-            G_k = np.einsum('kai,ki,kbi->kab', selected_vectors, denominator, selected_vectors.conj(), optimize=True)
-            rG_w_lat[iomega] = np.einsum('lk,kab->lab', lattice_factors, G_k, optimize=True) / nkpt
+        denominator = 1.0/(omegaList[:,None,None] - energies[None,:,:] + 1j*self.eta)
+        G_k = np.einsum('kai,wki,kbi->wkab', selected_vectors, denominator, selected_vectors.conj(), optimize=True)
+        self.rG_w_lat = np.einsum('lk,wkab->wlab', lattice_factors, G_k, optimize=True) / nkpt
 
-        self.rG_w_lat = rG_w_lat
         if self.verbose==2:
             showElapsedTime(extraInfo=f"retarded lattice Green function on {len(omegaList)} energies, {nlat} lattice vectors finished")
-        return rG_w_lat
+        return self.rG_w_lat
 
 class ExchangeCoupling(RetardedLatticeGreenFunc):
     def __init__(self, exchangeRoutes=None, erange=(-500,500), extraEnergyEmpty=5.0,

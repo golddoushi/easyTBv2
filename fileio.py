@@ -241,16 +241,26 @@ def writeJmatV2(mainDir, exch, supercellSize):
     global version
     with open(mainDir+'J.txt','w') as fJ:
         fJ.write(f'Anisotropic exchange energy J*S^2, calculated by Greens function. version: {version}\n')
-        fJ.write('evaluated in %dx%dx%d supercell\n'%(*supercellSize,))
-        fJ.write('#Fermi          NN   dis.  is  it  Rx  Ry  Rz             J          Ja_x          Ja_y         Ja_yx            Dx            Dy            Dz\n')
+        fJ.write('evaluated on %dx%dx%d k grid\n'%(*supercellSize,))
+        fJ.write('#Fermi          NN   dis.  is  it  Rx  Ry  Rz           Jxx           Jxy           Jxz           Jyx           Jyy           Jyz           Jzx           Jzy           Jzz             J          Ja_x          Ja_y         Ja_yx            Dx            Dy            Dz\n')
 
         for iroute, route in enumerate(exch.exchangeRoutes):
             for ifermi, fermi in enumerate(exch.fermiList):
-                fJ.write('%14.6e%3d%7.3f%4d%4d%4d%4d%4d%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e\n'%(
+                J = exch.exchangeEnergy[ifermi,iroute]
+                Jani = exch.Jani[ifermi,iroute]
+                Dx, Dy, Dz = exch.DMI[ifermi,iroute,:]
+                Jmat = np.array([
+                    [J + Jani[0,0], Jani[0,1] + Dz, -Dy],
+                    [Jani[0,1] - Dz, J + Jani[1,1], Dx],
+                    [Dy, -Dx, J],
+                ])
+                fJ.write('%14.6e%3d%7.3f%4d%4d%4d%4d%4d%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e\n'%(
                     fermi, (iroute+1), route["bond_length"], route["source_atom"], route["target_atom"], *route["overlat"],  
-                    exch.exchangeEnergy[ifermi,iroute],
-                    exch.Jani[ifermi,iroute,0,0],exch.Jani[ifermi,iroute,1,1],exch.Jani[ifermi,iroute,0,1],
-                    *exch.DMI[ifermi,iroute,:]))
+                    Jmat[0,0], Jmat[0,1], Jmat[0,2],
+                    Jmat[1,0], Jmat[1,1], Jmat[1,2],
+                    Jmat[2,0], Jmat[2,1], Jmat[2,2],
+                    J, Jani[0,0], Jani[1,1], Jani[0,1],
+                    Dx, Dy, Dz))
 
 def writeVolumeData(filePath:str,lat: list | np.ndarray,grid_size:tuple | list | np.ndarray,grid_data:np.ndarray):
     '''
