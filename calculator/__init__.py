@@ -3,6 +3,7 @@
 #
 from system import System
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from auxiliary import showElapsedTime, print_matrix, projectionOperator
 from auxiliary import PauliBlock, semiCirle
 from scipy.special import p_roots
@@ -54,6 +55,9 @@ class Calculator():
 
             "omegaList":np.array([0,]),
 
+            "greenFuncOmegaBatch":1,
+            "greenFuncNWorkers":1,
+
             "verbose":0,
         }
         defaultSettings.update(kwarg)
@@ -71,6 +75,8 @@ class Calculator():
         if type(self.phaseshift)==np.ndarray: self.phase=True
         self.fermiList=defaultSettings["fermiList"]
         self.omegaList=defaultSettings["omegaList"]
+        self.greenFuncOmegaBatch=max(1, int(defaultSettings["greenFuncOmegaBatch"]))
+        self.greenFuncNWorkers=max(1, int(defaultSettings["greenFuncNWorkers"]))
 
         self.verbose=defaultSettings["verbose"]
         if self.verbose==2: print("initializing calculator module finished")
@@ -3041,11 +3047,36 @@ class RetardedLatticeGreenFunc(Energy):
         k_frac = k_index / np.array(self.kgrid)[None,:]
         lattice_factors = np.exp(-2j*np.pi*(k_frac @ latVecList.T)).T
 
+        selected_vectors_conj = selected_vectors.conj()
+
+        def calc_omega_batch(iomega_start, omega_batch):
+            denominator = 1.0/(omega_batch[:, None, None] - energies[None, :, :] + 1j*self.eta)
+            G_k = np.einsum(
+                'kai,wki,kbi->wkab',
+                selected_vectors, denominator, selected_vectors_conj,
+                optimize=True,
+            )
+            rG_batch = np.einsum('lk,wkab->wlab', lattice_factors, G_k, optimize=True) / nkpt
+            return iomega_start, rG_batch
+
         self.rG_w_lat = np.zeros((len(omegaList), nlat, norb_reduced, norb_reduced), dtype=complex)
-        for iw, w in enumerate(omegaList):
-            denominator = 1.0/(w - energies + 1j*self.eta)
-            G_k = np.einsum('kai,ki,kbi->kab', selected_vectors, denominator, selected_vectors.conj(), optimize=True)
-            self.rG_w_lat[iw]=np.einsum('lk,kab->lab', lattice_factors, G_k, optimize=True) / nkpt
+        omega_batches = [
+            (iomega_start, omegaList[iomega_start:iomega_start+self.greenFuncOmegaBatch])
+            for iomega_start in range(0, len(omegaList), self.greenFuncOmegaBatch)
+        ]
+        if self.greenFuncNWorkers == 1 or len(omega_batches) == 1:
+            for iomega_start, omega_batch in omega_batches:
+                _, rG_batch = calc_omega_batch(iomega_start, omega_batch)
+                self.rG_w_lat[iomega_start:iomega_start+len(omega_batch)] = rG_batch
+        else:
+            with ThreadPoolExecutor(max_workers=self.greenFuncNWorkers) as executor:
+                futures = [
+                    executor.submit(calc_omega_batch, iomega_start, omega_batch)
+                    for iomega_start, omega_batch in omega_batches
+                ]
+                for future in futures:
+                    iomega_start, rG_batch = future.result()
+                    self.rG_w_lat[iomega_start:iomega_start+rG_batch.shape[0]] = rG_batch
         
         if self.verbose:
             showElapsedTime(extraInfo=f"retarded lattice Green function on {len(omegaList)} energies, {nlat} lattice vectors finished")
