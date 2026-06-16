@@ -1,5 +1,7 @@
 import numpy as np
+import copy
 from scipy import linalg
+from scipy.special import j0
 from auxiliary import showElapsedTime, pseudoRotation, print_matrix, getWholeSymmetryOperator
 from auxiliary import PauliBlockSigmaNorm
 from auxiliary import SYMPREC
@@ -1803,6 +1805,71 @@ class System:
         if self.RRRHam_R is not None: self.getRRRHam_R()
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+
+    def applyFloquetPeierlsDressing(self, vectorPotentialCos, vectorPotentialSin=None):
+        """
+        Apply the stage-1 off-resonant Floquet Peierls dressing in place.
+
+        The time-dependent vector potential is represented as
+        ``A(t) = A_cos cos(omega t) + A_sin sin(omega t)`` in Cartesian
+        inverse-Angstrom units. The zeroth Fourier component renormalizes each
+        hopping by
+
+        ``J0(sqrt((A_cos dot d)^2 + (A_sin dot d)^2))``,
+
+        where ``d = R + r_target - r_source`` is the hopping displacement in
+        Angstrom. For linearly polarized light, pass only ``vectorPotentialCos``.
+        For circular or elliptical light, pass both cosine and sine components.
+
+        This is only the time-averaged Peierls term ``H_eff = H_0``. It does not
+        include the van Vleck commutator correction.
+        """
+        vectorPotentialCos = np.asarray(vectorPotentialCos, dtype=float).reshape(3)
+        if vectorPotentialSin is None:
+            vectorPotentialSin = np.zeros(3)
+        vectorPotentialSin = np.asarray(vectorPotentialSin, dtype=float).reshape(3)
+
+        if self.verbose:
+            print("\n--- Applying stage-1 Floquet Peierls dressing ---")
+            print(f"A_cos = {vectorPotentialCos} 1/Angstrom")
+            print(f"A_sin = {vectorPotentialSin} 1/Angstrom")
+
+        r_source = self.rList[:, :, None]
+        r_target = self.rList[:, None, :]
+        intra_cell_displacement = r_target - r_source
+
+        dressing_R = np.zeros((self.nRvec, self.norbs, self.norbs), dtype=float)
+        for iR, Rvec in enumerate(self.iRvec):
+            displacement = (Rvec @ self.lattice)[:, None, None] + intra_cell_displacement
+            phase_cos = np.einsum('a,aij->ij', vectorPotentialCos, displacement, optimize=True)
+            phase_sin = np.einsum('a,aij->ij', vectorPotentialSin, displacement, optimize=True)
+            dressing_R[iR] = j0(np.sqrt(phase_cos**2 + phase_sin**2))
+
+        if hasattr(self, 'ham_R') and self.ham_R is not None:
+            self.ham_R = self.ham_R * dressing_R
+        if hasattr(self, 'energy_R') and self.energy_R is not None:
+            self.energy_R = self.energy_R * dressing_R
+
+        self.getRHam_R()
+        if self.RRHam_R is not None: self.getRRHam_R()
+        if self.RRRHam_R is not None: self.getRRRHam_R()
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+
+        if self.verbose:
+            print("--- Stage-1 Floquet Peierls dressing complete ---\n")
+
+    def getFloquetPeierlsDressedModel(self, vectorPotentialCos, vectorPotentialSin=None):
+        """
+        Return a deep-copied model with stage-1 Floquet Peierls dressing applied.
+
+        See ``applyFloquetPeierlsDressing`` for the physical convention and
+        units. This non-mutating wrapper is usually safer for comparing dressed
+        and undressed exchange couplings.
+        """
+        dressed_model = copy.deepcopy(self)
+        dressed_model.applyFloquetPeierlsDressing(vectorPotentialCos, vectorPotentialSin)
+        return dressed_model
 
     def rotateSpinBasisToGlobal(self, alpha, beta, gamma=0.0):
         """
