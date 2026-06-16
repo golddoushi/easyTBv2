@@ -1,3 +1,4 @@
+import os
 import auxiliary as aux
 import paramReader as param
 import numpy as np
@@ -111,6 +112,52 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
         "iRvec":iRvec,
         "iRvecIndex":iRvecIndex,
         "mp_grid":mp_grid,
+    }
+
+def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated):
+    '''Capable to read double hr.dat files for the colinear magnetic models'''
+    single_path = '%s/%s_hr.dat'%(mainDir, hamR)
+    up_path = '%s/%s.up_hr.dat'%(mainDir, hamR)
+    dn_path = '%s/%s.dn_hr.dat'%(mainDir, hamR)
+    if spinSeparated is None:
+        spinSeparated = (
+            ispin == 2
+            and not os.path.exists(single_path)
+            and os.path.exists(up_path)
+            and os.path.exists(dn_path)
+        )
+
+    if not spinSeparated:
+        return readHrDat(single_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format)
+
+    assert ispin == 2, "separated spin-channel Hamiltonians require ispin=2"
+    assert os.path.exists(up_path), f"cannot find spin-up Hamiltonian file {up_path}"
+    assert os.path.exists(dn_path), f"cannot find spin-down Hamiltonian file {dn_path}"
+
+    hr_up = readHrDat(up_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format)
+    hr_dn = readHrDat(dn_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format)
+
+    assert hr_up['ham_R'].shape == hr_dn['ham_R'].shape, (
+        f"spin-up and spin-down Hamiltonians have different shapes: "
+        f"{hr_up['ham_R'].shape} vs {hr_dn['ham_R'].shape}"
+    )
+    assert set(map(tuple, hr_up['iRvec'])) == set(map(tuple, hr_dn['iRvec'])), (
+        "spin-up and spin-down Hamiltonians do not contain the same R vectors"
+    )
+
+    nRvec = len(hr_up['iRvec'])
+    norb_spin = hr_up['ham_R'].shape[-1]
+    ham_R = np.zeros((nRvec, 2*norb_spin, 2*norb_spin), dtype=complex)
+    ham_R[:, :norb_spin, :norb_spin] = hr_up['ham_R']
+    for iR, Rvec in enumerate(hr_up['iRvec']):
+        iR_dn = hr_dn['iRvecIndex'][tuple(Rvec)]
+        ham_R[iR, norb_spin:, norb_spin:] = hr_dn['ham_R'][iR_dn]
+
+    return {
+        "ham_R": ham_R,
+        "iRvec": hr_up['iRvec'],
+        "iRvecIndex": hr_up['iRvecIndex'],
+        "mp_grid": hr_up['mp_grid'],
     }
 
 def readRDat(filepath,ignoreImagPart=False,cutoff=-1,):

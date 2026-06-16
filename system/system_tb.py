@@ -1,13 +1,14 @@
 import numpy as np
 from system import System
 from auxiliary import obtainProjectionsPlain, obtainProjections
-from fileio import readHrDat, readPOSCAR
+from fileio import readFullHrDat, readPOSCAR
 
 class System_tb(System):
 
     def __init__(self,
                  mainDir:str,hamR:str="wannier90",ignoreImagPart=False,cutoff=-1.,format="VASP",
-                 poscar:str="POSCAR",projections:dict=None,ispin=1,
+                 poscar:str="POSCAR",projections:dict=None,
+                 ispin=1,spinSeparated=None,
                  ) -> None:
         '''
         The system in basis of tight-binding orbitals, with convention as below:
@@ -37,6 +38,12 @@ class System_tb(System):
           sequence of atomic orbitals, e.g.,
         - ispin : int
         The number of spin tunnels. NOTE: set ispin=2 for spinor case
+        - spinSeparated : None | bool
+        If True, read ``{hamR}.up_hr.dat`` and ``{hamR}.dn_hr.dat`` as separate
+        collinear spin channels and build a block-diagonal spinful Hamiltonian.
+        If None, this mode is selected automatically when ``ispin=2`` and the
+        single ``{hamR}_hr.dat`` file is absent but both spin-channel files are
+        present.
 
           projections={
               "Fe":("s","s","p","p","d","d"),
@@ -50,7 +57,7 @@ class System_tb(System):
         # atomic orbital basis are normalized but nonothorgonal
         self.overlap=False
         # read in real-space ham
-        hrDat=readHrDat('%s/%s_hr.dat'%(mainDir,hamR),ignoreImagPart=ignoreImagPart,overlap=False,format=format)
+        hrDat=readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated)
         self.iRvec=hrDat['iRvec']
         self.iRvecIndex=hrDat['iRvecIndex']
         self.nRvec=len(self.iRvec)

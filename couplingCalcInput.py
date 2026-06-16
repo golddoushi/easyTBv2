@@ -37,8 +37,8 @@ showElapsedTime(extraInfo="Exchange coupling calc. start")
 exCoup = ExchangeCoupling(model=model, kgrid=kgrid, 
                           fermiList = fermiList, eta=0.0001,
                           exchangeRoutes = routes, symmetricExchangeSign=1,
-                          lowOrder=60,highOrder=80,Jcvg=-1e-4,verbose=True,
-                          greenFuncOmegaBatch=1, greenFuncNWorkers=8) # batch size * nworkers should be close to norders
+                          lowOrder=60,highOrder=80,Jcvg=-1e-4,
+                          verbose=True,greenFuncOmegaBatch=1, greenFuncNWorkers=8) # nworkers > 1, corresponds to parallel runs
 
 showElapsedTime(extraInfo="Exchange coupling calc. finished")
 
