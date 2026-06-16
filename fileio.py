@@ -262,6 +262,181 @@ def writeJmatV2(mainDir, exch, supercellSize):
                     J, Jani[0,0], Jani[1,1], Jani[0,1],
                     Dx, Dy, Dz))
 
+def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1),
+                           singleIonAnisotropy=(0.0, 0.0, 0.0),
+                           temperature=(100, 500, 16), field=(0, 0.1, 1),
+                           sweeps=(40000, 80000, 0), modelType="Ising",
+                           algorithm="Metropolis", ncores=4, spin=1.0,
+                           spinStates=None, magneticAtoms=None,
+                           measurePair=None, filename="MCSolver.txt",
+                           fermiIndex=0):
+    """
+    Write an MCSOLVER input file from a new-framework ExchangeCoupling object.
+
+    Energies in ``exch`` and ``singleIonAnisotropy`` are assumed to be in eV and
+    are converted to Kelvin. The single-ion anisotropy argument is ordered as
+    ``(Dx, Dy, Dz)`` and can be either a length-3 sequence or a dict keyed by
+    atom id.
+    """
+    EV2K = 11588.75
+
+    def as_axis_tuple(value, name):
+        if np.isscalar(value):
+            out = np.ones(3, dtype=int)
+            out[:] = int(value)
+        else:
+            out = np.asarray(value, dtype=int).reshape(3)
+        out_masked = np.ones(3, dtype=int)
+        for axis in pbc:
+            out_masked[int(axis)] = int(out[int(axis)])
+        return tuple(out_masked)
+
+    def scalar_for_atom(value, atom_id, default):
+        if isinstance(value, dict):
+            return value.get(atom_id, default)
+        if np.isscalar(value):
+            return value
+        return value[atom_id]
+
+    def vector_for_atom(value, atom_id, default):
+        if isinstance(value, dict):
+            return value.get(atom_id, default)
+        value = np.asarray(value, dtype=float)
+        if value.shape == (3,):
+            return value
+        return value[atom_id]
+
+    def spin_for_atom(atom_id):
+        val = scalar_for_atom(spin, atom_id, 1.0)
+        return float(val)
+
+    def spin_state_for_atom(atom_id):
+        if spinStates is None:
+            return np.sign(spin_for_atom(atom_id)) or 1.0
+        val = scalar_for_atom(spinStates, atom_id, 1.0)
+        if isinstance(val, (list, tuple, np.ndarray)):
+            val = np.asarray(val, dtype=float)
+            if val.shape == (3,):
+                return float(val[2])
+        return float(val)
+
+    def anisotropy_for_atom(atom_id):
+        val = vector_for_atom(singleIonAnisotropy, atom_id, (0.0, 0.0, 0.0))
+        return np.asarray(val, dtype=float).reshape(3)
+
+    def exchange_tensor(ifermi, iroute):
+        J = exch.exchangeEnergy[ifermi, iroute]
+        Jani = exch.Jani[ifermi, iroute]
+        Dx, Dy, Dz = exch.DMI[ifermi, iroute, :]
+        return np.array([
+            [J + Jani[0,0], Jani[0,1] + Dz, -Dy],
+            [Jani[0,1] - Dz, J + Jani[1,1], Dx],
+            [Dy, -Dx, J],
+        ])
+
+    repetition = as_axis_tuple(repetition, "repetition")
+    model = exch.model
+    if magneticAtoms is None:
+        magneticAtoms = sorted({
+            int(route["source_atom"]) for route in exch.exchangeRoutes
+        } | {
+            int(route["target_atom"]) for route in exch.exchangeRoutes
+        })
+    else:
+        magneticAtoms = [int(atom_id) for atom_id in magneticAtoms]
+    atom_to_mc_index = {atom_id: iorb for iorb, atom_id in enumerate(magneticAtoms)}
+
+    if measurePair is None:
+        anti_index = 0
+        first_spin = spin_state_for_atom(magneticAtoms[0])
+        for atom_id in magneticAtoms:
+            if spin_state_for_atom(atom_id) * first_spin < 0:
+                anti_index = atom_to_mc_index[atom_id]
+                break
+        measurePair = (0, anti_index, (0,0,0))
+
+    Tmin, Tmax, nT = temperature
+    Hmin, Hmax, nH = field
+    thermalization, statistics, relax_step = sweeps
+    outpath = mainDir + filename
+
+    written_routes = [
+        (iroute, route) for iroute, route in enumerate(exch.exchangeRoutes)
+        if int(route["source_atom"]) in atom_to_mc_index and int(route["target_atom"]) in atom_to_mc_index
+    ]
+
+    with open(outpath, 'w') as f:
+        f.write("This is mcsolver's save file, version: 3.0\n")
+        f.write('Lattice:\n')
+        for vec in model.lattice:
+            f.write('%.9f %.9f %.9f\n'%(vec[0], vec[1], vec[2]))
+        f.write('Supercell used in MC simulations:\n')
+        f.write('%d %d %d\n'%repetition)
+        f.write('Orbitals in cell:\n')
+        f.write('%d\n'%len(magneticAtoms))
+        f.write('Positions, initial spin states and onsite-anisotropy of every orbital:\n')
+        for atom_id in magneticAtoms:
+            iorb = atom_to_mc_index[atom_id]
+            atom_type = int(model.posinfo['itype list'][atom_id])
+            spin_abs = abs(spin_for_atom(atom_id))
+            spin_state = spin_abs * np.sign(spin_state_for_atom(atom_id))
+            if spin_state == 0:
+                spin_state = spin_abs
+            pos = model.posinfo['pos ions (frac.)'][atom_id]
+            Dx, Dy, Dz = anisotropy_for_atom(atom_id) * EV2K / spin_abs**2
+            f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dz: %.9f Dx: %.9f Dy: %.9f\n'%(
+                iorb, atom_type, spin_state, pos[0], pos[1], pos[2], Dz, Dx, Dy
+            ))
+
+        f.write('Bonds:\n')
+        f.write('%d\n'%len(written_routes))
+        f.write('id, source, target, overLat, Jx, Jy, Jz, Jxy, Jxz, Jyz, Jyx, Jzx, Jzy of each bond:\n')
+        ifermi = int(fermiIndex)
+        for ibond, (iroute, route) in enumerate(written_routes):
+            source_atom = int(route["source_atom"])
+            target_atom = int(route["target_atom"])
+            s1 = abs(spin_for_atom(source_atom))
+            s2 = abs(spin_for_atom(target_atom))
+            factor = EV2K / abs(s1 * s2)
+            Jmat = exchange_tensor(ifermi, iroute) * factor
+            f.write('bond %d: Jx %.9f Jy %.9f Jz %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
+                ibond, Jmat[0,0], Jmat[1,1], Jmat[2,2],
+                Jmat[0,1], Jmat[0,2], Jmat[1,2],
+                Jmat[1,0], Jmat[2,0], Jmat[2,1],
+                atom_to_mc_index[source_atom], atom_to_mc_index[target_atom],
+                *route["overlat"]
+            ))
+
+        f.write('Dipole long range correction:\n')
+        f.write('alpha 0.0\n')
+        f.write('Temperature scanning region:\n')
+        f.write('Tmin %.9g Tmax %.9g nT %d\n'%(Tmin, Tmax, int(nT)))
+        f.write('Field scanning region:\n')
+        f.write('Hmin %.9g Hmax %.9g nH %d\n'%(Hmin, Hmax, int(nH)))
+        f.write('Measurement:\n')
+        f.write('measure the correlation function between orb%d and orb%d over [%d %d %d]\n'%(
+            int(measurePair[0]), int(measurePair[1]), *measurePair[2]
+        ))
+        f.write('OrbGroup: 1\n')
+        f.write('Supergroup\n')
+        f.write('group0 orb0-orb0\n')
+        f.write('>>>       Topological section      <<<\n')
+        f.write('LocalCircuit per cell: 0 (set to 0 to skip the calc. for topo. Q)\n')
+        f.write('>>>   End of Topological section   <<<\n')
+        f.write('Sweeps for thermalization and statistics, and relaxiation step for each sweep:\n')
+        f.write('%d %d %d\n'%(int(thermalization), int(statistics), int(relax_step)))
+        f.write('Model type:\n')
+        f.write(f'{modelType}\n')
+        f.write('Algorithm:\n')
+        f.write(f'{algorithm}\n')
+        f.write('XAxis type:\n')
+        f.write('T\n')
+        f.write('Distribution output frame: 0 \n')
+        f.write('Ncores:\n')
+        f.write('%d\n'%int(ncores))
+
+    return outpath
+
 def writeVolumeData(filePath:str,lat: list | np.ndarray,grid_size:tuple | list | np.ndarray,grid_data:np.ndarray):
     '''
     output volume data in the format of CHGCAR
