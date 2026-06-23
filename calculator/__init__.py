@@ -2139,6 +2139,135 @@ class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
+class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001,
+                 n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
+        '''
+        Computing IFE by time propagation with the finite Bloch-acceleration
+        Hamiltonian H(k-A(t)), evaluated directly from real-space hoppings.
+
+        This is the nonperturbative counterpart of InverseFaradayEffect_TDSE.
+        It currently supports orthogonal local bases only.
+
+        Indexing
+        --------
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=float)
+        '''
+        assert len(velocityProjectionList) == 0, "Velocity projections are not used in Bloch-acceleration IFE"
+        super().__init__(**kwarg)
+        assert not self.model.overlap, "Bloch-acceleration TDSE currently supports only orthogonal bases"
+
+        nbasis = self.energies.shape[-1]
+        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]: M_K += self.spin_K
+        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
+
+        self._R_cart = self.model.iRvec @ self.model.lattice
+        self._r_cart = self.model.rList
+        if not self.phase:
+            self._ham_R_phase = self.model.ham_R
+        else:
+            assert len(self.phaseshift) == self.model.nRvec, f'{len(self.phaseshift)=} {self.model.nRvec=}'
+            self._ham_R_phase = self.model.ham_R * self.phaseshift[:, None, None]
+
+        self.chi_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
+        self.chi_TDSE_symmetric = np.zeros_like(self.chi_TDSE, dtype=float)
+        self.chi_TDSE_quadrature = np.zeros_like(self.chi_TDSE, dtype=float)
+
+        H_diag = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+        for iband in range(nbasis):
+            H_diag[..., iband, iband] = self.energies[..., iband]
+
+        for ifermi, fermi in enumerate(self.fermiList):
+            f = np.int8(self.energies < fermi)
+            rho0 = np.zeros_like(H_diag)
+            for iband in range(nbasis):
+                rho0[..., iband, iband] = f[..., iband]
+
+            M0 = np.zeros(3)
+            for ic in range(3):
+                M_val0 = np.sum(rho0 * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1, -2)).real
+                M0[ic] = np.sum(M_val0)
+
+            for iomega, Omega in enumerate(self.omegaList):
+                period = 2 * np.pi / Omega
+                dt = period / n_steps_per_cycle
+                n_cycles_transient = int(np.ceil((10.0 / self.eta) / period))
+                n_cycles_measure = 1
+
+                def run_drive(directions, phases):
+                    rho = rho0.copy()
+                    t = 0.0
+                    for _ in range(n_cycles_transient * n_steps_per_cycle):
+                        rho = self._rk4_step_bloch_acceleration(rho, t, dt, directions, phases, Omega, rho0, E0)
+                        t += dt
+
+                    M_dc = np.zeros(3)
+                    for _ in range(n_cycles_measure * n_steps_per_cycle):
+                        rho = self._rk4_step_bloch_acceleration(rho, t, dt, directions, phases, Omega, rho0, E0)
+                        t += dt
+
+                        for ic in range(3):
+                            M_val = np.sum(rho * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1, -2)).real
+                            M_dc[ic] += np.sum(M_val) / (n_cycles_measure * n_steps_per_cycle)
+
+                    return (M_dc - M0) / E0**2 / np.prod(self.kgrid)
+
+                diagonal_response = np.zeros((3, 3))
+                for ialpha in range(3):
+                    response = run_drive((ialpha,), (0.0,))
+                    diagonal_response[ialpha] = response
+                    self.chi_TDSE[ifermi, iomega, ialpha, ialpha, :] = response
+                    self.chi_TDSE_symmetric[ifermi, iomega, ialpha, ialpha, :] = response
+
+                if include_offdiag:
+                    for ialpha in range(3):
+                        for ibeta in range(ialpha + 1, 3):
+                            same_phase = run_drive((ialpha, ibeta), (0.0, 0.0))
+                            cross_symmetric = same_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
+
+                            quadrature_phase = run_drive((ialpha, ibeta), (0.0, -np.pi / 2))
+                            cross_quadrature = quadrature_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
+
+                            self.chi_TDSE_symmetric[ifermi, iomega, ialpha, ibeta, :] = cross_symmetric
+                            self.chi_TDSE_symmetric[ifermi, iomega, ibeta, ialpha, :] = cross_symmetric
+                            self.chi_TDSE_quadrature[ifermi, iomega, ialpha, ibeta, :] = cross_quadrature
+                            self.chi_TDSE_quadrature[ifermi, iomega, ibeta, ialpha, :] = -cross_quadrature
+
+                            self.chi_TDSE[ifermi, iomega, ialpha, ibeta, :] = 0.5 * (cross_symmetric - cross_quadrature)
+                            self.chi_TDSE[ifermi, iomega, ibeta, ialpha, :] = 0.5 * (cross_symmetric + cross_quadrature)
+
+        self.chi_IFE = self.chi_TDSE
+        self.projected_sigma = self.chi_TDSE[None, None, None, ...]
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Bloch-acceleration TDSE IFE finished")
+
+    def _hamiltonian_eigenbasis_at_vector_potential(self, A_cart):
+        phase_A = np.exp(-1j * (self._R_cart @ A_cart))
+        orbital_phase = np.exp(1j * (A_cart @ self._r_cart))
+        ham_R_A = (self._ham_R_phase * phase_A[:, None, None]
+                   * orbital_phase[None, :, None] * orbital_phase.conj()[None, None, :])
+        ham_R_grid = np.zeros(self.kgrid + (self.model.norbs, self.model.norbs), dtype=complex)
+        for iR, Rvec in enumerate(self.model.iRvec):
+            ham_R_grid[tuple(Rvec)] = ham_R_A[iR]
+        ham_K_AO = np.fft.ifftn(ham_R_grid, axes=(0, 1, 2)) * np.prod(self.kgrid)
+        ham_K_AO = 0.5 * (ham_K_AO + ham_K_AO.conj().swapaxes(-1, -2))
+        return self.vectors.conj().swapaxes(-2, -1) @ ham_K_AO @ self.vectors
+
+    def _rk4_step_bloch_acceleration(self, rho, t, dt, directions, phases, Omega, rho0, E0):
+        def dRho_dt(rho_state, time_val):
+            A_t = np.zeros(3)
+            for direction, phase in zip(directions, phases):
+                A_t[direction] += -2 * E0 / Omega * np.sin(Omega * time_val + phase)
+            H_t = self._hamiltonian_eigenbasis_at_vector_potential(A_t)
+            comm = H_t @ rho_state - rho_state @ H_t
+            return -1j * comm - self.eta * (rho_state - rho0)
+
+        k1 = dRho_dt(rho, t)
+        k2 = dRho_dt(rho + 0.5 * dt * k1, t + 0.5 * dt)
+        k3 = dRho_dt(rho + 0.5 * dt * k2, t + 0.5 * dt)
+        k4 = dRho_dt(rho + dt * k3, t + dt)
+        return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+
 class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
         '''
