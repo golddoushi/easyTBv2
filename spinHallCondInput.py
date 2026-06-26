@@ -155,7 +155,7 @@ def run():
     
     '''
     # check band intepolation
-    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,)
+    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8, backend="thread")
     energies,spin_eig,orbital_eig=np.zeros((calc.nkpt,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float)
     for result in calc.results:
         energies[result['indices']]   =result['energies']

@@ -1,6 +1,7 @@
 # Module to implement the parallel tasks
 # 
 from multiprocessing import Pool
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
@@ -152,7 +153,8 @@ class BZLineTask:
                  args: dict=dict(),
                  KPOINTS="./KPOINTS",
                  mode="run",
-                 ncores=1) -> None:
+                 ncores=1,
+                 backend="process") -> None:
         '''
         Conduct parallel tasks along a 1D k-path defined in a KPOINTS file.
         Splits the k-path into chunks and distributes them across cores to minimize IPC overhead.
@@ -171,9 +173,16 @@ class BZLineTask:
             "run" to run the tasks directly, otherwise, only show the partition info.
         - ncores : int
             Number of parallel processes.
+        - backend : "process" | "thread"
+            Parallel execution backend. The process backend preserves the old
+            behavior. The thread backend shares the model object between workers,
+            avoiding expensive model pickling/copying for read-only k-line tasks.
         '''
         self.KPOINTS = KPOINTS
         self.ncores = ncores
+        self.backend = backend
+        if self.backend not in ("process", "thread"):
+            raise ValueError(f"Unsupported BZLineTask backend {self.backend!r}. Use 'process' or 'thread'.")
         
         # 1. Read the KPOINTS file
         with open(self.KPOINTS, "r") as fin:
@@ -207,10 +216,9 @@ class BZLineTask:
             newTask.update(args)
             tasks.append(newTask)
             
-        print(f"Split k-path into {len(tasks)} chunks for {self.ncores} cores.")
+        print(f"Split k-path into {len(tasks)} chunks for {self.ncores} cores using {self.backend} backend.")
         
         # 3. Execute parallel mapping
-        pool = Pool(processes=ncores)
         self.results = []
         
         if ncores == 1:
@@ -219,12 +227,21 @@ class BZLineTask:
                 result = taskFunc(task)
                 self.results.append(result)
                 showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
+        elif self.backend == "process":
+            tasks[0]['verbose']=2 # only output one process's information when parallel run
+            with Pool(processes=ncores) as pool:
+                for result in pool.imap_unordered(taskFunc, tasks):
+                    self.results.append(result)
+                    if len(self.results) % ncores == 1:
+                        showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
         else:
             tasks[0]['verbose']=2 # only output one process's information when parallel run
-            for result in pool.imap_unordered(taskFunc, tasks):
-                self.results.append(result)
-            pool.close()
-            pool.join()
+            with ThreadPoolExecutor(max_workers=ncores) as executor:
+                futures = [executor.submit(taskFunc, task) for task in tasks]
+                for future in as_completed(futures):
+                    self.results.append(future.result())
+                    if len(self.results) % ncores == 1:
+                        showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
         
         showElapsedTime(extraInfo="1D K-Path integration finished")
 
