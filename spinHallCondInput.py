@@ -15,7 +15,7 @@ from task import solvePDOS, solveVelocity, solveVelocity_diag
 from task import solveSHC, solveSHC_diag, solveOHC, solveStGC, solveAHC, solveAHC_LG_DM
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
-from task import solveIFE_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
+from task import solveIFE_TDSE, solveIFE_BlochAcceleration_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
 from task import solveIFTorque_TDSE, solveIFTorque_VG_DM, solveIFTorque_LG_DM
 #+------------+
 #| Line tasks |
@@ -35,7 +35,7 @@ def run():
         mainDir=mainDir,
         #hamR="wannier90",
         #hamR="omx",
-        hamR="BN_fm_rashiba",
+        hamR="BN_afm_soc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -200,7 +200,7 @@ def run():
     recordOmegaIndexList=[41]
     recordFermiIndexList=[0]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveIFTorque_VG_DM, 
+    calc=BZGridTask(model, solveIFE_TDSE,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

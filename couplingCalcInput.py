@@ -5,13 +5,15 @@ from fileio import writeJmatV2, writeMCSolverInputFile
 from auxiliary import showElapsedTime
 
 # 1. define model basic infomation
-mainDir="./mcalc/FeCl2/"
+mainDir="./mcalc/BN/"
 model = System_tb(
         mainDir=mainDir,
-        #hamR="BN_fm_soc",
+        hamR="BN_afm_soc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
+            "B":(0,),
+            "N":(0,),
             "Fe":(0,1,2),
             "Cl":(0,1),
         },
@@ -24,15 +26,15 @@ atomicMagMomList=[
 ]*1+[
     np.array([0, 0, 0]),
 ]*2
-model.symmerizeHamAndOverlap(
-    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
-)
+#model.symmerizeHamAndOverlap(
+#    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
+#)
 
 # 3. compute the exchange coupling
 kgrid=(56, 56, 1)
 pbc=(0, 1, )
-fermiList=[-2.5]
-routes=model.classifyExchangeRoutes(sourceAtoms=[0,], pbc=pbc, maxRange=5, calRange=5, )
+fermiList=[0.0]
+routes=model.classifyExchangeRoutes(sourceAtoms=[0,1,], pbc=pbc, maxRange=5, calRange=5, )
 showElapsedTime(extraInfo="Exchange coupling calc. start")
 exCoup = ExchangeCoupling(model=model, kgrid=kgrid, 
                           fermiList = fermiList, eta=0.0001,
@@ -51,8 +53,8 @@ for ifermi, fermi in enumerate(fermiList):
                         ex["exchangeEnergy"][ifermi]/2*1000,ex["Jani"][ifermi,0,0]/2*1000,ex["Jani"][ifermi,1,1]/2*1000,
                         ex["Jani"][ifermi,0,1]/2*1000,*ex["DMI"][ifermi,:]/2*1000,))
 
-writeMCSolverInputFile(mainDir, exCoup, repetition=16, pbc=pbc,
-                           singleIonAnisotropy=(0.0, 0.0, 0.0),
+writeMCSolverInputFile(mainDir, exCoup, repetition=16, pbc=pbc, offdiag=False, 
+                           singleIonAnisotropy=(0.0, 0.0, 0.0),   # anisotropy energy per atom in eV
                            temperature=(100, 500, 16), field=(0, 0.1, 1),
                            sweeps=(40000, 80000, 0), modelType="Heisenberg",
                            algorithm="Metropolis", ncores=8, spin=1.0,

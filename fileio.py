@@ -297,9 +297,9 @@ def writeJmatV2(mainDir, exch, supercellSize):
                 Jani = exch.Jani[ifermi,iroute]
                 Dx, Dy, Dz = exch.DMI[ifermi,iroute,:]
                 Jmat = np.array([
-                    [J + Jani[0,0], Jani[0,1] + Dz, -Dy],
-                    [Jani[0,1] - Dz, J + Jani[1,1], Dx],
-                    [Dy, -Dx, J],
+                    [ J + Jani[0,0], Jani[0,1] + Dz, -Dy],
+                    [Jani[0,1] - Dz,  J + Jani[1,1],  Dx],
+                    [            Dy,            -Dx,   J],
                 ])
                 fJ.write('%14.6e%3d%7.3f%4d%4d%4d%4d%4d%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e%14.6e\n'%(
                     fermi, (iroute+1), route["bond_length"], route["source_atom"], route["target_atom"], *route["overlat"],  
@@ -309,7 +309,7 @@ def writeJmatV2(mainDir, exch, supercellSize):
                     J, Jani[0,0], Jani[1,1], Jani[0,1],
                     Dx, Dy, Dz))
 
-def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1),
+def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=False,
                            singleIonAnisotropy=(0.0, 0.0, 0.0),
                            temperature=(100, 500, 16), field=(0, 0.1, 1),
                            sweeps=(40000, 80000, 0), modelType="Ising",
@@ -324,6 +324,9 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1),
     are converted to Kelvin. The single-ion anisotropy argument is ordered as
     ``(Dx, Dy, Dz)`` and can be either a length-3 sequence or a dict keyed by
     atom id.
+
+    offdiag = True, then only output a nearly isotropic Heisenberg spin model, in 
+    which all the anisotropy are expressed with single-ion anisotropy
     """
     EV2K = 11588.75
 
@@ -376,9 +379,9 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1),
         Jani = exch.Jani[ifermi, iroute]
         Dx, Dy, Dz = exch.DMI[ifermi, iroute, :]
         return np.array([
-            [J + Jani[0,0], Jani[0,1] + Dz, -Dy],
-            [Jani[0,1] - Dz, J + Jani[1,1], Dx],
-            [Dy, -Dx, J],
+            [ J + Jani[0,0], Jani[0,1] + Dz, -Dy],
+            [Jani[0,1] - Dz,  J + Jani[1,1],  Dx],
+            [            Dy,            -Dx,   J],
         ])
 
     repetition = as_axis_tuple(repetition, "repetition")
@@ -431,8 +434,8 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1),
                 spin_state = spin_abs
             pos = model.posinfo['pos ions (frac.)'][atom_id]
             Dx, Dy, Dz = anisotropy_for_atom(atom_id) * EV2K / spin_abs**2
-            f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dz: %.9f Dx: %.9f Dy: %.9f\n'%(
-                iorb, atom_type, spin_state, pos[0], pos[1], pos[2], Dz, Dx, Dy
+            f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dx: %.9f Dy: %.9f Dz: %.9f\n'%(
+                iorb, atom_type, spin_state, pos[0], pos[1], pos[2], Dx, Dy, Dz
             ))
 
         f.write('Bonds:\n')
@@ -446,13 +449,20 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1),
             s2 = abs(spin_for_atom(target_atom))
             factor = EV2K / abs(s1 * s2)
             Jmat = exchange_tensor(ifermi, iroute) * factor
-            f.write('bond %d: Jx %.9f Jy %.9f Jz %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
-                ibond, Jmat[0,0], Jmat[1,1], Jmat[2,2],
-                Jmat[0,1], Jmat[0,2], Jmat[1,2],
-                Jmat[1,0], Jmat[2,0], Jmat[2,1],
-                atom_to_mc_index[source_atom], atom_to_mc_index[target_atom],
-                *route["overlat"]
-            ))
+            if offdiag:
+                f.write('bond %d: Jx %.9f Jy %.9f Jz %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(
+                    ibond, Jmat[0,0], Jmat[1,1], Jmat[2,2],
+                    Jmat[0,1], Jmat[0,2], Jmat[1,2],
+                    Jmat[1,0], Jmat[2,0], Jmat[2,1],
+                    atom_to_mc_index[source_atom], atom_to_mc_index[target_atom],
+                    *route["overlat"]
+                ))
+            else:
+                f.write('bond %d: Jx %.9f Jy %.9f Jz %.9f Jxy 0 Jxz 0 Jyz 0 Jyx 0 Jzx 0 Jzy 0 orb %d to orb %d over [%d %d %d]\n'%(
+                    ibond, Jmat[2,2], Jmat[2,2], Jmat[2,2],
+                    atom_to_mc_index[source_atom], atom_to_mc_index[target_atom],
+                    *route["overlat"]
+                ))
 
         f.write('Dipole long range correction:\n')
         f.write('alpha 0.0\n')
