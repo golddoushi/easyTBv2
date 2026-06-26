@@ -1,7 +1,7 @@
 import numpy as np
 import copy
 from scipy import linalg
-from scipy.special import j0
+from scipy.special import jv
 from auxiliary import showElapsedTime, pseudoRotation, print_matrix, getWholeSymmetryOperator
 from auxiliary import PauliBlockSigmaNorm
 from auxiliary import SYMPREC
@@ -271,7 +271,7 @@ class System:
 
         Indexing: orbital[icomponent=0, 1, 2][iorb, jorb].
 
-        spin[0], spin[1], spin[2] correspond to Lx,  Ly,  Lz.
+        orbital[0], orbital[1], orbital[2] correspond to Lx,  Ly,  Lz.
         '''
         self.orbital=np.zeros((3,self.norbs,self.norbs),dtype=complex)
 
@@ -1149,8 +1149,130 @@ class System:
             for iorb in range(self.norbs): self.AA_R_W[iR0, :, iorb, iorb] = AA_0_W[:,iorb]
         #'''
         #exit()
-    
-    def make_supercell(self, Tmatrix):
+
+    def _refreshHamiltonianDerivedMatrices(self, omitRHam=False):
+        if not omitRHam:
+            self.getRHam_R()
+            if self.RRHam_R is not None: self.getRRHam_R()
+            if self.RRRHam_R is not None: self.getRRRHam_R()
+        else:
+            # disable the three matrices since they are not updated accordingly
+            self.RHam_R, self.RRHam_R, self.RRRHam_R = None, None, None
+        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
+        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+
+    def shiftOrigin(self, surfaceDir, shift=None, omitRHam=False):
+        """
+        Shifts the origin of the unit cell along surfaceDir to minimize hoppings across the surface.
+        Reassigns the R vectors of the hoppings accordingly without deleting any bonds.
+        
+        Parameters
+        ----------
+        surfaceDir : int
+            The lattice direction to shift (0, 1, or 2).
+        shift : float, optional
+            The fractional shift of the cell boundary. If None, it is auto-optimized.
+        omitRHam : bool
+            if True, then the RHam, RRHam, RRRHam will not be built for supercell model
+            the velocity related computations are then nonavailable.
+            use this only for the computations on energy spectra, such as the surface states,
+        """
+        if self.verbose: print(f"\n--- Shifting Origin along Direction {surfaceDir} ---")
+        invLattice = np.linalg.inv(self.lattice)
+        
+        # Get fractional coordinates of orbitals
+        rList_frac = invLattice @ self.rList
+        
+        # 1. Auto-optimize the boundary shift to minimize boundary-crossing bonds
+        if shift is None:
+            if self.verbose: print(f"Optimizing cell origin to minimize boundary crossing...")
+            shifts = np.linspace(0, 1, 100, endpoint=False)
+            best_shift = 0
+            min_cut_weight = float('inf')
+            
+            for s in shifts:
+                cut_weight = 0
+                c_I = np.floor(rList_frac[surfaceDir, :] + s).astype(int)
+                
+                for iR, R in enumerate(self.iRvec):
+                    # R'_surfaceDir = R + c_target - c_source
+                    R_prime_surfaceDir = R[surfaceDir] + c_I[None, :] - c_I[:, None]
+                    mask_cut = (R_prime_surfaceDir != 0)
+                    cut_weight += np.sum(np.abs(self.ham_R[iR])[mask_cut])
+                    
+                if cut_weight < min_cut_weight:
+                    min_cut_weight = cut_weight
+                    best_shift = s
+                    
+            shift = best_shift
+            if self.verbose: print(f"Optimal fractional shift found: {shift:.4f} (Crossing weight: {min_cut_weight:.4f})")
+        else:
+            if self.verbose: print(f"Using provided shift: {shift:.4f}")
+            
+        # 2. Apply the chosen shift and remap the hoppings to new R vectors
+        c_I = np.floor(rList_frac[surfaceDir, :] + shift).astype(int)
+        
+        new_ham_dict = {}
+        new_overlap_dict = {}
+        new_AA_dict = {}
+        
+        has_overlap = getattr(self, "overlap_R", None) is not None
+        has_AA = getattr(self, "AA_R_W", None) is not None
+        
+        for iR, R in enumerate(self.iRvec):
+            for I in range(self.norbs):
+                for J in range(self.norbs):
+                    # Minor optimization: skip exactly zero elements to save memory
+                    if abs(self.ham_R[iR, I, J]) < 1e-12 and (not has_overlap or abs(self.overlap_R[iR, I, J]) < 1e-12):
+                        continue
+                        
+                    # Reassign the R vector based on the new cell boundaries
+                    R_new = R.copy()
+                    R_new[surfaceDir] = R[surfaceDir] + c_I[J] - c_I[I]
+                    R_new_tuple = tuple(R_new)
+                    
+                    if R_new_tuple not in new_ham_dict:
+                        new_ham_dict[R_new_tuple] = np.zeros((self.norbs, self.norbs), dtype=complex)
+                        if has_overlap: new_overlap_dict[R_new_tuple] = np.zeros((self.norbs, self.norbs), dtype=complex)
+                        if has_AA: new_AA_dict[R_new_tuple] = np.zeros((3, self.norbs, self.norbs), dtype=complex)
+                        
+                    new_ham_dict[R_new_tuple][I, J] += self.ham_R[iR, I, J]
+                    if has_overlap: new_overlap_dict[R_new_tuple][I, J] += self.overlap_R[iR, I, J]
+                    if has_AA: new_AA_dict[R_new_tuple][:, I, J] += self.AA_R_W[iR, :, I, J]
+                    
+        if self.verbose: print(f"Origin Shift Complete: Re-mapped into {len(new_ham_dict)} lattice vectors.")
+        
+        # 3. Update physical coordinates (atoms and orbitals are shifted to the new home cell)
+        for iatom, frac in enumerate(self.posinfo['pos ions (frac.)']):
+            frac[surfaceDir] = (frac[surfaceDir] + shift) % 1.0
+            self.posinfo['pos ions (frac.)'][iatom] = frac
+            self.posinfo['pos ions (cart.)'][iatom] = frac @ self.lattice
+            
+        rList_frac[surfaceDir, :] = (rList_frac[surfaceDir, :] + shift) % 1.0
+        self.rList = self.lattice @ rList_frac
+        
+        # 4. Repack the matrices into the System object
+        new_nRvec = len(new_ham_dict)
+        self.iRvec = np.empty((new_nRvec, 3), dtype=int)
+        self.iRvecIndex = {}
+        self.ham_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
+        if has_overlap: self.overlap_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
+        if has_AA: self.AA_R_W = np.zeros((new_nRvec, 3, self.norbs, self.norbs), dtype=complex)
+        
+        for idx, R_new_tuple in enumerate(new_ham_dict.keys()):
+            self.iRvec[idx] = R_new_tuple
+            self.iRvecIndex[R_new_tuple] = idx
+            self.ham_R[idx] = new_ham_dict[R_new_tuple]
+            if has_overlap: self.overlap_R[idx] = new_overlap_dict[R_new_tuple]
+            if has_AA: self.AA_R_W[idx] = new_AA_dict[R_new_tuple]
+        self.nRvec = new_nRvec
+        
+        # 5. Re-initialize dependent operators
+        self._refreshHamiltonianDerivedMatrices(omitRHam=omitRHam)
+
+        if self.verbose: showElapsedTime(extraInfo=f"--- canonical origined model constructed successfully ---\n")
+
+    def make_supercell(self, Tmatrix, omitRHam=False):
         """
         Construct a supercell model directly from the primitive model.
         
@@ -1159,6 +1281,10 @@ class System:
         Tmatrix : list or np.ndarray
             3x3 integer matrix defining the supercell lattice.
             The supercell lattice is defined as: lat_sc = T @ lat_pc
+        omitRHam : bool
+            if True, then the RHam, RRHam, RRRHam will not be built for supercell model
+            the velocity related computations are then nonavailable.
+            use this only for the computations on energy spectra, such as the surface states,
         """
         if self.verbose: print(f"\n--- Constructing Supercell ---")
         T = np.array(Tmatrix, dtype=int)
@@ -1333,130 +1459,9 @@ class System:
         self.mp_grid=new_mp_grid
         
         # 6. Reconstruct dependent operators
-        self.getRHam_R()
-        if self.RRHam_R is not None: self.getRRHam_R()
-        if self.RRRHam_R is not None: self.getRRRHam_R()
-        if hasattr(self, 'getRO_R'): self.getRO_R()
-        self.getSpinMatrice()
-        self.atomOrbAM = self.orbitalAngularMomentCubic()
-        self.getOrbitalMatrice()
+        self._refreshHamiltonianDerivedMatrices(omitRHam=omitRHam)
         
-        
-        if self.verbose: print(f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
-
-    def shiftOrigin(self, surfaceDir, shift=None):
-        """
-        Shifts the origin of the unit cell along surfaceDir to minimize hoppings across the surface.
-        Reassigns the R vectors of the hoppings accordingly without deleting any bonds.
-        
-        Parameters
-        ----------
-        surfaceDir : int
-            The lattice direction to shift (0, 1, or 2).
-        shift : float, optional
-            The fractional shift of the cell boundary. If None, it is auto-optimized.
-        """
-        if self.verbose: print(f"\n--- Shifting Origin along Direction {surfaceDir} ---")
-        invLattice = np.linalg.inv(self.lattice)
-        
-        # Get fractional coordinates of orbitals
-        rList_frac = invLattice @ self.rList
-        
-        # 1. Auto-optimize the boundary shift to minimize boundary-crossing bonds
-        if shift is None:
-            if self.verbose: print(f"Optimizing cell origin to minimize boundary crossing...")
-            shifts = np.linspace(0, 1, 100, endpoint=False)
-            best_shift = 0
-            min_cut_weight = float('inf')
-            
-            for s in shifts:
-                cut_weight = 0
-                c_I = np.floor(rList_frac[surfaceDir, :] + s).astype(int)
-                
-                for iR, R in enumerate(self.iRvec):
-                    # R'_surfaceDir = R + c_target - c_source
-                    R_prime_surfaceDir = R[surfaceDir] + c_I[None, :] - c_I[:, None]
-                    mask_cut = (R_prime_surfaceDir != 0)
-                    cut_weight += np.sum(np.abs(self.ham_R[iR])[mask_cut])
-                    
-                if cut_weight < min_cut_weight:
-                    min_cut_weight = cut_weight
-                    best_shift = s
-                    
-            shift = best_shift
-            if self.verbose: print(f"Optimal fractional shift found: {shift:.4f} (Crossing weight: {min_cut_weight:.4f})")
-        else:
-            if self.verbose: print(f"Using provided shift: {shift:.4f}")
-            
-        # 2. Apply the chosen shift and remap the hoppings to new R vectors
-        c_I = np.floor(rList_frac[surfaceDir, :] + shift).astype(int)
-        
-        new_ham_dict = {}
-        new_overlap_dict = {}
-        new_AA_dict = {}
-        
-        has_overlap = getattr(self, "overlap_R", None) is not None
-        has_AA = getattr(self, "AA_R_W", None) is not None
-        
-        for iR, R in enumerate(self.iRvec):
-            for I in range(self.norbs):
-                for J in range(self.norbs):
-                    # Minor optimization: skip exactly zero elements to save memory
-                    if abs(self.ham_R[iR, I, J]) < 1e-12 and (not has_overlap or abs(self.overlap_R[iR, I, J]) < 1e-12):
-                        continue
-                        
-                    # Reassign the R vector based on the new cell boundaries
-                    R_new = R.copy()
-                    R_new[surfaceDir] = R[surfaceDir] + c_I[J] - c_I[I]
-                    R_new_tuple = tuple(R_new)
-                    
-                    if R_new_tuple not in new_ham_dict:
-                        new_ham_dict[R_new_tuple] = np.zeros((self.norbs, self.norbs), dtype=complex)
-                        if has_overlap: new_overlap_dict[R_new_tuple] = np.zeros((self.norbs, self.norbs), dtype=complex)
-                        if has_AA: new_AA_dict[R_new_tuple] = np.zeros((3, self.norbs, self.norbs), dtype=complex)
-                        
-                    new_ham_dict[R_new_tuple][I, J] += self.ham_R[iR, I, J]
-                    if has_overlap: new_overlap_dict[R_new_tuple][I, J] += self.overlap_R[iR, I, J]
-                    if has_AA: new_AA_dict[R_new_tuple][:, I, J] += self.AA_R_W[iR, :, I, J]
-                    
-        if self.verbose: print(f"Origin Shift Complete: Re-mapped into {len(new_ham_dict)} lattice vectors.")
-        
-        # 3. Update physical coordinates (atoms and orbitals are shifted to the new home cell)
-        for iatom, frac in enumerate(self.posinfo['pos ions (frac.)']):
-            frac[surfaceDir] = (frac[surfaceDir] + shift) % 1.0
-            self.posinfo['pos ions (frac.)'][iatom] = frac
-            self.posinfo['pos ions (cart.)'][iatom] = frac @ self.lattice
-            
-        rList_frac[surfaceDir, :] = (rList_frac[surfaceDir, :] + shift) % 1.0
-        self.rList = self.lattice @ rList_frac
-        
-        # 4. Repack the matrices into the System object
-        new_nRvec = len(new_ham_dict)
-        self.iRvec = np.empty((new_nRvec, 3), dtype=int)
-        self.iRvecIndex = {}
-        self.ham_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
-        if has_overlap: self.overlap_R = np.zeros((new_nRvec, self.norbs, self.norbs), dtype=complex)
-        if has_AA: self.AA_R_W = np.zeros((new_nRvec, 3, self.norbs, self.norbs), dtype=complex)
-        
-        for idx, R_new_tuple in enumerate(new_ham_dict.keys()):
-            self.iRvec[idx] = R_new_tuple
-            self.iRvecIndex[R_new_tuple] = idx
-            self.ham_R[idx] = new_ham_dict[R_new_tuple]
-            if has_overlap: self.overlap_R[idx] = new_overlap_dict[R_new_tuple]
-            if has_AA: self.AA_R_W[idx] = new_AA_dict[R_new_tuple]
-        self.nRvec = new_nRvec
-        
-        # 5. Re-initialize dependent operators
-        if hasattr(self, 'energy_R') and self.energy_R is not None:
-            self.energy_R = self.ham_R.copy()
-            
-        self.getRHam_R()
-        if self.RRHam_R is not None: self.getRRHam_R()
-        if self.RRRHam_R is not None: self.getRRRHam_R()
-        if hasattr(self, 'getRO_R') and has_overlap: self.getRO_R()
-        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
-        if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
-        self.getOrbitalMatrice()
+        if self.verbose: showElapsedTime(extraInfo=f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
 
     def cutEdge(self, cutDir):
         """
@@ -1514,16 +1519,9 @@ class System:
         self.mp_grid[cutDir] = 1 # Flatten the grid in the cut direction
         
         # Re-initialize dependent operators
-        if hasattr(self, 'energy_R') and self.energy_R is not None:
-            self.energy_R = self.ham_R.copy()
-            
-        self.getRHam_R()
-        if self.RRHam_R is not None: self.getRRHam_R()
-        if self.RRRHam_R is not None: self.getRRRHam_R()
-        if hasattr(self, 'getRO_R') and has_overlap: self.getRO_R()
-        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
-        if hasattr(self, 'orbitalAngularMomentCubic'): self.atomOrbAM = self.orbitalAngularMomentCubic()
-        self.getOrbitalMatrice()
+        self._refreshHamiltonianDerivedMatrices()
+
+        if self.verbose: showElapsedTime(extraInfo=f"--- open boundary model constructed successfully ---\n")
 
     def constructPrincipleLayer(self, surfaceDir):
         """
@@ -1586,7 +1584,7 @@ class System:
         self.H_m10_R = np.array(self.H_m10_R)
         
         if self.verbose:
-            print(f"Principal layer partitioning complete:")
+            showElapsedTime(extraInfo=f"Principal layer partitioning complete:")
             print(f"  H_00: {len(self.H_00_R)} hopping matrices")
             print(f"  H_01: {len(self.H_01_R)} hopping matrices")
             print(f"  H_10: {len(self.H_m10_R)} hopping matrices\n")
@@ -1653,20 +1651,10 @@ class System:
                     
                     applied_orbitals += 1
                     
-        if self.verbose: 
-            print(f"Successfully applied exchange splitting to {applied_orbitals} physical spatial orbitals.")
-            
         # 3. Synchronize dependent system matrices
-        if hasattr(self, 'energy_R') and self.energy_R is not None:
-            # For OpenMX models where energy_R tracks ham_R
-            self.energy_R[iR0, :, :] = self.ham_R[iR0, :, :].copy()
-            
-        # Rebuild dependent operators
-        self.getRHam_R()
-        if self.RRHam_R is not None: self.getRRHam_R()
-        if self.RRRHam_R is not None: self.getRRRHam_R()
-        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
-        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+        self._refreshHamiltonianDerivedMatrices()
+
+        if self.verbose: showElapsedTime(extraInfo=f"Successfully applied exchange splitting to {applied_orbitals} physical spatial orbitals.")
 
     def rotateExchangeField(self, projection, theta, phi):
         """
@@ -1726,18 +1714,11 @@ class System:
                     self.ham_R[iR0, I_up, I_dn] = Sx_pp - 1j * Sy_pp
                     self.ham_R[iR0, I_dn, I_up] = Sx_pp + 1j * Sy_pp
                     count += 1
-                    
-        if self.verbose: print(f"Rotated exchange field for {count} spatial orbitals.")
         
         # Synchronize dependent matrices
-        if hasattr(self, 'energy_R') and self.energy_R is not None:
-            self.energy_R[iR0] = self.ham_R[iR0].copy()
-            
-        self.getRHam_R()
-        if self.RRHam_R is not None: self.getRRHam_R()
-        if self.RRRHam_R is not None: self.getRRRHam_R()
-        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
-        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+        self._refreshHamiltonianDerivedMatrices()
+
+        if self.verbose: showElapsedTime(extraInfo=f"Rotated exchange field for {count} spatial orbitals.")
 
     def scaleSOC(self, lam=1.0, projection=[]):
         """
@@ -1793,22 +1774,90 @@ class System:
                     self.ham_R[iR, i_dn, j_up] = tx_p + 1j * ty_p
                     
                     count += 1
-                    
-        if self.verbose: print(f"Successfully scaled {count} hopping matrix blocks.")
         
         # Synchronize dependent matrices
-        if hasattr(self, 'energy_R') and self.energy_R is not None:
-            self.energy_R = self.ham_R.copy()
-            
-        self.getRHam_R()
-        if self.RRHam_R is not None: self.getRRHam_R()
-        if self.RRRHam_R is not None: self.getRRRHam_R()
-        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
-        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+        self._refreshHamiltonianDerivedMatrices()
 
-    def applyFloquetPeierlsDressing(self, vectorPotentialCos, vectorPotentialSin=None):
+        if self.verbose: showElapsedTime(extraInfo=f"Successfully scaled {count} hopping matrix blocks.")
+
+    def _floquetPeierlsFourierComponents(self, vectorPotentialCos, vectorPotentialSin, maxHarmonic):
         """
-        Apply the stage-1 off-resonant Floquet Peierls dressing in place.
+        Return real-space Fourier harmonics of the Peierls dressed Hamiltonian.
+
+        The time-dependent hopping is represented as
+
+        ``H_Rij(t) = H_Rij exp(i A(t) dot d_Rij)``,
+
+        with ``A(t) = A_cos cos(omega t) + A_sin sin(omega t)`` and
+        ``d_Rij = R + r_j - r_i``. The returned dictionary stores harmonics
+        ``H_m`` in the convention ``H(t) = sum_m H_m exp(i m omega t)``.
+        """
+        assert self.ham_R is not None, "ham_R must be initialized before applying Floquet dressing"
+        assert maxHarmonic >= 0, f"maxHarmonic should be non-negative, got {maxHarmonic}"
+
+        harmonics = {
+            m: np.zeros((self.nRvec, self.norbs, self.norbs), dtype=complex)
+            for m in range(-maxHarmonic, maxHarmonic + 1)
+        }
+
+        r_source = self.rList[:, :, None]
+        r_target = self.rList[:, None, :]
+        intra_cell_displacement = r_target - r_source
+
+        for iR, Rvec in enumerate(self.iRvec):
+            displacement = (Rvec @ self.lattice)[:, None, None] + intra_cell_displacement
+            phase_cos = np.einsum('a,aij->ij', vectorPotentialCos, displacement, optimize=True)
+            phase_sin = np.einsum('a,aij->ij', vectorPotentialSin, displacement, optimize=True)
+            radius = np.sqrt(phase_cos**2 + phase_sin**2)
+
+            unit_phase = np.ones_like(radius, dtype=complex)
+            nonzero = radius > 1e-14
+            unit_phase[nonzero] = (phase_cos[nonzero] - 1j * phase_sin[nonzero]) / radius[nonzero]
+
+            for m in harmonics:
+                coeff = (1j ** m) * jv(m, radius) * (unit_phase ** m)
+                if m != 0:
+                    coeff = np.where(nonzero, coeff, 0.0)
+                harmonics[m][iR] = self.ham_R[iR] * coeff
+
+        return harmonics
+
+    def _convolveRealSpaceMatrices(self, left_R, right_R):
+        """
+        Compute the real-space representation of the k-space product AB.
+        """
+        product = {}
+        for iR1, R1 in enumerate(self.iRvec):
+            left = left_R[iR1]
+            if not np.any(np.abs(left) > 1e-14):
+                continue
+            for iR2, R2 in enumerate(self.iRvec):
+                right = right_R[iR2]
+                if not np.any(np.abs(right) > 1e-14):
+                    continue
+                R = tuple((R1 + R2).tolist())
+                if R not in product:
+                    product[R] = np.zeros((self.norbs, self.norbs), dtype=complex)
+                product[R] += left @ right
+        return product
+
+    def _setHamRFromDict(self, ham_dict, cutoff=1e-14):
+        kept = []
+        for R, matrix in ham_dict.items():
+            if np.max(np.abs(matrix)) > cutoff:
+                kept.append((tuple(int(x) for x in R), matrix))
+
+        kept.sort(key=lambda item: (item[0][0], item[0][1], item[0][2]))
+        self.iRvec = np.array([item[0] for item in kept], dtype=int)
+        self.nRvec = len(kept)
+        self.iRvecIndex = {tuple(R): iR for iR, R in enumerate(self.iRvec)}
+        self.ham_R = np.array([item[1] for item in kept], dtype=complex)
+
+    def applyFloquetPeierlsDressing(self, vectorPotentialCos, vectorPotentialSin=None,
+                                    photonEnergy=None, maxHarmonic=1,
+                                    commutatorSign=1.0):
+        """
+        Apply off-resonant Floquet Peierls dressing in place.
 
         The time-dependent vector potential is represented as
         ``A(t) = A_cos cos(omega t) + A_sin sin(omega t)`` in Cartesian
@@ -1821,54 +1870,79 @@ class System:
         Angstrom. For linearly polarized light, pass only ``vectorPotentialCos``.
         For circular or elliptical light, pass both cosine and sine components.
 
-        This is only the time-averaged Peierls term ``H_eff = H_0``. It does not
-        include the van Vleck commutator correction.
+        If ``photonEnergy`` is None, only the stage-1 time-averaged Peierls term
+        ``H_eff = H_0`` is applied. If ``photonEnergy`` is provided in eV, the
+        first van Vleck correction is added,
+
+        ``H_eff = H_0 + sum_m [H_m, H_-m] / (m photonEnergy)``.
+
+        The Fourier convention is ``H(t) = sum_m H_m exp(i m omega t)`` and the
+        Peierls phase convention is ``exp(i A(t) dot d)``. Reversing the light
+        helicity, e.g. changing the sign of ``vectorPotentialSin``, reverses the
+        chiral van Vleck term. ``maxHarmonic=1`` keeps only the leading photon
+        sector and is usually the intended stage-2 approximation.
         """
         vectorPotentialCos = np.asarray(vectorPotentialCos, dtype=float).reshape(3)
         if vectorPotentialSin is None:
             vectorPotentialSin = np.zeros(3)
         vectorPotentialSin = np.asarray(vectorPotentialSin, dtype=float).reshape(3)
+        maxHarmonic = int(maxHarmonic)
 
         if self.verbose:
-            print("\n--- Applying stage-1 Floquet Peierls dressing ---")
+            stage = "stage-1" if photonEnergy is None else "stage-2 van Vleck"
+            print(f"\n--- Applying {stage} Floquet Peierls dressing ---")
             print(f"A_cos = {vectorPotentialCos} 1/Angstrom")
             print(f"A_sin = {vectorPotentialSin} 1/Angstrom")
+            if photonEnergy is not None:
+                print(f"photonEnergy = {photonEnergy} eV")
+                print(f"maxHarmonic = {maxHarmonic}")
 
-        r_source = self.rList[:, :, None]
-        r_target = self.rList[:, None, :]
-        intra_cell_displacement = r_target - r_source
+        if photonEnergy is not None:
+            photonEnergy = float(photonEnergy)
+            assert photonEnergy != 0.0, "photonEnergy should be non-zero when the van Vleck correction is enabled"
 
-        dressing_R = np.zeros((self.nRvec, self.norbs, self.norbs), dtype=float)
-        for iR, Rvec in enumerate(self.iRvec):
-            displacement = (Rvec @ self.lattice)[:, None, None] + intra_cell_displacement
-            phase_cos = np.einsum('a,aij->ij', vectorPotentialCos, displacement, optimize=True)
-            phase_sin = np.einsum('a,aij->ij', vectorPotentialSin, displacement, optimize=True)
-            dressing_R[iR] = j0(np.sqrt(phase_cos**2 + phase_sin**2))
+        harmonics = self._floquetPeierlsFourierComponents(
+            vectorPotentialCos, vectorPotentialSin, maxHarmonic if photonEnergy is not None else 0)
+        if photonEnergy is None:
+            self.ham_R = harmonics[0]
+            self._refreshHamiltonianDerivedMatrices()
+            if self.verbose:
+                print("--- Floquet Peierls dressing complete ---\n")
+            return
 
-        if hasattr(self, 'ham_R') and self.ham_R is not None:
-            self.ham_R = self.ham_R * dressing_R
-        if hasattr(self, 'energy_R') and self.energy_R is not None:
-            self.energy_R = self.energy_R * dressing_R
+        ham_eff = {tuple(R.tolist()): harmonics[0][iR].copy() for iR, R in enumerate(self.iRvec)}
 
-        self.getRHam_R()
-        if self.RRHam_R is not None: self.getRRHam_R()
-        if self.RRRHam_R is not None: self.getRRRHam_R()
-        if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
-        if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
+        for m in range(1, maxHarmonic + 1):
+            hm_hminus = self._convolveRealSpaceMatrices(harmonics[m], harmonics[-m])
+            hminus_hm = self._convolveRealSpaceMatrices(harmonics[-m], harmonics[m])
+            for R in set(hm_hminus) | set(hminus_hm):
+                if R not in ham_eff:
+                    ham_eff[R] = np.zeros((self.norbs, self.norbs), dtype=complex)
+                ham_eff[R] += commutatorSign * (
+                    hm_hminus.get(R, 0.0) - hminus_hm.get(R, 0.0)
+                ) / (m * photonEnergy)
+
+        self._setHamRFromDict(ham_eff)
+        self._refreshHamiltonianDerivedMatrices()
 
         if self.verbose:
-            print("--- Stage-1 Floquet Peierls dressing complete ---\n")
+            print("--- Floquet Peierls dressing complete ---\n")
 
-    def getFloquetPeierlsDressedModel(self, vectorPotentialCos, vectorPotentialSin=None):
+    def getFloquetPeierlsDressedModel(self, vectorPotentialCos, vectorPotentialSin=None,
+                                      photonEnergy=None, maxHarmonic=1,
+                                      commutatorSign=1.0):
         """
-        Return a deep-copied model with stage-1 Floquet Peierls dressing applied.
+        Return a deep-copied model with Floquet Peierls dressing applied.
 
         See ``applyFloquetPeierlsDressing`` for the physical convention and
         units. This non-mutating wrapper is usually safer for comparing dressed
         and undressed exchange couplings.
         """
         dressed_model = copy.deepcopy(self)
-        dressed_model.applyFloquetPeierlsDressing(vectorPotentialCos, vectorPotentialSin)
+        dressed_model.applyFloquetPeierlsDressing(
+            vectorPotentialCos, vectorPotentialSin,
+            photonEnergy=photonEnergy, maxHarmonic=maxHarmonic,
+            commutatorSign=commutatorSign)
         return dressed_model
 
     def rotateSpinBasisToGlobal(self, alpha, beta, gamma=0.0):

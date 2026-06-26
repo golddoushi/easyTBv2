@@ -88,6 +88,7 @@ class System_omx(System):
         self.lattice=self.posinfo['lattice']
         self.reciLattice=np.linalg.inv(self.lattice)*np.pi*2
 
+        self.ham_R=self.energy_R      # set ham_R to track energy_R, for Ham. manipulation
         self.getRHam_R()
         self.getRRHam_R()
         self.getRRRHam_R()
@@ -97,7 +98,12 @@ class System_omx(System):
         # compute orbital angular moment operator
         self.atomOrbAM=self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
-    
+
+    def _refreshHamiltonianDerivedMatrices(self, omitRHam=False):
+        super()._refreshHamiltonianDerivedMatrices(omitRHam=omitRHam)
+        self.energy_R = self.ham_R.copy()
+        self.getRO_R()
+
     def orbitalAngularMomentCubic(self):
         '''
         Orbital angular moment operator represented in the cubic hamonics (s, px, py, pz, ...)
@@ -154,7 +160,6 @@ class System_omx(System):
             
             return L.conj() @ orbitalAngularMomentSpherical[3] @ L.T
         return (0, orbitalAngularP(), orbitalAngularD(), orbitalAngularF())
-
 
     def getRHam_R(self):
         #return super().getRHam_R()
