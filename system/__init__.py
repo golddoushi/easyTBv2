@@ -1523,7 +1523,7 @@ class System:
 
         if self.verbose: showElapsedTime(extraInfo=f"--- open boundary model constructed successfully ---\n")
 
-    def constructPrincipleLayer(self, surfaceDir):
+    def constructPrincipleLayer(self, surfaceDir, omitRHam=False):
         """
         Constructs a principal layer supercell for surface Green's function calculations.
         The principal layer is defined such that hoppings in the surfaceDir direction 
@@ -1533,6 +1533,9 @@ class System:
         ----------
         surfaceDir : int
             The normal direction of the surface (0, 1, or 2).
+        omitRHam : bool
+            If True, skip rebuilding velocity-related Hamiltonian moments when
+            an internal principal-layer supercell is needed.
         """
         if self.verbose: print(f"\n--- Constructing Principal Layer along Direction {surfaceDir} ---")
         
@@ -1550,7 +1553,7 @@ class System:
             if self.verbose: print(f"Creating a {Nsc}x supercell along direction {surfaceDir} to form the principal layer.")
             Tmatrix = np.eye(3, dtype=int)
             Tmatrix[surfaceDir, surfaceDir] = Nsc
-            self.make_supercell(Tmatrix)
+            self.make_supercell(Tmatrix, omitRHam=omitRHam)
         else:
             if self.verbose: print("Original cell is already a valid principal layer.")
             

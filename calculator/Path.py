@@ -33,6 +33,7 @@ class CalculatorOnPath():
             "smr_type":"Lorentzian",
             "degen":1e-6,
             "verbose":0,
+            "syncModelVerbose":True,
         }
         defaultSettings.update(kwarg)
         
@@ -46,8 +47,9 @@ class CalculatorOnPath():
         self.nkpt=len(self.kpath)
 
         if self.verbose==2: print("initializing calculator module")
-        # sychronize verbose with model
-        self.model.verbose = self.verbose
+        # sychronize verbose with model when the calculator may call mutating model methods
+        if defaultSettings["syncModelVerbose"]:
+            self.model.verbose = self.verbose
 
 class EnergyOnPath(CalculatorOnPath):
     def __init__(self, **kwarg) -> None:
@@ -326,7 +328,7 @@ class SpinBerryCurvOnPath(SpinVelocityOnPath):
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class SurfaceBulkGreenOnPath(CalculatorOnPath):
-    def __init__(self, surfaceDir: int, omega:np.ndarray|list, n_iter:int=10, Tmatrix=np.eye(3), cutoff=1e-6, diag=False, **kwarg):
+    def __init__(self, surfaceDir: int, omega:np.ndarray|list, n_iter:int=10, diag=False, omegaBatchSize=1, **kwarg):
         """
         Computes the Left Surface, Right Surface, and Bulk Green's Functions via the
         iterative decimation algorithm (Lopez Sancho et al. 1985).
@@ -343,29 +345,29 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
             Number of decimation iterations. n_iter = n simulates a slab of 2^n layers.
         diag : bool
             if True, only compute the diagonal elements of surf/bulk GFs (for evaluations on spectral func.)
-        Tmatrix: np.ndarray(3)
-            The transformation matrix to construct rect cell from the (possible) non-rect bulk
-        ncores : int
-            Number of cores used for the parallel computations
+        omegaBatchSize : int
+            Number of frequencies solved together. Larger values can be faster
+            but allocate arrays with shape (omegaBatchSize, norbs, norbs).
+            Use 1 for large surface/principal-layer models.
         """
+        kwarg.setdefault("syncModelVerbose", False)
         super().__init__(**kwarg)
-        # construct principal layer
-        self.model.make_supercell(Tmatrix)
-        self.model.shiftOrigin(surfaceDir=surfaceDir)
-        self.model.constructPrincipleLayer(surfaceDir=surfaceDir)
 
         # Enforce open boundary conditions in k-space
         for ikpt, kpt in enumerate(self.kpath):
-            if abs(kpt[surfaceDir]) > cutoff:
+            if abs(kpt[surfaceDir]) > 1e-6:
                 if self.verbose == 2:
                     print(f"Warning: k-point {kpt} has non-zero component in surface normal direction {surfaceDir}. Forcing to 0.")
                 self.kpath[ikpt, surfaceDir] = 0.0
         
         # initialize surface and bulk Green's function
         assert hasattr(self.model, 'H_00_R'), "You must call model.constructPrincipleLayer(surfaceDir) before GreenOnPath!"
+        assert hasattr(self.model, 'H_01_R'), "You must call model.constructPrincipleLayer(surfaceDir) before GreenOnPath!"
+        assert hasattr(self.model, 'H_m10_R'), "You must call model.constructPrincipleLayer(surfaceDir) before GreenOnPath!"
         
         self.omega = np.array(omega, dtype=complex)
         self.nomega = len(self.omega)
+        self.omegaBatchSize = max(1, int(omegaBatchSize))
         self.diag= diag
         if diag:
             self.G_bulk_diag = np.zeros((self.nkpt, self.nomega, self.model.norbs), dtype=complex)
@@ -379,7 +381,7 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
         self.surfaceDir = surfaceDir
         self.n_iter = n_iter
         
-        if self.verbose: print(f"\n--- Computing Green's Functions ({self.nkpt} k-points, {self.nomega} frequencies, {self.n_iter} iterations) ---")
+        if self.verbose: print(f"\n--- Computing Green's Functions ({self.nkpt} k-points, {self.nomega} frequencies, {self.n_iter} iterations, omega batch {self.omegaBatchSize}) ---")
         if self.verbose == 2: showElapsedTime(offset=True)
 
     def setOmega(self, omega:np.ndarray|list):
@@ -388,7 +390,12 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
         if self.verbose: print(f"Frequencies reset. Now {self.nomega} points are involved")
 
     def solveGreensFunction(self):
-        II = np.eye(self.model.norbs, dtype=complex)
+        diag_indices = np.diag_indices(self.model.norbs)
+        def invertShifted(omega, matrix):
+            shifted = -matrix.copy()
+            shifted[:,diag_indices[0],diag_indices[1]] += omega[:,None]
+            return np.linalg.inv(shifted)
+
         if self.verbose: 
             showElapsedTime(extraInfo="Start solving Surface Green's function")
             #for itag in range(len(self.kpath)): print("-",end="")
@@ -450,52 +457,57 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
                     self.G_surf_R[ikpt, iomega] = np.linalg.inv(w * II - eps_s_R)
             '''
             
-            alpha = H_01_k[None,:,:]
-            beta = H_m10_k[None,:,:]
-            eps = H_00_k[None,:,:]
-            eps_s_L = H_00_k[None,:,:]
-            eps_s_R = H_00_k[None,:,:]
-            w=self.omega[:,None,None] * II[None,:,:]
             if self.verbose: showElapsedTime(extraInfo=f"ik {ikpt+1}/{len(self.kpath)} Fourier transform finished")
-            for i in range(self.n_iter):
-                # Compute the propagator: g = (w*I - eps)^-1
-                g = np.linalg.inv(w - eps)
-                # Precompute heavy matrix multiplications
-                a_g = alpha @ g
-                b_g = beta @ g
-            
-                # Compute off-diagonal effective couplings
-                a_next = a_g @ alpha
-                b_next = b_g @ beta
-            
-                # Compute effective diagonal shifts
-                a_g_b = a_g @ beta
-                b_g_a = b_g @ alpha
-            
-                # Update local density potentials
-                eps_s_L = eps_s_L + a_g_b
-                eps_s_R = eps_s_R + b_g_a
-                eps     = eps + a_g_b + b_g_a
-            
-                alpha = a_next
-                beta = b_next
+            for iomega_start in range(0, self.nomega, self.omegaBatchSize):
+                iomega_stop = min(iomega_start + self.omegaBatchSize, self.nomega)
+                omega = self.omega[iomega_start:iomega_stop]
+                nbatch = len(omega)
 
-                if self.verbose: print(">",end="",flush=True)
-            if self.verbose: showElapsedTime(extraInfo=f"\nik {ikpt+1}/{len(self.kpath)} Surface GFs iteration finished")
-            # 3. Final Matrix Inversions
-            if self.diag:
-                self.G_bulk_diag[ikpt,...]   = np.diagonal(np.linalg.inv(w - eps),     axis1=-2,axis2=-1)
-                self.G_surf_L_diag[ikpt,...] = np.diagonal(np.linalg.inv(w - eps_s_L), axis1=-2,axis2=-1)
-                self.G_surf_R_diag[ikpt,...] = np.diagonal(np.linalg.inv(w - eps_s_R), axis1=-2,axis2=-1)
-            else:
-                self.G_bulk[ikpt,...]   = np.linalg.inv(w - eps)
-                self.G_surf_L[ikpt,...] = np.linalg.inv(w - eps_s_L)
-                self.G_surf_R[ikpt,...] = np.linalg.inv(w - eps_s_R)
+                alpha = np.repeat(H_01_k[None,:,:], nbatch, axis=0)
+                beta = np.repeat(H_m10_k[None,:,:], nbatch, axis=0)
+                eps = np.repeat(H_00_k[None,:,:], nbatch, axis=0)
+                eps_s_L = eps.copy()
+                eps_s_R = eps.copy()
+
+                for i in range(self.n_iter):
+                    # Compute the propagator: g = (w*I - eps)^-1
+                    g = invertShifted(omega, eps)
+                    # Precompute heavy matrix multiplications
+                    a_g = alpha @ g
+                    b_g = beta @ g
+                
+                    # Compute off-diagonal effective couplings
+                    a_next = a_g @ alpha
+                    b_next = b_g @ beta
+                
+                    # Compute effective diagonal shifts
+                    a_g_b = a_g @ beta
+                    b_g_a = b_g @ alpha
+                
+                    # Update local density potentials
+                    eps_s_L = eps_s_L + a_g_b
+                    eps_s_R = eps_s_R + b_g_a
+                    eps     = eps + a_g_b + b_g_a
+                
+                    alpha = a_next
+                    beta = b_next
+
+                    if self.verbose: print(">",end="",flush=True)
+                if self.verbose: showElapsedTime(extraInfo=f"\nik {ikpt+1}/{len(self.kpath)} omega {iomega_start+1}-{iomega_stop}/{self.nomega} Surface GFs iteration finished")
+                # 3. Final Matrix Inversions
+                if self.diag:
+                    self.G_bulk_diag[ikpt,iomega_start:iomega_stop]   = np.diagonal(invertShifted(omega, eps),     axis1=-2,axis2=-1)
+                    self.G_surf_L_diag[ikpt,iomega_start:iomega_stop] = np.diagonal(invertShifted(omega, eps_s_L), axis1=-2,axis2=-1)
+                    self.G_surf_R_diag[ikpt,iomega_start:iomega_stop] = np.diagonal(invertShifted(omega, eps_s_R), axis1=-2,axis2=-1)
+                else:
+                    self.G_bulk[ikpt,iomega_start:iomega_stop]   = invertShifted(omega, eps)
+                    self.G_surf_L[ikpt,iomega_start:iomega_stop] = invertShifted(omega, eps_s_L)
+                    self.G_surf_R[ikpt,iomega_start:iomega_stop] = invertShifted(omega, eps_s_R)
 
         if self.verbose: showElapsedTime(extraInfo="\nSurface Green's function computation finished")
 
 class SurfaceBulkSpectraOnPath(SurfaceBulkGreenOnPath):
-    def __init__(self, surfaceDir: int, fermiAxis: np.ndarray, n_iter:int=10, Tmatrix=np.eye(3), cutoff=1e-6, **kwarg):
+    def __init__(self, surfaceDir: int, fermiAxis: np.ndarray, n_iter:int=10, **kwarg):
         """
         Construct the principal layer model from the bulk model, 
         then computes the Left Surface, Right Surface, and Bulk Green's Functions via the
@@ -511,10 +523,8 @@ class SurfaceBulkSpectraOnPath(SurfaceBulkGreenOnPath):
             Array of real energies to evaluate.
         n_iter : int
             Number of decimation iterations. n_iter = n simulates a slab of 2^n layers.
-        Tmatrix: np.ndarray(3)
-            The transformation matrix to construct rect cell from the (possible) non-rect bulk
         """
-        super().__init__(Tmatrix=Tmatrix, surfaceDir=surfaceDir, omega=fermiAxis, n_iter=n_iter, cutoff=cutoff, diag=True, **kwarg)
+        super().__init__(surfaceDir=surfaceDir, omega=fermiAxis, n_iter=n_iter, diag=True, **kwarg)
         self.setOmega(fermiAxis-1j*self.eta)
 
         self.solveGreensFunction()

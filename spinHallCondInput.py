@@ -170,13 +170,18 @@ def run():
     exit()#'''
     '''
     # check surface spectra
-    calc=BZLineTask(model, solveSurfaceSpectraTask, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8,
-                    args={"fermiAxis": fermiAxis, "n_iter": 10, "cutoff":0.01, "eta":0.01,
-                          "Tmatrix":[
-                            [ 1, 0, 0], # The A1 of the supercell in the frame of primitive cell
-                            [ 1, 2, 0], # The A2 of the supercell in the frame of primitive cell
-                            [ 0, 0, 1]  # The A3 of the supercell in the frame of primitive cell
-                            ], "surfaceDir": 0, # select the lattice vector normal to surface (from the transformed cell via Tmatrix)
+    Tmatrix=[
+        [ 1, 0, 0], # The A1 of the supercell in the frame of primitive cell
+        [ 1, 2, 0], # The A2 of the supercell in the frame of primitive cell
+        [ 0, 0, 1]  # The A3 of the supercell in the frame of primitive cell
+    ]
+    surfaceDir=0 # select the lattice vector normal to surface (from the transformed cell via Tmatrix)
+    model.make_supercell(Tmatrix, omitRHam=True)
+    model.shiftOrigin(surfaceDir=surfaceDir, omitRHam=True)
+    model.constructPrincipleLayer(surfaceDir=surfaceDir, omitRHam=True)
+    calc=BZLineTask(model, solveSurfaceSpectraTask, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8, backend="thread",
+                    args={"fermiAxis": fermiAxis, "n_iter": 10, "cutoff":0.01, "eta":0.01, "surfaceDir":surfaceDir,
+                          "omegaBatchSize":1,
                             },)
     spectral=np.zeros((3,calc.nkpt,len(fermiAxis)),dtype=float) # ikind, ik, iE
     for result in calc.results: 

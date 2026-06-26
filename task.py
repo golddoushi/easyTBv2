@@ -545,8 +545,10 @@ def solveVelocity_diag(param):
 #| factory for BZLine tasks |
 #+--------------------------+
 def solveSurfaceSpectraTask(param):
-    calc=SurfaceBulkSpectraOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], Tmatrix=param['Tmatrix'],
-                                  surfaceDir=param['surfaceDir'], fermiAxis=param['fermiAxis'], eta=param['eta'], n_iter=param['n_iter'])
+    calc=SurfaceBulkSpectraOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], 
+                                  surfaceDir=param['surfaceDir'], fermiAxis=param['fermiAxis'], eta=param['eta'],
+                                  n_iter=param['n_iter'], 
+                                  omegaBatchSize=param.get('omegaBatchSize', 1))
     return {
         'indices': param['indices'],
         'A_bulk': calc.A_bulk,
