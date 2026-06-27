@@ -396,10 +396,7 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
             shifted[:,diag_indices[0],diag_indices[1]] += omega[:,None]
             return np.linalg.inv(shifted)
 
-        if self.verbose: 
-            showElapsedTime(extraInfo="Start solving Surface Green's function")
-            #for itag in range(len(self.kpath)): print("-",end="")
-            #print("",flush=True)
+        if self.verbose: showElapsedTime(extraInfo="Start solving Surface Green's function")
         for ikpt, kpt in enumerate(self.kpath):
             # 1. Fourier Transform the Principal Layer Blocks
             H_00_k = np.zeros((self.model.norbs, self.model.norbs), dtype=complex)
@@ -415,48 +412,6 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
                 H_m10_k += HR * np.exp(2j * np.pi * kpt @ R)
 
             # 2. Iterative Decimation for each complex frequency
-            '''
-            for iomega, w in enumerate(self.omega):
-                alpha = H_01_k.copy()
-                beta = H_m10_k.copy()
-                eps = H_00_k.copy()
-                eps_s_L = H_00_k.copy()
-                eps_s_R = H_00_k.copy()
-            
-                for i in range(self.n_iter):
-                    # Compute the propagator: g = (w*I - eps)^-1
-                    g = np.linalg.inv(w * II - eps)
-                    # Precompute heavy matrix multiplications
-                    a_g = alpha @ g
-                    b_g = beta @ g
-            
-                    # Compute off-diagonal effective couplings
-                    a_next = a_g @ alpha
-                    b_next = b_g @ beta
-            
-                    # Compute effective diagonal shifts
-                    a_g_b = a_g @ beta
-                    b_g_a = b_g @ alpha
-            
-                    # Update local density potentials
-                    eps_s_L = eps_s_L + a_g_b
-                    eps_s_R = eps_s_R + b_g_a
-                    eps     = eps + a_g_b + b_g_a
-            
-                    alpha = a_next
-                    beta = b_next
-                
-                # 3. Final Matrix Inversions
-                if self.diag:
-                    self.G_bulk_diag[ikpt, iomega]   = np.diag(np.linalg.inv(w * II - eps))
-                    self.G_surf_L_diag[ikpt, iomega] = np.diag(np.linalg.inv(w * II - eps_s_L))
-                    self.G_surf_R_diag[ikpt, iomega] = np.diag(np.linalg.inv(w * II - eps_s_R))
-                else:
-                    self.G_bulk[ikpt, iomega]   = np.linalg.inv(w * II - eps)
-                    self.G_surf_L[ikpt, iomega] = np.linalg.inv(w * II - eps_s_L)
-                    self.G_surf_R[ikpt, iomega] = np.linalg.inv(w * II - eps_s_R)
-            '''
-            
             if self.verbose: showElapsedTime(extraInfo=f"ik {ikpt+1}/{len(self.kpath)} Fourier transform finished")
             for iomega_start in range(0, self.nomega, self.omegaBatchSize):
                 iomega_stop = min(iomega_start + self.omegaBatchSize, self.nomega)
@@ -492,8 +447,6 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
                     alpha = a_next
                     beta = b_next
 
-                    if self.verbose: print(">",end="",flush=True)
-                if self.verbose: showElapsedTime(extraInfo=f"\nik {ikpt+1}/{len(self.kpath)} omega {iomega_start+1}-{iomega_stop}/{self.nomega} Surface GFs iteration finished")
                 # 3. Final Matrix Inversions
                 if self.diag:
                     self.G_bulk_diag[ikpt,iomega_start:iomega_stop]   = np.diagonal(invertShifted(omega, eps),     axis1=-2,axis2=-1)
@@ -503,6 +456,7 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
                     self.G_bulk[ikpt,iomega_start:iomega_stop]   = invertShifted(omega, eps)
                     self.G_surf_L[ikpt,iomega_start:iomega_stop] = invertShifted(omega, eps_s_L)
                     self.G_surf_R[ikpt,iomega_start:iomega_stop] = invertShifted(omega, eps_s_R)
+                if self.verbose: print(">",end="",flush=True)
 
         if self.verbose: showElapsedTime(extraInfo="\nSurface Green's function computation finished")
 

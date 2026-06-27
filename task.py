@@ -154,7 +154,7 @@ class BZLineTask:
                  KPOINTS="./KPOINTS",
                  mode="run",
                  ncores=1,
-                 backend="process") -> None:
+                 ) -> None:
         '''
         Conduct parallel tasks along a 1D k-path defined in a KPOINTS file.
         Splits the k-path into chunks and distributes them across cores to minimize IPC overhead.
@@ -173,16 +173,9 @@ class BZLineTask:
             "run" to run the tasks directly, otherwise, only show the partition info.
         - ncores : int
             Number of parallel processes.
-        - backend : "process" | "thread"
-            Parallel execution backend. The process backend preserves the old
-            behavior. The thread backend shares the model object between workers,
-            avoiding expensive model pickling/copying for read-only k-line tasks.
         '''
         self.KPOINTS = KPOINTS
         self.ncores = ncores
-        self.backend = backend
-        if self.backend not in ("process", "thread"):
-            raise ValueError(f"Unsupported BZLineTask backend {self.backend!r}. Use 'process' or 'thread'.")
         
         # 1. Read the KPOINTS file
         with open(self.KPOINTS, "r") as fin:
@@ -192,10 +185,6 @@ class BZLineTask:
         
         print(f"Read {self.nkpt} k-points from {self.KPOINTS}")
         showElapsedTime()
-        
-        if mode != "run":
-            print(f"{mode=} the tasks are stopped. Set mode = 'run' to execute.")
-            exit()
             
         # 2. Partition the k-path based on available cores
         # If nkpt is not perfectly divisible, array_split handles it cleanly
@@ -216,7 +205,10 @@ class BZLineTask:
             newTask.update(args)
             tasks.append(newTask)
             
-        print(f"Split k-path into {len(tasks)} chunks for {self.ncores} cores using {self.backend} backend.")
+        print(f"Split k-path into {len(tasks)} chunks for {self.ncores} cores using thread backend.")
+        if mode != "run":
+            print(f"{mode=} the tasks are stopped. Set mode = 'run' to execute.")
+            exit()
         
         # 3. Execute parallel mapping
         self.results = []
@@ -227,21 +219,12 @@ class BZLineTask:
                 result = taskFunc(task)
                 self.results.append(result)
                 showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
-        elif self.backend == "process":
-            tasks[0]['verbose']=2 # only output one process's information when parallel run
-            with Pool(processes=ncores) as pool:
-                for result in pool.imap_unordered(taskFunc, tasks):
-                    self.results.append(result)
-                    if len(self.results) % ncores == 1:
-                        showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
         else:
-            tasks[0]['verbose']=2 # only output one process's information when parallel run
+            for itask in range(0,len(tasks),ncores): tasks[itask]["verbose"]=2 # output one information per batch
             with ThreadPoolExecutor(max_workers=ncores) as executor:
                 futures = [executor.submit(taskFunc, task) for task in tasks]
                 for future in as_completed(futures):
                     self.results.append(future.result())
-                    if len(self.results) % ncores == 1:
-                        showElapsedTime(offset=False, extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
         
         showElapsedTime(extraInfo="1D K-Path integration finished")
 
@@ -547,8 +530,7 @@ def solveVelocity_diag(param):
 def solveSurfaceSpectraTask(param):
     calc=SurfaceBulkSpectraOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], 
                                   surfaceDir=param['surfaceDir'], fermiAxis=param['fermiAxis'], eta=param['eta'],
-                                  n_iter=param['n_iter'], 
-                                  omegaBatchSize=param.get('omegaBatchSize', 1))
+                                  n_iter=param['n_iter'],)
     return {
         'indices': param['indices'],
         'A_bulk': calc.A_bulk,

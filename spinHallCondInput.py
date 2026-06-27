@@ -155,7 +155,7 @@ def run():
     
     '''
     # check band intepolation
-    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8, backend="thread")
+    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8)
     energies,spin_eig,orbital_eig=np.zeros((calc.nkpt,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float)
     for result in calc.results:
         energies[result['indices']]   =result['energies']
@@ -179,9 +179,8 @@ def run():
     model.make_supercell(Tmatrix, omitRHam=True)
     model.shiftOrigin(surfaceDir=surfaceDir, omitRHam=True)
     model.constructPrincipleLayer(surfaceDir=surfaceDir, omitRHam=True)
-    calc=BZLineTask(model, solveSurfaceSpectraTask, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8, backend="thread",
+    calc=BZLineTask(model, solveSurfaceSpectraTask, KPOINTS=mainDir+"/KPOINTS.rect", ncores=8, 
                     args={"fermiAxis": fermiAxis, "n_iter": 10, "cutoff":0.01, "eta":0.01, "surfaceDir":surfaceDir,
-                          "omegaBatchSize":1,
                             },)
     spectral=np.zeros((3,calc.nkpt,len(fermiAxis)),dtype=float) # ikind, ik, iE
     for result in calc.results: 
