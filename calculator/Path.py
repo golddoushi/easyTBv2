@@ -328,7 +328,7 @@ class SpinBerryCurvOnPath(SpinVelocityOnPath):
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Berry curvature finished")
 
 class SurfaceBulkGreenOnPath(CalculatorOnPath):
-    def __init__(self, surfaceDir: int, omega:np.ndarray|list, n_iter:int=10, diag=False, omegaBatchSize=1, **kwarg):
+    def __init__(self, surfaceDir: int, omega:np.ndarray|list, n_iter:int=10, diag=False, **kwarg):
         """
         Computes the Left Surface, Right Surface, and Bulk Green's Functions via the
         iterative decimation algorithm (Lopez Sancho et al. 1985).
@@ -345,10 +345,6 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
             Number of decimation iterations. n_iter = n simulates a slab of 2^n layers.
         diag : bool
             if True, only compute the diagonal elements of surf/bulk GFs (for evaluations on spectral func.)
-        omegaBatchSize : int
-            Number of frequencies solved together. Larger values can be faster
-            but allocate arrays with shape (omegaBatchSize, norbs, norbs).
-            Use 1 for large surface/principal-layer models.
         """
         kwarg.setdefault("syncModelVerbose", False)
         super().__init__(**kwarg)
@@ -367,7 +363,6 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
         
         self.omega = np.array(omega, dtype=complex)
         self.nomega = len(self.omega)
-        self.omegaBatchSize = max(1, int(omegaBatchSize))
         self.diag= diag
         if diag:
             self.G_bulk_diag = np.zeros((self.nkpt, self.nomega, self.model.norbs), dtype=complex)
@@ -381,8 +376,7 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
         self.surfaceDir = surfaceDir
         self.n_iter = n_iter
         
-        if self.verbose: print(f"\n--- Computing Green's Functions ({self.nkpt} k-points, {self.nomega} frequencies, {self.n_iter} iterations, omega batch {self.omegaBatchSize}) ---")
-        if self.verbose == 2: showElapsedTime(offset=True)
+        if self.verbose == 2: showElapsedTime(extraInfo=f"\n--- Computing Green's Functions ({self.nkpt} k-points, {self.nomega} frequencies, {self.n_iter} iterations) ---")
 
     def setOmega(self, omega:np.ndarray|list):
         self.omega=omega
@@ -393,7 +387,7 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
         diag_indices = np.diag_indices(self.model.norbs)
         def invertShifted(omega, matrix):
             shifted = -matrix.copy()
-            shifted[:,diag_indices[0],diag_indices[1]] += omega[:,None]
+            shifted[diag_indices] += omega
             return np.linalg.inv(shifted)
 
         if self.verbose: showElapsedTime(extraInfo="Start solving Surface Green's function")
@@ -413,14 +407,10 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
 
             # 2. Iterative Decimation for each complex frequency
             if self.verbose: showElapsedTime(extraInfo=f"ik {ikpt+1}/{len(self.kpath)} Fourier transform finished")
-            for iomega_start in range(0, self.nomega, self.omegaBatchSize):
-                iomega_stop = min(iomega_start + self.omegaBatchSize, self.nomega)
-                omega = self.omega[iomega_start:iomega_stop]
-                nbatch = len(omega)
-
-                alpha = np.repeat(H_01_k[None,:,:], nbatch, axis=0)
-                beta = np.repeat(H_m10_k[None,:,:], nbatch, axis=0)
-                eps = np.repeat(H_00_k[None,:,:], nbatch, axis=0)
+            for iomega, omega in enumerate(self.omega):
+                alpha = H_01_k.copy()
+                beta = H_m10_k.copy()
+                eps = H_00_k.copy()
                 eps_s_L = eps.copy()
                 eps_s_R = eps.copy()
 
@@ -449,13 +439,13 @@ class SurfaceBulkGreenOnPath(CalculatorOnPath):
 
                 # 3. Final Matrix Inversions
                 if self.diag:
-                    self.G_bulk_diag[ikpt,iomega_start:iomega_stop]   = np.diagonal(invertShifted(omega, eps),     axis1=-2,axis2=-1)
-                    self.G_surf_L_diag[ikpt,iomega_start:iomega_stop] = np.diagonal(invertShifted(omega, eps_s_L), axis1=-2,axis2=-1)
-                    self.G_surf_R_diag[ikpt,iomega_start:iomega_stop] = np.diagonal(invertShifted(omega, eps_s_R), axis1=-2,axis2=-1)
+                    self.G_bulk_diag[ikpt,iomega]   = np.diag(invertShifted(omega, eps))
+                    self.G_surf_L_diag[ikpt,iomega] = np.diag(invertShifted(omega, eps_s_L))
+                    self.G_surf_R_diag[ikpt,iomega] = np.diag(invertShifted(omega, eps_s_R))
                 else:
-                    self.G_bulk[ikpt,iomega_start:iomega_stop]   = invertShifted(omega, eps)
-                    self.G_surf_L[ikpt,iomega_start:iomega_stop] = invertShifted(omega, eps_s_L)
-                    self.G_surf_R[ikpt,iomega_start:iomega_stop] = invertShifted(omega, eps_s_R)
+                    self.G_bulk[ikpt,iomega]   = invertShifted(omega, eps)
+                    self.G_surf_L[ikpt,iomega] = invertShifted(omega, eps_s_L)
+                    self.G_surf_R[ikpt,iomega] = invertShifted(omega, eps_s_R)
                 if self.verbose: print(">",end="",flush=True)
 
         if self.verbose: showElapsedTime(extraInfo="\nSurface Green's function computation finished")
