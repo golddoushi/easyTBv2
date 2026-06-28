@@ -12,7 +12,7 @@ from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, In
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
-from calculator import EnergyOnPath, SpinExpectationOnPath, SpinOrbitalExpectationOnPath, SurfaceBulkSpectraOnPath
+from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, SpinOrbitalExpectationOnPath, SurfaceBulkSpectraOnPath
 
 class BZGridTask:
 
@@ -539,10 +539,21 @@ def solveSurfaceSpectraTask(param):
     }
 
 def solveBandStructure(param):
-    calc=SpinOrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
+    spin_eig, orbital_eig=None, None
+    if param['spin proj'] and param['orbital proj']:
+        calc=SpinOrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
+        spin_eig, orbital_eig = calc.spin_eig.real, calc.orbital_eig.real
+    elif param['spin proj']:
+        calc=SpinExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
+        spin_eig = calc.spin_eig.real
+    elif param['orbital proj']:
+        calc=OrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
+        orbital_eig = calc.orbital_eig.real
+    else:
+        calc=EnergyOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
     return {
         'indices': param['indices'],
         'energies': calc.energies,
-        'spin_eig': calc.spin_eig.real,
-        'orbital_eig': calc.orbital_eig.real,
+        'spin_eig': spin_eig,
+        'orbital_eig': orbital_eig,
     }

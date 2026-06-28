@@ -154,19 +154,30 @@ def run():
     omegaAxis=np.linspace(0.5,4.0,101)
     model.setFermi(fermi)
     
-    '''
+    #'''
     # check band intepolation
-    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8)
-    energies,spin_eig,orbital_eig=np.zeros((calc.nkpt,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float),np.zeros((calc.nkpt,3,model.norbs),dtype=float)
+    spin_proj, orbital_proj= False, False
+    calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
+                   args={"spin proj":spin_proj, "orbital proj":orbital_proj},
+                   )
+    energies=np.zeros((calc.nkpt,model.norbs),dtype=float)
+    if spin_proj: spin_eig=np.zeros((calc.nkpt,3,model.norbs),dtype=float)
+    if orbital_proj: orbital_eig = np.zeros((calc.nkpt,3,model.norbs),dtype=float)
     for result in calc.results:
         energies[result['indices']]   =result['energies']
-        spin_eig[result['indices']]   =np.diagonal(result['spin_eig'],axis1=-2,axis2=-1)
-        orbital_eig[result['indices']]=np.diagonal(result['orbital_eig'],axis1=-2,axis2=-1)
+        if spin_proj: spin_eig[result['indices']]   =np.diagonal(result['spin_eig'],axis1=-2,axis2=-1)
+        if orbital_proj: orbital_eig[result['indices']]=np.diagonal(result['orbital_eig'],axis1=-2,axis2=-1)
     with open(mainDir+"./tbbands.txt","w") as fout:
-        fout.write("#ikpt Energy(eV) <Sx> <Sy> <Sz> <Lx> <Ly> <Lz>\n")
+        fout.write("#ikpt Energy(eV) ")
+        if spin_proj: fout.write("<Sx> <Sy> <Sz> ")
+        if orbital_proj: fout.write("<Lx> <Ly> <Lz> ")
+        fout.write("\n")
         for iband in range(model.norbs):
-            for ik, (energy,spin,orbital) in enumerate(zip(energies[:,iband],spin_eig[:,:,iband],orbital_eig[:,:,iband])):
-                fout.write(f"{ik:5d}{energy:15.6E}{spin[0]:15.6E}{spin[1]:15.6E}{spin[2]:15.6E}{orbital[0]:15.6E}{orbital[1]:15.6E}{orbital[2]:15.6E}\n")
+            for ik, energy in enumerate(energies[:,iband]):
+                fout.write(f"{ik:5d}{energy:15.6E}")
+                if spin_proj: fout.write(f"{spin_eig[ik,0,iband]:15.6E}{spin_eig[ik,1,iband]:15.6E}{spin_eig[ik,2,iband]:15.6E}")
+                if orbital_proj: fout.write(f"{orbital_eig[ik,0,iband]:15.6E}{orbital_eig[ik,1,iband]:15.6E}{orbital_eig[ik,2,iband]:15.6E}")
+                fout.write("\n")
             fout.write("\n")
     exit()#'''
     '''
