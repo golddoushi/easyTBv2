@@ -77,9 +77,10 @@ def run():
     #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
     #)
     #exit()
-    # modulate the SOC, exchange fields, etc
+    # modulate the SOC, exchange fields, baised fields, etc.
     #model.scaleSOC(lam=0)
     #model.rotateExchangeField(projection=[(0,(0,)),(1,(0,))], theta=np.pi, phi=0.)
+    #model.applyElectrostaticPotentialAtOnsites([0., 0., 0.,]) # in eV/angstrom
     '''
     # create supercell model and cut into nanoribbon
     Tmatrix=[

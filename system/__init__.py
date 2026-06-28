@@ -1783,6 +1783,46 @@ class System:
 
         if self.verbose: showElapsedTime(extraInfo=f"Successfully scaled {count} hopping matrix blocks.")
 
+    def applyElectrostaticPotentialAtOnsites(self, efield):
+        """
+        Adds extra onsite energies according to electric field
+        
+        Parameters
+        ----------
+        efield : np.ndarray | list | tuple
+            A 3-element array [Ex, Ey, Ez] representing the strength of the 
+            electric field in eV/angstrom for each direction.
+        """
+        Ex, Ey, Ez = efield
+        
+        if self.verbose: 
+            print(f"\n--- Adding electrostatic potential ---")
+            print(f"Electric field (Ex, Ey, Ez) = ({Ex}, {Ey}, {Ez}) eV/angst.")
+            
+        # 1. Locate the R=(0,0,0) home cell matrix
+        home_R_tuple = (0, 0, 0)
+        if hasattr(self, 'iRvecIndex') and home_R_tuple in self.iRvecIndex:
+            iR0 = self.iRvecIndex[home_R_tuple]
+        else:
+            iR0 = -1
+            for i, R in enumerate(self.iRvec):
+                if tuple(R) == home_R_tuple:
+                    iR0 = i
+                    break
+        assert iR0 != -1, "Could not find the R=(0,0,0) home cell in the Hamiltonian!"
+        
+        # 2. Compute relative positions of orbitals to the geometry center
+        positions_relative = self.rList[:, :] - np.mean(self.rList, axis=(-1,))[:,None]
+
+        # 3. apply the electrostatic potential        
+        for iorb, (rx, ry, rz) in enumerate(positions_relative.T):
+            self.ham_R[iR0, iorb, iorb] += rx*Ex + ry*Ey + rz*Ez
+                    
+        # 4. Synchronize dependent system matrices
+        self._refreshHamiltonianDerivedMatrices()
+
+        if self.verbose: showElapsedTime(extraInfo=f"Successfully applied electrostatic potential.")
+
     def _floquetPeierlsFourierComponents(self, vectorPotentialCos, vectorPotentialSin, maxHarmonic):
         """
         Return real-space Fourier harmonics of the Peierls dressed Hamiltonian.
