@@ -43,7 +43,42 @@ def readPOSCAR(filePath="./POSCAR"):
         resultDic['pos ions (cart.)']=resultDic['pos ions (cart.)'].reshape((1,3))
     return resultDic
 
-def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
+def _mpGridFromIRvec(iRvec):
+    if len(iRvec) == 0:
+        raise ValueError("Cannot build mp_grid from an empty R-vector list")
+    Rx_max, Rx_min = iRvec[:,0].max(), iRvec[:,0].min()
+    Ry_max, Ry_min = iRvec[:,1].max(), iRvec[:,1].min()
+    Rz_max, Rz_min = iRvec[:,2].max(), iRvec[:,2].min()
+    return np.array([Rx_max-Rx_min+1, Ry_max-Ry_min+1, Rz_max-Rz_min+1,])
+
+def _applyHrCutoff(hrDat, cutoff=-1, overlap=False):
+    if cutoff is None or cutoff < 0:
+        return hrDat
+
+    nRvec = len(hrDat["iRvec"])
+    ham_amp = np.max(np.abs(hrDat["ham_R"]), axis=(1,2))
+    if overlap:
+        overlap_amp = np.max(np.abs(hrDat["overlap_R"]), axis=(1,2))
+        keep = (ham_amp >= cutoff) | (overlap_amp >= cutoff)
+    else:
+        keep = ham_amp >= cutoff
+
+    if not np.any(keep):
+        raise ValueError(f"cutoff={cutoff} removes all real-space Hamiltonian blocks")
+    if np.all(keep):
+        return hrDat
+
+    hrDat = hrDat.copy()
+    for key, value in list(hrDat.items()):
+        if isinstance(value, np.ndarray) and value.shape[:1] == (nRvec,):
+            hrDat[key] = value[keep]
+
+    hrDat["iRvecIndex"] = {tuple(Rvec): iR for iR, Rvec in enumerate(hrDat["iRvec"])}
+    hrDat["mp_grid"] = _mpGridFromIRvec(hrDat["iRvec"])
+    print(f"cutoff={cutoff} keeps {np.count_nonzero(keep)}/{nRvec} real-space Hamiltonian blocks")
+    return hrDat
+
+def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP",cutoff=-1):
     aux.showElapsedTime(True)
     with open(filepath,'r') as fin:
         headline=fin.readline()
@@ -92,12 +127,11 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
         o, px, py, pz, rx, ry, rz = data[:,7], data[:,8], data[:,9], data[:,10], data[:,11], data[:,12], data[:,13]
         overlap_R, px_R, py_R, pz_R, rx_R, ry_R, rz_R = o.reshape((nR,norbs,norbs)), px.reshape((nR,norbs,norbs)), py.reshape((nR,norbs,norbs)), pz.reshape((nR,norbs,norbs)), rx.reshape((nR,norbs,norbs)), ry.reshape((nR,norbs,norbs)), rz.reshape((nR,norbs,norbs))
     
-    Rx_max, Rx_min, Ry_max, Ry_min, Rz_max, Rz_min= iRvec[:,0].max(), iRvec[:,0].min(), iRvec[:,1].max(), iRvec[:,1].min(), iRvec[:,2].max(), iRvec[:,2].min()
-    mp_grid=np.array([Rx_max-Rx_min+1,Ry_max-Ry_min+1,Rz_max-Rz_min+1,])
+    mp_grid=_mpGridFromIRvec(iRvec)
     
     aux.showElapsedTime(extraInfo='\nreal-space grid: %dx%dx%d, ham_R read'%(*ham_R.shape[:3],))
     if overlap:
-        return {
+        return _applyHrCutoff({
         "ham_R":ham_R,
         "overlap":overlap,
         "overlap_R":overlap_R,
@@ -106,15 +140,15 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP"):
         "iRvec":iRvec,
         "iRvecIndex":iRvecIndex,
         "mp_grid":mp_grid,
-    }    
-    return {
+    }, cutoff=cutoff, overlap=True)
+    return _applyHrCutoff({
         "ham_R":ham_R,
         "iRvec":iRvec,
         "iRvecIndex":iRvecIndex,
         "mp_grid":mp_grid,
-    }
+    }, cutoff=cutoff, overlap=False)
 
-def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated):
+def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated, cutoff=-1):
     '''Capable to read double hr.dat files for the colinear magnetic models'''
     single_path = '%s/%s_hr.dat'%(mainDir, hamR)
     up_path = '%s/%s.up_hr.dat'%(mainDir, hamR)
@@ -128,7 +162,7 @@ def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated):
         )
 
     if not spinSeparated:
-        return readHrDat(single_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format)
+        return readHrDat(single_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format, cutoff=cutoff)
 
     assert ispin == 2, "separated spin-channel Hamiltonians require ispin=2"
     assert os.path.exists(up_path), f"cannot find spin-up Hamiltonian file {up_path}"
@@ -153,12 +187,12 @@ def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated):
         iR_dn = hr_dn['iRvecIndex'][tuple(Rvec)]
         ham_R[iR, norb_spin:, norb_spin:] = hr_dn['ham_R'][iR_dn]
 
-    return {
+    return _applyHrCutoff({
         "ham_R": ham_R,
         "iRvec": hr_up['iRvec'],
         "iRvecIndex": hr_up['iRvecIndex'],
         "mp_grid": hr_up['mp_grid'],
-    }
+    }, cutoff=cutoff, overlap=False)
 
 def readRDat(filepath,ignoreImagPart=False,cutoff=-1,):
     aux.showElapsedTime(True)

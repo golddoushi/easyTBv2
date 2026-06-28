@@ -50,7 +50,7 @@ class System_omx(System):
         # atomic orbital basis are normalized but nonothorgonal
         self.overlap=True
         # read in real-space ham
-        hrDat=readHrDat('%s/%s_hr.dat'%(mainDir,hamR),ignoreImagPart=ignoreImagPart,overlap=True,format=format)
+        hrDat=readHrDat('%s/%s_hr.dat'%(mainDir,hamR),ignoreImagPart=ignoreImagPart,overlap=True,format=format,cutoff=cutoff)
         self.iRvec=hrDat['iRvec']
         self.iRvecIndex=hrDat['iRvecIndex']
         self.nRvec=len(self.iRvec)

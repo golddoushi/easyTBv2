@@ -57,7 +57,7 @@ class System_tb(System):
         # atomic orbital basis are normalized but nonothorgonal
         self.overlap=False
         # read in real-space ham
-        hrDat=readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated)
+        hrDat=readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated, cutoff=cutoff)
         self.iRvec=hrDat['iRvec']
         self.iRvecIndex=hrDat['iRvecIndex']
         self.nRvec=len(self.iRvec)
