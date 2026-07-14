@@ -912,6 +912,51 @@ class AnormalousHallConductance(BerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
+class VelocityVelocityCorrelation_diag(Velocity_diag):
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Calc. intra-band contributions on the correlation func of velocity velocity \Omega^{alpha,beta}_{k,m}.
+
+        alpha and beta can be x, y, z, denoting the (cart.) space direction of applied currents and the propagation of Hall currents
+        k denotes the crystal moment, m indexes the bands.
+
+        Indexing
+        --------
+        BerryCurv_diag[ik1, ik2, ik3, ialpha, ibeta, ieig]
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList,**kwarg)
+
+        self.projected_BerryCurv_diag=np.zeros((len(velocityProjectionList)+1,len(velocityProjectionList)+1)+self.kgrid+(3,3,self.ibmax+1-self.ibmin))
+        for ivelocity_alpha, proj_velocity_diag_K_alpha in enumerate([self.velocity_diag_K]+self.projected_velocity_diag_K_list):
+            for ivelocity_beta, proj_velocity_diag_K_beta in enumerate([self.velocity_diag_K]+self.projected_velocity_diag_K_list):
+                for ialpha in range(3):
+                    for ibeta in range(3):
+                        self.projected_BerryCurv_diag[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]=-(proj_velocity_diag_K_beta[...,ibeta,:]*proj_velocity_diag_K_alpha[...,ialpha,:]).real/self.eta
+        
+        self.BerryCurv_diag=self.projected_BerryCurv_diag[0,0]
+        if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on intra band contributions on correlation functions <velocity><velocity> finished")
+
+class AnormalousHallConductance_diag(VelocityVelocityCorrelation_diag):
+    def __init__(self, currentProjectionList=[], **kwarg) -> None:
+        '''
+        Intra band contributions on the spin Hall conductance in (S/m)
+        '''
+        super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
+
+        nProjections=self.projected_BerryCurv_diag.shape[:2]
+        projected_sigma=np.zeros(nProjections+(len(self.fermiList),3,3))
+        
+        for ifermi, weight in enumerate(self.fermiWeight):
+            for ivelocity_alpha in range(nProjections[0]):
+                for ivelocity_beta in range(nProjections[1]):
+                    for ialpha in range(3):
+                        for ibeta in range(3):
+                            projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv_diag[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]*weight)
+        
+        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        if self.verbose==2: showElapsedTime(extraInfo=f"Intra-band spin Galvanic conductance finished")
+
 class AnormalousHallConductance_LG_DM(Velocity):
 
     def __init__(self, currentProjectionList=[], match_resonator=False, **kwarg) -> None:

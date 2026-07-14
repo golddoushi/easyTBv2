@@ -810,6 +810,7 @@ class System:
         lmax=0
         for iatom, atom in enumerate(self.atomicOrbInfoList):
             atomL,atomOrb=atom["L"],atom["orbital index"]
+            if len(atomL)==0:continue 
             print('atom %d, lmax=%d'%(iatom,max(atomL)))
             lmax=max([lmax,max(atomL)])
             for ishell, (orbL, orbIndex) in enumerate(zip(atomL,atomOrb)):
