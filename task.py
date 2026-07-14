@@ -6,7 +6,7 @@ import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import AnormalousHallConductance, AnormalousHallConductance_LG_DM, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
+from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
@@ -67,7 +67,7 @@ class BZGridTask:
             print(f"{mode=} the tasks are stoped. set mode = 'run' to run the tasks")
             exit()
     
-        irreducibleTask=[]
+        tasks=[]
         for iq1 in range(self.QGrid[0]):
             for iq2 in range(self.QGrid[1]):
                 for iq3 in range(self.QGrid[2]):
@@ -83,36 +83,41 @@ class BZGridTask:
                     }
                     newTask.update(args)
                     if not BZSymm: 
-                        irreducibleTask.append(newTask)
+                        tasks.append(newTask)
                         continue
-                    for itask, oldTask in enumerate(irreducibleTask):
+                    for itask, oldTask in enumerate(tasks):
                         if abs(oldTask['qlen'] - qlen) < SYMPREC:
                             if self.equiv(model,oldTask['q'],newTask['q']):
                                 break
                             else:
-                                irreducibleTask.insert(itask,newTask)
+                                tasks.insert(itask,newTask)
                                 break
                         elif oldTask['qlen']>qlen+SYMPREC:
-                            irreducibleTask.insert(itask,newTask)
+                            tasks.insert(itask,newTask)
                             break
                     else:
-                        irreducibleTask.append(newTask)
+                        tasks.append(newTask)
 
-        showElapsedTime(extraInfo=f"find {len(irreducibleTask)} irreducible q, {len(irreducibleTask)/np.prod(self.QGrid)*100:.3f}% the whole BZ")
+        showElapsedTime(extraInfo=f"find {len(tasks)} irreducible q, {len(tasks)/np.prod(self.QGrid)*100:.3f}% the whole BZ")
     
-        pool=Pool(processes=ncores)
+        #pool=Pool(processes=ncores)
         self.results=[]
         if ncores==1: # serial run
-            for task in irreducibleTask:
+            for task in tasks:
                 result=taskFunc(task)
                 self.results.append(result)
-                showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(irreducibleTask):3d} finished")
+                showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
         else: # parallel run
-            for result in pool.imap_unordered(taskFunc,irreducibleTask):
-                self.results.append(result)
-                if len(self.results) % ncores == 1: showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(irreducibleTask):3d} finished")
-            pool.close()
-            pool.join()
+            #for result in pool.imap_unordered(taskFunc,tasks):
+            #    self.results.append(result)
+            #    if len(self.results) % ncores == 1: showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
+            #pool.close()
+            #pool.join()
+            for itask in range(0,len(tasks),ncores): tasks[itask]["verbose"]=2 # output one information per batch
+            with ThreadPoolExecutor(max_workers=ncores) as executor:
+                futures = [executor.submit(taskFunc, task) for task in tasks]
+                for future in as_completed(futures):
+                    self.results.append(future.result())
         showElapsedTime(extraInfo=f"integration finished")
 
     def distGamma(self, model:System, q:np.ndarray):
@@ -228,6 +233,26 @@ class BZLineTask:
         
         showElapsedTime(extraInfo="1D K-Path integration finished")
 
+def solveAHC(param):
+    calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   )
+    return {"energies":calc.energies,
+            "projected Berry curv":calc.projected_BerryCurv,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
+            "iq":param["iq"]}
+
+def solveAHC_diag(param):
+    calc=AnormalousHallConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+                                   fermiList=param['fermi'],
+                                   currentProjectionList    =param['projected shells for applying current'],
+                                   )
+    return {"energies":calc.energies,
+            "projected Berry curv":calc.projected_BerryCurv_diag,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
+            "iq":param["iq"]}
+
 def solveSHC(param):
     calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
@@ -270,16 +295,6 @@ def solveStGC(param):
                              currentProjectionList  =param['projected shells for applying current'],
                              )
     return {"energies":calc.energies,
-            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
-            "iq":param["iq"]}
-
-def solveAHC(param):
-    calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
-                                   fermiList=param['fermi'],
-                                   currentProjectionList    =param['projected shells for applying current'],
-                                   )
-    return {"energies":calc.energies,
-            "projected Berry curv":calc.projected_BerryCurv,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
