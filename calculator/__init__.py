@@ -211,6 +211,15 @@ class Energy(Calculator):
             return
         raise NotImplementedError()
     
+    @property
+    def fd_occupations(self):
+        # fd_occupations[ifermi,k1,k2,k3,iband] gives the Fermi-Dirac distribution
+        dE = self.energies[None,...,:] - self.fermiList[:,None,None,None,None]
+        fd_occupations=np.zeros_like(dE,dtype=float)
+        mask= dE < self.kBT*20
+        fd_occupations[mask]=1/(np.exp(1/self.kBT*dE[mask])+1)
+        return fd_occupations
+    
     def getEnergyWindow(self,gap=5.0):
         energy=np.sort(self.energies.flatten()) - self.model.fermi
         valence_bands=energy[energy<=0]
@@ -900,13 +909,12 @@ class AnormalousHallConductance(BerryCurv):
         nProjections=self.projected_BerryCurv.shape[:2]
         projected_sigma=np.zeros(nProjections+(len(self.fermiList),3,3))
         
-        for ifermi, fermi in enumerate(self.fermiList):
-            occupy=self.energies<fermi
+        for ifermi, occupation in enumerate(self.fd_occupations):
             for ivelocity_alpha in range(nProjections[0]):
                 for ivelocity_beta in range(nProjections[1]):
                     for ialpha in range(3):
                         for ibeta in range(3):
-                            projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:][occupy])
+                            projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]*occupation)
         
         #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
