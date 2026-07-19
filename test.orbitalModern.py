@@ -57,7 +57,7 @@ def run():
     #'''
     # set flux phi1, -(phi1+phi2), phi2, -(phi1+phi2)
     t1=-1
-    Phi=np.pi*0.6
+    Phi=np.pi*0.1
     phi1, phi2=2*Phi, 0*Phi
     # left down plaquett, iR = 0 corresponding to R= (0, 0, 0)
     model.ham_R[0,0,1] = t1*np.exp(1j*phi1/4)
@@ -86,9 +86,9 @@ def run():
     fermi=-4            # model hamiltonian
     model.setFermi(fermi)
 
-    '''
+    #'''
     # check band intepolation
-    spin_proj, orbital_proj= False, False
+    spin_proj, orbital_proj= False, True
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
                    args={"spin proj":spin_proj, "orbital proj":orbital_proj},
                    )

@@ -5,7 +5,7 @@ from multiprocessing import Pool
 from system import System
 import numpy as np
 from auxiliary import showElapsedTime, print_matrix
-from scipy.constants import elementary_charge, hbar, angstrom
+from scipy.constants import elementary_charge, electron_mass, hbar, angstrom
 
 class CalculatorOnPath():
 
@@ -176,6 +176,9 @@ class VelocityOnPath(EnergyOnPath):
         self.RHam_K[ik, idirection, iorb, jorb] gives velocity matrix in original basis,
         idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
 
+        self.position_K[ik, idirection, ieig, jeig] gives the position
+        matrix in eigen-basis.
+
         self.velocity_K[ik, idirection, ieig, jeig] gives velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
         '''
@@ -189,8 +192,7 @@ class VelocityOnPath(EnergyOnPath):
 
         if self.verbose==2: showElapsedTime(extraInfo=f"Exp. sum. RHam_R to RHam_K to calc. velocity in ao-basis finished")
         vectors=self.vectors[:,None,:,self.ibmin:]
-        self.velocity_K=vectors.conj().transpose((0,1,3,2)) @ self.RHam_K @ vectors
-        if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
+        velocity_bare_K=vectors.conj().transpose((0,1,3,2)) @ self.RHam_K @ vectors
 
         if self.model.overlap:
             self.RO_K=np.zeros((self.nkpt,3,self.model.norbs,self.model.norbs),dtype=complex)
@@ -199,7 +201,19 @@ class VelocityOnPath(EnergyOnPath):
                     phase=np.exp(2j*np.pi*kpt@Rvec)
                     self.RO_K[ikpt]+=1j*phase*RO_R
 
-            self.velocity_K -= vectors.conj().transpose((0,1,3,2)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
+            velocity_bare_K -= vectors.conj().transpose((0,1,3,2)) @ self.RO_K @ (vectors *self.energies[...,None,None,self.ibmin:])
+
+        # Gauge-covariant velocity: v_a = H^(1)_a - i[r_a, H^(0)].
+        position_K_AO=np.zeros((self.nkpt,3,self.model.norbs,self.model.norbs),dtype=complex)
+        for ikpt, kpt in enumerate(self.kpath):
+            for Rvec, position_R in zip(self.model.iRvec,self.model.AA_R_W):
+                phase=np.exp(2j*np.pi*kpt@Rvec)
+                position_K_AO[ikpt]+=phase*position_R
+
+        self.position_K=vectors.conj().transpose((0,1,3,2)) @ position_K_AO @ vectors
+        position_K_H=self.position_K*self.energies[:,None,None,self.ibmin:]
+        self.velocity_K=velocity_bare_K-1j*(position_K_H-position_K_H.conj().swapaxes(-2,-1))
+        if self.verbose==2: showElapsedTime(extraInfo=f"gauge-covariant velocity in eig.-basis finished")
 
 class BerryCurvOnPath(VelocityOnPath):
     
@@ -257,8 +271,77 @@ class OrbitalExpectationOnPath(EnergyOnPath):
             self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,:,:,:] @ vectors
         if self.verbose==2: showElapsedTime(extraInfo=f"orbital op. in eig.-basis calculated")
 
-class SpinOrbitalExpectationOnPath(SpinExpectationOnPath, OrbitalExpectationOnPath):
-    def __init__(self, **kwarg):
+class OrbitalModernExpectationOnPath(VelocityOnPath):
+    def __init__(self, gL:float=1.0, **kwarg):
+        '''
+        Compute the modern orbital magnetic-moment matrix along a k path
+        using Eq. S9 of PRL 136, 236302 (2026).
+
+        The velocity matrices used by this code are dH/dk = hbar*v_phys in
+        eV*angstrom. ``orbitalMagneticMoment_eig`` is returned in units of
+        mu_B. For an electron,
+
+            mu_L = -g_L*mu_B*L/hbar,
+
+        so ``orbital_eig`` is the corresponding dimensionless L/hbar matrix
+        and can be used in place of OrbitalExpectationOnPath.orbital_eig.
+
+        Indexing
+        --------
+        orbitalMagneticMoment_eig[ik, idirection, iband, jband]
+        orbital_eig[ik, idirection, iband, jband]
+        '''
+        super().__init__(**kwarg)
+
+        band_energies = self.energies[:, self.ibmin:]
+        nbands = self.velocity_K.shape[-1]
+
+        moment_sum = np.zeros((self.nkpt, 3, nbands, nbands), dtype=complex,)
+        cross_pairs = ((1, 2), (2, 0), (0, 1))
+
+        for p in range(nbands):
+            gap_p_band = band_energies[:, p, None] - band_energies
+            valid_gap = np.abs(gap_p_band) > self.degen
+            inverse_gap = np.zeros_like(gap_p_band)
+            inverse_gap[valid_gap] = 1.0 / gap_p_band[valid_gap]
+
+            weight = inverse_gap[:, :, None] + inverse_gap[:, None, :]
+            weight *= valid_gap[:, :, None] & valid_gap[:, None, :]
+
+            for component, (a, b) in enumerate(cross_pairs):
+                v_a_lp = self.velocity_K[:, a, :, p]
+                v_b_lp = self.velocity_K[:, b, :, p]
+                v_a_pn = self.velocity_K[:, a, p, :]
+                v_b_pn = self.velocity_K[:, b, p, :]
+                velocity_cross = (
+                    v_a_lp[:, :, None] * v_b_pn[:, None, :]
+                    - v_b_lp[:, :, None] * v_a_pn[:, None, :]
+                )
+                moment_sum[:, component] += weight * velocity_cross
+
+        # hbar^2/(2*m_e), expressed in eV*angstrom^2. With
+        # velocity_K=dH/dk, Eq. S9 divided by mu_B has the prefactor
+        # 1/(4*i*constant).
+        hbar2_over_2me = (
+            hbar**2 /
+            (2 * electron_mass * elementary_charge * angstrom**2)
+        )
+        self.orbitalMagneticMoment_eig = (
+            moment_sum / (4j * hbar2_over_2me)
+        )
+        self.orbitalMagneticMoment_eig = (
+            self.orbitalMagneticMoment_eig
+            + self.orbitalMagneticMoment_eig.conj().swapaxes(-2, -1)
+        ) / 2
+
+        assert gL != 0, "gL must be nonzero"
+        self.orbital_eig = -self.orbitalMagneticMoment_eig / gL
+
+        if self.verbose==2:
+            showElapsedTime(extraInfo="modern orbital magnetic moment on path finished")
+
+class SpinOrbitalExpectationOnPath(SpinExpectationOnPath, OrbitalModernExpectationOnPath):
+    def __init__(self, gL:float=1.0, **kwarg):
         '''
         Compute spin and orbital matrix in eigen-basis
 
@@ -270,7 +353,7 @@ class SpinOrbitalExpectationOnPath(SpinExpectationOnPath, OrbitalExpectationOnPa
         - self.orbital_eig[ik, igamma, ieig, jeig] gives orbital matrix in eigen-basis. 
           igamma can be 0 | 1 | 2 | 3, corresponding to L^x | L^y | L^z | L^0 orbital-polarization. 
         '''
-        super().__init__(**kwarg)
+        super().__init__(gL=gL, **kwarg)
 
 class SpinVelocityOnPath(VelocityOnPath):
     def __init__(self, **kwarg) -> None:

@@ -3549,5 +3549,6 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
             route["DMI"] = self.DMI[:, iroute]
         return self.exchangeEnergy
 
-from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, SpinOrbitalExpectationOnPath
+from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
+from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SpinOrbitalExpectationOnPath
 from .Path import SurfaceBulkSpectraOnPath
