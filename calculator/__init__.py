@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from auxiliary import showElapsedTime, print_matrix, projectionOperator
 from auxiliary import PauliBlock, semiCirle
 from scipy.special import p_roots
-from scipy.constants import elementary_charge, hbar, angstrom
+from scipy.constants import elementary_charge, electron_mass, hbar, angstrom
 from scipy.constants import k as kB
 
 class Calculator():
@@ -680,6 +680,85 @@ class Velocity(Energy):
                         c4 = comm(self.position_K[..., c, :, :], self.w_K[..., a, b, :, :])
 
                         self.u_K[..., a, b, c, :, :] = H3[..., a, b, c, :, :] - 1j*c1 - 1j*c2 - c3 - 1j*c4
+
+class OrbitalModern(Velocity):
+    def __init__(self, orbitalProjectionList=[], gL:float=1.0, **kwarg):
+        '''
+        Compute the modern orbital magnetic-moment matrix from Eq. S9 of
+        PRL 136, 236302 (2026), and its effective orbital angular momentum.
+
+        The velocity matrices used by this code are dH/dk = hbar*v_phys in
+        eV*angstrom.  ``orbitalMagneticMoment_K`` is therefore returned in
+        units of mu_B.  For an electron,
+
+            mu_L = -g_L*mu_B*L/hbar,
+
+        so ``orbital_K`` is the corresponding dimensionless L/hbar matrix.
+        It has the same indexing and units as ``Orbital.orbital_K``:
+
+        orbital_K[ik1, ik2, ik3, idirection, iband, jband].
+        '''
+        super().__init__(**kwarg)
+
+        nbands = self.model.norbs
+        moment_sum = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
+        cross_pairs = ((1, 2), (2, 0), (0, 1))
+
+        for p in range(nbands):
+            gap_p_band = self.energies[..., p, None] - self.energies
+            valid_gap = np.abs(gap_p_band) > self.degen
+            inverse_gap = np.zeros_like(gap_p_band)
+            inverse_gap[valid_gap] = 1.0 / gap_p_band[valid_gap]
+
+            weight = inverse_gap[..., :, None] + inverse_gap[..., None, :]
+            weight *= valid_gap[..., :, None] & valid_gap[..., None, :]
+
+            for component, (a, b) in enumerate(cross_pairs):
+                v_a_lp = self.velocity_K[..., a, :, p]
+                v_b_lp = self.velocity_K[..., b, :, p]
+                v_a_pn = self.velocity_K[..., a, p, :]
+                v_b_pn = self.velocity_K[..., b, p, :]
+                velocity_cross = (
+                    v_a_lp[..., :, None] * v_b_pn[..., None, :]
+                    - v_b_lp[..., :, None] * v_a_pn[..., None, :]
+                )
+                moment_sum[..., component, :, :] += weight * velocity_cross
+
+        # hbar^2/(2*m_e), expressed in eV*angstrom^2.  With velocity_K=dH/dk,
+        # Eq. S9 divided by mu_B has the prefactor 1/(4*i*constant).
+        hbar2_over_2me = hbar**2 / (2 * electron_mass * elementary_charge * angstrom**2)
+        self.orbitalMagneticMoment_K = moment_sum / (4j * hbar2_over_2me)
+        self.orbitalMagneticMoment_K = (
+            self.orbitalMagneticMoment_K +
+            self.orbitalMagneticMoment_K.conj().swapaxes(-2, -1)
+        ) / 2
+        assert gL != 0, "gL must be nonzero"
+        self.orbital_K = -self.orbitalMagneticMoment_K / gL
+
+        self.projected_orbital_K_list = []
+        self.projected_orbitalMagneticMoment_K_list = []
+        for orbitalProjection in orbitalProjectionList:
+            proj1 = projectionOperator(
+                orbitalProjection['source'],
+                self.model.atomicOrbInfoList,
+                self.model.norbs,
+            )
+            proj2 = projectionOperator(
+                orbitalProjection['target'],
+                self.model.atomicOrbInfoList,
+                self.model.norbs,
+            )
+            proj1_K = self.projectorInEigenBasis(proj1)[..., None, :, :]
+            proj2_K = self.projectorInEigenBasis(proj2)[..., None, :, :]
+            projected_moment = (
+                proj1_K @ self.orbitalMagneticMoment_K
+                + self.orbitalMagneticMoment_K @ proj2_K
+            ) / 2
+            self.projected_orbitalMagneticMoment_K_list.append(projected_moment)
+            self.projected_orbital_K_list.append(-projected_moment / gL)
+
+        if self.verbose == 2:
+            showElapsedTime(extraInfo="modern orbital magnetic moment in eig.-basis finished")
 
 class Velocity_diag(FermiScan):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:

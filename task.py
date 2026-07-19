@@ -6,6 +6,7 @@ import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
+from calculator import Spin, Orbital, OrbitalModern, BerryCurv
 from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
@@ -538,6 +539,42 @@ def solveVelocity(param):
 def solveVelocity_diag(param):
     calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
+
+def solveMagneticMoment(param):
+    from scipy.constants import elementary_charge, electron_mass, hbar, angstrom
+    unit=(hbar**2/(2 * electron_mass * elementary_charge * angstrom**2))
+    spin_eig, orbital_LC_eig, orbital_IC_eig=None, None, None
+    if param['spin proj'] and param['orbital proj']:
+        calc=Spin(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        calc_orbital=OrbitalModern(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        calc_berry=BerryCurv(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        spin_eig       = np.diagonal(calc.spin_K,axis1=-2,axis2=-1)
+        orbital_LC_eig = np.diagonal(calc_orbital.orbitalMagneticMoment_K,axis1=-2,axis2=-1)
+        orbital_IC_eig = np.zeros(tuple(param['FFT grid'])+(3,param['model'].norbs),dtype=complex)
+        _orbital_IC_eig = (calc.energies[...,None,None,:] - param['model'].fermi) * calc_berry.BerryCurv / unit
+        orbital_IC_eig[...,0,:]=_orbital_IC_eig[...,1,2,:]
+        orbital_IC_eig[...,1,:]=_orbital_IC_eig[...,2,0,:]
+        orbital_IC_eig[...,2,:]=_orbital_IC_eig[...,0,1,:]
+    elif param['spin proj']:
+        calc=Spin(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        spin_eig       = np.diagonal(calc.spin_K,axis1=-2,axis2=-1)
+    elif param['orbital proj']:
+        calc=OrbitalModern(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        calc_berry=BerryCurv(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        orbital_LC_eig = np.diagonal(calc.orbitalMagneticMoment_K,axis1=-2,axis2=-1)
+        orbital_IC_eig = np.zeros(tuple(param['FFT grid'])+(3,param['model'].norbs),dtype=complex)
+        _orbital_IC_eig = (calc.energies[...,None,None,:] - param['model'].fermi) * calc_berry.BerryCurv / unit
+        orbital_IC_eig[...,0,:]=_orbital_IC_eig[...,1,2,:]
+        orbital_IC_eig[...,1,:]=_orbital_IC_eig[...,2,0,:]
+        orbital_IC_eig[...,2,:]=_orbital_IC_eig[...,0,1,:]
+    else:
+        calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+    return {
+        'energies': calc.energies,
+        'vectors':calc.vectors,
+        'spin': spin_eig, 'orbital LC': orbital_LC_eig, 'orbital IC': orbital_IC_eig,
+        "iq":param["iq"]
+    }
 
 #+--------------------------+
 #| factory for BZLine tasks |

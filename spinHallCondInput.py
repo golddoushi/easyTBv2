@@ -30,12 +30,12 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, outputBZDistrib
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/BN/"
+    mainDir="./mcalc/2D-rashba-ife/"
     model=System_tb(
         mainDir=mainDir,
         #hamR="wannier90",
         #hamR="omx",
-        hamR="BN_afm_soc",
+        #hamR="BN_afm_soc",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -62,6 +62,9 @@ def run():
             "H":(0,),
             #"H":(0,0,1,),
             "Au":(0,0,0,1,1,2,2,),
+            "Sr":(0,0,0,1,1,2,2,),
+            "Ti":(0,0,0,1,1,2,),
+             "O":(0,0,1,1,2,),
         },
         ispin=2
     )
@@ -156,7 +159,7 @@ def run():
     
     #'''
     # check band intepolation
-    spin_proj, orbital_proj= False, False
+    spin_proj, orbital_proj= True, False
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
                    args={"spin proj":spin_proj, "orbital proj":orbital_proj},
                    )
