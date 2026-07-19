@@ -295,58 +295,57 @@ class PDOS(Energy):
         self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(self.kgrid)
 
 class Spin(Energy):
-    def __init__(self, spinProjectionList=[], **kwarg):
+    def __init__(self, spinProjectionList=[], gS:float=2.0, **kwarg):
         '''
-        Compute spin matrix in eigen-basis
+        Compute the spin magnetic-moment matrix in eigen-basis, in mu_B.
 
         Indexing:
-        self.spin_K[ik1, ik2, ik3, idirection, ieig, jeig] gives spin matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to sigma_x | sigma_y | sigma_z.
+        self.spin_K[ik1, ik2, ik3, idirection, ieig, jeig] gives the
+        spin magnetic-moment matrix in eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
         vectors=self.vectors[:,:,:,None,:,:]
+        spin_operator=-gS*self.model.spin/2
         if self.model.overlap:
-            self.spin_K=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            self.spin_K=vectors.conj().swapaxes(-2,-1) @ spin_operator[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.spin_K=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,None,None,:,:,:] @ vectors
-        if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+            self.spin_K=vectors.conj().swapaxes(-2,-1) @ spin_operator[None,None,None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin magnetic moment in eig.-basis calculated")
 
         self.projected_spin_K_list=[]
         for spinProjection in spinProjectionList:
             proj1=projectionOperator(spinProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(spinProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            #spin_proj=(proj1@self.model.spin@proj2 + proj2@self.model.spin@proj1)/2
-            #if self.model.overlap:
-            #    projected_spin_K=vectors.conj().swapaxes(-2,-1) @ spin_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
-            #else:
-            #    projected_spin_K=vectors.conj().swapaxes(-2,-1) @ spin_proj[None,None,None,:,:,:] @ vectors
-            #self.projected_spin_K_list.append(projected_spin_K)
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_spin_K_list.append((proj1_K@self.spin_K + self.spin_K@proj2_K)/2)
 
 class Orbital(Energy):
-    def __init__(self, orbitalProjectionList=[], **kwarg):
+    def __init__(self, orbitalProjectionList=[], gL:float=1.0, **kwarg):
         '''
-        Compute orbital matrix in eigen-basis
+        Compute the local orbital magnetic-moment matrix in eigen-basis,
+        in mu_B, using the individual-atom approximation.
 
         Indexing:
-        self.orbital_K[ik1, ik2, ik3, idirection, ieig, jeig] gives orbital matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to L_x | L_y | L_z.
+        self.orbital_K[ik1, ik2, ik3, idirection, ieig, jeig] gives the
+        orbital magnetic-moment matrix in eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
         vectors=self.vectors[:,:,:,None,:,:]
+        orbital_operator=-gL*self.model.orbital
         if self.model.overlap:
-            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ orbital_operator[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,None,None,:,:,:] @ vectors
-        if self.verbose==2: showElapsedTime(extraInfo=f"orbital op. in eig.-basis calculated")
+            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ orbital_operator[None,None,None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"local orbital magnetic moment in eig.-basis calculated")
 
         self.projected_orbital_K_list=[]
         for orbitalProjection in orbitalProjectionList:
             proj1=projectionOperator(orbitalProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(orbitalProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            orbital_proj=(proj1@self.model.orbital@proj2 + proj2@self.model.orbital@proj1)/2
+            orbital_proj=(proj1@orbital_operator@proj2 + proj2@orbital_operator@proj1)/2
             if self.model.overlap:
                 projected_orbital_K=vectors.conj().swapaxes(4,5) @ orbital_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
             else:
@@ -358,14 +357,15 @@ class SpinTorque(Spin):
         '''
         Compute spin torque matrix in eigen-basis
 
-        T = -i [S, H]
+        T = -i [mu_S, H]
 
-        In eigen-basis, H is diagonalized eigen-energy, S is computed in parent Spin class. So, the only work is matrix product
+        In eigen-basis, H is diagonalized eigen-energy and mu_S is computed
+        in the parent Spin class in units of mu_B.
 
         Indexing
         --------
         self.spinTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives spin torque matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to sigma_x | sigma_y | sigma_z.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
 
@@ -385,7 +385,7 @@ class SpinTorque(Spin):
         Build vector-potential torque vertices for velocity-gauge calculations.
 
         With H(A) = H0 - A_a v_a + 1/2 A_a A_b w_ab,
-        T(A) = -i[S,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
+        T(A) = -i[mu_S,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
         '''
         nbasis = self.energies.shape[-1]
         self.spinTorqueA_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
@@ -420,14 +420,15 @@ class OrbitalTorque(Orbital):
         '''
         Compute orbital torque matrix in eigen-basis
 
-        T = (-i/\hbar) [L, H]
+        T = -i [mu_L, H]
 
-        In eigen-basis, H is diagonalized eigen-energy, L is computed in parent Orbital class. So, the only work is matrix product
+        In eigen-basis, H is diagonalized eigen-energy and mu_L is computed
+        in the parent Orbital class in units of mu_B.
 
         Indexing
         --------
         self.orbitalTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives orbital torque matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to L_x | L_y | L_z.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
 
@@ -447,7 +448,7 @@ class OrbitalTorque(Orbital):
         Build vector-potential torque vertices for velocity-gauge calculations.
 
         With H(A) = H0 - A_a v_a + 1/2 A_a A_b w_ab,
-        T(A) = -i[L,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
+        T(A) = -i[mu_L,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
         '''
         nbasis = self.energies.shape[-1]
         self.orbitalTorqueA_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
@@ -478,31 +479,33 @@ class OrbitalTorque(Orbital):
         if self.verbose==2: showElapsedTime(extraInfo=f"high-order orbital torque in eig.-basis finished")
 
 class Spin_diag(FermiScan):
-    def __init__(self, spinProjectionList=[], **kwarg):
+    def __init__(self, spinProjectionList=[], gS:float=2.0, **kwarg):
         '''
-        Compute spin expectation of eigen-basis
+        Compute spin magnetic-moment expectations in eigen-basis, in mu_B.
 
         Indexing
         --------
-        self.spin_diag_K[ik1, ik2, ik3, idirection, ieig] gives spin expectation of eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to sigma_x | sigma_y | sigma_z.
+        self.spin_diag_K[ik1, ik2, ik3, idirection, ieig] gives the spin
+        magnetic-moment expectation of an eigenstate.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
 
         vectors=self.vectors[:,:,:,None,:,self.ibmin:self.ibmax+1]
+        spin_operator=-gS*self.model.spin/2
         if self.model.overlap:
-            _sv=self.model.spin[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            _sv=spin_operator[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
             self.spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
         else:
-            _sv=self.model.spin[None,None,None,:,:,:] @ vectors
+            _sv=spin_operator[None,None,None,:,:,:] @ vectors
             self.spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
-        if self.verbose==2: showElapsedTime(extraInfo=f"<spin> of eig.-basis calculated")
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin magnetic moment of eig.-basis calculated")
 
         self.projected_spin_diag_K_list=[]
         for spinProjection in spinProjectionList:
             proj1=projectionOperator(spinProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(spinProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            spin_proj=(proj1@self.model.spin@proj2 + proj2@self.model.spin@proj1)/2
+            spin_proj=(proj1@spin_operator@proj2 + proj2@spin_operator@proj1)/2
             if self.model.overlap:
                 _sv=spin_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
                 projected_spin_diag_K=np.sum(vectors.conj() * _sv, axis=(4,))
@@ -514,31 +517,34 @@ class Spin_diag(FermiScan):
             #proj2_K=proj2[None,None,None,:,:]@self.vectors[...,self.ibmin:self.ibmax+1]
 
 class Orbital_diag(FermiScan):
-    def __init__(self, orbitalProjectionList=[], **kwarg):
+    def __init__(self, orbitalProjectionList=[], gL:float=1.0, **kwarg):
         '''
-        Compute orbital expectation of eigen-basis
+        Compute local orbital magnetic-moment expectations in eigen-basis,
+        in mu_B, using the individual-atom approximation.
 
         Indexing
         --------
-        self.orbital_diag_K[ik1, ik2, ik3, idirection, ieig] gives orbital angular moment expectation of eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to L_x | L_y | L_z.
+        self.orbital_diag_K[ik1, ik2, ik3, idirection, ieig] gives the
+        orbital magnetic-moment expectation of an eigenstate.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
 
         vectors=self.vectors[:,:,:,None,:,self.ibmin:self.ibmax+1]
+        orbital_operator=-gL*self.model.orbital
         if self.model.overlap:
-            _ov=self.model.orbital[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            _ov=orbital_operator[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
             self.orbital_diag_K=np.sum(vectors.conj() * _ov, axis=(4,))
         else:
-            _ov=self.model.orbital[None,None,None,:,:,:] @ vectors
+            _ov=orbital_operator[None,None,None,:,:,:] @ vectors
             self.orbital_diag_K=np.sum(vectors.conj() * _ov, axis=(4,))
-        if self.verbose==2: showElapsedTime(extraInfo=f"<L> of eig.-basis calculated")
+        if self.verbose==2: showElapsedTime(extraInfo=f"local orbital magnetic moment of eig.-basis calculated")
 
         self.projected_orbital_diag_K_list=[]
         for orbitalProjection in orbitalProjectionList:
             proj1=projectionOperator(orbitalProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(orbitalProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            orbital_proj=(proj1@self.model.orbital@proj2 + proj2@self.model.orbital@proj1)/2
+            orbital_proj=(proj1@orbital_operator@proj2 + proj2@orbital_operator@proj1)/2
             if self.model.overlap:
                 _ov=orbital_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
                 projected_orbital_diag_K=np.sum(vectors.conj() * _ov, axis=(4,))
@@ -682,19 +688,13 @@ class Velocity(Energy):
                         self.u_K[..., a, b, c, :, :] = H3[..., a, b, c, :, :] - 1j*c1 - 1j*c2 - c3 - 1j*c4
 
 class OrbitalModern(Velocity):
-    def __init__(self, orbitalProjectionList=[], gL:float=1.0, **kwarg):
+    def __init__(self, orbitalProjectionList=[], **kwarg):
         '''
         Compute the modern orbital magnetic-moment matrix from Eq. S9 of
-        PRL 136, 236302 (2026), and its effective orbital angular momentum.
+        PRL 136, 236302 (2026).
 
         The velocity matrices used by this code are dH/dk = hbar*v_phys in
-        eV*angstrom.  ``orbitalMagneticMoment_K`` is therefore returned in
-        units of mu_B.  For an electron,
-
-            mu_L = -g_L*mu_B*L/hbar,
-
-        so ``orbital_K`` is the corresponding dimensionless L/hbar matrix.
-        It has the same indexing and units as ``Orbital.orbital_K``:
+        eV*angstrom. ``orbital_K`` is returned in units of mu_B:
 
         orbital_K[ik1, ik2, ik3, idirection, iband, jband].
         '''
@@ -727,16 +727,13 @@ class OrbitalModern(Velocity):
         # hbar^2/(2*m_e), expressed in eV*angstrom^2.  With velocity_K=dH/dk,
         # Eq. S9 divided by mu_B has the prefactor 1/(4*i*constant).
         hbar2_over_2me = hbar**2 / (2 * electron_mass * elementary_charge * angstrom**2)
-        self.orbitalMagneticMoment_K = moment_sum / (4j * hbar2_over_2me)
-        self.orbitalMagneticMoment_K = (
-            self.orbitalMagneticMoment_K +
-            self.orbitalMagneticMoment_K.conj().swapaxes(-2, -1)
+        self.orbital_K = moment_sum / (4j * hbar2_over_2me)
+        self.orbital_K = (
+            self.orbital_K +
+            self.orbital_K.conj().swapaxes(-2, -1)
         ) / 2
-        assert gL != 0, "gL must be nonzero"
-        self.orbital_K = -self.orbitalMagneticMoment_K / gL
 
         self.projected_orbital_K_list = []
-        self.projected_orbitalMagneticMoment_K_list = []
         for orbitalProjection in orbitalProjectionList:
             proj1 = projectionOperator(
                 orbitalProjection['source'],
@@ -750,12 +747,11 @@ class OrbitalModern(Velocity):
             )
             proj1_K = self.projectorInEigenBasis(proj1)[..., None, :, :]
             proj2_K = self.projectorInEigenBasis(proj2)[..., None, :, :]
-            projected_moment = (
-                proj1_K @ self.orbitalMagneticMoment_K
-                + self.orbitalMagneticMoment_K @ proj2_K
+            projected_orbital_K = (
+                proj1_K @ self.orbital_K
+                + self.orbital_K @ proj2_K
             ) / 2
-            self.projected_orbitalMagneticMoment_K_list.append(projected_moment)
-            self.projected_orbital_K_list.append(-projected_moment / gL)
+            self.projected_orbital_K_list.append(projected_orbital_K)
 
         if self.verbose == 2:
             showElapsedTime(extraInfo="modern orbital magnetic moment in eig.-basis finished")
@@ -827,11 +823,11 @@ class SpinVelocity(Velocity, Spin):
         Indexing:
         self.SRHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives spin velocity matrix in original basis,
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
 
         self.spinVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives spin velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
 
         if spinvelocityProjctionList is not empty
         self.spinVelocity_K_proj[iproj] gives each projected spin velocity matrix in eigen-basis.
@@ -866,11 +862,11 @@ class OrbitalVelocity(Velocity, Orbital):
         Indexing:
         self.ORHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives orbital velocity matrix in original basis,
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to Lx | Ly | Lz orbital-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
 
         self.orbitalVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives orbital velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to Lx | Ly | Lz orbital-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
 
         if orbitalvelocityProjctionList is not empty
         self.orbitalVelocity_K_proj[iproj] gives each projected orbital velocity matrix in eigen-basis.
@@ -904,11 +900,11 @@ class SpinVelocity_diag(Velocity, Spin):
         Indexing:
         self.SRHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives spin velocity matrix in original basis,
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
 
         self.spinVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives spin velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
 
         if spinvelocityProjctionList is not empty
         self.spinVelocity_K_proj[iproj] gives each projected spin velocity matrix in eigen-basis.
@@ -934,11 +930,11 @@ class OrbitalVelocity_diag(Velocity, Orbital):
         Indexing:
         self.ORHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives orbital velocity matrix in original basis,
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to Lx | Ly | Lz orbital-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
 
         self.orbitalVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives orbital velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to Lx | Ly | Lz orbital-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
 
         if orbitalvelocityProjctionList is not empty
         self.orbitalVelocity_K_proj[iproj] gives each projected orbital velocity matrix in eigen-basis.
@@ -2713,7 +2709,7 @@ class SpinBerryCurv(SpinVelocity):
         Calc. spin Berry curvature \Omega^{alpha,gamma}_{k,mn}.
 
         alpha can be x, y, z, denoting the (cart.) space direction. 
-        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the spin-polarization. 
+        gamma can be x, y, or z, corresponding to the spin magnetic-moment orientation.
         k denotes the crystal moment, m, n index the bands.
 
         Indexing: spinBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
@@ -2903,7 +2899,8 @@ class SpinGalvanicConductance(SpinVelocityCorrelation):
 class OrbitalVelocityCorrelation(Orbital,Velocity):
     def __init__(self, velocityProjectionList=[], orbitalProjectionList=[], **kwarg) -> None:
         '''
-        Calc. inter-band contributions on the correlation func of orbital angular moment and velocity \Omega^{alpha,gamma}_{k,m}.
+        Calc. inter-band contributions to the correlation function of
+        orbital magnetic moment and velocity.
 
         alpha can be x, y, z, denoting the (cart.) space direction. 
         gammma can be Lx, Ly, Lz, corresponding to the orientation of orbital-polarization. 
@@ -2996,7 +2993,8 @@ class SpinGalvanicConductance_diag(SpinVelocityCorrelation_diag):
 class OrbitalVelocityCorrelation_diag(Orbital_diag, Velocity_diag):
     def __init__(self, velocityProjectionList=[], orbitalProjectionList=[], **kwarg) -> None:
         '''
-        Calc. intra-band contributions on the correlation func of orbital angular moment and velocity \Omega^{alpha,gamma}_{k,m}.
+        Calc. intra-band contributions to the correlation function of
+        orbital magnetic moment and velocity.
 
         alpha can be x, y, z, denoting the (cart.) space direction. 
         gammma can be Lx, Ly, Lz, corresponding to the orientation of orbital-polarization. 
@@ -3044,7 +3042,7 @@ class SpintorqueVelocityCorrelation(SpinTorque,Velocity):
         Calc. correlation func of spin torque and velocity \Omega^{alpha,gamma}_{k,mn}.
 
         alpha can be x, y, z, denoting the (cart.) space direction. 
-        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the torque orientation. 
+        gamma can be x, y, or z, corresponding to the spin magnetic-moment torque orientation.
         k denotes the crystal moment, m, n index the bands.
 
         Indexing
@@ -3550,5 +3548,5 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
         return self.exchangeEnergy
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SpinOrbitalExpectationOnPath
+from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath
 from .Path import SurfaceBulkSpectraOnPath

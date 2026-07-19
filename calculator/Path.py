@@ -236,59 +236,58 @@ class BerryCurvOnPath(VelocityOnPath):
         if self.verbose==2: showElapsedTime(extraInfo=f"Berry curvature finished")
 
 class SpinExpectationOnPath(EnergyOnPath):
-    def __init__(self, **kwarg):
+    def __init__(self, gS:float=2.0, **kwarg):
         '''
-        Compute spin matrix in eigen-basis
+        Compute the spin magnetic-moment matrix along a k path, in mu_B.
 
         Indexing
         ---------
-        - self.spin_eig[ik, igamma, ieig, jeig] gives spin matrix in eigen-basis. 
-          igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        - self.spin_eig[ik, idirection, ieig, jeig] gives the spin
+          magnetic-moment matrix in eigen-basis.
+          idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
         vectors=self.vectors[:,None,:,self.ibmin:]
+        spin_operator=-gS*self.model.spin/2
         if self.model.overlap:
-            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ spin_operator[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ self.model.spin[None,:,:,:] @ vectors
-        if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
+            self.spin_eig=vectors.conj().swapaxes(-2,-1) @ spin_operator[None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin magnetic moment on path calculated")
 
 class OrbitalExpectationOnPath(EnergyOnPath):
-    def __init__(self, **kwarg):
+    def __init__(self, gL:float=1.0, **kwarg):
         '''
-        Compute orbital matrix in eigen-basis
+        Compute the local orbital magnetic-moment matrix along a k path,
+        in mu_B, using the individual-atom approximation.
 
         Indexing
         --------
-        - self.orbital_eig[ik, igamma, ieig, jeig] gives orbital matrix in eigen-basis. 
-          igamma can be 0 | 1 | 2 | 3, corresponding to L^x | L^y | L^z | L^0 orbital-polarization. 
+        - self.orbital_eig[ik, idirection, ieig, jeig] gives the orbital
+          magnetic-moment matrix in eigen-basis.
+          idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
         vectors=self.vectors[:,None,:,self.ibmin:]
+        orbital_operator=-gL*self.model.orbital
         if self.model.overlap:
-            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
+            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ orbital_operator[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
-            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ self.model.orbital[None,:,:,:] @ vectors
-        if self.verbose==2: showElapsedTime(extraInfo=f"orbital op. in eig.-basis calculated")
+            self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ orbital_operator[None,:,:,:] @ vectors
+        if self.verbose==2: showElapsedTime(extraInfo=f"local orbital magnetic moment on path calculated")
 
 class OrbitalModernExpectationOnPath(VelocityOnPath):
-    def __init__(self, gL:float=1.0, **kwarg):
+    def __init__(self, **kwarg):
         '''
         Compute the modern orbital magnetic-moment matrix along a k path
         using Eq. S9 of PRL 136, 236302 (2026).
 
         The velocity matrices used by this code are dH/dk = hbar*v_phys in
-        eV*angstrom. ``orbitalMagneticMoment_eig`` is returned in units of
-        mu_B. For an electron,
-
-            mu_L = -g_L*mu_B*L/hbar,
-
-        so ``orbital_eig`` is the corresponding dimensionless L/hbar matrix
-        and can be used in place of OrbitalExpectationOnPath.orbital_eig.
+        eV*angstrom. ``orbital_eig`` is returned in units of mu_B and can
+        be used in place of OrbitalExpectationOnPath.orbital_eig.
 
         Indexing
         --------
-        orbitalMagneticMoment_eig[ik, idirection, iband, jband]
         orbital_eig[ik, idirection, iband, jband]
         '''
         super().__init__(**kwarg)
@@ -326,48 +325,30 @@ class OrbitalModernExpectationOnPath(VelocityOnPath):
             hbar**2 /
             (2 * electron_mass * elementary_charge * angstrom**2)
         )
-        self.orbitalMagneticMoment_eig = (
+        self.orbital_eig = (
             moment_sum / (4j * hbar2_over_2me)
         )
-        self.orbitalMagneticMoment_eig = (
-            self.orbitalMagneticMoment_eig
-            + self.orbitalMagneticMoment_eig.conj().swapaxes(-2, -1)
+        self.orbital_eig = (
+            self.orbital_eig
+            + self.orbital_eig.conj().swapaxes(-2, -1)
         ) / 2
-
-        assert gL != 0, "gL must be nonzero"
-        self.orbital_eig = -self.orbitalMagneticMoment_eig / gL
 
         if self.verbose==2:
             showElapsedTime(extraInfo="modern orbital magnetic moment on path finished")
 
-class SpinOrbitalExpectationOnPath(SpinExpectationOnPath, OrbitalModernExpectationOnPath):
-    def __init__(self, gL:float=1.0, **kwarg):
-        '''
-        Compute spin and orbital matrix in eigen-basis
-
-        Indexing
-        --------
-        - self.spin_eig[ik, igamma, ieig, jeig] gives spin matrix in eigen-basis.
-          igamma can be 0 | 1 | 2 | 3, corresponding to S^x | S^y | S^z | S^0 orbital-polarization. 
-
-        - self.orbital_eig[ik, igamma, ieig, jeig] gives orbital matrix in eigen-basis. 
-          igamma can be 0 | 1 | 2 | 3, corresponding to L^x | L^y | L^z | L^0 orbital-polarization. 
-        '''
-        super().__init__(gL=gL, **kwarg)
-
 class SpinVelocityOnPath(VelocityOnPath):
-    def __init__(self, **kwarg) -> None:
+    def __init__(self, gS:float=2.0, **kwarg) -> None:
         '''
         Compute spin velocity matrix in original basis and eigen-basis
 
         Indexing:
         self.SRHam_K[ik, idirection, igamma, iorb, jorb] gives spin velocity matrix in original basis,
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
 
         self.spinVelocity_K[ik, idirection, igamma, ieig, jeig] gives spin velocity matrix in eigen-basis.
         idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2 | 3, corresponding to sigma^x | sigma^y | sigma^z | sigma^0 spin-polarization. 
+        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
         '''
         super().__init__(**kwarg)
         self.Iodd = True
@@ -378,6 +359,7 @@ class SpinVelocityOnPath(VelocityOnPath):
             spin_eig=vectors.conj().transpose((0,1,3,2)) @ self.model.spin[None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
         else:
             spin_eig=vectors.conj().transpose((0,1,3,2)) @ self.model.spin[None,:,:,:] @ vectors
+        spin_eig *= -gS/2
         if self.verbose==2: showElapsedTime(extraInfo=f"spin op. in eig.-basis calculated")
         spin=spin_eig[...,None,:,:,:]
         velocity=self.velocity_K[...,None,:,:]
@@ -391,12 +373,12 @@ class SpinBerryCurvOnPath(SpinVelocityOnPath):
         Calc. spin Berry curvature \Omega^{alpha,gamma}_{k,mn}.
 
         alpha can be x, y, z, denoting the (cart.) space direction. 
-        gammma can be sigma^x, sigma^y, sigma^z, sigma^0, corresponding to the spin-polarization. 
+        gamma can be x, y, or z, corresponding to the spin magnetic-moment orientation.
         k denotes the crystal moment, m, n index the bands.
 
         Indexing: spinBerryCurv[ik, ialpha, igamma, ieig]
         '''
-        super().__init__(kwarg)
+        super().__init__(**kwarg)
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 

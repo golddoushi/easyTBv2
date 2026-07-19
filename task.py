@@ -13,7 +13,7 @@ from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, In
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
-from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SpinOrbitalExpectationOnPath, SurfaceBulkSpectraOnPath
+from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
 
 class BZGridTask:
 
@@ -549,7 +549,7 @@ def solveMagneticMoment(param):
         calc_orbital=OrbitalModern(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
         calc_berry=BerryCurv(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
         spin_eig       = np.diagonal(calc.spin_K,axis1=-2,axis2=-1)
-        orbital_LC_eig = np.diagonal(calc_orbital.orbitalMagneticMoment_K,axis1=-2,axis2=-1)
+        orbital_LC_eig = np.diagonal(calc_orbital.orbital_K,axis1=-2,axis2=-1)
         orbital_IC_eig = np.zeros(tuple(param['FFT grid'])+(3,param['model'].norbs),dtype=complex)
         _orbital_IC_eig = (calc.energies[...,None,None,:] - param['model'].fermi) * calc_berry.BerryCurv / unit
         orbital_IC_eig[...,0,:]=_orbital_IC_eig[...,1,2,:]
@@ -561,7 +561,7 @@ def solveMagneticMoment(param):
     elif param['orbital proj']:
         calc=OrbitalModern(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
         calc_berry=BerryCurv(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
-        orbital_LC_eig = np.diagonal(calc.orbitalMagneticMoment_K,axis1=-2,axis2=-1)
+        orbital_LC_eig = np.diagonal(calc.orbital_K,axis1=-2,axis2=-1)
         orbital_IC_eig = np.zeros(tuple(param['FFT grid'])+(3,param['model'].norbs),dtype=complex)
         _orbital_IC_eig = (calc.energies[...,None,None,:] - param['model'].fermi) * calc_berry.BerryCurv / unit
         orbital_IC_eig[...,0,:]=_orbital_IC_eig[...,1,2,:]
@@ -592,14 +592,17 @@ def solveSurfaceSpectraTask(param):
 
 def solveBandStructure(param):
     spin_eig, orbital_eig=None, None
+    degen=param.get('degen', 1e-6)
     if param['spin proj'] and param['orbital proj']:
-        calc=SpinOrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=param['degen'])
-        spin_eig, orbital_eig = calc.spin_eig.real, calc.orbital_eig.real
+        calc=SpinExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
+        spin_eig = calc.spin_eig.real
+        calc=OrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
+        orbital_eig = calc.orbital_eig.real
     elif param['spin proj']:
-        calc=SpinExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=param['degen'])
+        calc=SpinExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
         spin_eig = calc.spin_eig.real
     elif param['orbital proj']:
-        calc=OrbitalModernExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=param['degen'])
+        calc=OrbitalModernExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
         orbital_eig = calc.orbital_eig.real
     else:
         calc=EnergyOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
