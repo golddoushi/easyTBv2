@@ -6,7 +6,7 @@ import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import Spin, Orbital, OrbitalModern, BerryCurv
+from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
 from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
@@ -81,6 +81,7 @@ class BZGridTask:
                     'phase':np.array([np.exp(2j*np.pi*((q/BZGrid) @ Rvec)) for Rvec in model.iRvec]),
                     'model':model,
                     'FFT grid':tuple(FastGrid),
+                    'verbose':False, # quiet by default
                     }
                     newTask.update(args)
                     if not BZSymm: 
@@ -109,11 +110,6 @@ class BZGridTask:
                 self.results.append(result)
                 showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
         else: # parallel run
-            #for result in pool.imap_unordered(taskFunc,tasks):
-            #    self.results.append(result)
-            #    if len(self.results) % ncores == 1: showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
-            #pool.close()
-            #pool.join()
             for itask in range(0,len(tasks),ncores): tasks[itask]["verbose"]=2 # output one information per batch
             with ThreadPoolExecutor(max_workers=ncores) as executor:
                 futures = [executor.submit(taskFunc, task) for task in tasks]
@@ -206,7 +202,7 @@ class BZLineTask:
                 'indices': chunk,
                 'kpath': self.kpath[chunk],
                 'model': model,
-                'verbose': 0, # quiet by default
+                'verbose': False, # quiet by default
             }
             newTask.update(args)
             tasks.append(newTask)
@@ -541,34 +537,22 @@ def solveVelocity_diag(param):
     return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
 
 def solveMagneticMoment(param):
-    from scipy.constants import elementary_charge, electron_mass, hbar, angstrom
-    unit=(hbar**2/(2 * electron_mass * elementary_charge * angstrom**2))
     spin_eig, orbital_LC_eig, orbital_IC_eig=None, None, None
+    skip_low=param.get('skip low',False)
     if param['spin proj'] and param['orbital proj']:
-        calc=Spin(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
-        calc_orbital=OrbitalModern(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
-        calc_berry=BerryCurv(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        calc=SpinOrbital(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
         spin_eig       = np.diagonal(calc.spin_K,axis1=-2,axis2=-1)
-        orbital_LC_eig = np.diagonal(calc_orbital.orbital_K,axis1=-2,axis2=-1)
-        orbital_IC_eig = np.zeros(tuple(param['FFT grid'])+(3,param['model'].norbs),dtype=complex)
-        _orbital_IC_eig = (calc.energies[...,None,None,:] - param['model'].fermi) * calc_berry.BerryCurv / unit
-        orbital_IC_eig[...,0,:]=_orbital_IC_eig[...,1,2,:]
-        orbital_IC_eig[...,1,:]=_orbital_IC_eig[...,2,0,:]
-        orbital_IC_eig[...,2,:]=_orbital_IC_eig[...,0,1,:]
+        orbital_LC_eig = np.diagonal(calc.orbital_K,axis1=-2,axis2=-1)
+        if hasattr(calc,"orbital_IC_K"): orbital_IC_eig = calc.orbital_IC_K
     elif param['spin proj']:
-        calc=Spin(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        calc=Spin(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
         spin_eig       = np.diagonal(calc.spin_K,axis1=-2,axis2=-1)
     elif param['orbital proj']:
-        calc=OrbitalModern(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
-        calc_berry=BerryCurv(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        calc=OrbitalModern_Full(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
         orbital_LC_eig = np.diagonal(calc.orbital_K,axis1=-2,axis2=-1)
-        orbital_IC_eig = np.zeros(tuple(param['FFT grid'])+(3,param['model'].norbs),dtype=complex)
-        _orbital_IC_eig = (calc.energies[...,None,None,:] - param['model'].fermi) * calc_berry.BerryCurv / unit
-        orbital_IC_eig[...,0,:]=_orbital_IC_eig[...,1,2,:]
-        orbital_IC_eig[...,1,:]=_orbital_IC_eig[...,2,0,:]
-        orbital_IC_eig[...,2,:]=_orbital_IC_eig[...,0,1,:]
+        if hasattr(calc,"orbital_IC_K"): orbital_IC_eig = calc.orbital_IC_K
     else:
-        calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'])
+        calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
     return {
         'energies': calc.energies,
         'vectors':calc.vectors,

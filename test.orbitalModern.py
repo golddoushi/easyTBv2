@@ -83,10 +83,10 @@ def run():
     model._refreshHamiltonianDerivedMatrices()
     #'''
 
-    fermi=-4            # model hamiltonian
+    fermi=-1              # model hamiltonian
     model.setFermi(fermi)
 
-    #'''
+    '''
     # check band intepolation
     spin_proj, orbital_proj= False, True
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,

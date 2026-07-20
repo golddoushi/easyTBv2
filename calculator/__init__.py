@@ -233,6 +233,7 @@ class Energy(Calculator):
         self.ibmin=len(self.energies[(0,0,0)][self.energies[(0,0,0)]<mid_valence])
         self.energies=self.energies[:,:,:,self.ibmin:]
         self.vectors=self.vectors[:,:,:,:,self.ibmin:]
+        if self.verbose: print(f"Low-lying bands skipped, {self.ibmin=}")
     
     def projectorInEigenBasis(self,projectorInLocalBasis:np.ndarray):
         '''
@@ -345,12 +346,9 @@ class Orbital(Energy):
         for orbitalProjection in orbitalProjectionList:
             proj1=projectionOperator(orbitalProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(orbitalProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            orbital_proj=(proj1@orbital_operator@proj2 + proj2@orbital_operator@proj1)/2
-            if self.model.overlap:
-                projected_orbital_K=vectors.conj().swapaxes(4,5) @ orbital_proj[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
-            else:
-                projected_orbital_K=vectors.conj().swapaxes(4,5) @ orbital_proj[None,None,None,:,:,:] @ vectors
-            self.projected_orbital_K_list.append(projected_orbital_K)
+            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
+            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
+            self.projected_orbital_K_list.append((proj1_K@self.orbital_K + self.orbital_K@proj2_K)/2)
 
 class SpinTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
@@ -687,11 +685,12 @@ class Velocity(Energy):
 
                         self.u_K[..., a, b, c, :, :] = H3[..., a, b, c, :, :] - 1j*c1 - 1j*c2 - c3 - 1j*c4
 
-class OrbitalModern(Velocity):
+class OrbitalModern_LC(Velocity):
     def __init__(self, orbitalProjectionList=[], **kwarg):
         '''
-        Compute the modern orbital magnetic-moment matrix from Eq. S9 of
-        PRL 136, 236302 (2026).
+        Compute the local-circulation (LC), or Bloch-state self-rotation,
+        orbital magnetic-moment matrix from Eq. S9 of PRL 136, 236302
+        (2026).
 
         The velocity matrices used by this code are dH/dk = hbar*v_phys in
         eV*angstrom. ``orbital_K`` is returned in units of mu_B:
@@ -700,7 +699,7 @@ class OrbitalModern(Velocity):
         '''
         super().__init__(**kwarg)
 
-        nbands = self.model.norbs
+        nbands = self.energies.shape[-1]
         moment_sum = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
         cross_pairs = ((1, 2), (2, 0), (0, 1))
 
@@ -754,7 +753,7 @@ class OrbitalModern(Velocity):
             self.projected_orbital_K_list.append(projected_orbital_K)
 
         if self.verbose == 2:
-            showElapsedTime(extraInfo="modern orbital magnetic moment in eig.-basis finished")
+            showElapsedTime(extraInfo="modern LC orbital magnetic moment in eig.-basis finished")
 
 class Velocity_diag(FermiScan):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
@@ -952,7 +951,8 @@ class OrbitalVelocity_diag(Velocity, Orbital):
         
 class BerryCurv(Velocity):
     
-    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[],
+                 _simultaneousVelocityProjection=False, **kwarg) -> None:
         '''
         Calc. Berry curvature \Omega_{alpha,beta}_{k,mn}.
 
@@ -964,15 +964,117 @@ class BerryCurv(Velocity):
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
-        self.projected_BerryCurv=np.zeros((len(velocityProjectionList)+1,len(velocityProjectionList)+1)+self.kgrid+(3,3,self.model.norbs-self.ibmin))
-        for ivelocity_alpha, proj_velocity_alpha_K in enumerate([self.velocity_K]+self.projected_velocity_K_list):
-            for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K]+self.projected_velocity_K_list):
-                for ialpha in range(3):
-                    for ibeta in range(3):
-                        self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]=-2*np.diagonal(proj_velocity_beta_K[...,ibeta,:,:] @ (dEInverse2*proj_velocity_alpha_K[...,ialpha,:,:]),0,-2,-1).imag
-        
-        self.BerryCurv=self.projected_BerryCurv[0,0]
+        velocity_K_list = [self.velocity_K]+self.projected_velocity_K_list
+        berry_shape = self.kgrid+(3,3,self.energies.shape[-1])
+        if _simultaneousVelocityProjection:
+            self.projected_BerryCurv=np.zeros((len(velocity_K_list),)+berry_shape)
+            velocity_pairs = (
+                (iprojection, iprojection, velocity_K, velocity_K)
+                for iprojection, velocity_K in enumerate(velocity_K_list)
+            )
+        else:
+            self.projected_BerryCurv=np.zeros(
+                (len(velocity_K_list),len(velocity_K_list))+berry_shape
+            )
+            velocity_pairs = (
+                (ivelocity_alpha, ivelocity_beta,
+                 proj_velocity_alpha_K, proj_velocity_beta_K)
+                for ivelocity_alpha, proj_velocity_alpha_K in enumerate(velocity_K_list)
+                for ivelocity_beta, proj_velocity_beta_K in enumerate(velocity_K_list)
+            )
+
+        for ivelocity_alpha, ivelocity_beta, proj_velocity_alpha_K, proj_velocity_beta_K in velocity_pairs:
+            if _simultaneousVelocityProjection:
+                berry_curv = self.projected_BerryCurv[ivelocity_alpha]
+            else:
+                berry_curv = self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta]
+            for ialpha in range(3):
+                for ibeta in range(3):
+                    berry_curv[...,ialpha,ibeta,:]=-2*np.diagonal(
+                        proj_velocity_beta_K[...,ibeta,:,:] @
+                        (dEInverse2*proj_velocity_alpha_K[...,ialpha,:,:]),
+                        0,-2,-1
+                    ).imag
+
+        if _simultaneousVelocityProjection:
+            self.BerryCurv=self.projected_BerryCurv[0]
+        else:
+            self.BerryCurv=self.projected_BerryCurv[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"Berry curvature finished")
+
+class OrbitalModern_IC(BerryCurv):
+    def __init__(self, orbitalProjectionList=[], **kwarg) -> None:
+        '''
+        Compute the itinerant-circulation (IC) contribution to the
+        equilibrium orbital magnetization, in mu_B.
+
+        Unlike the LC magnetic-moment operator, this is a band-diagonal
+        ground-state contribution. A projected IC term applies the same
+        projection to both velocity vertices of the Berry curvature.
+
+        Indexing:
+        orbital_IC_K[ik1, ik2, ik3, idirection, iband].
+        '''
+        super().__init__(
+            velocityProjectionList=orbitalProjectionList,
+            _simultaneousVelocityProjection=True,
+            orbitalProjectionList=orbitalProjectionList,
+            **kwarg,
+        )
+
+        hbar2_over_2me = hbar**2 / (
+            2 * electron_mass * elementary_charge * angstrom**2
+        )
+
+        def berryCurvatureToItinerantMoment(berryCurvature):
+            orbital_tensor = (
+                (self.energies[...,None,None,:] - self.model.fermi)
+                * berryCurvature / hbar2_over_2me
+            )
+            return np.stack((
+                orbital_tensor[...,1,2,:],
+                orbital_tensor[...,2,0,:],
+                orbital_tensor[...,0,1,:],
+            ),axis=-2)
+
+        self.orbital_IC_K = berryCurvatureToItinerantMoment(self.BerryCurv)
+        self.projected_orbital_IC_K_list = [
+            berryCurvatureToItinerantMoment(projected_BerryCurv)
+            for projected_BerryCurv in self.projected_BerryCurv[1:]
+        ]
+        if self.verbose==2:
+            showElapsedTime(extraInfo="modern IC orbital magnetization finished")
+
+class OrbitalModern_Full(OrbitalModern_IC, OrbitalModern_LC):
+    def __init__(self, orbitalProjectionList=[], **kwarg) -> None:
+        '''
+        Compute LC and IC orbital magnetism using one eigensystem and one
+        velocity calculation.
+
+        ``orbital_K`` is the LC magnetic-moment operator. The band-diagonal
+        equilibrium integrand including IC is ``orbital_full_diag_K``.
+        '''
+        super().__init__(orbitalProjectionList=orbitalProjectionList, **kwarg)
+        orbital_LC_diag_K = np.diagonal(
+            self.orbital_K,axis1=-2,axis2=-1
+        )
+        self.orbital_full_diag_K = orbital_LC_diag_K+self.orbital_IC_K
+        self.projected_orbital_full_diag_K_list = [
+            np.diagonal(projected_orbital_K,axis1=-2,axis2=-1)
+            + projected_orbital_IC_K
+            for projected_orbital_K, projected_orbital_IC_K in zip(
+                self.projected_orbital_K_list,
+                self.projected_orbital_IC_K_list,
+            )
+        ]
+
+class SpinOrbital(Spin, Orbital):
+    '''
+    Compute spin, LC orbital, and IC orbital magnetism while sharing the
+    eigensystem and velocity calculation.
+    '''
+    def __init__(self, magneticProjectionList=[], gS = 2, **kwarg):
+        super().__init__(spinProjectionList=magneticProjectionList, orbitalProjections=magneticProjectionList, gS=gS, **kwarg)
 
 class AnormalousHallConductance(BerryCurv):
 

@@ -30,11 +30,11 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, outputBZDistrib
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/MoTe2/"
-    model=System_w90(
+    mainDir="./mcalc/Au111/"
+    model=System_omx(
         mainDir=mainDir,
         #hamR="wannier90",
-        #hamR="omx",
+        hamR="omx",
         #hamR="BN_afm_soc",
         cutoff=-0.002,
         poscar="POSCAR",
