@@ -13,6 +13,7 @@ from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, In
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
+from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_FermiSea, SecondOrderAHC_FermiSurf
 from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
 
 class BZGridTask:
@@ -305,6 +306,33 @@ def solveAHC_LG_DM(param):
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
+def _solve2ndAHC(param, calculatorClass):
+    calc = calculatorClass(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'], fermiList=param['fermi'], verbose=param.get('verbose', 0),
+            eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026), degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),)
+    result = {"energies": calc.energies,
+              "BCP": calc.G_K, "response": calc.response,
+              "sigma": calc.sigma, "iq": param["iq"]}
+    if hasattr(calc, "G_Dipole_K"):
+        result["BCP dipole"] = calc.G_Dipole_K
+    return result
+
+def solve2ndAHC_FermiSea(param):
+    return _solve2ndAHC(param, SecondOrderAHC_FermiSea)
+
+
+def solve2ndAHC_FermiSurf(param):
+    return _solve2ndAHC(param, SecondOrderAHC_FermiSurf)
+
+def solveINPHE_BCP(param):
+    calc = IntrinsicNPHE_BCP(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'], fermiList=param['fermi'],
+            eta=param.get('eta', 0.0), kBT=param.get('kBT', 0.026), degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
+            mag_type=param.get('mag type', 'total'), gS=param.get('gS', 2.0), verbose=param.get('verbose', 0))
+    return{"energies": calc.energies,
+           "response": calc.response,
+           "sigma": calc.Upsilon,
+           "iq": param["iq"],
+    }
+
 def solveBPVE_VG(param):
     calc=BulkPhotovoltaicConductance_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
@@ -378,7 +406,7 @@ def solveBPVE_TDSE_LG(param):
 def solveIFE_VG(param):
     calc = InverseFaradayEffect_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
+                                   ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    )
@@ -389,7 +417,7 @@ def solveIFE_VG(param):
 def solveIFE_VG_DM(param):
     calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
+                                   ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    )
@@ -400,7 +428,7 @@ def solveIFE_VG_DM(param):
 def solveIFE_LG(param):
     calc = InverseFaradayEffect_LG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
+                                   ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    )
@@ -411,7 +439,7 @@ def solveIFE_LG(param):
 def solveIFE_LG_DM(param):
     calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
+                                   ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    )
@@ -422,7 +450,7 @@ def solveIFE_LG_DM(param):
 def solveIFE_TDSE(param):
     calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
+                                   ife_type=param['mag type'],
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
                                    n_steps_per_cycle=param.get('n steps per cycle', 100),
@@ -433,7 +461,7 @@ def solveIFE_TDSE(param):
 def solveIFE_BlochAcceleration_TDSE(param):
     calc = InverseFaradayEffect_BlochAcceleration_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   ife_type=param['IFE type'],
+                                   ife_type=param['mag type'],
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
                                    n_steps_per_cycle=param.get('n steps per cycle', 100),
@@ -446,7 +474,7 @@ def solveIFTorque_TDSE(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
+                                   torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
                                    n_steps_per_cycle=param.get('n steps per cycle', 100),
@@ -459,7 +487,7 @@ def solveIFTorque_VG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
+                                   torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    )
@@ -472,7 +500,7 @@ def solveIFTorque_LG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   torqueProjectionList=torqueProjectionList,ife_type=param['IFE type'],
+                                   torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    )

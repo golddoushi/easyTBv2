@@ -17,6 +17,7 @@ from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_BlochAcceleration_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
 from task import solveIFTorque_TDSE, solveIFTorque_VG_DM, solveIFTorque_LG_DM
+from task import solveINPHE_BCP
 #+------------+
 #| Line tasks |
 #+------------+
@@ -26,16 +27,15 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
-from fileio import writeVolumeData, output3rdFreqDenpendentData, outputBZDistributionData
+from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, outputBZDistributionData
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/Au111/"
-    model=System_omx(
+    mainDir="./mcalc/BN/"
+    model=System_tb(
         mainDir=mainDir,
-        #hamR="wannier90",
-        hamR="omx",
-        #hamR="BN_afm_soc",
+        #hamR="omx",
+        hamR="BN_fm_rashiba",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -153,12 +153,12 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     fermi=0            # model hamiltonian
     
-    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
-    fermiAxis=np.array([fermi,])
+    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
+    #fermiAxis=np.array([fermi,])
     omegaAxis=np.linspace(0.5,4.0,101)
     model.setFermi(fermi)
     
-    #'''
+    '''
     # check band intepolation
     spin_proj, orbital_proj= True, True
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
@@ -220,7 +220,7 @@ def run():
     recordOmegaIndexList=[41]
     recordFermiIndexList=[0]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveIFE_TDSE,
+    calc=BZGridTask(model, solveINPHE_BCP,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -235,7 +235,7 @@ def run():
                           'record frequency ids':recordOmegaIndexList,
                           'record fermi ids':recordFermiIndexList,
 
-                          "IFE type": "total", # Type of Inversed Faraday effect, can be spin | orbital | total
+                          "mag type": "total", # Type of Inversed Faraday effect, can be spin | orbital | total
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
@@ -261,7 +261,7 @@ def run():
                              result_q['iq'][2]::calc.QGrid[2],
                              :, :, :, :, :] = result_q['projected response']
         #continue
-        projected_sigma += result_q['projected sigma']
+        if 'projected sigma' in result_q: projected_sigma += result_q['projected sigma']
         if not BZSymm:  # symmetrization on the BZ is only implemented for the whole tensor
             sigma += result_q['sigma']
         #else:
@@ -324,7 +324,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    #'''
+    '''
     # output projected 3-ranked, frequency-dependent complex conductance
     output3rdFreqDenpendentData(projected_sigma.real/len(calc.results), fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis, 
                                 filePath="%s/thirdOrderFreqDependent.real.txt"%mainDir)
@@ -346,6 +346,10 @@ def run():
                             )
     
     exit()#'''
+
+    # output 4-ranked conductance
+    output4thData(sigma/len(calc.results), fermi, fermiAxis, filePath="%s/fourthOrderFreqDependent.txt"%mainDir)
+    exit()
 
     kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
     #'''

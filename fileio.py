@@ -582,7 +582,7 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
         Position of the file to be output
     '''
     with open("%s"%filePath,"w") as fout:
-        fout.write("Omega(eV) Fermi(eV) ")
+        fout.write("   Omega(eV)   Fermi(eV)")
         directionName=['x','y','z']
         for iproj1 in range(tensor_data.shape[0]):
             for iproj2 in range(tensor_data.shape[1]):
@@ -593,9 +593,8 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
                                 fout.write(f"            {directionName[alpha1]}{directionName[alpha2]}{directionName[beta]}")
         fout.write("\n")
         for iomega, omega in enumerate(omegaAxis):
-            fout.write(f"{omega:9.6f}")
             for ifermi, fermiEnergy in enumerate(fermiAxis):
-                fout.write(f"{fermiEnergy-fermi:9.6f}")
+                fout.write(f"{omega:12.6f}{fermiEnergy-fermi:12.6f}")
                 for iproj1 in range(tensor_data.shape[0]):
                     for iproj2 in range(tensor_data.shape[1]):
                         for iproj3 in range(tensor_data.shape[2]):
@@ -604,6 +603,40 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
                                     for beta in range(3):
                                         fout.write(f"{tensor_data[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
                 fout.write("\n")
+
+def output4thData(tensor_data, fermi, fermiAxis, filePath):
+    '''
+    Output a Fermi-dependent fourth-rank Cartesian tensor.
+
+    ``tensor_data[ifermi, a, b, c, d]`` and ``fermiAxis[ifermi]`` use
+    absolute Fermi energies. The first output column is relative to ``fermi``.
+    '''
+    tensor_data = np.asarray(tensor_data)
+    fermiAxis = np.asarray(fermiAxis)
+    expectedShape = (len(fermiAxis), 3, 3, 3, 3)
+    assert tensor_data.shape == expectedShape, (
+        f"expect tensor_data shape {expectedShape}, got {tensor_data.shape}"
+    )
+
+    directionName = ('x', 'y', 'z')
+    with open(filePath, "w") as fout:
+        fout.write("Fermi(eV) ")
+        for a in range(3):
+            for b in range(3):
+                for c in range(3):
+                    for d in range(3):
+                        componentName = (
+                            directionName[a]+directionName[b]
+                            + directionName[c]+directionName[d]
+                        )
+                        fout.write(f"{componentName:>15s}")
+        fout.write("\n")
+
+        for ifermi, fermiEnergy in enumerate(fermiAxis):
+            fout.write(f"{fermiEnergy-fermi:9.6f}")
+            for component in np.ndindex((3, 3, 3, 3)):
+                fout.write(f"{tensor_data[(ifermi,)+component]:15.6E}")
+            fout.write("\n")
 
 def outputBZDistributionData(tensor_data, filePath, reciLattice, componentLabels=None,
                              bzRepeat=(0, 0, 0)):
