@@ -200,12 +200,13 @@ class Energy(Calculator):
 
         deltaEInverse[ik1, ik2, ik3, ieig, jeig] = 1/(E_{ki} - E_{kj} - 1j*eta)
         '''
-        #self.deltaE = self.energies[:,:,:,self.ibmin:,None] - self.energies[:,:,:,None,self.ibmin:]
         self.deltaE = self.energies[:,:,:,:,None] - self.energies[:,:,:,None,:]
         self.deltaEInverse =np.zeros_like(self.deltaE, dtype=complex)
+        self.deltaEInverse_pure =np.zeros_like(self.deltaE, dtype=float)
         self.deltaEInverse2=np.zeros_like(self.deltaE, dtype=complex)
         nondegeneratedCondition=abs(self.deltaE)>self.degen
         self.deltaEInverse[nondegeneratedCondition] =1./(self.deltaE[nondegeneratedCondition] - 1j*self.eta)
+        self.deltaEInverse_pure[nondegeneratedCondition] =1./self.deltaE[nondegeneratedCondition]
         self.deltaEInverse2[nondegeneratedCondition]=1./self.deltaE[nondegeneratedCondition]/(self.deltaE[nondegeneratedCondition] - 1j*self.eta)
         if self.smr_type == 'Lorentzian':
             return
@@ -296,7 +297,7 @@ class PDOS(Energy):
         self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(self.kgrid)
 
 class Spin(Energy):
-    def __init__(self, spinProjectionList=[], gS:float=2.0, **kwarg):
+    def __init__(self, spinProjectionList=[], gS:float=2.0, _computeSpin=True, **kwarg,):
         '''
         Compute the spin magnetic-moment matrix in eigen-basis, in mu_B.
 
@@ -306,6 +307,8 @@ class Spin(Energy):
         idirection can be 0 | 1 | 2, corresponding to x | y | z.
         '''
         super().__init__(**kwarg)
+        if not _computeSpin:
+            return
         vectors=self.vectors[:,:,:,None,:,:]
         spin_operator=-gS*self.model.spin/2
         if self.model.overlap:
@@ -686,7 +689,7 @@ class Velocity(Energy):
                         self.u_K[..., a, b, c, :, :] = H3[..., a, b, c, :, :] - 1j*c1 - 1j*c2 - c3 - 1j*c4
 
 class OrbitalModern_LC(Velocity):
-    def __init__(self, orbitalProjectionList=[], **kwarg):
+    def __init__(self, orbitalProjectionList=[], _computeOrbitalModernLC=True, **kwarg,):
         '''
         Compute the local-circulation (LC), or Bloch-state self-rotation,
         orbital magnetic-moment matrix from Eq. S9 of PRL 136, 236302
@@ -698,6 +701,8 @@ class OrbitalModern_LC(Velocity):
         orbital_K[ik1, ik2, ik3, idirection, iband, jband].
         '''
         super().__init__(**kwarg)
+        if not _computeOrbitalModernLC:
+            return
 
         nbands = self.energies.shape[-1]
         moment_sum = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
@@ -1068,7 +1073,7 @@ class OrbitalModern_Full(OrbitalModern_IC, OrbitalModern_LC):
             )
         ]
 
-class SpinOrbital(Spin, Orbital):
+class SpinOrbital(Spin, OrbitalModern_Full):
     '''
     Compute spin, LC orbital, and IC orbital magnetism while sharing the
     eigensystem and velocity calculation.
@@ -1187,6 +1192,325 @@ class AnormalousHallConductance_LG_DM(Velocity):
         self.projected_sigma = projected_sigma * (2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2])))
         self.sigma = self.projected_sigma[0, 0]
         if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix AHE finished")
+
+class BerryConnectionPolarizability(Velocity):
+    def __init__(self, velocityProjectionList=[], **kwarg) -> None:
+        '''
+        Compute the Berry-connection polarizability (BCP) tensor
+        c.f. eq. S2, PHYSICAL REVIEW LETTERS 130, 126303 (2023)
+
+                            v^a_nm v^b_mn
+        G^n_ab = 2 Re sum ------------------- .
+                            (E_n-E_m)^3
+                      m != n
+
+        ``velocity_K`` is dH/dk in eV*angstrom, so ``G_K`` is in
+        angstrom^2/eV. Degenerate terms selected by ``degen`` are omitted.
+
+        Indexing:
+        G_K[ik1, ik2, ik3, ia, ib, n]
+
+        projected_G_K[iproj_a, iproj_b, ik1, ik2, ik3, ia, ib, n]
+        applies the two projections independently to the two velocity
+        vertices.
+        '''
+        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg,)
+
+        self.calcDeltaEInverse()
+        deltaEInverse3 = self.deltaEInverse_pure**3
+
+        velocity_K_list = [self.velocity_K]+self.projected_velocity_K_list
+        bcp_shape = self.kgrid+(3,3,self.energies.shape[-1])
+        self.projected_G_K = np.zeros((len(velocity_K_list),len(velocity_K_list))+bcp_shape,dtype=float,)
+
+        for iproj_a, velocity_a_K in enumerate(velocity_K_list):
+            for iproj_b, velocity_b_K in enumerate(velocity_K_list):
+                self.projected_G_K[iproj_a, iproj_b] = 2*np.einsum(
+                    "...anm,...bmn,...nm->...abn",
+                    velocity_a_K,
+                    velocity_b_K,
+                    deltaEInverse3,
+                    optimize="greedy",
+                ).real
+
+        self.G_K = self.projected_G_K[0,0]
+        if self.verbose==2: showElapsedTime(extraInfo="Berry-connection polarizability finished")
+
+class BerryConnectionPolarizabilityDipole(BerryConnectionPolarizability):
+    Iodd = True
+    Todd = False
+
+    def __init__(self, **kwarg) -> None:
+        '''
+        Compute the analytical k-space dipole of the BCP,
+
+        G_Dipole_K[..., a, b, c, n] = partial_{k_a} G^n_{bc}.
+
+        The derivative is evaluated locally at each k point using velocity
+        matrices, their gauge-covariant derivatives, and band-energy
+        derivatives. Its unit is angstrom^3/eV. The isolated-band expression
+        omits intermediate states separated by less than ``degen``.
+        '''
+        super().__init__(highOrderVelocity=True, **kwarg)
+        nbands = self.energies.shape[-1]
+
+        eigenstateDeltaEInverse   = self.deltaEInverse_pure
+        eigenstateDeltaEInverse_T = self.deltaEInverse_pure.swapaxes(-1, -2)
+        deltaEInverse3 = self.deltaEInverse_pure**3
+        deltaEInverse4 = self.deltaEInverse_pure**4
+        bandVelocity = np.diagonal(self.velocity_K, axis1=-2, axis2=-1)
+
+        self.G_Dipole_K = np.zeros(
+            self.kgrid + (3, 3, 3, nbands),
+            dtype=float,
+        )
+        for a in range(3):
+            velocity_a = self.velocity_K[..., a, :, :]
+            braDerivative = velocity_a * eigenstateDeltaEInverse
+            ketDerivative = velocity_a * eigenstateDeltaEInverse_T
+            # D_a V_b includes changes of both eigenstates. Keeping only one
+            # derivative direction in memory matters for large Wannier models.
+            velocityDerivative_K = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
+            for b in range(3):
+                velocity_b = self.velocity_K[..., b, :, :]
+                velocityDerivative_K[..., b, :, :] = (
+                    self.w_K[..., a, b, :, :]
+                    + braDerivative @ velocity_b
+                    + velocity_b @ ketDerivative
+                )
+
+            numeratorDerivative = np.einsum(
+                "...bnm,...cmn,...nm->...bcn",
+                velocityDerivative_K,
+                self.velocity_K,
+                deltaEInverse3,
+                optimize="greedy",
+            ) + np.einsum(
+                "...bnm,...cmn,...nm->...bcn",
+                self.velocity_K,
+                velocityDerivative_K,
+                deltaEInverse3,
+                optimize="greedy",
+            )
+            
+            deltaVelocity =  bandVelocity[..., a, :, None] - bandVelocity[..., a, None, :]
+            
+            denominatorDerivative = -3*np.einsum(
+                "...bnm,...cmn,...nm->...bcn",
+                self.velocity_K,
+                self.velocity_K,
+                deltaVelocity*deltaEInverse4,
+                optimize="greedy",
+            )
+            self.G_Dipole_K[..., a, :, :, :] =  2*(numeratorDerivative + denominatorDerivative).real
+
+        if self.verbose==2:
+            showElapsedTime(extraInfo="Berry-connection polarizability dipole finished")
+
+class SecondOrderAHC_BCP_FermiSea(BerryConnectionPolarizabilityDipole):
+    Iodd = True
+    Todd = True
+
+    def __init__(self, **kwarg) -> None:
+        '''
+        Second-order nonlinear DC conductivity in the Fermi-sea form,
+        c.f. eq. S6, PHYSICAL REVIEW LETTERS 130, 126303 (2023)
+
+        chi_abc = sum_n integral[dk] f_n
+                  (partial_b G^n_ac - partial_a G^n_bc).
+
+        Indexing
+        --------
+        - sigma[ifermi, a, b, c]
+            3rd-ranked conductivity. a: orientation of current; b, c: orientations of applied efield
+        - response[ik1, ik2, ik3, ifermi, a, b, c]
+            response function on BZ
+        '''
+        super().__init__(**kwarg)
+
+        self.response=np.zeros(self.kgrid+(len(self.fermiList),3,3,3),dtype=float)
+        for ifermi, occupation in enumerate(self.fd_occupations):
+            for a in range(3):
+                for b in range(3):
+                    for c in range(3):
+                        self.response[...,ifermi,a,b,c]=np.sum(
+                            (self.G_Dipole_K[...,b,a,c,:]-self.G_Dipole_K[...,a,b,c,:])*occupation,axis=-1)
+        
+        self.sigma=np.sum(self.response,axis=(0,1,2,))/np.prod(self.kgrid)
+        if self.verbose==2: showElapsedTime(extraInfo="2nd-order anomalous Hall conductance (Fermi sea) finished")
+
+
+class SecondOrderAHC_BCP_FermiSurf(BerryConnectionPolarizability, FermiScan):
+    Iodd = True
+    Todd = True
+
+    def __init__(self, **kwarg) -> None:
+        '''
+        Second-order nonlinear DC conductivity in the Fermi-surface form,
+        obtained from Eq. S6 of PHYSICAL REVIEW LETTERS 130, 126303 (2023)
+        by integration by parts:
+
+        chi_abc = sum_n integral[dk] f'_n
+                  (v^n_a G^n_bc - v^n_b G^n_ac).
+
+        ``fermiWeight`` is f'_n and is evaluated only for the band window
+        selected by ``FermiScan``.
+
+        Indexing
+        --------
+        - sigma[ifermi, a, b, c]
+            3rd-rank conductivity. a: current direction; b, c: electric-field
+            directions.
+        - response[ik1, ik2, ik3, ifermi, a, b, c]
+            Fermi-surface response on the BZ after summing over bands.
+        '''
+        super().__init__(**kwarg)
+
+        bandWindow = slice(self.ibmin, self.ibmax+1)
+        bandVelocity = np.diagonal(self.velocity_K, axis1=-2, axis2=-1).real[..., bandWindow]
+
+        responseFermiFirst = np.einsum(
+            "f...n,...an,...bcn->f...abc",
+            self.fermiWeight,
+            bandVelocity,
+            self.G_K[..., bandWindow],
+            optimize="greedy",
+        )
+        responseFermiFirst = responseFermiFirst - responseFermiFirst.swapaxes(-3, -2)
+        self.response = np.moveaxis(responseFermiFirst, 0, 3)
+        self.sigma = np.sum(self.response, axis=(0, 1, 2)) / np.prod(self.kgrid)
+
+        if self.verbose==2: showElapsedTime(extraInfo="2nd-order anomalous Hall conductance (Fermi surface) finished")
+
+class BerryConnectionPolarizabilityMagSusceptibility(BerryConnectionPolarizability,Spin,OrbitalModern_LC,):
+    Iodd = False
+    Todd = True
+
+    def __init__(self, mag_type="total", gS=2.0, **kwarg) -> None:
+        '''
+        Compute the magnetic susceptibility of the BCP from Eq. S7,
+
+        Lambda_K[..., a, b, d, n] = partial_{B_d} G^n_{ab}.
+
+        ``mag_type`` selects ``"spin"``, modern local-circulation
+        ``"orbital"``, or their ``"total"``. Magnetic moments are represented
+        in mu_B, so Lambda_K is in mu_B*angstrom^2/eV^2. Degenerate
+        intermediate states selected by ``degen`` are omitted.
+        '''
+        validMagTypes = ("total", "spin", "orbital")
+        if mag_type not in validMagTypes:
+            raise ValueError(
+                f"mag_type must be one of {validMagTypes}, got {mag_type!r}"
+            )
+
+        super().__init__(gS=gS,_computeSpin=mag_type in ("total", "spin"),_computeOrbitalModernLC=mag_type in ("total", "orbital"),**kwarg,)
+        nbands = self.energies.shape[-1]
+
+        self.magneticMoment_K = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
+        if mag_type in ("total", "spin"):
+            self.magneticMoment_K += self.spin_K
+        if mag_type in ("total", "orbital"):
+            self.magneticMoment_K += self.orbital_K
+        self.mag_type = mag_type
+
+        nondegenerate = np.abs(self.deltaE) > self.degen
+        eigenstateDeltaEInverse   = self.deltaEInverse_pure
+        eigenstateDeltaEInverse_T = self.deltaEInverse_pure.swapaxes(-1, -2)
+        deltaEInverse3 = self.deltaEInverse**3
+        deltaEInverse4 = self.deltaEInverse**4
+        momentDiagonal = np.diagonal(self.magneticMoment_K, axis1=-2, axis2=-1)
+
+        self.Lambda_K = np.zeros(self.kgrid + (3, 3, 3, nbands), dtype=float)
+        for d in range(3):
+            # H_B=-M_d B_d. These two terms are the changes of the bra and
+            # ket eigenstates in each velocity matrix element.
+            magneticPerturbation = -self.magneticMoment_K[..., d, :, :]
+            braDerivative = magneticPerturbation * eigenstateDeltaEInverse
+            ketDerivative = magneticPerturbation * eigenstateDeltaEInverse_T
+            velocityMagDerivative_K = np.zeros(self.kgrid + (3, nbands, nbands),dtype=complex,)
+            for a in range(3):
+                velocity_a = self.velocity_K[..., a, :, :]
+                velocityMagDerivative_K[..., a, :, :] =  braDerivative @ velocity_a + velocity_a @ ketDerivative
+
+            numeratorDerivative = np.einsum(
+                "...anm,...bmn,...nm->...abn",
+                velocityMagDerivative_K, self.velocity_K, deltaEInverse3,
+                optimize="greedy",
+            ) + np.einsum(
+                "...anm,...bmn,...nm->...abn",
+                self.velocity_K, velocityMagDerivative_K, deltaEInverse3,
+                optimize="greedy",
+            )
+            deltaMoment =  momentDiagonal[..., d, :, None] - momentDiagonal[..., d, None, :]
+            denominatorDerivative = 3*np.einsum(
+                "...anm,...bmn,...nm->...abn",
+                self.velocity_K, self.velocity_K, deltaMoment*deltaEInverse4,
+                optimize="greedy",
+            )
+            self.Lambda_K[..., :, :, d, :] = 2*(numeratorDerivative + denominatorDerivative).real
+
+        if self.verbose==2: showElapsedTime(extraInfo="Berry-connection polarizability magnetic susceptibility finished")
+
+class IntrinsicNPHE_BCP(BerryConnectionPolarizabilityDipole,BerryConnectionPolarizabilityMagSusceptibility,FermiScan):
+    Iodd = True
+    Todd = False
+
+    def __init__(self, mag_type="total", gS=2.0, **kwarg) -> None:
+        '''
+        Compute the intrinsic nonlinear planar Hall response from Eq. S6.
+
+        Indexing:
+        ---------
+        - BCP_susc_K[..., a, b, c, d, n]
+            Band-resolved geometric bracket in Eq. S6, before f'_0.
+        - BCP_susc_integrand_K[ifermi, ..., a, b, c, d]
+            Full k-resolved integrand after the Fermi-surface band sum.
+        - Upsilon[ifermi, a, b, c, d]
+            Uniform-k average of the integrand. a: current direction, b and c: electric field direction, d: mag. field direction
+
+        Magnetic moments are in mu_B, so Upsilon is in
+        mu_B*angstrom^3/eV^2 before the later SI conversion.
+        '''
+        super().__init__(mag_type=mag_type, gS=gS, **kwarg)
+
+        bandVelocity = np.diagonal(self.velocity_K,axis1=-2,axis2=-1).real
+        momentDiagonal = np.diagonal(self.magneticMoment_K,axis1=-2,axis2=-1,).real
+
+        self.BCP_susc_K = np.einsum(
+            "...an,...bcdn->...abcdn",
+            bandVelocity,self.Lambda_K,
+            optimize="greedy",
+        )
+        self.BCP_susc_K -= np.einsum(
+            "...bn,...acdn->...abcdn",
+            bandVelocity,self.Lambda_K,
+            optimize="greedy",
+        )
+        self.BCP_susc_K += np.einsum(
+            "...abcn,...dn->...abcdn",
+            self.G_Dipole_K,momentDiagonal,
+            optimize="greedy",
+        )
+        self.BCP_susc_K -= np.einsum(
+            "...abcn,...dn->...abcdn",
+            self.G_Dipole_K.swapaxes(-4, -3),momentDiagonal,
+            optimize="greedy",
+        )
+
+        bandWindow = slice(self.ibmin, self.ibmax+1)
+        BCP_susc_integrand_K = np.einsum(
+            "f...n,...abcdn->f...abcd",
+            self.fermiWeight,self.BCP_susc_K[..., bandWindow],
+            optimize="greedy",
+        )
+        if self.model.ispin == 1:
+            BCP_susc_integrand_K *= 2
+
+        self.response = np.moveaxis(BCP_susc_integrand_K, 0, 3)
+        self.Upsilon = np.sum(BCP_susc_integrand_K,axis=(1, 2, 3)) / np.prod(self.kgrid)
+        self.projected_Upsilon=self.Upsilon[None,None,...]
+
+        if self.verbose==2: showElapsedTime(extraInfo="intrinsic NPHE from BCP finished")
 
 class BulkPhotovoltaicConductance(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:

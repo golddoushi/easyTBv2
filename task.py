@@ -13,7 +13,7 @@ from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, In
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
-from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_FermiSea, SecondOrderAHC_FermiSurf
+from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
 
 class BZGridTask:
@@ -316,12 +316,12 @@ def _solve2ndAHC(param, calculatorClass):
         result["BCP dipole"] = calc.G_Dipole_K
     return result
 
-def solve2ndAHC_FermiSea(param):
-    return _solve2ndAHC(param, SecondOrderAHC_FermiSea)
+def solve2ndAHC_BCP_FermiSea(param):
+    return _solve2ndAHC(param, SecondOrderAHC_BCP_FermiSea)
 
 
-def solve2ndAHC_FermiSurf(param):
-    return _solve2ndAHC(param, SecondOrderAHC_FermiSurf)
+def solve2ndAHC_BCP_FermiSurf(param):
+    return _solve2ndAHC(param, SecondOrderAHC_BCP_FermiSurf)
 
 def solveINPHE_BCP(param):
     calc = IntrinsicNPHE_BCP(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'], fermiList=param['fermi'],
