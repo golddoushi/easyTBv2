@@ -596,7 +596,6 @@ class Velocity(Energy):
         self.velocity_K = velocity_bare_K -1j*(r_K_H - r_K_H.conj().swapaxes(-2,-1))
 
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
-        if self.verbose==2: showElapsedTime(extraInfo=f"velocity in eig.-basis finished")
         # check hermity
         #dconj=np.sum(abs(self.velocity_K.transpose((0,1,2,3,5,4)).conj()-self.velocity_K))
         #assert dconj<1e-4, f"Hermity of velocity is not satisfied {dconj=}"
@@ -659,34 +658,95 @@ class Velocity(Energy):
                 # Helper to compute commutator [A, B] broadcasting over k-grid
                 return A @ B - B @ A
 
-            # Store the bare spatial moments
-            H1 = velocity_bare_K #self.RHam_K
+            # Ordinary k derivatives of the Wannier-gauge connection.
+            # These terms vanish in the diagonal tight-binding limit, but are
+            # required when the off-diagonal position matrix depends on k.
+            r1_R_intepolated = np.zeros(
+                self.kgrid + (3, 3, self.model.norbs, self.model.norbs),
+                dtype=complex,
+            )
+            for iR, Rvec in enumerate(self.model.iRvec):
+                R_cart = Rvec @ self.model.lattice
+                r1_R_intepolated[tuple(Rvec)] = (
+                    1j * R_cart[:, None, None, None]
+                    * r_R[iR][None, :, :, :]
+                )
+
+            r1_K_AO = np.fft.ifftn(
+                r1_R_intepolated, axes=(0, 1, 2)
+            ) * np.prod(self.kgrid)
+            vectors1 = self.vectors[..., None, None, :, :]
+            connectionDerivative1 = (
+                vectors1.conj().swapaxes(-2, -1) @ r1_K_AO @ vectors1
+            )
+            del r1_R_intepolated, r1_K_AO, vectors1
+
+            # Construct the larger second-derivative tensor only after the
+            # first-derivative FFT buffers have been released.
+            r2_R_intepolated = np.zeros(
+                self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs),
+                dtype=complex,
+            )
+            for iR, Rvec in enumerate(self.model.iRvec):
+                R_cart = Rvec @ self.model.lattice
+                r2_R_intepolated[tuple(Rvec)] = (
+                    -R_cart[:, None, None, None, None]
+                    * R_cart[None, :, None, None, None]
+                    * r_R[iR][None, None, :, :, :]
+                )
+            r2_K_AO = np.fft.ifftn(
+                r2_R_intepolated, axes=(0, 1, 2)
+            ) * np.prod(self.kgrid)
+            vectors2 = self.vectors[..., None, None, None, :, :]
+            connectionDerivative2 = (
+                vectors2.conj().swapaxes(-2, -1) @ r2_K_AO @ vectors2
+            )
+            del r2_R_intepolated, r2_K_AO, vectors2
+
+            # Store the bare spatial moments and H in the eigenbasis.
+            H0 = (
+                self.energies[..., :, None]
+                * np.eye(self.energies.shape[-1], dtype=complex)
+            )
+            H1 = velocity_bare_K
             H2 = self.w_K.copy()
 
-            # 1. Correct w_K
-            # w_ab = H^(2)_ab - i[r_a, H^(1)_b] - i[r_b, v_a]
+            # partialV_ab = partial_b v_a
+            partialV = np.zeros_like(self.w_K)
             for a in range(3):
                 for b in range(3):
-                    c1 = comm(self.position_K[..., a, :, :], H1[..., b, :, :])
-                    c2 = comm(self.position_K[..., b, :, :], self.velocity_K[..., a, :, :])
-                    self.w_K[..., a, b, :, :] = H2[..., a, b, :, :] - 1j * c1 - 1j * c2
+                    partialV[..., a, b, :, :] = (
+                        H2[..., a, b, :, :]
+                        - 1j * comm(connectionDerivative1[..., b, a, :, :], H0)
+                        - 1j * comm(self.position_K[..., a, :, :], H1[..., b, :, :])
+                    )
+                    # w_ab = D_b v_a
+                    self.w_K[..., a, b, :, :] = (partialV[..., a, b, :, :] 
+                        - 1j * comm(self.position_K[..., b, :, :], self.velocity_K[..., a, :, :])
+                    )
 
-            # 2. Correct u_K
-            # u_abc = H^(3)_abc - i[r_a, H^(2)_bc] - i[r_b, H^(2)_ac] - [r_b, [r_a, H^(1)_c]] - i[r_c, w_ab]
+            # u_abc = D_c w_ab.  connectionDerivative1[..., b, a]
+            # is partial_b A_a, and connectionDerivative2[..., c, b, a]
+            # is partial_c partial_b A_a.
             H3 = self.u_K.copy()
             for a in range(3):
                 for b in range(3):
                     for c in range(3):
-                        c1 = comm(self.position_K[..., a, :, :], H2[..., b, c, :, :])
-                        c2 = comm(self.position_K[..., b, :, :], H2[..., a, c, :, :])
-                        
-                        c3_inner = comm(self.position_K[..., a, :, :], H1[..., c, :, :])
-                        c3 = comm(self.position_K[..., b, :, :], c3_inner)
-                        
-                        # Note: This explicitly uses the CORRECTED w_K calculated above
-                        c4 = comm(self.position_K[..., c, :, :], self.w_K[..., a, b, :, :])
-
-                        self.u_K[..., a, b, c, :, :] = H3[..., a, b, c, :, :] - 1j*c1 - 1j*c2 - c3 - 1j*c4
+                        partial2V = (H3[..., a, b, c, :, :]  
+                            - 1j * comm(connectionDerivative2[..., c, b, a, :, :], H0)
+                            - 1j * comm(connectionDerivative1[..., b, a, :, :], H1[..., c, :, :])
+                            - 1j * comm(connectionDerivative1[..., c, a, :, :], H1[..., b, :, :])
+                            - 1j * comm(self.position_K[..., a, :, :], H2[..., b, c, :, :])
+                        )
+                        partialW = (partial2V
+                            - 1j * comm(connectionDerivative1[..., c, b, :, :], self.velocity_K[..., a, :, :])
+                            - 1j * comm(self.position_K[..., b, :, :], partialV[..., a, c, :, :])
+                        )
+                        self.u_K[..., a, b, c, :, :] = (partialW
+                            - 1j * comm(self.position_K[..., c, :, :], self.w_K[..., a, b, :, :])
+                        )
+            del connectionDerivative1, connectionDerivative2, partialV
+            if self.verbose==2: showElapsedTime(extraInfo=f"higer order velocity modification with position operators finished")
 
 class OrbitalModern_LC(Velocity):
     def __init__(self, orbitalProjectionList=[], _computeOrbitalModernLC=True, **kwarg,):

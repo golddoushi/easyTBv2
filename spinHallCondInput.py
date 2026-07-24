@@ -31,7 +31,7 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, 
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/PbSn/"
+    mainDir="./mcalc/FeCl2/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -72,20 +72,19 @@ def run():
     )
     # Include SOC in a collinear w90 model (spinSeparated=True).
     # keepRegularSpinAxis=True is the default and restores global x/y/z spin axes.
-    #model.includeSOCFromSOI(
-    #    theta=0, phi=0, strength=1, keepRegularSpinAxis=True,
-    #)
+    #model.includeSOCFromSOI(theta=0, phi=0, strength=1, keepRegularSpinAxis=True)
+
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually.
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
-    #atomicMagMomList=[
-    #    np.array([0, 0, 1]),
-    #]*1+[
-    #    np.array([0, 0, 0]),
-    #]*2
-    #model.symmerizeHamAndOverlap(
-    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
-    #)
+    atomicMagMomList=[
+        np.array([0, 0, 1]),
+    ]*1+[
+        np.array([0, 0, 0]),
+    ]*2
+    model.symmerizeHamAndOverlap(
+        atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
+    )
     #exit()
     # modulate the SOC, exchange fields, baised fields, etc.
     #model.scaleSOC(lam=0)
@@ -147,7 +146,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.1         # VASP 2H-FeCl2
+    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -159,12 +158,12 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
     
-    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
-    #fermiAxis=np.array([fermi,])
-    omegaAxis=np.linspace(0.5,4.0,101)
+    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
+    fermiAxis=np.array([fermi,])
+    omegaAxis=np.linspace(0.5,2.0,21)
     model.setFermi(fermi)
     
-    #'''
+    '''
     # check band intepolation
     spin_proj, orbital_proj= False, False
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
@@ -226,7 +225,7 @@ def run():
     recordOmegaIndexList=[41]
     recordFermiIndexList=[0]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveINPHE_BCP,
+    calc=BZGridTask(model, solveBPVE_VG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -311,7 +310,7 @@ def run():
     '''
     # output projected 2-rank conductance
     projected_sigma/=len(calc.results)
-    with open("%s/spinGalvanics.txt"%mainDir,"w") as fout:
+    with open("%s/secondOrderTensor.txt"%mainDir,"w") as fout:
         fout.write("Fermi(eV)")
         directionName=['x','y','z']
         for iproj1 in range(projected_sigma.shape[0]):
@@ -330,7 +329,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    '''
+    #'''
     # output projected 3-ranked, frequency-dependent complex conductance
     output3rdFreqDenpendentData(projected_sigma.real/len(calc.results), fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis, 
                                 filePath="%s/thirdOrderFreqDependent.real.txt"%mainDir)

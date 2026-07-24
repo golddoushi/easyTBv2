@@ -348,7 +348,7 @@ def solveBPVE_VG_DM(param):
     calc=BulkPhotovoltaicConductance_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],
+                                   currentProjectionList    =param['projected shells for applying current'], verbose=param['verbose'],
                                    )
     return {"energies":calc.energies,
             "projected response":calc.projected_response,

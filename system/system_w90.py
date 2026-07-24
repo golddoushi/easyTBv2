@@ -363,9 +363,20 @@ class System_w90(System):
                 if trans_inv:
                     # Translationally invariant diagonal, Eq. 13,
                     # PRB 56, 12847 (1997).
+                    phase=np.angle(np.diag(overlap))
+                    # Im log is defined modulo 2*pi.  Lift every link phase
+                    # to the branch nearest the corresponding Wannier center.
+                    # This is essential when a center lies on a cell boundary:
+                    # tiny numerical noise can otherwise alternate a phase
+                    # between +pi and -pi across the k mesh and create large,
+                    # spurious AA(R != 0) matrix elements after the FFT.
+                    phase_reference=-(chk.wannier_centers@bvec)
+                    phase+=2*np.pi*np.rint(
+                        (phase_reference-phase)/(2*np.pi)
+                    )
                     contribution[:,diagonal,diagonal]=-(
                         wb*bvec[:,None]*
-                        np.log(np.diag(overlap)).imag[None,:]
+                        phase[None,:]
                     )
                 AA_k_W[ikpt]+=contribution
         return AA_k_W
