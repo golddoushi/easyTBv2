@@ -1,0 +1,430 @@
+diff --git a/src/mlwf.F b/src/mlwf.F
+index 501518a..7dd9647 100644
+--- a/src/mlwf.F
++++ b/src/mlwf.F
+@@ -131,6 +131,8 @@
+       USE full_kpoints
+       USE reader_tags
+       USE pead, ONLY : PEAD_REQUEST
++      USE relativistic, ONLY : LWRITE_SOI
++      USE tutor, ONLY : vtutor
+ 
+       IMPLICIT NONE
+       INTEGER IU5,IU6,IU0
+@@ -148,6 +150,14 @@
+ 
+       CALL PROCESS_INCAR(LOPEN, IU0, IU5, 'LWANNIER90_RUN', LWANNIER90_RUN, IERR, WRITEXMLINCAR)
+ 
++      ! Write matrix elements of the orbital part of the PAW SOC
++      ! operator between the no-SOC Bloch states.
++      LWRITE_SOI=.FALSE.
++      CALL PROCESS_INCAR(.FALSE., IU0, IU5, 'LWRITE_SOI', LWRITE_SOI, IERR, WRITEXMLINCAR)
++      IF (LWRITE_SOI .AND. .NOT.WANNIER90()) THEN
++         CALL vtutor%error("LWRITE_SOI requires LWANNIER90=.TRUE. or LWANNIER90_RUN=.TRUE.")
++      ENDIF
++
+       ! Do we want to write UWAN files?
+       LWRITE_WANPROJ=.FALSE.
+       CALL PROCESS_INCAR(.FALSE., IU0, IU5, 'LWRITE_WANPROJ', LWRITE_WANPROJ, IERR, WRITEXMLINCAR)
+@@ -240,6 +250,8 @@
+       USE radial
+       USE full_kpoints
+       USE pead, ONLY : PEAD_CALC_OVERLAP
++      USE relativistic, ONLY : LWRITE_SOI
++      USE tutor, ONLY : vtutor
+ 
+       IMPLICIT NONE
+ 
+@@ -313,6 +325,8 @@
+       ! in case a fil is present
+       INQUIRE(FILE=WANPROJFILE, EXIST = LEXIST )
+       IF ( LEXIST) THEN
++         IF (LWRITE_SOI) &
++        &   CALL vtutor%error("LWRITE_SOI is not compatible with the early WANPROJ return path")
+          IF ( IO%IU0>=0 )&
+             WRITE(*,*)'Using projections from '//WANPROJFILE
+          RETURN
+@@ -777,6 +791,8 @@
+       ENDIF
+ 
+       ENDDO spin
++
++      CALL MLWF_WRITE_SOI(WDES,W,T_INFO,num_bands,num_kpts,kpt_latt,EXCLUDE_BAND,IO)
+    
+       ! Write information on seed_name.win
+       IF (IO%IU6>=0) THEN
+@@ -926,6 +942,218 @@
+       END SUBROUTINE MLWF_WANNIER90
+ 
+ 
++!******************** SUBROUTINE MLWF_WRITE_SOI ***********************
++!
++! Write the Cartesian orbital-SOC matrices
++!
++!   A^ss'_{k,nm,j} = <psi_{k n s}| xi L_j |psi_{k m s'}>
++!
++! between the scalar-relativistic collinear Bloch states.  The output
++! band and k-point order is exactly the order used by the Wannier90
++! eig/amn/mmn files produced in the same call.
++!
++! Supported parallel decomposition:
++!   COMM_INTER  band groups: gather all band projector columns
++!   COMM_INB    projector/ion distribution: sum local contractions
++!   COMM_KINTER k-point groups: transfer from the owning k group
++!
++! File format:
++! line 1: comment and conventions
++! line 2: num_bands, num_kpts, 3 Cartesian components, 2 spin channels
++! for each (k,j,spin_bra,spin_ket) block:
++!   block header: k, j, spin_bra, spin_ket, kx, ky, kz
++!   num_bands**2 lines: band_bra, band_ket, Re(A), Im(A)
++!
++! Components j=1,2,3 are x,y,z.  Spin 1 is up and spin 2 is down.
++! Units are eV.  Define A_+=A_x+i*A_y and A_-=A_x-i*A_y.
++!
++!***********************************************************************
++      SUBROUTINE MLWF_WRITE_SOI( &
++     &   WDES,W,T_INFO,NUM_BANDS,NUM_KPTS,KPT_LATT,EXCLUDE_BAND,IO)
++      USE base
++      USE poscar
++      USE wave
++      USE wave_high
++      USE full_kpoints
++      USE mpimy
++      USE relativistic, ONLY : LWRITE_SOI,SOI_ORB_MATRIX
++      USE tutor, ONLY : vtutor
++      IMPLICIT NONE
++
++      TYPE(wavedes) WDES
++      TYPE(wavespin) W
++      TYPE(type_info) T_INFO
++      TYPE(in_struct) IO
++      INTEGER NUM_BANDS,NUM_KPTS
++      REAL(q) KPT_LATT(3,NUM_KPTS)
++      LOGICAL EXCLUDE_BAND(WDES%NB_TOT)
++
++      COMPLEX(q), ALLOCATABLE :: SOI_K(:,:,:,:,:)
++      GDEF, ALLOCATABLE :: CPROJ_ALL(:,:,:)
++      INTEGER, ALLOCATABLE :: BAND_MAP(:)
++      INTEGER NKI,NK,NKF,N,M,NBI,MBI,J
++      INTEGER ISPBRA,ISPKET,NI,NIP,NT,LMMAXC,NPRO,L,LP
++      INTEGER BAND_OWNER,NLOCAL
++      REAL(q) HERM_ERR
++      LOGICAL K_OWNER
++
++      IF (.NOT.LWRITE_SOI) RETURN
++
++      IF (WDES%ISPIN/=2) &
++     &   CALL vtutor%error("LWRITE_SOI requires ISPIN=2")
++      IF (WDES%LNONCOLLINEAR) &
++     &   CALL vtutor%error("LWRITE_SOI requires LNONCOLLINEAR=.FALSE.")
++      IF (WDES%LSORBIT) &
++     &   CALL vtutor%error("LWRITE_SOI requires LSORBIT=.FALSE.")
++      IF (NUM_KPTS/=WDES%NKPTS) &
++     &   CALL vtutor%error("LWRITE_SOI requires a full explicit k mesh (use ISYM=-1)")
++      IF (.NOT.ALLOCATED(SOI_ORB_MATRIX)) &
++     &   CALL vtutor%error("LWRITE_SOI: PAW orbital-SOC matrices were not initialized")
++      IF (SIZE(SOI_ORB_MATRIX,1)/=SIZE(SOI_ORB_MATRIX,2) .OR. &
++     &    SIZE(SOI_ORB_MATRIX,3)/=3 .OR. &
++     &    SIZE(SOI_ORB_MATRIX,4)/=T_INFO%NIONS) &
++     &   CALL vtutor%error("LWRITE_SOI: inconsistent PAW orbital-SOC matrix dimensions")
++
++      ALLOCATE(BAND_MAP(WDES%NB_TOT))
++      BAND_MAP=0
++      NBI=0
++      DO N=1,WDES%NB_TOT
++         IF (EXCLUDE_BAND(N)) CYCLE
++         NBI=NBI+1
++         BAND_MAP(N)=NBI
++      ENDDO
++      IF (NBI/=NUM_BANDS) &
++     &   CALL vtutor%error("LWRITE_SOI: inconsistent excluded-band map")
++
++      ALLOCATE(SOI_K(NUM_BANDS,NUM_BANDS,2,2,3))
++      ALLOCATE(CPROJ_ALL(WDES%NPROD,WDES%NB_TOT,2))
++      HERM_ERR=0._q
++
++      IF (IO%IU6>=0) THEN
++         OPEN(UNIT=98,FILE=seed_name//'.soi',STATUS='REPLACE')
++         WRITE(98,'(A)') &
++        & 'VASP PAW orbital SOC v3: j=1,2,3 -> x,y,z; spin=1,2 -> up,dn; units=eV; entries=bra ket Re Im'
++         WRITE(98,'(4I12)') NUM_BANDS,NUM_KPTS,3,2
++      ENDIF
++
++      kpoint: DO NKI=1,NUM_KPTS
++         NKF=KPOINT_IN_FULL_GRID(KPT_LATT(:,NKI),KPOINTS_FULL)
++         NK=KPOINTS_FULL%NEQUIV(NKF)
++         IF (NK<1 .OR. NK>WDES%NKPTS) &
++        &   CALL vtutor%error("LWRITE_SOI: failed to map a full-mesh k point to WDES")
++
++         SOI_K=(0._q,0._q)
++         CPROJ_ALL=0
++         K_OWNER=MOD(NK-1,WDES%COMM_KINTER%NCPU)== &
++        &        WDES%COMM_KINTER%NODE_ME-1
++
++! Only the k-point group owning NK has valid projector data.  Within
++! that group, collect the band-distributed projector columns so every
++! band group can form complete bra/ket matrices for its local ions.
++         IF (K_OWNER) THEN
++            DO ISPKET=1,2
++            DO M=1,WDES%NB_TOT
++               BAND_OWNER=MOD(M-1,WDES%NB_PAR)+1
++               IF (BAND_OWNER==WDES%NB_LOW) THEN
++                  NLOCAL=1+(M-1)/WDES%NB_PAR
++                  CPROJ_ALL(:,M,ISPKET)=W%CPROJ(:,NLOCAL,NK,ISPKET)
++               ENDIF
++#ifdef gammareal
++               CALLMPI( M_bcast_d_from(WDES%COMM_INTER,CPROJ_ALL(1,M,ISPKET),WDES%NPROD,BAND_OWNER) )
++#else
++               CALLMPI( M_bcast_z_from(WDES%COMM_INTER,CPROJ_ALL(1,M,ISPKET),WDES%NPROD,BAND_OWNER) )
++#endif
++            ENDDO
++            ENDDO
++
++! Each MPI rank contracts the SOC matrices for the ions stored on that
++! rank.  All Bloch bands are now available in CPROJ_ALL.
++         ions: DO NI=1,T_INFO%NIONS
++            NIP=NI_LOCAL(NI,WDES%COMM_INB)
++            IF (NIP==0) CYCLE ions
++            NT=WDES%ITYP(NIP)
++            LMMAXC=WDES%LMMAX(NT)
++            NPRO=WDES%NPRO_POS(NIP)
++
++            DO ISPBRA=1,2
++            DO ISPKET=1,2
++            DO N=1,WDES%NB_TOT
++               NBI=BAND_MAP(N)
++               IF (NBI==0) CYCLE
++               DO M=1,WDES%NB_TOT
++                  MBI=BAND_MAP(M)
++                  IF (MBI==0) CYCLE
++                  DO J=1,3
++                  DO L=1,LMMAXC
++                  DO LP=1,LMMAXC
++                     SOI_K(NBI,MBI,ISPBRA,ISPKET,J)= &
++                    & SOI_K(NBI,MBI,ISPBRA,ISPKET,J)+ &
++                    & SOI_ORB_MATRIX(LP,L,J,NI)* &
++                    & CPROJ_ALL(LP+NPRO,M,ISPKET)* &
++                    & GCONJG(CPROJ_ALL(L+NPRO,N,ISPBRA))
++                  ENDDO
++                  ENDDO
++                  ENDDO
++               ENDDO
++            ENDDO
++            ENDDO
++            ENDDO
++         ENDDO ions
++
++! Sum the ion/projector contributions distributed over COMM_INB.
++         CALLMPI( M_sum_z(WDES%COMM_INB,SOI_K,SIZE(SOI_K)) )
++         ENDIF
++
++! Transfer the completed matrix from the group owning NK to all
++! corresponding ranks in the other k-point groups.
++         CALLMPI( M_sum_z(WDES%COMM_KINTER,SOI_K,SIZE(SOI_K)) )
++
++! Check A_j^{ss'}(n,m)=[A_j^{s's}(m,n)]^* for j=x,y,z.
++         DO J=1,3
++         DO ISPBRA=1,2
++         DO ISPKET=1,2
++         DO NBI=1,NUM_BANDS
++         DO MBI=1,NUM_BANDS
++            HERM_ERR=MAX(HERM_ERR,ABS( &
++           & SOI_K(NBI,MBI,ISPBRA,ISPKET,J)- &
++           & CONJG(SOI_K(MBI,NBI,ISPKET,ISPBRA,J))))
++         ENDDO
++         ENDDO
++         ENDDO
++         ENDDO
++         ENDDO
++
++         IF (IO%IU6>=0) THEN
++            DO J=1,3
++            DO ISPBRA=1,2
++            DO ISPKET=1,2
++               WRITE(98,'(4I8,3F20.12)') &
++              & NKI,J,ISPBRA,ISPKET,KPT_LATT(:,NKI)
++               DO MBI=1,NUM_BANDS
++               DO NBI=1,NUM_BANDS
++                  WRITE(98,'(2I8,2E26.16)') &
++                 & NBI,MBI,SOI_K(NBI,MBI,ISPBRA,ISPKET,J)
++               ENDDO
++               ENDDO
++            ENDDO
++            ENDDO
++            ENDDO
++         ENDIF
++      ENDDO kpoint
++
++      IF (IO%IU6>=0) THEN
++         CLOSE(98)
++         WRITE(IO%IU6,'(/A,1PE12.4)') &
++        & ' LWRITE_SOI: maximum Cartesian Hermiticity error = ',HERM_ERR
++         IF (IO%IU0>=0) WRITE(IO%IU0,'(A)') &
++        & ' LWRITE_SOI: wrote '//seed_name//'.soi'
++      ENDIF
++
++      DEALLOCATE(SOI_K,CPROJ_ALL,BAND_MAP)
++
++      END SUBROUTINE MLWF_WRITE_SOI
++
++
+ !******************** SUBROUTINE MLWF_ROTATE_ORBITALS ******************
+ ! 
+ !***********************************************************************
+diff --git a/src/paw.F b/src/paw.F
+index 719bae3..d26dd74 100644
+--- a/src/paw.F
++++ b/src/paw.F
+@@ -1564,6 +1564,7 @@
+ ! for spin orbit coupling set the euler angles
+       IF ( WDES%LSORBIT ) &
+          CALL EULER(WDES%SAXIS, ALPHA, BETA)
++      IF (LWRITE_SOI) CALL INIT_SOI_ORB_MATRIX(LMDIM,T_INFO%NIONS)
+ !=======================================================================
+ ! cycle all ions and add corrections to pseudopotential strength CDIJ
+ !=======================================================================
+@@ -1902,6 +1903,21 @@
+ 
+             EPAWAEG=EPAWAEG+EXCG-PP%DEXCCORE
+             EPAWCORE=EPAWCORE+PP%DEXCCORE
++
++! Construct the orbital part xi*L_j of the PAW SOC operator from the
++! converged scalar-relativistic potential, but do not add it to CDIJ.
++! In a collinear ISPIN=2 calculation POTAE(:,:,1:2) contains the two
++! spin-channel potentials.  Their average supplies the scalar potential
++! entering the Pauli SOC operator.
++            IF (LWRITE_SOI .AND. ISPIN==2) THEN
++               CALL SPINORB_STRENGTH( &
++              & (POTAE(:,1,1)+POTAE(:,1,2))/2._q, &
++              & PP%RHOAE,PP%POTAE_XCUPDATED,PP%R, &
++              & CHANNELS=PP%LMAX,L=PP%LPS,W=PP%WAE, &
++              & Z=PP%ZCORE+PP%ZVALF_ORIG,THETA=0._q,PHI=0._q, &
++              & DLLMM_ORB=SOI_ORB_MATRIX(:,:,:,NI))
++               SOI_ORB_MATRIX(:,:,:,NI)=SOI_ORB_MATRIX(:,:,:,NI)*T_INFO%VCA(NT)
++            ENDIF
+          ENDIF
+ 
+          DOUBLEC_PS= DOUBLEC_PS-DOUBLEPS*T_INFO%VCA(NT)
+@@ -2095,6 +2111,8 @@
+       CALLMPI( M_sum_d(WDES%COMM_KINTER,CDIJ, LMDIM*LMDIM*WDES%NIONS*NCDIJ*2))
+ #endif
+       CALLMPI( M_sum_d(WDES%COMM, CL_SHIFT, SIZE(CL_SHIFT)))
++      IF (LWRITE_SOI) &
++     &   CALLMPI( M_sum_z(WDES%COMM,SOI_ORB_MATRIX,SIZE(SOI_ORB_MATRIX)) )
+ 
+       CALLMPI( M_sum_d(WDES%COMM, DOUBLEC_AE, 1))
+       CALLMPI( M_sum_d(WDES%COMM, DOUBLEC_PS, 1))
+diff --git a/src/relativistic.F b/src/relativistic.F
+index f6963a8..105b5ee 100644
+--- a/src/relativistic.F
++++ b/src/relativistic.F
+@@ -5,12 +5,42 @@
+       
+       REAL(q), ALLOCATABLE, PRIVATE, SAVE :: SPINORB_MATRIX_ELEMENTS(:,:,:)
+       REAl(q), ALLOCATABLE, PRIVATE, SAVE :: SPINORB_ENERGY_PER_SITE(:)
++
++! LWRITE_SOI requests matrix elements of the orbital part of the PAW
++! spin-orbit operator between the scalar-relativistic Bloch states.
++! SOI_ORB_MATRIX(i,j,k,ion), k=1,2,3, stores the Cartesian x,y,z
++! projector-space matrices in eV.  These matrices are calculated from
++! the no-SOC potential and are never added to CDIJ.
++      LOGICAL, PUBLIC, SAVE :: LWRITE_SOI=.FALSE.
++      COMPLEX(q), ALLOCATABLE, PUBLIC, SAVE :: SOI_ORB_MATRIX(:,:,:,:)
+       
+       CONTAINS
++
++!*******************************************************************
++
++      SUBROUTINE INIT_SOI_ORB_MATRIX(LMDIM,NIONS)
++
++!*******************************************************************
++      IMPLICIT NONE
++      INTEGER LMDIM,NIONS
++
++      IF (ALLOCATED(SOI_ORB_MATRIX)) THEN
++         IF (SIZE(SOI_ORB_MATRIX,1)/=LMDIM .OR. &
++        &    SIZE(SOI_ORB_MATRIX,2)/=LMDIM .OR. &
++        &    SIZE(SOI_ORB_MATRIX,3)/=3 .OR. &
++        &    SIZE(SOI_ORB_MATRIX,4)/=NIONS) THEN
++            DEALLOCATE(SOI_ORB_MATRIX)
++         ENDIF
++      ENDIF
++      IF (.NOT.ALLOCATED(SOI_ORB_MATRIX)) &
++     &   ALLOCATE(SOI_ORB_MATRIX(LMDIM,LMDIM,3,NIONS))
++      SOI_ORB_MATRIX=(0._q,0._q)
++
++      END SUBROUTINE INIT_SOI_ORB_MATRIX
+       
+ !*******************************************************************
+ 
+-      SUBROUTINE SPINORB_STRENGTH(POT, RHOC, POTVAL, R, DLLMM, CHANNELS, L, W, Z, THETA, PHI)
++      SUBROUTINE SPINORB_STRENGTH(POT, RHOC, POTVAL, R, DLLMM, CHANNELS, L, W, Z, THETA, PHI, DLLMM_ORB)
+ 
+ !*******************************************************************
+ !
+@@ -33,7 +63,8 @@
+       REAL(q) POTVAL(:)      ! minus potential of atom
+       TYPE(rgrid) :: R
+       REAL(q) W(:,:)         ! wavefunctions phi(r,l)
+-      OVERLAP DLLMM(:,:,:)   ! contribution to H from so-coupling
++      OVERLAP, OPTIONAL :: DLLMM(:,:,:) ! contribution to H from so-coupling
++      COMPLEX(q), OPTIONAL :: DLLMM_ORB(:,:,:) ! xi L_x, xi L_y, xi L_z
+       INTEGER CHANNELS, L(:) 
+       REAL(q) THETA,PHI      ! Euler angle
+       REAL(q) Z              ! charge of the nucleus
+@@ -121,16 +152,44 @@
+ ! VASP uses a reverted notation (for efficiency reason)
+ !  D(lm,l'm',alpha+2*alpha') =  <alpha'| < y_l'm' | D | y_lm>  |alpha>
+ ! therefore we need a little bit of reindexing (not too complicated)
+-          DO I=0,1
+-          DO J=0,1
+-          DO M =1,2*LL+1
+-          DO MP=1,2*LL+1
+-             DLLMM(LMP+MP-1,LM+M-1,J+2*I+1)=DLLMM(LMP+MP-1,LM+M-1,J+2*I+1)+ &
+-             SUM*LS(M,MP,I+2*J+1,LL)
+-          END DO
+-          END DO
+-          END DO
+-          END DO
++          IF (PRESENT(DLLMM)) THEN
++             DO I=0,1
++             DO J=0,1
++             DO M =1,2*LL+1
++             DO MP=1,2*LL+1
++                DLLMM(LMP+MP-1,LM+M-1,J+2*I+1)=DLLMM(LMP+MP-1,LM+M-1,J+2*I+1)+ &
++                SUM*LS(M,MP,I+2*J+1,LL)
++             END DO
++             END DO
++             END DO
++             END DO
++          ENDIF
++
++! Extract A_x,A_y,A_z from the same LS spin blocks used by VASP's native
++! spin-orbit Hamiltonian, H_SO=A_x*sigma_x+A_y*sigma_y+A_z*sigma_z.
++! In the reverted spin indexing above, the stored uu,ud,du,dd blocks
++! correspond respectively to LS components 1,3,2,4.
++          IF (PRESENT(DLLMM_ORB)) THEN
++             DO J=1,3
++             DO M=1,2*LL+1
++             DO MP=1,2*LL+1
++                IF (J==1) THEN
++                   DLLMM_ORB(LMP+MP-1,LM+M-1,J)= &
++                  & DLLMM_ORB(LMP+MP-1,LM+M-1,J)+ &
++                  & SUM*(LS(M,MP,3,LL)+LS(M,MP,2,LL))/2._q
++                ELSE IF (J==2) THEN
++                   DLLMM_ORB(LMP+MP-1,LM+M-1,J)= &
++                  & DLLMM_ORB(LMP+MP-1,LM+M-1,J)+ &
++                  & SUM*(0._q,0.5_q)*(LS(M,MP,3,LL)-LS(M,MP,2,LL))
++                ELSE
++                   DLLMM_ORB(LMP+MP-1,LM+M-1,J)= &
++                  & DLLMM_ORB(LMP+MP-1,LM+M-1,J)+ &
++                  & SUM*(LS(M,MP,1,LL)-LS(M,MP,4,LL))/2._q
++                ENDIF
++             ENDDO
++             ENDDO
++             ENDDO
++          ENDIF
+         ENDIF
+ 
+       LMP=LMP+(2*LLP+1)

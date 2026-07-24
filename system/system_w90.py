@@ -1,11 +1,13 @@
+import os
 import numpy as np
 import functools
+import warnings
 
 from numpy.core.multiarray import array as array, zeros as zeros
 from system import System
 from auxiliary import obtainProjections, obtainProjectionsPlain, showElapsedTime, iterate3dpm, fourier_q_to_R, reindexOrbitalsQE2VASP
 from fileio import readHrDat, readPOSCAR, readRDat
-from fileio import W90CHK, W90MMN, W90EIG
+from fileio import W90CHK, W90MMN, W90EIG, W90SOI
 
 class System_w90(System):
 
@@ -13,6 +15,7 @@ class System_w90(System):
                  mainDir:str,hamR:str="wannier90",ignoreImagPart=False,cutoff=-1.,format="VASP",vaspSPN=None,
                  poscar:str="POSCAR",projections:dict=None,ispin=1,
                  getAA:bool=True,trans_inv=True,
+                 spinSeparated=None,
                  ) -> None:
         '''
         The system in basis of wannier orbitals, with convention as below:
@@ -41,6 +44,12 @@ class System_w90(System):
           sequence of atomic orbitals, e.g.,
         - ispin : int
         The number of spin tunnels. NOTE: set ispin=2 for spinor case
+        - spinSeparated : None | bool
+        If True, read ``{hamR}.up.chk/eig/mmn`` and
+        ``{hamR}.dn.chk/eig/mmn`` as separate collinear spin channels and
+        combine them in block order ``[up, down]``. If None, this mode is
+        selected automatically only when the single ``{hamR}.chk`` file is
+        absent and both separated checkpoints are present.
           projections={
               "Fe":("s","s","p","p","d","d"),
               "Cl":(0,0,1,1,2,3),
@@ -57,18 +66,94 @@ class System_w90(System):
         self.format=format
         # TB approximation
         self.getAA=getAA
+        self.mainDir=mainDir
+        self.hamR=hamR
+        single_seed=os.path.join(mainDir,hamR)
+        up_seed=single_seed+'.up'
+        dn_seed=single_seed+'.dn'
+        if spinSeparated is None:
+            spinSeparated=(
+                ispin==2
+                and not os.path.exists(single_seed+'.chk')
+                and os.path.exists(up_seed+'.chk')
+                and os.path.exists(dn_seed+'.chk')
+            )
+        self.spinSeparated=bool(spinSeparated)
+        self.soi_R_W=None
+        self._soi_filename=None
+        self._included_soi_R=None
+
         showElapsedTime()
-        # 1. read in .chk file to obtain the wannier projection trans. Vk
-        chk=W90CHK(seedname="%s/%s"%(mainDir,hamR))
-        showElapsedTime(extraInfo="chk read")
-        # 3. read in eigs computed by DFT, which is also the Hamiltonian in DFT gauge
-        ham_k_DFT=W90EIG(seedname="%s/%s"%(mainDir,hamR))
-        showElapsedTime(extraInfo=f"H_k_DFT: {ham_k_DFT.data.min():.6f} ~ {ham_k_DFT.data.max():.6f} eigs. read")
-        Ham_k_W = np.array([self.toWannierGauge(H_k, ik, ik, chk) for ik, H_k in enumerate(ham_k_DFT.data)])
-        showElapsedTime(extraInfo="Wannier gauge trans. done")
+
+        if self.spinSeparated:
+            assert ispin==2, "separated spin-channel Wannier files require ispin=2"
+            for seed in (up_seed,dn_seed):
+                for extension in ('.chk','.eig'):
+                    assert os.path.exists(seed+extension), (
+                        f"cannot find separated spin-channel file {seed+extension}"
+                    )
+
+            chk_up=W90CHK(seedname=up_seed)
+            chk_dn=W90CHK(seedname=dn_seed)
+            self._validateSeparatedCheckpoints(chk_up,chk_dn)
+            self._w90_spin_chks=(chk_up,chk_dn)
+            chk=chk_up
+            showElapsedTime(extraInfo="spin-separated chk files read")
+
+            ham_k_DFT_up=W90EIG(seedname=up_seed)
+            ham_k_DFT_dn=W90EIG(seedname=dn_seed)
+            assert ham_k_DFT_up.nkpts==chk_up.num_kpts
+            assert ham_k_DFT_dn.nkpts==chk_dn.num_kpts
+            assert ham_k_DFT_up.nbands==chk_up.num_bands
+            assert ham_k_DFT_dn.nbands==chk_dn.num_bands
+            Ham_k_W_up=np.array([
+                self.toWannierGauge(H_k,ik,ik,chk_up)
+                for ik,H_k in enumerate(ham_k_DFT_up.data)
+            ])
+            Ham_k_W_dn=np.array([
+                self.toWannierGauge(H_k,ik,ik,chk_dn)
+                for ik,H_k in enumerate(ham_k_DFT_dn.data)
+            ])
+            nwann_spin=chk_up.num_wann
+            self._w90_spin_slices=(
+                slice(0,nwann_spin),
+                slice(nwann_spin,2*nwann_spin),
+            )
+            Ham_k_W=np.zeros(
+                (chk.num_kpts,2*nwann_spin,2*nwann_spin),dtype=complex,
+            )
+            Ham_k_W[:,self._w90_spin_slices[0],self._w90_spin_slices[0]]=Ham_k_W_up
+            Ham_k_W[:,self._w90_spin_slices[1],self._w90_spin_slices[1]]=Ham_k_W_dn
+            chk_center=np.concatenate((
+                chk_up.wannier_centers,chk_dn.wannier_centers,
+            ),axis=0)
+            showElapsedTime(
+                extraInfo=(
+                    "spin-separated H_k_DFT read and Wannier-gauge "
+                    "transformation done"
+                )
+            )
+        else:
+            chk=W90CHK(seedname=single_seed)
+            self._w90_spin_chks=None
+            self._w90_spin_slices=None
+            showElapsedTime(extraInfo="chk read")
+            ham_k_DFT=W90EIG(seedname=single_seed)
+            showElapsedTime(
+                extraInfo=(
+                    f"H_k_DFT: {ham_k_DFT.data.min():.6f} ~ "
+                    f"{ham_k_DFT.data.max():.6f} eigs. read"
+                )
+            )
+            Ham_k_W=np.array([
+                self.toWannierGauge(H_k,ik,ik,chk)
+                for ik,H_k in enumerate(ham_k_DFT.data)
+            ])
+            chk_center=chk.wannier_centers
+            showElapsedTime(extraInfo="Wannier gauge trans. done")
 
         # 5. store lattice info.
-        self.norbs=chk.num_wann#ham_R.shape[-1]
+        self.norbs=Ham_k_W.shape[-1]
         self.mp_grid=chk.mp_grid
         self.lattice=chk.real_lattice
         self.reciLattice=np.linalg.inv(self.lattice)*np.pi*2
@@ -85,12 +170,14 @@ class System_w90(System):
             kpt_mp_grid=kpt_mp_grid,
             iRvec=self.iRvec,
             ndegen=self.Ndegen)
+        self._fourier_q_to_R=fourier_q_to_R_loc
         
         # 6. FFT to obtain H_W in R-space
         self.ham_R=fourier_q_to_R_loc(Ham_k_W)
-        if format=="QE" or format=="VASP6": 
+        if (format=="QE" or format=="VASP6") and not self.spinSeparated:
             self.ham_R=reindexOrbitalsQE2VASP(self.ham_R, axis=-1)
             self.ham_R=reindexOrbitalsQE2VASP(self.ham_R, axis=-2)
+            chk_center=reindexOrbitalsQE2VASP(chk_center,axis=0)
         
         '''
         # 7. check the eigs
@@ -118,23 +205,30 @@ class System_w90(System):
         
         # 7. compute Berry connection in wannier gauge
         if getAA:
-            M_k_DFT=W90MMN(seedname="%s/%s"%(mainDir,hamR),kpt_list=chk.kpt_list,reci_lat=chk.recip_lattice)
-            showElapsedTime(extraInfo="mmn read")
-            Mmn_k_W = np.array([[self.toWannierGauge(Mmnk1k2, ik1, M_k_DFT.innkpt[ik1,ib], chk) for ib, Mmnk1k2 in enumerate(Mmnk1)] for ik1, Mmnk1 in enumerate(M_k_DFT.Mmn)])
-            AA_k_W=np.zeros((chk.num_kpts,3,self.norbs,self.norbs),dtype=complex)
-            delta=np.eye(self.norbs)
-            for ikpt, MMNk in enumerate(Mmn_k_W):
-                for bvec, wb, overlap in zip(M_k_DFT.bvecs[ikpt],M_k_DFT.wbvecs,MMNk):
-                    # Eq.44 [PRB 74, 195118 (2006)]
-                    _AA_k_W=1j*wb*bvec[:,None,None]*(overlap-delta)[None,:,:]
-                    if trans_inv:
-                        # Diagnonal term corrected via Eq.13 [PRB 56, 12847 (1997)]
-                        _AA_k_W[:,np.arange(self.norbs,dtype=int),np.arange(self.norbs,dtype=int)]=-(
-                            wb*bvec[:,None]*(np.log(np.diag(overlap)).imag)[None,:])
-                    AA_k_W[ikpt,...]+=_AA_k_W
+            if self.spinSeparated:
+                AA_k_W_up=self._berryConnectionWannier(
+                    up_seed,chk_up,trans_inv,
+                )
+                AA_k_W_dn=self._berryConnectionWannier(
+                    dn_seed,chk_dn,trans_inv,
+                )
+                AA_k_W=np.zeros(
+                    (chk.num_kpts,3,self.norbs,self.norbs),dtype=complex,
+                )
+                AA_k_W[
+                    :,:,self._w90_spin_slices[0],self._w90_spin_slices[0]
+                ]=AA_k_W_up
+                AA_k_W[
+                    :,:,self._w90_spin_slices[1],self._w90_spin_slices[1]
+                ]=AA_k_W_dn
+            else:
+                AA_k_W=self._berryConnectionWannier(
+                    single_seed,chk,trans_inv,
+                )
+
             # 8. FFT to obtain AA_W in R-space
             self.AA_R_W=fourier_q_to_R_loc(AA_k_W)
-            if format=="QE" or format=="VASP6": 
+            if (format=="QE" or format=="VASP6") and not self.spinSeparated:
                 self.AA_R_W=reindexOrbitalsQE2VASP(self.AA_R_W, axis=-1)
                 self.AA_R_W=reindexOrbitalsQE2VASP(self.AA_R_W, axis=-2)
             for Rvec, AA in zip(self.iRvec,self.AA_R_W):
@@ -143,8 +237,6 @@ class System_w90(System):
                 if Rvec@Rvec==0: self.rList=np.diagonal(AA,axis1=-2,axis2=-1).real
             #exit()
             print("diagonal element of AA_R_W and the wcc produced in .chk")
-            chk_center=chk.wannier_centers
-            if format=="QE" or format=="VASP6": chk_center=reindexOrbitalsQE2VASP(chk_center, axis=0)
             for AA_r, wcc in zip(self.rList.T,chk_center): 
                 print(f"{AA_r[0].real:10.6f}{AA_r[1].real:10.6f}{AA_r[2].real:10.6f} - {wcc[0]:10.6f}{wcc[1]:10.6f}{wcc[2]:10.6f}")
             showElapsedTime(extraInfo="AA_R_W calc. done")
@@ -196,6 +288,295 @@ class System_w90(System):
         # 13. compute orbital angular moment operator
         self.atomOrbAM=self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
+
+    def _validateSeparatedCheckpoints(self,chk_up:W90CHK,chk_dn:W90CHK):
+        assert chk_up.num_wann==chk_dn.num_wann, (
+            "the current spin-block architecture requires equal numbers of "
+            f"up/down Wannier functions, found {chk_up.num_wann} and "
+            f"{chk_dn.num_wann}"
+        )
+        assert chk_up.num_kpts==chk_dn.num_kpts, (
+            "spin-up and spin-down checkpoints have different k-point counts"
+        )
+        assert np.array_equal(chk_up.mp_grid,chk_dn.mp_grid), (
+            "spin-up and spin-down checkpoints have different Monkhorst-Pack grids"
+        )
+        assert np.allclose(
+            chk_up.real_lattice,chk_dn.real_lattice,atol=1e-10,rtol=0,
+        ), "spin-up and spin-down checkpoints have different real lattices"
+        assert np.allclose(
+            chk_up.recip_lattice,chk_dn.recip_lattice,atol=1e-10,rtol=0,
+        ), "spin-up and spin-down checkpoints have different reciprocal lattices"
+        dk=chk_up.kpt_list-chk_dn.kpt_list
+        dk-=np.rint(dk)
+        assert np.max(np.abs(dk))<1e-10, (
+            "spin-up and spin-down checkpoints have differently ordered k points"
+        )
+
+        center_delta=chk_up.wannier_centers-chk_dn.wannier_centers
+        center_frac=center_delta@np.linalg.inv(chk_up.real_lattice)
+        center_frac-=np.rint(center_frac)
+        center_distance=np.linalg.norm(
+            center_frac@chk_up.real_lattice,axis=1,
+        )
+        print(
+            "paired up/down Wannier-center distance: "
+            f"mean {center_distance.mean():.3e} angstrom, "
+            f"max {center_distance.max():.3e} angstrom"
+        )
+
+    def _berryConnectionWannier(
+        self,seedname:str,chk:W90CHK,trans_inv:bool,
+    ):
+        M_k_DFT=W90MMN(
+            seedname=seedname,
+            kpt_list=chk.kpt_list,
+            reci_lat=chk.recip_lattice,
+        )
+        assert M_k_DFT.nbands==chk.num_bands
+        assert M_k_DFT.nkpts==chk.num_kpts
+        showElapsedTime(extraInfo=f"{seedname}.mmn read")
+        Mmn_k_W=np.array([
+            [
+                self.toWannierGauge(
+                    Mmnk1k2,ik1,M_k_DFT.innkpt[ik1,ib],chk,
+                )
+                for ib,Mmnk1k2 in enumerate(Mmnk1)
+            ]
+            for ik1,Mmnk1 in enumerate(M_k_DFT.Mmn)
+        ])
+        AA_k_W=np.zeros(
+            (chk.num_kpts,3,chk.num_wann,chk.num_wann),dtype=complex,
+        )
+        delta=np.eye(chk.num_wann)
+        diagonal=np.arange(chk.num_wann,dtype=int)
+        for ikpt,MMNk in enumerate(Mmn_k_W):
+            for bvec,wb,overlap in zip(
+                M_k_DFT.bvecs[ikpt],M_k_DFT.wbvecs,MMNk,
+            ):
+                # Eq. 44, PRB 74, 195118 (2006).
+                contribution=(
+                    1j*wb*bvec[:,None,None]*
+                    (overlap-delta)[None,:,:]
+                )
+                if trans_inv:
+                    # Translationally invariant diagonal, Eq. 13,
+                    # PRB 56, 12847 (1997).
+                    contribution[:,diagonal,diagonal]=-(
+                        wb*bvec[:,None]*
+                        np.log(np.diag(overlap)).imag[None,:]
+                    )
+                AA_k_W[ikpt]+=contribution
+        return AA_k_W
+
+    def toWannierGaugeCross(
+        self,mat:np.ndarray,ik1:int,ik2:int,
+        chk_bra:W90CHK,chk_ket:W90CHK,
+    ):
+        '''
+        Transform a matrix whose bra and ket use different Wannier gauges.
+        '''
+        assert mat.shape[-2:]==(
+            chk_bra.num_bands,chk_ket.num_bands,
+        )
+        mat=mat[
+            ...,
+            chk_bra.win_min[ik1]:chk_bra.win_max[ik1],
+            chk_ket.win_min[ik2]:chk_ket.win_max[ik2],
+        ]
+        return (
+            chk_bra.v_matrix[ik1].conj()@
+            mat@
+            chk_ket.v_matrix[ik2].T
+        )
+
+    def _resolveSOIFile(self,soi):
+        if soi is None:
+            soi=self.hamR+'.soi'
+        if not soi.endswith('.soi'):
+            soi+='.soi'
+        if not os.path.isabs(soi):
+            soi=os.path.join(self.mainDir,soi)
+        return os.path.abspath(os.path.normpath(soi))
+
+    def loadSOI(self,soi=None,force=False):
+        '''
+        Read ``wannier90.soi`` and transform its Cartesian orbital-SOC
+        matrices into the separated-spin Wannier basis.
+
+        This method does not alter ``ham_R``. The resulting tensor is stored
+        in ``soi_R_W`` with indexing ``[iR, j, orbital_bra, orbital_ket]``.
+        '''
+        assert self.spinSeparated, (
+            "wannier90.soi must be combined with the separated collinear "
+            "up/down Wannier checkpoints"
+        )
+        filename=self._resolveSOIFile(soi)
+        if (
+            not force and self.soi_R_W is not None
+            and self._soi_filename==filename
+        ):
+            return self.soi_R_W
+        assert os.path.exists(filename), f"cannot find SOI file {filename}"
+
+        soi_data=W90SOI(filename)
+        assert soi_data.hermiticity_error<1e-8, (
+            f"Bloch-gauge SOI matrices are not Hermitian: "
+            f"{soi_data.hermiticity_error:.3e} eV"
+        )
+        chk_up,chk_dn=self._w90_spin_chks
+        for chk_spin in (chk_up,chk_dn):
+            assert soi_data.nbands==chk_spin.num_bands, (
+                f"{filename} has {soi_data.nbands} bands but the checkpoint "
+                f"has {chk_spin.num_bands}"
+            )
+            assert soi_data.nkpts==chk_spin.num_kpts
+            dk=soi_data.kpt_list-chk_spin.kpt_list
+            dk-=np.rint(dk)
+            assert np.max(np.abs(dk))<1e-10, (
+                f"k-point order in {filename} differs from the checkpoints"
+            )
+
+        soi_k_W=np.zeros((soi_data.nkpts,3,self.norbs,self.norbs),dtype=complex)
+        spin_chks=(chk_up,chk_dn)
+        for ikpt in range(soi_data.nkpts):
+            for ispin_bra in range(2):
+                bra_slice=self._w90_spin_slices[ispin_bra]
+                for ispin_ket in range(2):
+                    ket_slice=self._w90_spin_slices[ispin_ket]
+                    soi_k_W[ikpt,:,bra_slice,ket_slice]=self.toWannierGaugeCross(
+                        soi_data.data[ikpt,:,ispin_bra,ispin_ket],
+                        ikpt,ikpt,
+                        spin_chks[ispin_bra],
+                        spin_chks[ispin_ket],
+                    )
+
+        hermiticity_error=float(np.max(np.abs(
+            soi_k_W-soi_k_W.conj().swapaxes(-1,-2)
+        )))
+        assert hermiticity_error<1e-8, (
+            f"Wannier-gauge Cartesian SOI matrices are not Hermitian: "
+            f"{hermiticity_error:.3e} eV"
+        )
+        self.soi_R_W=self._fourier_q_to_R(soi_k_W)
+        soi_norm_squared=np.sum(np.abs(self.soi_R_W.reshape(self.nRvec,-1))**2,axis=1)
+        boundary_mask=np.any(2*np.abs(np.asarray(self.iRvec))>=np.asarray(self.mp_grid),axis=1)
+        total_soi_norm_squared=np.sum(soi_norm_squared)
+        self.soi_boundary_weight=(
+            float(np.sum(soi_norm_squared[boundary_mask])/
+                  total_soi_norm_squared)
+            if total_soi_norm_squared>0 else 0.
+        )
+        if self.soi_boundary_weight>1e-3:
+            warnings.warn(
+                "SOI interpolation is poorly localized: "
+                f"{self.soi_boundary_weight:.3%} of its squared norm lies "
+                "on the Wigner-Seitz boundary. Native-mesh values remain "
+                "valid, but interpolation may require a denser mesh or "
+                "better aligned up/down Wannier gauges.",
+                RuntimeWarning,
+            )
+        self._soi_filename=filename
+        print(
+            "Cartesian SOI matrices transformed to Wannier gauge; "
+            f"Hermiticity error {hermiticity_error:.3e} eV; "
+            f"boundary weight {self.soi_boundary_weight:.3%}"
+        )
+        return self.soi_R_W
+
+    def includeSOCFromSOI(self,soi=None,theta=0.,phi=0.,strength=1.,replace=True):
+        r'''
+        Add the SOC Hamiltonian for a chosen magnetization direction.
+
+        ``theta`` and ``phi`` are the polar and azimuthal angles of the
+        magnetization axis in the global Cartesian frame. The collinear
+        up/down basis remains quantized along that axis. For ``theta=phi=0``
+        the assembled blocks are
+
+        .. math::
+
+            \begin{pmatrix}
+            A_z^{\uparrow\uparrow} &
+            A_x^{\uparrow\downarrow}-iA_y^{\uparrow\downarrow}\\
+            A_x^{\downarrow\uparrow}+iA_y^{\downarrow\uparrow} &
+            -A_z^{\downarrow\downarrow}
+            \end{pmatrix}.
+
+        If ``replace`` is True, a contribution previously added by this
+        method is removed before the new direction is applied.
+        '''
+        filename=self._resolveSOIFile(soi)
+        if self.soi_R_W is None or self._soi_filename!=filename:
+            self.loadSOI(filename)
+        strength=float(strength)
+
+        c=np.cos(theta/2)
+        s=np.sin(theta/2)
+        spin_rotation=np.array([
+            [c,-np.exp(-1j*phi)*s],
+            [np.exp(1j*phi)*s,c],
+        ],dtype=complex)
+        pauli=np.array([
+            [[0,1],[1,0]],
+            [[0,-1j],[1j,0]],
+            [[1,0],[0,-1]],
+        ],dtype=complex)
+        pauli_local=np.array([
+            spin_rotation.conj().T@sigma@spin_rotation
+            for sigma in pauli
+        ])
+
+        soc_R=np.zeros_like(self.ham_R)
+        for ispin_bra in range(2):
+            bra_slice=self._w90_spin_slices[ispin_bra]
+            for ispin_ket in range(2):
+                ket_slice=self._w90_spin_slices[ispin_ket]
+                soc_R[:,bra_slice,ket_slice]=np.einsum(
+                    'j,rjmn->rmn',
+                    pauli_local[:,ispin_bra,ispin_ket],
+                    self.soi_R_W[:,:,bra_slice,ket_slice],
+                    optimize=True,
+                )
+        soc_R*=strength
+
+        real_space_error=0.
+        for iR,Rvec in enumerate(self.iRvec):
+            iR_minus=self.iRvecIndex.get(tuple(-np.asarray(Rvec)))
+            if iR_minus is not None:
+                real_space_error=max(
+                    real_space_error,
+                    float(np.max(np.abs(
+                        soc_R[iR]-soc_R[iR_minus].conj().T
+                    ))),
+                )
+        assert real_space_error<1e-8, (
+            f"assembled SOI Hamiltonian violates real-space Hermiticity: "
+            f"{real_space_error:.3e} eV"
+        )
+
+        if replace and self._included_soi_R is not None:
+            self.ham_R-=self._included_soi_R
+            self._included_soi_R=None
+        self.ham_R+=soc_R
+        if self._included_soi_R is None:
+            self._included_soi_R=soc_R.copy()
+        else:
+            self._included_soi_R+=soc_R
+        self._refreshHamiltonianDerivedMatrices()
+        print(
+            f"included SOI for theta={theta:.8f}, phi={phi:.8f}, "
+            f"strength={strength:.8f}; real-space Hermiticity error "
+            f"{real_space_error:.3e} eV"
+        )
+        return soc_R
+
+    def removeSOCFromSOI(self):
+        '''Remove SOC contributions previously added by ``includeSOCFromSOI``.'''
+        if self._included_soi_R is None:
+            return
+        self.ham_R-=self._included_soi_R
+        self._included_soi_R=None
+        self._refreshHamiltonianDerivedMatrices()
     
     def toWannierGauge(self, mat:np.ndarray, ik1:int, ik2:int, chk:W90CHK):
         '''
@@ -218,7 +599,7 @@ class System_w90(System):
         return
 
     def orbitalAngularMomentCubic(self):
-        '''
+        r'''
         Orbital angular moment operator represented in the cubic hamonics (s, px, py, pz, ...)
         in unit of \hbar
         For now, only l=s, p, d, f was implemented

@@ -31,11 +31,11 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, 
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/BN/"
-    model=System_tb(
+    mainDir="./mcalc/FeCl2/"
+    model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
-        hamR="BN_fm_rashiba",
+        #hamR="BN_fm_rashiba",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -51,13 +51,13 @@ def run():
             "Pt":(0,1,2,),
             #"Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
-            "Fe":(2,),
+            "Fe":(0,1,2,),
             "Mo":(2,),
             "S":(1,),
             "Bi":(0,1,),
             "Te":(0,1,),
             #"Fe":(0,0,1,1,2,2,),
-            "Cl":(1,),
+            "Cl":(0,1,),
             "Te":(1,),
             #"Cl":(0,0,1,1,2,3),
             "H":(0,),
@@ -67,8 +67,10 @@ def run():
             "Ti":(0,0,0,1,1,2,),
              "O":(0,0,1,1,2,),
         },
-        ispin=2
+        ispin=2,
+        spinSeparated=True,
     )
+    model.includeSOCFromSOI(theta=np.pi/2, phi=np.pi/2, strength=1)
     # rotate the spin quantization axis to \sigma^z if SAXIS != 0 0 1
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
@@ -141,7 +143,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-2.1         # VASP 2H-FeCl2
+    fermi=-2.1         # VASP 2H-FeCl2
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -151,16 +153,16 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
     
     fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
     #fermiAxis=np.array([fermi,])
     omegaAxis=np.linspace(0.5,4.0,101)
     model.setFermi(fermi)
     
-    '''
+    #'''
     # check band intepolation
-    spin_proj, orbital_proj= True, True
+    spin_proj, orbital_proj= False, False
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
                    args={"spin proj":spin_proj, "orbital proj":orbital_proj, "degen":1e-2},
                    )
