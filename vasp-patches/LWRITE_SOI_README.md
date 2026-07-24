@@ -40,16 +40,6 @@ with standalone Wannier90. It does not modify Wannier90.
   - Writes `wannier90.soi` in the same band and k-point order as the
     corresponding Wannier90 interface files.
 
-The file header contains `VASP PAW orbital SOC v3`. Version 3 follows VASP's
-reversed PAW storage convention: `CDIJ(LP,L)` is the physical operator
-element `O(L,LP)`. Version 2 paired these indices with the opposite projector
-coefficients, thereby transposing every Cartesian angular-momentum matrix.
-Because these matrices are antisymmetric in the real-spherical-harmonic
-basis, v2 carries one global minus sign. The Python reader corrects that sign
-automatically, but v2 files should be regenerated when convenient. Files
-from the earlier unversioned patch remain unsupported because they also used
-an incorrect Cartesian decomposition.
-
 ## Applying the patch on Linux
 
 Place `vasp-6.1.2-lwrite-soi.patch` outside or inside the clean VASP 6.1.2
@@ -102,7 +92,7 @@ included in memory estimates for calculations with many projectors/bands.
 
 A practical workflow is:
 
-1. Converge the collinear antiferromagnetic ground state without SOC.
+1. Converge the collinear and spinful ground state without SOC.
 2. Perform a fixed-charge run on the uniform Wannier mesh, for example with
    `ICHARG=11`, the converged `CHGCAR`, the desired `NBANDS`, and the tags
    above.
@@ -110,9 +100,7 @@ A practical workflow is:
    excluded bands, and disentanglement windows.
 4. Run patched `vasp_std`; it writes the normal spin-resolved Wannier90
    interface files plus `wannier90.soi`.
-5. Run standalone Wannier90 separately for the up and down seeds. Set
-   `write_u_matrices = true` so the final `U` and, when applicable,
-   `U_dis` matrices are available to the later postprocessor.
+5. Run standalone Wannier90 separately for the up and down seeds.
 
 The excluded-band map used for `wannier90.soi` is the same map produced by
 `wannier_setup`, so its compact band indices match `wannier90.up.eig`,
@@ -246,23 +234,3 @@ Checks recommended on the Linux server:
    The physical comparison must use `strength=+1`.
 5. Repeat the comparison for at least one nontrivial magnetization direction
    after implementing the angular formulas from the paper.
-
-This is an uncompiled research patch. The supplied patch was checked
-mechanically against the local VASP 6.1.2 source, but it still requires
-compilation and numerical validation on the target Linux build.
-
-## Compile fix for the first patch revision
-
-If the first revision was already applied and `mlwf.F` reports that
-`VTUTOR` or `LWRITE_SOI` has no explicit type, apply the small follow-up
-patch from the VASP source root:
-
-```bash
-git apply --check /path/to/vasp-6.1.2-lwrite-soi-compile-fix.patch
-git apply /path/to/vasp-6.1.2-lwrite-soi-compile-fix.patch
-make std
-```
-
-Do not reapply the all-in-one patch to that already-patched tree. The
-current all-in-one patch already includes this compile fix and is intended
-for a clean VASP 6.1.2 source tree.
