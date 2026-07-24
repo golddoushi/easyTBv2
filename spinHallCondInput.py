@@ -31,7 +31,7 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, 
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
+    mainDir="./mcalc/PbSn/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -68,10 +68,14 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        spinSeparated=True,
+        #spinSeparated=True,
     )
-    model.includeSOCFromSOI(theta=np.pi/2, phi=np.pi/2, strength=1)
-    # rotate the spin quantization axis to \sigma^z if SAXIS != 0 0 1
+    # Include SOC in a collinear w90 model (spinSeparated=True).
+    # keepRegularSpinAxis=True is the default and restores global x/y/z spin axes.
+    #model.includeSOCFromSOI(
+    #    theta=0, phi=0, strength=1, keepRegularSpinAxis=True,
+    #)
+    # For an independent noncollinear VASP model, rotate its SAXIS frame manually.
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
     #atomicMagMomList=[

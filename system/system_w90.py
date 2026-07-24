@@ -82,6 +82,7 @@ class System_w90(System):
         self.soi_R_W=None
         self._soi_filename=None
         self._included_soi_R=None
+        self._soi_global_spin_frame=None
 
         showElapsedTime()
 
@@ -484,14 +485,34 @@ class System_w90(System):
         )
         return self.soi_R_W
 
-    def includeSOCFromSOI(self,soi=None,theta=0.,phi=0.,strength=1.,replace=True):
+    def _restoreSOILocalSpinFrame(self):
+        """Return an automatically rotated SOI model to its local spin frame."""
+        if self._soi_global_spin_frame is None:
+            return
+        theta,phi=self._soi_global_spin_frame
+        self.rotateSpinBasisToGlobal(
+            alpha=phi,beta=-theta,gamma=-phi,
+        )
+        self._soi_global_spin_frame=None
+
+    def _rotateSOIToGlobalSpinFrame(self,theta,phi):
+        """Apply the spin-frame convention used by ``includeSOCFromSOI``."""
+        self.rotateSpinBasisToGlobal(
+            alpha=phi,beta=theta,gamma=-phi,
+        )
+        self._soi_global_spin_frame=(float(theta),float(phi))
+
+    def includeSOCFromSOI(
+        self,soi=None,theta=0.,phi=0.,strength=1.,replace=True,
+        keepRegularSpinAxis=True,
+    ):
         r'''
         Add the SOC Hamiltonian for a chosen magnetization direction.
 
         ``theta`` and ``phi`` are the polar and azimuthal angles of the
-        magnetization axis in the global Cartesian frame. The collinear
-        up/down basis remains quantized along that axis. For ``theta=phi=0``
-        the assembled blocks are
+        magnetization axis in the global Cartesian frame. The SOC is first
+        assembled in the local collinear basis quantized along that axis.
+        For ``theta=phi=0`` the assembled blocks are
 
         .. math::
 
@@ -502,9 +523,24 @@ class System_w90(System):
             -A_z^{\downarrow\downarrow}
             \end{pmatrix}.
 
+        If ``keepRegularSpinAxis`` is True (the default), the complete model
+        is subsequently transformed with
+
+        .. math::
+
+            U=R_z(\phi)R_y(\theta)R_z(-\phi)
+
+        so that ``spin[0:3]`` again denotes the global Cartesian
+        :math:`(\sigma_x,\sigma_y,\sigma_z)` operators. If False, the model
+        remains in the local magnetization-aligned spin basis.
+
         If ``replace`` is True, a contribution previously added by this
-        method is removed before the new direction is applied.
+        method is removed before the new direction is applied. An automatic
+        global-frame rotation from an earlier call is undone before the
+        replacement, preventing rotations from accumulating during an angle
+        scan.
         '''
+        self._restoreSOILocalSpinFrame()
         filename=self._resolveSOIFile(soi)
         if self.soi_R_W is None or self._soi_filename!=filename:
             self.loadSOI(filename)
@@ -562,21 +598,38 @@ class System_w90(System):
             self._included_soi_R=soc_R.copy()
         else:
             self._included_soi_R+=soc_R
-        self._refreshHamiltonianDerivedMatrices()
+        returned_soc_R=soc_R
+        if keepRegularSpinAxis:
+            spin_rotation_full=np.kron(
+                spin_rotation,np.eye(self.norbs//2,dtype=complex),
+            )
+            returned_soc_R=(
+                spin_rotation_full@soc_R@spin_rotation_full.conj().T
+            )
+            self._rotateSOIToGlobalSpinFrame(theta,phi)
+        else:
+            self._refreshHamiltonianDerivedMatrices()
         print(
             f"included SOI for theta={theta:.8f}, phi={phi:.8f}, "
-            f"strength={strength:.8f}; real-space Hermiticity error "
+            f"strength={strength:.8f}, "
+            f"keepRegularSpinAxis={bool(keepRegularSpinAxis)}; "
+            f"real-space Hermiticity error "
             f"{real_space_error:.3e} eV"
         )
-        return soc_R
+        return returned_soc_R
 
     def removeSOCFromSOI(self):
         '''Remove SOC contributions previously added by ``includeSOCFromSOI``.'''
         if self._included_soi_R is None:
             return
+        global_spin_frame=self._soi_global_spin_frame
+        self._restoreSOILocalSpinFrame()
         self.ham_R-=self._included_soi_R
         self._included_soi_R=None
-        self._refreshHamiltonianDerivedMatrices()
+        if global_spin_frame is None:
+            self._refreshHamiltonianDerivedMatrices()
+        else:
+            self._rotateSOIToGlobalSpinFrame(*global_spin_frame)
     
     def toWannierGauge(self, mat:np.ndarray, ik1:int, ik2:int, chk:W90CHK):
         '''
