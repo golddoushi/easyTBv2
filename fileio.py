@@ -3,6 +3,7 @@ import auxiliary as aux
 import paramReader as param
 import numpy as np
 import fortio, scipy.io
+import warnings
 
 global version
 version='0.2'
@@ -820,6 +821,115 @@ class W90EIG:
         print(f"nbands: {self.nbands}, nkpts: {self.nkpts}")
         #data = data.reshape(self.nkpts, self.nbands, 3)
         self.data=data[:,2].reshape(self.nkpts, self.nbands)#data[:,:,2]
+
+class W90SOI:
+    def __init__(self,filename='wannier90.soi') -> None:
+        r'''
+        Read Cartesian orbital-SOC matrices written by the VASP
+        ``LWRITE_SOI`` patch.
+
+        The stored matrix elements are
+
+        .. math::
+
+            A_{\mathbf{k},nm}^{\sigma\sigma',j}
+            = \langle\psi_{\mathbf{k}n\sigma}|\xi L_j|
+              \psi_{\mathbf{k}m\sigma'}\rangle .
+
+        Properties
+        ----------
+        - data:
+            Array indexed as ``[ik, j, spin_bra, spin_ket, band_bra,
+            band_ket]``.
+        - kpt_list:
+            Fractional reciprocal coordinates in the output block order.
+        - hermiticity_error:
+            Maximum error in
+            ``A[j,s,s'] == A[j,s',s].conj().T``.
+        '''
+        if not filename.endswith('.soi'):
+            filename += '.soi'
+
+        with open(filename,'r') as fin:
+            self.comment=fin.readline().strip()
+            assert "VASP PAW orbital SOC v3:" in self.comment, (
+                    f"{filename} was written by the legacy LWRITE_SOI "
+                    "patch, whose PAW projector contraction and Cartesian "
+                    "SOC decomposition were incorrect. Rebuild VASP with "
+                    "the current patch and regenerate this file."
+            )
+                
+            header=fin.readline().split()
+            assert len(header)==4, f"invalid header in {filename}: {header}"
+            self.nbands,self.nkpts,self.ncomponents,self.nspins=map(int,header)
+            assert self.ncomponents==3, (
+                f"{filename} must contain three Cartesian components, "
+                f"found {self.ncomponents}"
+            )
+            assert self.nspins==2, (
+                f"{filename} must contain two spin channels, found {self.nspins}"
+            )
+
+            self.kpt_list=np.empty((self.nkpts,3),dtype=float)
+            self.data=np.empty((
+                self.nkpts,self.ncomponents,self.nspins,self.nspins,
+                self.nbands,self.nbands,
+            ),dtype=complex)
+
+            for ikpt in range(self.nkpts):
+                for icomponent in range(self.ncomponents):
+                    for ispin_bra in range(self.nspins):
+                        for ispin_ket in range(self.nspins):
+                            block_header=fin.readline().split()
+                            assert len(block_header)==7, (
+                                f"invalid block header in {filename}: {block_header}"
+                            )
+                            block_index=tuple(map(int,block_header[:4]))
+                            expected=(
+                                ikpt+1,icomponent+1,ispin_bra+1,ispin_ket+1,
+                            )
+                            assert block_index==expected, (
+                                f"unexpected block order in {filename}: "
+                                f"{block_index}, expected {expected}"
+                            )
+                            kpt=np.array(block_header[4:],dtype=float)
+                            if icomponent==0 and ispin_bra==0 and ispin_ket==0:
+                                self.kpt_list[ikpt]=kpt
+                            else:
+                                assert np.allclose(
+                                    kpt,self.kpt_list[ikpt],atol=1e-12,rtol=0,
+                                ), f"inconsistent k point in block {block_index}"
+
+                            matrix=self.data[
+                                ikpt,icomponent,ispin_bra,ispin_ket
+                            ]
+                            for _ in range(self.nbands*self.nbands):
+                                fields=fin.readline().split()
+                                assert len(fields)==4, (
+                                    f"invalid matrix entry in {filename}: {fields}"
+                                )
+                                ibra,iket=int(fields[0])-1,int(fields[1])-1
+                                assert (
+                                    0<=ibra<self.nbands and
+                                    0<=iket<self.nbands
+                                ), f"band index outside the header range in {filename}"
+                                matrix[ibra,iket]=(
+                                    float(fields[2])+1j*float(fields[3])
+                                )
+
+            assert not any(line.strip() for line in fin), (
+                f"unexpected trailing data in {filename}"
+            )
+
+        hermitian_partner=self.data.conj().transpose(0,1,3,2,5,4)
+        self.hermiticity_error=float(
+            np.max(np.abs(self.data-hermitian_partner))
+        )
+        print(
+            f"SOI file {filename} has been read: "
+            f"{self.nbands} bands, {self.nkpts} k points; "
+            f"Hermiticity error {self.hermiticity_error:.3e} eV"
+        )
 
 class W90MMN:
     
