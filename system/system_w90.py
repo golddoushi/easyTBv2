@@ -496,6 +496,88 @@ class System_w90(System):
         )
         return self.soi_R_W
 
+    def symmerizeCollinearAndSOI(
+        self,soi=None,symOpSelection:list=[],
+        print_row=(0,1,),print_col=(0,1,),
+        enforceSpinlessTimeReversal=True,
+    ):
+        r'''
+        Symmetrize the SOC-free collinear Hamiltonian and Cartesian SOI
+        coefficients before selecting a magnetization direction.
+
+        The three matrices in ``soi_R_W[:, j]`` are coefficients of the
+        orbital axial vector in
+
+        .. math::
+
+            H_{\rm SO}=\sum_j A_j\sigma_j.
+
+        They therefore cannot be symmetrized as three unrelated scalar
+        Hamiltonians.  Their Cartesian axis is transformed as an axial
+        vector, including the extra determinant for improper rotations.
+
+        After this routine, repeated calls to ``includeSOCFromSOI`` may use
+        arbitrary ``theta`` and ``phi`` without symmetrizing the assembled
+        Hamiltonian again.  Each fixed direction retains the magnetic little
+        group appropriate to that direction, while Hamiltonians at
+        symmetry-related directions transform covariantly.
+
+        ``enforceSpinlessTimeReversal`` imposes the real-space relations
+        ``H_R = H_R*`` and ``A_R = -A_R*``.  The SOC-free Hamiltonian is even
+        and its orbital axial-vector coefficient is odd under spinless time
+        reversal.  These projections remove residual violations between
+        independently disentangled up/down Wannier gauges.  Disable them only
+        when the collinear reference intentionally contains orbital flux or
+        another spin-independent time-reversal-breaking term.
+
+        This routine must act on the collinear model before an SOI
+        contribution is included.
+        '''
+        assert self.spinSeparated, "separate collinear/SOI symmetrization requires the separated up/down Wannier model"
+        assert self._included_soi_R is None, "remove the included SOI before symmetrizing its collinear and Cartesian ingredients"
+        assert self._soi_global_spin_frame is None
+
+        filename=self._resolveSOIFile(soi)
+        if self.soi_R_W is None or self._soi_filename!=filename:
+            self.loadSOI(filename)
+
+        nions=int(self.posinfo['tot ions'])
+        nonmagnetic_reference=[np.zeros(3) for _ in range(nions)]
+
+        if enforceSpinlessTimeReversal:
+            spinless_tr_residual=float(np.max(np.abs(
+                self.ham_R-self.ham_R.conj()
+            )))
+            self.ham_R=0.5*(self.ham_R+self.ham_R.conj())
+            print(f"Projected the collinear Hamiltonian onto spinless time reversal; residual {spinless_tr_residual:.3e} eV")
+            spinless_soi_tr_residual=float(np.max(np.abs(
+                self.soi_R_W+self.soi_R_W.conj()
+            )))
+            self.soi_R_W=0.5*(self.soi_R_W-self.soi_R_W.conj())
+            print(f"Projected the orbital-SOI coefficients onto spinless time reversal; residual {spinless_soi_tr_residual:.3e} eV")
+
+        print("Symmetrizing the SOC-free collinear model")
+        self.symmerizeHamAndOverlap(spinor=False, 
+            symOpSelection=symOpSelection,
+            atomicMagMomList=nonmagnetic_reference,
+            print_row=print_row,
+            print_col=print_col,
+        )
+
+        print("Symmetrizing Cartesian orbital-SOI coefficients")
+        self.soi_R_W=self.symmerizeTensorInAtomicBasis(
+            self.soi_R_W,
+            axisRep=("iRvec","axial","atomic orb","atomic orb"),
+            spinor=False,
+            symOpSelection=symOpSelection,
+            atomicMagMomList=nonmagnetic_reference,
+            format="VASP6" if self.format=="VASP6" else "w90",
+            print_row=print_row,
+            print_col=print_col,
+            reportSymOps=False,
+        )
+        return self.soi_R_W
+
     def _restoreSOILocalSpinFrame(self):
         """Return an automatically rotated SOI model to its local spin frame."""
         if self._soi_global_spin_frame is None:

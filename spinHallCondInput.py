@@ -68,24 +68,37 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        #spinSeparated=True,
+        spinSeparated=True,
     )
-    # Include SOC in a collinear w90 model (spinSeparated=True).
-    # keepRegularSpinAxis=True is the default and restores global x/y/z spin axes.
-    #model.includeSOCFromSOI(theta=0, phi=0, strength=1, keepRegularSpinAxis=True)
+    #'''
+    # Symmetrize the direction-independent collinear and orbital-SOI
+    # ingredients once, then assemble any requested magnetization direction.
+    model.symmerizeCollinearAndSOI(
+        print_row=(0,1,9,10,),print_col=(0,1,9,10,),
+    )
+    model.includeSOCFromSOI(
+        theta=np.pi/2,phi=0,strength=1,keepRegularSpinAxis=True,
+    )#'''
 
-    # For an independent noncollinear VASP model, rotate its SAXIS frame manually.
+    # For an independent noncollinear VASP model, rotate its SAXIS frame manually
+    # NOTE: this is only for independent vasp_ncl + wannier90 scheme, DO NOT apply for vasp_std + V_soi scheme
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
+    
+    '''
+    # global symmetrization
+    # usage: regularized independent noncollinear model, collinear model
+    # NOT for vasp_std + V_soi scheme, use the symmerizeCollinearAndSOI rather
     atomicMagMomList=[
-        np.array([0, 0, 1]),
+        np.array([1, 0, 0]),
     ]*1+[
         np.array([0, 0, 0]),
     ]*2
     model.symmerizeHamAndOverlap(
         atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
     )
-    #exit()
+    #'''
+
     # modulate the SOC, exchange fields, baised fields, etc.
     #model.scaleSOC(lam=0)
     #model.rotateExchangeField(projection=[(0,(0,)),(1,(0,))], theta=np.pi, phi=0.)

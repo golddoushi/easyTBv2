@@ -804,6 +804,16 @@ class System:
             :param symRotateList: rotation matrix in fractional coor.
             '''
             return self.lattice.T@rotate@np.linalg.inv(self.lattice.T)
+        def generateAxialO3SymOp(rotate):
+            '''
+            Generate the Cartesian representation of an axial vector.
+
+            Axial vectors acquire one additional determinant under an
+            improper spatial operation.  Examples are spin, orbital angular
+            momentum, and the Cartesian coefficient of an L.S operator.
+            '''
+            rotate_cart=generateO3SymOp(rotate)
+            return np.linalg.det(rotate_cart)*rotate_cart
         showElapsedTime()
         # check the projections
         orbName=['s','p','d','f']
@@ -916,14 +926,17 @@ class System:
         repFuncMapping={
             "r":generateO3SymOp,
             "p":generateO3SymOp,
+            "axial":generateAxialO3SymOp,
         }
         timeReversalSign={
             "r":1,
             "p":-1,
+            "axial":-1,
         }
         dimRep={
             "r":3,
             "p":3,
+            "axial":3,
         }
         symMidRotateList,symMidRotateInvList=[], []  # symMidOpList[isymOp][imidAxis]
         for rotate, timeReversal in zip(symRotateList,symTimeReversalList):
