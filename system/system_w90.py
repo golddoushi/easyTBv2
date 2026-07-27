@@ -442,7 +442,10 @@ class System_w90(System):
                 f"{filename} has {soi_data.nbands} bands but the checkpoint "
                 f"has {chk_spin.num_bands}"
             )
-            assert soi_data.nkpts==chk_spin.num_kpts
+            assert soi_data.nkpts==chk_spin.num_kpts, (
+                f"{filename} has {soi_data.nkpts} kpoints but the checkpoint "
+                f"has {chk_spin.num_kpts}"
+            )
             dk=soi_data.kpt_list-chk_spin.kpt_list
             dk-=np.rint(dk)
             assert np.max(np.abs(dk))<1e-10, (

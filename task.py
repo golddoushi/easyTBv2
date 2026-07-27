@@ -359,7 +359,7 @@ def solveBPVE_LG_Shift(param):
     calc=BulkPhotovoltaicConductance_LG_Shift(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],
+                                   currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
                                    )
     return {"energies":calc.energies,
             #"projected response":calc.projected_response,
@@ -370,7 +370,7 @@ def solveBPVE_LG_Inject(param):
     calc=BulkPhotovoltaicConductance_LG_Injection(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],
+                                   currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
                                    )
     return {"energies":calc.energies,
             #"projected response":calc.projected_response,
@@ -381,7 +381,7 @@ def solveBPVE_LG_DM(param):
     calc=BulkPhotovoltaicConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],
+                                   currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
                                    )
     return {"energies":calc.energies,
             "projected response":calc.projected_response,
@@ -391,14 +391,14 @@ def solveBPVE_LG_DM(param):
 def solveBPVE_TDSE(param):
     calc = BulkPhotovoltaicConductance_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                     fermiList=param['fermi'],omegaList=param['omega'],
-                                    include_offdiag=param.get('include offdiag', True),
+                                    include_offdiag=param.get('include offdiag', True),verbose=param["verbose"],
                                     )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
             "iq": param["iq"]}
 
 def solveBPVE_TDSE_LG(param):
     calc = BulkPhotovoltaicConductance_TDSE_LG_Naive(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
+                                   fermiList=param['fermi'],omegaList=param['omega'],verbose=param["verbose"],
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
             "iq": param["iq"]}
@@ -408,7 +408,7 @@ def solveIFE_VG(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
     return {"projected response": calc.projected_response,
             "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
@@ -419,7 +419,7 @@ def solveIFE_VG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
     return {"projected response": calc.projected_response,
             "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
@@ -430,9 +430,9 @@ def solveIFE_LG(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
-    return {"projected response": calc.projected_response,
+    return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
             "iq": param["iq"]}
 
@@ -441,9 +441,9 @@ def solveIFE_LG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
-    return {"projected response": calc.projected_response,
+    return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
             "iq": param["iq"]}
 
@@ -453,9 +453,9 @@ def solveIFE_TDSE(param):
                                    ife_type=param['mag type'],
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
-                                   n_steps_per_cycle=param.get('n steps per cycle', 100),
+                                   n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE, 
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE, "energies":calc.energies,
             "iq": param["iq"]}
 
 def solveIFE_BlochAcceleration_TDSE(param):
@@ -464,9 +464,9 @@ def solveIFE_BlochAcceleration_TDSE(param):
                                    ife_type=param['mag type'],
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
-                                   n_steps_per_cycle=param.get('n steps per cycle', 100),
+                                   n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
                                    )
-    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE,
+    return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE,"energies":calc.energies,
             "iq": param["iq"]}
 
 def solveIFTorque_TDSE(param):
@@ -477,9 +477,9 @@ def solveIFTorque_TDSE(param):
                                    torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
-                                   n_steps_per_cycle=param.get('n steps per cycle', 100),
+                                   n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
                                    )
-    return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
+    return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,"energies":calc.energies,
             "iq": param["iq"]}
 
 def solveIFTorque_VG_DM(param):
@@ -489,9 +489,9 @@ def solveIFTorque_VG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
-    return {"projected response": calc.projected_response,
+    return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}
 
@@ -502,9 +502,9 @@ def solveIFTorque_LG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
-    return {"projected response": calc.projected_response,
+    return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}
 

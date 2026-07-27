@@ -31,7 +31,7 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, 
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
+    mainDir="./mcalc/PbSn/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -68,16 +68,16 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        spinSeparated=True,
+        #spinSeparated=True,
     )
-    #'''
+    '''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
-    model.symmerizeCollinearAndSOI(
-        print_row=(0,1,9,10,),print_col=(0,1,9,10,),
-    )
+    #model.symmerizeCollinearAndSOI(
+    #    print_row=(0,1,9,10,),print_col=(0,1,9,10,),
+    #)
     model.includeSOCFromSOI(
-        theta=np.pi/2,phi=0,strength=1,keepRegularSpinAxis=True,
+        theta=0,phi=0,strength=1,keepRegularSpinAxis=True,
     )#'''
 
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually
@@ -90,7 +90,7 @@ def run():
     # usage: regularized independent noncollinear model, collinear model
     # NOT for vasp_std + V_soi scheme, use the symmerizeCollinearAndSOI rather
     atomicMagMomList=[
-        np.array([1, 0, 0]),
+        np.array([0, 0, 1]),
     ]*1+[
         np.array([0, 0, 0]),
     ]*2
@@ -176,9 +176,9 @@ def run():
     omegaAxis=np.linspace(0.5,2.0,21)
     model.setFermi(fermi)
     
-    '''
+    #'''
     # check band intepolation
-    spin_proj, orbital_proj= False, False
+    spin_proj, orbital_proj= True, False
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
                    args={"spin proj":spin_proj, "orbital proj":orbital_proj, "degen":1e-2},
                    )
