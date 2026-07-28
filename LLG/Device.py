@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 from LLG import Field, SingleMomentLLG, Torque
@@ -65,6 +66,115 @@ def _polarization_vector(polarization) -> np.ndarray:
     return vector / norm
 
 
+@dataclass(frozen=True)
+class TangentTorqueMap:
+    """Drive-torque vector field sampled on the magnetic orientation sphere."""
+
+    theta: np.ndarray
+    phi: np.ndarray
+    direction: np.ndarray
+    cartesian: np.ndarray
+    theta_component: np.ndarray
+    phi_component: np.ndarray
+
+    @property
+    def magnitude(self) -> np.ndarray:
+        return np.linalg.norm(self.cartesian, axis=-1)
+
+    @property
+    def components(self) -> np.ndarray:
+        """Return ``(T_theta, T_phi)`` on the last axis."""
+        return np.stack((self.theta_component, self.phi_component), axis=-1)
+
+
+def sample_tangent_torque_map(
+    device,
+    theta_count: int = 31,
+    phi_count: int = 61,
+    drive_amplitude: float = 1.0,
+) -> TangentTorqueMap:
+    """
+    Sample the drive-induced tangent torque over magnetic orientations.
+
+    ``drive_amplitude=1`` means a unit current-pulse multiplier for
+    :class:`SOTDevice` and a unit electric-field amplitude in V/angstrom for
+    :class:`IFTDevice`.  Static fields, anisotropy, and their LLG precession
+    are intentionally excluded.
+
+    The theta samples are cell-centered in ``(0, pi)``.  The plot can still
+    span ``0 <= theta <= pi``, but avoiding the exact poles removes the
+    coordinate singularity of the local spherical basis and of the VSH fit.
+    """
+    theta_count = int(theta_count)
+    phi_count = int(phi_count)
+    if theta_count < 2:
+        raise ValueError("theta_count must be at least 2.")
+    if phi_count < 2:
+        raise ValueError("phi_count must be at least 2.")
+    if not np.isfinite(drive_amplitude):
+        raise ValueError("drive_amplitude must be finite.")
+    if not hasattr(device, "drive_torque"):
+        raise TypeError("device must provide drive_torque(m, drive_amplitude).")
+
+    theta_axis = (
+        np.arange(theta_count, dtype=float) + 0.5
+    ) * np.pi / theta_count
+    phi_axis = np.linspace(0.0, 2.0 * np.pi, phi_count, endpoint=False)
+    theta, phi = np.meshgrid(theta_axis, phi_axis, indexing="ij")
+
+    sin_theta = np.sin(theta)
+    cos_theta = np.cos(theta)
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+    direction = np.stack(
+        (
+            sin_theta * cos_phi,
+            sin_theta * sin_phi,
+            cos_theta,
+        ),
+        axis=-1,
+    )
+    theta_basis = np.stack(
+        (
+            cos_theta * cos_phi,
+            cos_theta * sin_phi,
+            -sin_theta,
+        ),
+        axis=-1,
+    )
+    phi_basis = np.stack(
+        (
+            -sin_phi,
+            cos_phi,
+            np.zeros_like(phi),
+        ),
+        axis=-1,
+    )
+
+    flat_direction = direction.reshape(-1, 3)
+    flat_torque = np.asarray(
+        [
+            device.drive_torque(m, drive_amplitude)
+            for m in flat_direction
+        ],
+        dtype=float,
+    )
+    if flat_torque.shape != flat_direction.shape:
+        raise ValueError("device.drive_torque must return a Cartesian vector.")
+    cartesian = flat_torque.reshape(direction.shape)
+    radial = np.sum(cartesian * direction, axis=-1)
+    cartesian = cartesian - radial[..., None] * direction
+
+    return TangentTorqueMap(
+        theta=theta,
+        phi=phi,
+        direction=direction,
+        cartesian=cartesian,
+        theta_component=np.sum(cartesian * theta_basis, axis=-1),
+        phi_component=np.sum(cartesian * phi_basis, axis=-1),
+    )
+
+
 
 class SOTDevice:
     def __init__(
@@ -83,15 +193,14 @@ class SOTDevice:
         """Simulate a single-moment current-driven SOT device."""
         H_K = np.asarray(H_K, dtype=float)
         H_ext = np.asarray(H_ext, dtype=float)
-        sigma = np.asarray(sigma, dtype=float)
+        self.sigma = np.asarray(sigma, dtype=float)
+        self.gamma = float(gamma)
+        self.H_FL = float(H_FL)
+        self.H_DL = float(H_DL)
+        self.current_pulse = current_pulse
 
         def sot(m, time):
-            pulse = current_pulse(time)
-            damping_like = -gamma * H_DL * np.cross(
-                m, np.cross(m, sigma)
-            )
-            field_like = -gamma * H_FL * np.cross(m, sigma)
-            return pulse * (damping_like + field_like)
+            return self.drive_torque(m, self.current_pulse(time))
 
         torque = Torque(sot)
         H_K_norm = np.linalg.norm(H_K)
@@ -111,6 +220,16 @@ class SOTDevice:
         )
         self.m = _initial_direction(theta0, phi0)
         self.time = 0.0
+
+    def drive_torque(self, m, drive_amplitude=1.0) -> np.ndarray:
+        """Return SOT at a specified dimensionless current-pulse amplitude."""
+        m = np.asarray(m, dtype=float)
+        damping_like = -self.gamma * self.H_DL * np.cross(
+            m,
+            np.cross(m, self.sigma),
+        )
+        field_like = -self.gamma * self.H_FL * np.cross(m, self.sigma)
+        return float(drive_amplitude) * (damping_like + field_like)
 
     def run(self, t_total=1.0, time_step=0.01):
         time_axis, trajectory = self.dynamic.integrate(
@@ -341,9 +460,13 @@ class IFTDevice:
 
     def optical_torque(self, m, time) -> np.ndarray:
         """Return the optical source torque on the unit moment in 1/fs."""
-        amplitude = complex(self.light_pulse(time))
-        return  self.ift_response(m) * abs(amplitude) ** 2 / (HBAR_EV_FS * self.moment_magnitude_muB)
+        return self.drive_torque(m, self.light_pulse(time))
 
+    def drive_torque(self, m, drive_amplitude=1.0) -> np.ndarray:
+        """Return IFT at a specified field amplitude in V/angstrom."""
+        amplitude = complex(drive_amplitude)
+        return self.ift_response(m) * abs(amplitude) ** 2 / (HBAR_EV_FS * self.moment_magnitude_muB)
+    
     def _optical_torque(self, m, time) -> np.ndarray:
         return self.optical_torque(m, time)
 
