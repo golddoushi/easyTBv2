@@ -19,7 +19,7 @@ from SphericalHarmonics import (
     fibonacci_sphere,
     project_tangential,
 )
-from calculator import fermiDiracOccupations
+from auxiliary import fermiDiracOccupations
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
 
@@ -347,6 +347,228 @@ def load_ift_sample(
         return data["projected_chi_IFT"].copy()
 
 
+def optical_polarization_states():
+    """
+    Return linear and circular unit Jones vectors in Cartesian coordinates.
+
+    Circular ``ab+`` means ``(e_a + i e_b)/sqrt(2)``.  Responses are
+    contracted as ``sum_ab e_a e_b^* chi_ab``.
+    """
+    cartesian = np.eye(3, dtype=complex)
+    labels = ["linear_x", "linear_y", "linear_z"]
+    vectors = [cartesian[0], cartesian[1], cartesian[2]]
+    for label, ia, ib in (("xy", 0, 1), ("xz", 0, 2), ("yz", 1, 2)):
+        labels.extend((f"circular_{label}+", f"circular_{label}-"))
+        vectors.extend(
+            (
+                (cartesian[ia] + 1j * cartesian[ib]) / np.sqrt(2.0),
+                (cartesian[ia] - 1j * cartesian[ib]) / np.sqrt(2.0),
+            )
+        )
+    return np.asarray(labels), np.asarray(vectors)
+
+
+def polarization_contracted_diagnostics(
+    reference,
+    reconstructed,
+    polarization_vectors,
+):
+    """
+    Measure vector-field errors after contraction with optical polarization.
+
+    Input tensor axes must end in ``(drive_1, drive_2, torque_cartesian)``.
+    Per-frequency metrics average over orientations and torque components.
+    Global metrics additionally combine all frequencies.
+    """
+    reference = np.asarray(reference)
+    reconstructed = np.asarray(reconstructed)
+    if reference.shape != reconstructed.shape:
+        raise ValueError("Reference and reconstructed responses must match.")
+    if reference.shape[-3:] != (3, 3, 3):
+        raise ValueError("Response axes must end in (3, 3, 3).")
+
+    polarization_vectors = np.asarray(polarization_vectors, dtype=complex)
+    contracted_reference = np.einsum(
+        "pa,pb,n...abc->np...c",
+        polarization_vectors,
+        polarization_vectors.conj(),
+        reference,
+    )
+    contracted_reconstructed = np.einsum(
+        "pa,pb,n...abc->np...c",
+        polarization_vectors,
+        polarization_vectors.conj(),
+        reconstructed,
+    )
+    error = contracted_reconstructed - contracted_reference
+
+    reference_rms = np.sqrt(
+        np.mean(np.abs(contracted_reference) ** 2, axis=(0, -1))
+    )
+    error_rms = np.sqrt(np.mean(np.abs(error) ** 2, axis=(0, -1)))
+    relative_rms = np.divide(
+        error_rms,
+        reference_rms,
+        out=np.zeros_like(error_rms, dtype=float),
+        where=reference_rms > 0.0,
+    )
+    reference_peak = np.max(np.abs(contracted_reference), axis=(0, -1))
+    error_peak = np.max(np.abs(error), axis=(0, -1))
+    peak_normalized_error = np.divide(
+        error_peak,
+        reference_peak,
+        out=np.zeros_like(error_peak, dtype=float),
+        where=reference_peak > 0.0,
+    )
+
+    reference_power = np.sum(
+        np.abs(contracted_reference) ** 2,
+        axis=(0, -2, -1),
+    )
+    error_power = np.sum(np.abs(error) ** 2, axis=(0, -2, -1))
+    global_relative_rms = np.sqrt(
+        np.divide(
+            error_power,
+            reference_power,
+            out=np.zeros_like(error_power, dtype=float),
+            where=reference_power > 0.0,
+        )
+    )
+    return {
+        "reference_rms": reference_rms,
+        "error_rms": error_rms,
+        "relative_rms": relative_rms,
+        "reference_peak": reference_peak,
+        "error_peak": error_peak,
+        "peak_normalized_error": peak_normalized_error,
+        "global_relative_rms": global_relative_rms,
+    }
+
+
+def paired_antipodal_vsh_cross_validation(
+    directions,
+    values,
+    harmonic_degree,
+    number_folds=5,
+):
+    """Predict every orientation from fits that exclude its antipodal pair."""
+    directions = np.asarray(directions)
+    values = np.asarray(values)
+    number_orientations = len(directions)
+    if number_orientations % 2:
+        raise ValueError("Paired-antipodal validation needs an even sample count.")
+    number_pairs = number_orientations // 2
+    if not np.allclose(
+        directions[:number_pairs],
+        -directions[number_pairs:],
+        atol=1.0e-12,
+    ):
+        raise ValueError(
+            "The second half of directions must be antipodal to the first."
+        )
+    number_folds = int(number_folds)
+    if not 2 <= number_folds <= number_pairs:
+        raise ValueError("number_folds must lie between 2 and the pair count.")
+
+    predictions = np.empty_like(values)
+    fold_rank = np.empty(number_folds, dtype=int)
+    fold_condition = np.empty(number_folds)
+    pair_indices = np.arange(number_pairs)
+    for ifold in range(number_folds):
+        test_pairs = pair_indices[pair_indices % number_folds == ifold]
+        test_indices = np.concatenate(
+            (test_pairs, test_pairs + number_pairs)
+        )
+        training_mask = np.ones(number_orientations, dtype=bool)
+        training_mask[test_indices] = False
+        expansion, diagnostics = VectorSphericalHarmonicExpansion.fit(
+            directions[training_mask],
+            values[training_mask],
+            harmonic_degree,
+            project=False,
+        )
+        predictions[test_indices] = expansion.evaluate(
+            directions[test_indices]
+        )
+        fold_rank[ifold] = diagnostics["rank"]
+        fold_condition[ifold] = diagnostics["condition"]
+    return predictions, {
+        "rank": fold_rank,
+        "condition": fold_condition,
+    }
+
+
+def output_polarization_validation_table(
+    path,
+    omega_axis,
+    polarization_labels,
+    diagnostics_by_type,
+):
+    """Write projection- and frequency-resolved polarization fit errors."""
+    with open(path, "w", encoding="utf-8") as output:
+        output.write(
+            "# validation polarization drive_projection_1 "
+            "drive_projection_2 torque_projection fermi_index omega_index "
+            "omega_eV reference_rms error_rms relative_rms reference_peak "
+            "error_peak peak_normalized_error\n"
+        )
+        for validation_name, diagnostics in diagnostics_by_type.items():
+            relative_rms = diagnostics["relative_rms"]
+            leading_shape = relative_rms.shape[1:-1]
+            for ipolarization, label in enumerate(polarization_labels):
+                for leading_index in np.ndindex(leading_shape):
+                    for iomega, omega in enumerate(omega_axis):
+                        index = (ipolarization,) + leading_index + (iomega,)
+                        output.write(
+                            f"{validation_name:16s} {label:16s} "
+                            + " ".join(f"{value:4d}" for value in leading_index)
+                            + f" {iomega:4d} {omega:18.10e}"
+                            f" {diagnostics['reference_rms'][index]:18.10e}"
+                            f" {diagnostics['error_rms'][index]:18.10e}"
+                            f" {diagnostics['relative_rms'][index]:18.10e}"
+                            f" {diagnostics['reference_peak'][index]:18.10e}"
+                            f" {diagnostics['error_peak'][index]:18.10e}"
+                            f" {diagnostics['peak_normalized_error'][index]:18.10e}\n"
+                        )
+
+
+def print_polarization_validation_summary(
+    polarization_labels,
+    fit_diagnostics,
+    cross_validation_diagnostics,
+    active_signal_fraction,
+):
+    """Print compact full-response diagnostics for each polarization."""
+    fit_relative = fit_diagnostics["relative_rms"][:, 0, 0, 0, 0, :]
+    cross_relative = cross_validation_diagnostics["relative_rms"][
+        :, 0, 0, 0, 0, :
+    ]
+    reference_rms = cross_validation_diagnostics["reference_rms"][
+        :, 0, 0, 0, 0, :
+    ]
+    fit_global = fit_diagnostics["global_relative_rms"][:, 0, 0, 0, 0]
+    cross_global = cross_validation_diagnostics["global_relative_rms"][
+        :, 0, 0, 0, 0
+    ]
+
+    print(
+        "IFT polarization validation for the full response "
+        f"(active frequencies >= {active_signal_fraction:.0%} of peak RMS):"
+    )
+    for ipolarization, label in enumerate(polarization_labels):
+        active = (
+            reference_rms[ipolarization]
+            >= active_signal_fraction * np.max(reference_rms[ipolarization])
+        )
+        cross_active = cross_relative[ipolarization, active]
+        print(
+            f"  {label:16s} fit global={fit_global[ipolarization]:.3%}, "
+            f"CV global={cross_global[ipolarization]:.3%}, "
+            f"CV active median={np.median(cross_active):.3%}, "
+            f"max={np.max(cross_active):.3%}"
+        )
+
+
 def output_energy_table(
     path,
     directions,
@@ -396,12 +618,13 @@ def run():
     torque_projection_list = []
     ift_solver = solveIFTorque_LG_DM
 
-    # Angular representation.  For l_max=4 the tangential VSH expansion has
-    # 48 coefficients.  Fifty orientations provide 100 tangential data
-    # values for each response-tensor component.
+    # Angular representation.  A degree-l tangential VSH expansion has
+    # 2*l*(l+2) coefficients for each response-tensor component.
     harmonic_degree = 6
-    number_of_orientations = 100
+    number_of_orientations = 200
     resume_completed_orientations = True
+    validation_folds = 5
+    validation_active_signal_fraction = 0.05
 
     if occupation_mode not in {"zero-temperature", "fermi-dirac"}:
         raise ValueError(
@@ -412,7 +635,7 @@ def run():
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
-    moment_magnitude_muB = None
+    moment_magnitude_muB = 4 # mu_B
 
     minimum_recommended = 2 * harmonic_degree * (harmonic_degree + 2)
     if number_of_orientations < minimum_recommended:
@@ -686,6 +909,26 @@ def run():
             project=False,
         )
     )
+    torque_reconstructed = torque_expansion.evaluate(directions)
+    torque_cross_validated, torque_cross_validation_fit = (
+        paired_antipodal_vsh_cross_validation(
+            directions,
+            tangential_chi_ift,
+            harmonic_degree,
+            number_folds=validation_folds,
+        )
+    )
+    polarization_labels, polarization_vectors = optical_polarization_states()
+    polarization_fit = polarization_contracted_diagnostics(
+        tangential_chi_ift,
+        torque_reconstructed,
+        polarization_vectors,
+    )
+    polarization_cross_validation = polarization_contracted_diagnostics(
+        tangential_chi_ift,
+        torque_cross_validated,
+        polarization_vectors,
+    )
 
     energy_gradient = np.real_if_close(
         energy_expansion.surface_gradient(directions)
@@ -699,10 +942,7 @@ def run():
         moment_magnitude_muB = float(moment_magnitude_muB)
         if moment_magnitude_muB <= 0.0:
             raise ValueError("moment_magnitude_muB must be positive.")
-        anisotropy_field_tesla = (
-            -energy_gradient
-            / (moment_magnitude_muB * BOHR_MAGNETON_EV_PER_TESLA)
-        )
+        anisotropy_field_tesla = -energy_gradient / (moment_magnitude_muB * BOHR_MAGNETON_EV_PER_TESLA)
 
     output_energy_table(
         main_dir / "AngleDependentEnergy.txt",
@@ -714,6 +954,15 @@ def run():
         chemical_potential,
         highest_occupied,
         lowest_unoccupied,
+    )
+    output_polarization_validation_table(
+        main_dir / "AngleDependentIFTFitValidation.txt",
+        omega_axis,
+        polarization_labels,
+        {
+            "fit": polarization_fit,
+            "cross_validation": polarization_cross_validation,
+        },
     )
 
     output_path = main_dir / "AngleDependentDynamicsMap.npz"
@@ -765,6 +1014,43 @@ def run():
         torque_fit_condition=torque_fit["condition"],
         torque_fit_rms=torque_fit["rms"],
         torque_fit_relative_rms=torque_fit["relative_rms"],
+        torque_cross_validation_prediction=torque_cross_validated,
+        torque_cross_validation_folds=validation_folds,
+        torque_cross_validation_fold_rank=torque_cross_validation_fit["rank"],
+        torque_cross_validation_fold_condition=torque_cross_validation_fit[
+            "condition"
+        ],
+        polarization_labels=polarization_labels,
+        polarization_vectors=polarization_vectors,
+        polarization_active_signal_fraction=validation_active_signal_fraction,
+        polarization_fit_reference_rms=polarization_fit["reference_rms"],
+        polarization_fit_error_rms=polarization_fit["error_rms"],
+        polarization_fit_relative_rms=polarization_fit["relative_rms"],
+        polarization_fit_reference_peak=polarization_fit["reference_peak"],
+        polarization_fit_error_peak=polarization_fit["error_peak"],
+        polarization_fit_peak_normalized_error=polarization_fit[
+            "peak_normalized_error"
+        ],
+        polarization_fit_global_relative_rms=polarization_fit[
+            "global_relative_rms"
+        ],
+        polarization_cv_reference_rms=polarization_cross_validation[
+            "reference_rms"
+        ],
+        polarization_cv_error_rms=polarization_cross_validation["error_rms"],
+        polarization_cv_relative_rms=polarization_cross_validation[
+            "relative_rms"
+        ],
+        polarization_cv_reference_peak=polarization_cross_validation[
+            "reference_peak"
+        ],
+        polarization_cv_error_peak=polarization_cross_validation["error_peak"],
+        polarization_cv_peak_normalized_error=polarization_cross_validation[
+            "peak_normalized_error"
+        ],
+        polarization_cv_global_relative_rms=polarization_cross_validation[
+            "global_relative_rms"
+        ],
     )
 
     metadata = {
@@ -818,6 +1104,14 @@ def run():
             "IFT values remain electronic response coefficients. Contract "
             "with the complex optical field and convert units before LLG."
         ),
+        "polarization_validation": (
+            "The fit metrics reconstruct all samples. Cross-validation uses "
+            f"{validation_folds} folds and keeps each antipodal pair in the "
+            "same held-out fold. Circular ab+ uses "
+            "(e_a+i e_b)/sqrt(2), and responses are contracted as "
+            "sum_ab e_a e_b^* chi_ab. Console active-frequency summaries "
+            f"use a {validation_active_signal_fraction:.1%} signal threshold."
+        ),
     }
     with open(main_dir / "AngleDependentDynamicsMap.json", "w", encoding="utf-8") as output:
         json.dump(metadata, output, indent=2)
@@ -832,6 +1126,18 @@ def run():
         f"IFT VSH fit: condition={torque_fit['condition']:.6e}, "
         f"median relative RMS={np.median(torque_relative_rms):.6e}, "
         f"maximum relative RMS={np.max(torque_relative_rms):.6e}"
+    )
+    print(
+        "IFT VSH cross-validation: "
+        f"fold condition min="
+        f"{np.min(torque_cross_validation_fit['condition']):.6e}, "
+        f"max={np.max(torque_cross_validation_fit['condition']):.6e}"
+    )
+    print_polarization_validation_summary(
+        polarization_labels,
+        polarization_fit,
+        polarization_cross_validation,
+        validation_active_signal_fraction,
     )
 
 

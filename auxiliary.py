@@ -738,4 +738,24 @@ def getWholeSymmetryOperator(posinfo:dict,DNA=[],symprec=SYMPREC):
     
     sym=spg.get_symmetry_dataset((posinfo['lattice'],posinfo['pos ions (frac.)'],typeNumbers),symprec=symprec)
     return sym
-    
+
+def fermiDiracOccupations(energies, fermiList, kBT):
+    """Return stable Fermi-Dirac occupations over one or more Fermi levels."""
+    energies = np.asarray(energies, dtype=float)
+    fermiList = np.atleast_1d(np.asarray(fermiList, dtype=float))
+    chemical_potential = fermiList.reshape(
+        (len(fermiList),) + (1,) * energies.ndim
+    )
+    if kBT < 0.0:
+        raise ValueError("kBT must be non-negative.")
+    if kBT == 0.0:
+        return np.asarray(energies[None, ...] < chemical_potential, dtype=float)
+
+    scaled_energy = (energies[None, ...] - chemical_potential) / kBT
+    occupations = np.empty_like(scaled_energy, dtype=float)
+    positive = scaled_energy >= 0.0
+    exp_negative = np.exp(-scaled_energy[positive])
+    occupations[positive] = exp_negative / (1.0 + exp_negative)
+    exp_positive = np.exp(scaled_energy[~positive])
+    occupations[~positive] = 1.0 / (1.0 + exp_positive)
+    return occupations

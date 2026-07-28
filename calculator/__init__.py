@@ -5,7 +5,7 @@ from system import System
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from auxiliary import showElapsedTime, print_matrix, projectionOperator
-from auxiliary import PauliBlock, semiCirle
+from auxiliary import PauliBlock, semiCirle, fermiDiracOccupations
 from scipy.special import p_roots
 from scipy.constants import elementary_charge, electron_mass, hbar, angstrom
 from scipy.constants import k as kB
@@ -221,22 +221,11 @@ class Energy(Calculator):
         ``kBT=0`` gives the strict zero-temperature step convention used by
         the response calculators.
         """
-        energies = np.asarray(self.energies, dtype=float)
-        fermiList = np.atleast_1d(np.asarray(self.fermiList, dtype=float))
-        chemical_potential = fermiList.reshape((len(fermiList),) + (1,) * energies.ndim)
-        if self.kBT < 0.0:
-            raise ValueError("kBT must be non-negative.")
-        if self.kBT == 0.0:
-            return np.asarray(energies[None, ...] < chemical_potential, dtype=float)
-        
-        scaled_energy = (energies[None, ...] - chemical_potential) / self.kBT
-        occupations = np.empty_like(scaled_energy, dtype=float)
-        positive = scaled_energy >= 0.0
-        exp_negative = np.exp(-scaled_energy[positive])
-        occupations[positive] = exp_negative / (1.0 + exp_negative)
-        exp_positive = np.exp(scaled_energy[~positive])
-        occupations[~positive] = 1.0 / (1.0 + exp_positive)
-        return occupations
+        return fermiDiracOccupations(
+            self.energies,
+            self.fermiList,
+            self.kBT,
+        )
     
     def getEnergyWindow(self,gap=5.0):
         energy=np.sort(self.energies.flatten()) - self.model.fermi

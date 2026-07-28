@@ -231,6 +231,17 @@ class BZLineTask:
         
         showElapsedTime(extraInfo="1D K-Path integration finished")
 
+def solveEnergy(param):
+    calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                skip_low=param.get('skip low',False),
+                #verbose=param['verbose']
+                )
+    return {"energies":calc.energies,"iq":param["iq"]}
+
+def solvePDOS(param):
+    calc=PDOS(energyAxis=param['fermi'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,model=param['model'],)
+    return {"energies":calc.energies,"PDOS":calc.pdos,"iq":param["iq"]}
+
 def solveAHC(param):
     calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    currentProjectionList    =param['projected shells for applying current'],
@@ -557,10 +568,6 @@ def solveOGC_diag(param):
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
-def solvePDOS(param):
-    calc=PDOS(energyAxis=param['fermi'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,model=param['model'],)
-    return {"energies":calc.energies,"PDOS":calc.pdos,"iq":param["iq"]}
-
 def solveVelocity(param):
     calc=Velocity(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_K,"iq":param["iq"]}
@@ -568,11 +575,6 @@ def solveVelocity(param):
 def solveVelocity_diag(param):
     calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
-
-def solveEnergy(param):
-    calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
-                skip_low=param.get('skip low',False),verbose=param['verbose'])
-    return {"energies":calc.energies,"iq":param["iq"]}
 
 def solveMagneticMoment(param):
     spin_eig, orbital_LC_eig, orbital_IC_eig=None, None, None

@@ -68,16 +68,14 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        #spinSeparated=True,
+        spinSeparated=True,
     )
-    '''
+    #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
-    #model.symmerizeCollinearAndSOI(
-    #    print_row=(0,1,9,10,),print_col=(0,1,9,10,),
-    #)
+    model.symmerizeCollinearAndSOI()
     model.includeSOCFromSOI(
-        theta=0,phi=0,strength=1,keepRegularSpinAxis=True,
+        theta=np.pi/2,phi=0,strength=1,keepRegularSpinAxis=True,
     )#'''
 
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually
@@ -171,8 +169,8 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
     
-    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
-    #fermiAxis=np.array([fermi,])
+    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
+    fermiAxis=np.array([fermi,])
     omegaAxis=np.linspace(0.5,2.0,21)
     model.setFermi(fermi)
     
@@ -238,7 +236,7 @@ def run():
     recordOmegaIndexList=[41]
     recordFermiIndexList=[0]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveAHC,
+    calc=BZGridTask(model, solveIFTorque_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -322,7 +320,7 @@ def run():
             fout.write("\n")
     #exit()#'''
 
-    #'''
+    '''
     # output projected 2-rank conductance
     projected_sigma/=len(calc.results)
     with open("%s/secondOrderTensor.txt"%mainDir,"w") as fout:
