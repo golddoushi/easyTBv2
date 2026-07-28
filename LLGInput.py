@@ -62,7 +62,7 @@ def run_ift_example(
         theta0=1*np.pi/180,
         phi0=0*np.pi/180,
     )
-    time_axis, trajectory = device.run(t_total=500000.0, time_step=1000.0)
+    time_axis, trajectory = device.run(t_total=200000.0, time_step=100.0)
 
     fig, axes = plt.subplots(2, 1, sharex=True)
     axes[0].plot(time_axis, trajectory[:, 0], label=r"m$_x$")
@@ -77,7 +77,7 @@ def run_ift_example(
     axes[1].set_ylabel(r"$|E(t)|^2$ [$(V/\AA)^2$]")
     axes[1].set_xlabel("Time [fs]")
     if show_torque_map:
-        plot_tangent_torque_map(device)
+        plot_tangent_torque_map(device, trajectory=trajectory)
     plt.show()
 
 
@@ -86,6 +86,7 @@ def plot_tangent_torque_map(
     theta_count=31,
     phi_count=61,
     drive_amplitude=1.0,
+    trajectory=None,
 ):
     """
     Plot the unit-drive source torque over magnetic orientation space.
@@ -109,7 +110,20 @@ def plot_tangent_torque_map(
         torque_map.magnitude,
         cmap="viridis",
         pivot="mid",
+        angles="xy",
+        scale_units="xy",
     )
+    if trajectory is not None:
+        path = np.asarray(trajectory, dtype=float)
+        if path.ndim != 2 or path.shape[1] != 3:
+            raise ValueError("trajectory must have shape (ntime, 3).")
+        path = path / np.linalg.norm(path, axis=1)[:, None]
+        path_theta = np.arccos(np.clip(path[:, 2], -1.0, 1.0))
+        path_phi = np.mod(np.arctan2(path[:, 1], path[:, 0]), 2.0 * np.pi)
+        axis.scatter(path_phi, path_theta, s=8, c="black", alpha=0.55, label="trajectory",)
+        axis.scatter(path_phi[0], path_theta[0], s=45, facecolors="white", edgecolors="black", label="start", zorder=3)
+        axis.scatter(path_phi[-1], path_theta[-1], s=55, marker="x", c="red", label="end", zorder=3)
+        axis.legend()
     axis.set_xlim(0.0, 2.0 * np.pi)
     axis.set_ylim(np.pi, 0.0)
     axis.set_xticks(
@@ -160,7 +174,7 @@ def run_sot_example(show_torque_map=True):
     axes[1].set_ylabel("Current density")
     axes[1].set_xlabel("Time")
     if show_torque_map:
-        plot_tangent_torque_map(device)
+        plot_tangent_torque_map(device, trajectory=trajectory)
     plt.show()
 
 
