@@ -19,18 +19,18 @@ from SphericalHarmonics import (
     fibonacci_sphere,
     project_tangential,
 )
+from calculator import fermiDiracOccupations
 from system import System_w90
-from task import BZGridTask, solveIFTorque_LG_DM
+from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
 
 
 BOHR_MAGNETON_EV_PER_TESLA = 5.7883818060e-5
 
 
-def collect_bz_results(calc, bz_grid):
-    """Assemble full-grid energies and average the response over phase grids."""
+def collect_bz_energies(calc, bz_grid):
+    """Assemble full-grid energies returned by a hybrid FFT calculation."""
     _, _, _, number_of_bands = calc.results[0]["energies"].shape
     energies = np.zeros(tuple(bz_grid) + (number_of_bands,), dtype=float)
-    projected_chi_ift = None
 
     for result in calc.results:
         iq = result["iq"]
@@ -39,18 +39,19 @@ def collect_bz_results(calc, bz_grid):
             iq[1] :: calc.QGrid[1],
             iq[2] :: calc.QGrid[2],
         ] = result["energies"]
+    return energies
 
-        if "projected sigma" in result:
-            if projected_chi_ift is None:
-                projected_chi_ift = np.zeros_like(
-                    result["projected sigma"], dtype=complex
-                )
-            projected_chi_ift += result["projected sigma"]
 
-    if projected_chi_ift is None:
-        raise RuntimeError("The IFT task did not return projected sigma.")
+def collect_bz_response(calc):
+    """Average an integrated response over the phase-shifted FFT grids."""
+    projected_chi_ift = np.zeros_like(
+        calc.results[0]["projected sigma"],
+        dtype=complex,
+    )
+    for result in calc.results:
+        projected_chi_ift += result["projected sigma"]
     projected_chi_ift /= len(calc.results)
-    return energies, projected_chi_ift
+    return projected_chi_ift
 
 
 def fixed_electron_band_energy(energies, occupied_state_count, number_kpoints):
@@ -81,59 +82,175 @@ def fixed_electron_band_energy(energies, occupied_state_count, number_kpoints):
     )
 
 
-def save_orientation_sample(
+def solve_chemical_potential(
+    energies,
+    target_electrons_per_cell,
+    number_kpoints,
+    kBT,
+    tolerance=1.0e-12,
+):
+    """Find the chemical potential giving a fixed Fermi-Dirac electron count."""
+    energies = np.asarray(energies, dtype=float)
+    number_bands = energies.size / number_kpoints
+    if not 0.0 < target_electrons_per_cell < number_bands:
+        raise ValueError(
+            "target_electrons_per_cell must lie strictly between zero and "
+            "the number of bands."
+        )
+    if kBT <= 0.0:
+        raise ValueError("A positive kBT is required for Fermi-Dirac filling.")
+
+    margin = max(40.0 * kBT, 1.0)
+    lower = float(np.min(energies) - margin)
+    upper = float(np.max(energies) + margin)
+    for _ in range(200):
+        chemical_potential = 0.5 * (lower + upper)
+        occupations = fermiDiracOccupations(
+            energies,
+            [chemical_potential],
+            kBT,
+        )[0]
+        electron_count = np.sum(occupations) / number_kpoints
+        if abs(electron_count - target_electrons_per_cell) < tolerance:
+            return chemical_potential
+        if electron_count < target_electrons_per_cell:
+            lower = chemical_potential
+        else:
+            upper = chemical_potential
+    raise RuntimeError("The fixed-number chemical-potential search did not converge.")
+
+
+def fixed_number_electronic_state(
+    energies,
+    target_electrons_per_cell,
+    number_kpoints,
+    occupation_mode,
+    kBT,
+):
+    """
+    Evaluate the electronic energy at fixed particle number.
+
+    At finite temperature the energy landscape is the Helmholtz free energy,
+    including the independent-electron entropy term.  The internal band
+    energy is returned separately for diagnostics.
+    """
+    state_count = target_electrons_per_cell * number_kpoints
+    nominal_occupied_count = int(round(state_count))
+    flat_energies = np.asarray(energies, dtype=float).reshape(-1)
+    if nominal_occupied_count < 1 or nominal_occupied_count >= len(flat_energies):
+        raise ValueError("The requested filling is outside the sampled bands.")
+    partitioned = np.partition(flat_energies, nominal_occupied_count)
+    highest_occupied = np.max(partitioned[:nominal_occupied_count])
+    lowest_unoccupied = partitioned[nominal_occupied_count]
+
+    if occupation_mode == "zero-temperature":
+        if not np.isclose(state_count, nominal_occupied_count, atol=1.0e-8):
+            raise ValueError(
+                "A zero-temperature finite-grid filling must contain an "
+                "integer number of sampled states."
+            )
+        (
+            internal_energy,
+            chemical_potential,
+            highest_occupied,
+            lowest_unoccupied,
+        ) = fixed_electron_band_energy(
+            energies,
+            nominal_occupied_count,
+            number_kpoints,
+        )
+        free_energy = internal_energy
+    elif occupation_mode == "fermi-dirac":
+        chemical_potential = solve_chemical_potential(
+            energies,
+            target_electrons_per_cell,
+            number_kpoints,
+            kBT,
+        )
+        occupations = fermiDiracOccupations(
+            energies,
+            [chemical_potential],
+            kBT,
+        )[0]
+        internal_energy = np.sum(occupations * energies) / number_kpoints
+        entropy_kernel = np.zeros_like(occupations)
+        fractional = (occupations > 0.0) & (occupations < 1.0)
+        f = occupations[fractional]
+        entropy_kernel[fractional] = (
+            f * np.log(f) + (1.0 - f) * np.log1p(-f)
+        )
+        free_energy = (
+            internal_energy
+            + kBT * np.sum(entropy_kernel) / number_kpoints
+        )
+    else:
+        raise ValueError(
+            "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
+        )
+
+    return {
+        "chemical_potential": chemical_potential,
+        "internal_energy": internal_energy,
+        "free_energy": free_energy,
+        "highest_occupied": highest_occupied,
+        "lowest_unoccupied": lowest_unoccupied,
+        "nominal_occupied_state_count": nominal_occupied_count,
+    }
+
+
+def save_energy_sample(
     path,
     direction,
     theta,
     phi,
-    fermi_axis,
-    omega_axis,
     bz_grid,
-    solver_name,
-    occupied_state_count,
-    band_energy,
-    discrete_fermi,
-    highest_occupied,
-    lowest_unoccupied,
-    projected_chi_ift,
+    target_electrons_per_cell,
+    occupation_mode,
+    kBT,
+    state,
 ):
-    """Atomically save one expensive electronic-structure orientation."""
+    """Atomically save one completed fixed-number energy calculation."""
     temporary = path.with_suffix(".tmp.npz")
     np.savez_compressed(
         temporary,
         direction=direction,
         theta=theta,
         phi=phi,
-        fermi_axis_eV=fermi_axis,
-        omega_axis_eV=omega_axis,
         bz_grid=bz_grid,
-        solver_name=solver_name,
-        occupied_state_count=occupied_state_count,
-        band_energy_eV_per_cell=band_energy,
-        discrete_fermi_eV=discrete_fermi,
-        highest_occupied_eV=highest_occupied,
-        lowest_unoccupied_eV=lowest_unoccupied,
-        projected_chi_IFT=projected_chi_ift,
+        target_electrons_per_cell=target_electrons_per_cell,
+        occupation_mode=occupation_mode,
+        kBT_eV=kBT,
+        chemical_potential_eV=state["chemical_potential"],
+        internal_energy_eV_per_cell=state["internal_energy"],
+        free_energy_eV_per_cell=state["free_energy"],
+        highest_occupied_eV=state["highest_occupied"],
+        lowest_unoccupied_eV=state["lowest_unoccupied"],
+        nominal_occupied_state_count=state[
+            "nominal_occupied_state_count"
+        ],
     )
     temporary.replace(path)
 
 
-def load_orientation_sample(
+def load_energy_sample(
     path,
     expected_direction,
-    expected_fermi_axis,
-    expected_omega_axis,
     expected_bz_grid,
-    expected_solver_name,
+    expected_target_electrons_per_cell,
+    expected_occupation_mode,
+    expected_kBT,
 ):
-    """Load and validate a previously completed orientation."""
+    """Load and validate one fixed-number energy checkpoint."""
     with np.load(path) as data:
         required = {
             "direction",
-            "fermi_axis_eV",
-            "omega_axis_eV",
             "bz_grid",
-            "solver_name",
+            "target_electrons_per_cell",
+            "occupation_mode",
+            "kBT_eV",
+            "chemical_potential_eV",
+            "internal_energy_eV_per_cell",
+            "free_energy_eV_per_cell",
         }
         missing = required.difference(data.files)
         if missing:
@@ -146,10 +263,13 @@ def load_orientation_sample(
                 f"Sampling direction in {path} does not match this run."
             )
         signatures_match = (
-            np.array_equal(data["fermi_axis_eV"], expected_fermi_axis)
-            and np.array_equal(data["omega_axis_eV"], expected_omega_axis)
-            and np.array_equal(data["bz_grid"], expected_bz_grid)
-            and str(data["solver_name"]) == expected_solver_name
+            np.array_equal(data["bz_grid"], expected_bz_grid)
+            and np.isclose(
+                float(data["target_electrons_per_cell"]),
+                expected_target_electrons_per_cell,
+            )
+            and str(data["occupation_mode"]) == expected_occupation_mode
+            and np.isclose(float(data["kBT_eV"]), expected_kBT)
         )
         if not signatures_match:
             raise RuntimeError(
@@ -157,13 +277,74 @@ def load_orientation_sample(
                 "this run. Remove the sample directory or restore its settings."
             )
         return {
-            "occupied_state_count": int(data["occupied_state_count"]),
-            "band_energy": float(data["band_energy_eV_per_cell"]),
-            "discrete_fermi": float(data["discrete_fermi_eV"]),
+            "chemical_potential": float(data["chemical_potential_eV"]),
+            "internal_energy": float(data["internal_energy_eV_per_cell"]),
+            "free_energy": float(data["free_energy_eV_per_cell"]),
             "highest_occupied": float(data["highest_occupied_eV"]),
             "lowest_unoccupied": float(data["lowest_unoccupied_eV"]),
-            "projected_chi_IFT": data["projected_chi_IFT"].copy(),
+            "nominal_occupied_state_count": int(
+                data["nominal_occupied_state_count"]
+            ),
         }
+
+
+def save_ift_sample(
+    path,
+    direction,
+    chemical_potential,
+    omega_axis,
+    bz_grid,
+    solver_name,
+    occupation_mode,
+    kBT,
+    projected_chi_ift,
+):
+    """Atomically save one completed fixed-number IFT calculation."""
+    temporary = path.with_suffix(".tmp.npz")
+    np.savez_compressed(
+        temporary,
+        direction=direction,
+        chemical_potential_eV=chemical_potential,
+        omega_axis_eV=omega_axis,
+        bz_grid=bz_grid,
+        solver_name=solver_name,
+        occupation_mode=occupation_mode,
+        kBT_eV=kBT,
+        projected_chi_IFT=projected_chi_ift,
+    )
+    temporary.replace(path)
+
+
+def load_ift_sample(
+    path,
+    expected_direction,
+    expected_chemical_potential,
+    expected_omega_axis,
+    expected_bz_grid,
+    expected_solver_name,
+    expected_occupation_mode,
+    expected_kBT,
+):
+    """Load and validate one fixed-number IFT checkpoint."""
+    with np.load(path) as data:
+        signatures_match = (
+            np.allclose(data["direction"], expected_direction, atol=1.0e-12)
+            and np.isclose(
+                float(data["chemical_potential_eV"]),
+                expected_chemical_potential,
+            )
+            and np.array_equal(data["omega_axis_eV"], expected_omega_axis)
+            and np.array_equal(data["bz_grid"], expected_bz_grid)
+            and str(data["solver_name"]) == expected_solver_name
+            and str(data["occupation_mode"]) == expected_occupation_mode
+            and np.isclose(float(data["kBT_eV"]), expected_kBT)
+        )
+        if not signatures_match:
+            raise RuntimeError(
+                f"IFT settings in {path} do not match this run. Remove the "
+                "IFT sample directory or restore its settings."
+            )
+        return data["projected_chi_IFT"].copy()
 
 
 def output_energy_table(
@@ -171,16 +352,18 @@ def output_energy_table(
     directions,
     theta,
     phi,
-    band_energy,
-    discrete_fermi,
+    internal_energy,
+    free_energy,
+    chemical_potential,
     highest_occupied,
     lowest_unoccupied,
 ):
-    relative_energy_meV = (band_energy - np.min(band_energy)) * 1000.0
+    relative_energy_meV = (free_energy - np.min(free_energy)) * 1000.0
     with open(path, "w", encoding="utf-8") as output:
         output.write(
-            "# index mx my mz theta phi band_energy_eV_per_cell "
-            "relative_energy_meV_per_cell discrete_fermi_eV "
+            "# index mx my mz theta phi internal_energy_eV_per_cell "
+            "free_energy_eV_per_cell relative_free_energy_meV_per_cell "
+            "chemical_potential_eV "
             "highest_occupied_eV lowest_unoccupied_eV\n"
         )
         for index, direction in enumerate(directions):
@@ -188,9 +371,10 @@ def output_energy_table(
                 f"{index:6d}"
                 f"{direction[0]:18.10e}{direction[1]:18.10e}"
                 f"{direction[2]:18.10e}{theta[index]:18.10e}"
-                f"{phi[index]:18.10e}{band_energy[index]:22.12e}"
+                f"{phi[index]:18.10e}{internal_energy[index]:22.12e}"
+                f"{free_energy[index]:22.12e}"
                 f"{relative_energy_meV[index]:22.12e}"
-                f"{discrete_fermi[index]:18.10e}"
+                f"{chemical_potential[index]:18.10e}"
                 f"{highest_occupied[index]:18.10e}"
                 f"{lowest_unoccupied[index]:18.10e}\n"
             )
@@ -199,8 +383,13 @@ def output_energy_table(
 def run():
     # Electronic calculation.
     main_dir = Path("./mcalc/FeCl2")
-    fermi = -2.5
-    fermi_axis = np.asarray([fermi])
+    reference_fermi = -2.5
+    reference_direction = np.asarray([0.0, 0.0, 1.0])
+    # Set this directly when the electron number is known.  Otherwise it is
+    # inferred from reference_fermi at reference_direction.
+    fixed_electrons_per_cell = None
+    occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
+    electronic_kBT = 0.026
     omega_axis = np.linspace(0.5, 2.0, 21)
     bz_grid = (48, 48, 1)
     number_of_cores = 8
@@ -210,9 +399,16 @@ def run():
     # Angular representation.  For l_max=4 the tangential VSH expansion has
     # 48 coefficients.  Fifty orientations provide 100 tangential data
     # values for each response-tensor component.
-    harmonic_degree = 4
-    number_of_orientations = 50
+    harmonic_degree = 6
+    number_of_orientations = 100
     resume_completed_orientations = True
+
+    if occupation_mode not in {"zero-temperature", "fermi-dirac"}:
+        raise ValueError(
+            "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
+        )
+    if occupation_mode == "fermi-dirac" and electronic_kBT <= 0.0:
+        raise ValueError("electronic_kBT must be positive in Fermi-Dirac mode.")
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
@@ -237,45 +433,132 @@ def run():
         spinSeparated=True,
     )
     model.symmerizeCollinearAndSOI()
-    model.setFermi(fermi)
+    model.setFermi(reference_fermi)
 
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
-    sample_dir = main_dir / "AngleDependentDynamicsSamples"
-    sample_dir.mkdir(parents=True, exist_ok=True)
+    energy_sample_dir = main_dir / "AngleDependentEnergySamples"
+    ift_sample_dir = main_dir / "AngleDependentIFTSamples"
+    energy_sample_dir.mkdir(parents=True, exist_ok=True)
+    ift_sample_dir.mkdir(parents=True, exist_ok=True)
 
-    band_energy = np.empty(number_of_orientations)
-    discrete_fermi = np.empty(number_of_orientations)
+    internal_energy = np.empty(number_of_orientations)
+    free_energy = np.empty(number_of_orientations)
+    chemical_potential = np.empty(number_of_orientations)
     highest_occupied = np.empty(number_of_orientations)
     lowest_unoccupied = np.empty(number_of_orientations)
-    projected_chi_samples = []
-    occupied_state_count = None
     number_kpoints = int(np.prod(bz_grid))
 
-    for index, (direction, theta, phi) in enumerate(
-        zip(directions, theta_axis, phi_axis)
-    ):
-        sample_path = sample_dir / f"orientation_{index:04d}.npz"
+    # Reference filling.  A metallic target is generally fractional at finite
+    # temperature, so store electrons/cell rather than an occupied-band count.
+    reference_path = energy_sample_dir / "reference_filling.npz"
+    if fixed_electrons_per_cell is not None:
+        target_electrons_per_cell = float(fixed_electrons_per_cell)
+        if not 0.0 < target_electrons_per_cell < model.norbs:
+            raise ValueError(
+                "fixed_electrons_per_cell must lie between zero and the "
+                "number of model orbitals."
+            )
+        filling_source = "explicit electrons/cell"
+        print(
+            "Using explicit filling: "
+            f"{target_electrons_per_cell:.12f} electrons/cell"
+        )
+    elif resume_completed_orientations and reference_path.exists():
+        with np.load(reference_path) as data:
+            reference_matches = (
+                np.array_equal(data["bz_grid"], np.asarray(bz_grid))
+                and np.isclose(
+                    float(data["reference_fermi_eV"]),
+                    reference_fermi,
+                )
+                and str(data["occupation_mode"]) == occupation_mode
+                and np.isclose(float(data["kBT_eV"]), electronic_kBT)
+                and np.allclose(
+                    data["reference_direction"],
+                    reference_direction,
+                    atol=1.0e-12,
+                )
+            )
+            if not reference_matches:
+                raise RuntimeError(
+                    f"Reference filling settings in {reference_path} do not "
+                    "match this run. Remove the energy sample directory or "
+                    "restore its settings."
+                )
+            target_electrons_per_cell = float(
+                data["target_electrons_per_cell"]
+            )
+        print(
+            "Loaded reference filling: "
+            f"{target_electrons_per_cell:.12f} electrons/cell"
+        )
+        filling_source = "reference Fermi level"
+    else:
+        reference_theta, reference_phi = cartesian_to_spherical(
+            reference_direction[None, :]
+        )
+        model.includeSOCFromSOI(
+            theta=reference_theta[0],
+            phi=reference_phi[0],
+            strength=1.0,
+            keepRegularSpinAxis=True,
+        )
+        reference_calc = BZGridTask(
+            model,
+            solveEnergy,
+            args={},
+            BZGrid=bz_grid,
+            BZSymm=False,
+            mode="run",
+            ncores=number_of_cores,
+        )
+        reference_energies = collect_bz_energies(reference_calc, bz_grid)
+        reference_occupations = fermiDiracOccupations(
+            reference_energies,
+            [reference_fermi],
+            electronic_kBT if occupation_mode == "fermi-dirac" else 0.0,
+        )[0]
+        target_electrons_per_cell = (
+            np.sum(reference_occupations) / number_kpoints
+        )
+        temporary = reference_path.with_suffix(".tmp.npz")
+        np.savez_compressed(
+            temporary,
+            reference_direction=reference_direction,
+            reference_fermi_eV=reference_fermi,
+            bz_grid=np.asarray(bz_grid),
+            occupation_mode=occupation_mode,
+            kBT_eV=electronic_kBT,
+            target_electrons_per_cell=target_electrons_per_cell,
+        )
+        temporary.replace(reference_path)
+        print(
+            "Determined reference filling: "
+            f"{target_electrons_per_cell:.12f} electrons/cell"
+        )
+        filling_source = "reference Fermi level"
+
+    # Pass 1: determine mu(m) and the fixed-number energy landscape.
+    for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
+        sample_path = energy_sample_dir / f"orientation_{index:04d}.npz"
         if resume_completed_orientations and sample_path.exists():
-            sample = load_orientation_sample(
+            sample = load_energy_sample(
                 sample_path,
                 direction,
-                fermi_axis,
-                omega_axis,
                 np.asarray(bz_grid),
-                ift_solver.__name__,
+                target_electrons_per_cell,
+                occupation_mode,
+                electronic_kBT,
             )
-            if occupied_state_count is None:
-                occupied_state_count = sample["occupied_state_count"]
-            elif occupied_state_count != sample["occupied_state_count"]:
-                raise RuntimeError("Inconsistent filling in saved samples.")
             print(
-                f"[{index + 1:4d}/{number_of_orientations:4d}] "
-                f"loaded {sample_path.name}"
+                f"[energy {index + 1:4d}/{number_of_orientations:4d}] "
+                f"loaded {sample_path.name}, "
+                f"mu={sample['chemical_potential']:.9f} eV"
             )
         else:
             print(
-                f"[{index + 1:4d}/{number_of_orientations:4d}] "
+                f"[energy {index + 1:4d}/{number_of_orientations:4d}] "
                 f"m=({direction[0]: .7f}, {direction[1]: .7f}, "
                 f"{direction[2]: .7f})"
             )
@@ -287,59 +570,108 @@ def run():
             )
             calc = BZGridTask(
                 model,
+                solveEnergy,
+                args={},
+                BZGrid=bz_grid,
+                BZSymm=False,
+                mode="run",
+                ncores=number_of_cores,
+            )
+            energies = collect_bz_energies(calc, bz_grid)
+            sample = fixed_number_electronic_state(
+                energies,
+                target_electrons_per_cell,
+                number_kpoints,
+                occupation_mode,
+                electronic_kBT,
+            )
+            save_energy_sample(
+                sample_path,
+                direction,
+                theta,
+                phi,
+                np.asarray(bz_grid),
+                target_electrons_per_cell,
+                occupation_mode,
+                electronic_kBT,
+                sample,
+            )
+
+        internal_energy[index] = sample["internal_energy"]
+        free_energy[index] = sample["free_energy"]
+        chemical_potential[index] = sample["chemical_potential"]
+        highest_occupied[index] = sample["highest_occupied"]
+        lowest_unoccupied[index] = sample["lowest_unoccupied"]
+
+    # Pass 2: evaluate IFT with the orientation-specific chemical potential
+    # and exactly the same occupation convention used in pass 1.
+    projected_chi_samples = []
+    for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
+        sample_path = ift_sample_dir / f"orientation_{index:04d}.npz"
+        if resume_completed_orientations and sample_path.exists():
+            projected_chi_sample = load_ift_sample(
+                sample_path,
+                direction,
+                chemical_potential[index],
+                omega_axis,
+                np.asarray(bz_grid),
+                ift_solver.__name__,
+                occupation_mode,
+                electronic_kBT,
+            )
+            print(
+                f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] "
+                f"loaded {sample_path.name}"
+            )
+        else:
+            print(
+                f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] "
+                f"mu={chemical_potential[index]:.9f} eV"
+            )
+            model.includeSOCFromSOI(
+                theta=theta,
+                phi=phi,
+                strength=1.0,
+                keepRegularSpinAxis=True,
+            )
+            calc = BZGridTask(
+                model,
                 ift_solver,
                 args={
-                    "fermi": fermi_axis,
+                    "fermi": np.asarray([chemical_potential[index]]),
                     "omega": omega_axis,
                     "mag type": "total",
                     "projected shells for detecting torque":
                         torque_projection_list,
+                    "finite temperature occupations":
+                        occupation_mode == "fermi-dirac",
+                    "kBT": electronic_kBT,
                 },
                 BZGrid=bz_grid,
                 BZSymm=False,
                 mode="run",
                 ncores=number_of_cores,
             )
-            energies, projected_chi_ift = collect_bz_results(calc, bz_grid)
-
-            if occupied_state_count is None: occupied_state_count = int(np.count_nonzero(energies <= fermi))
-            energy_value, fermi_value, highest_value, lowest_value = fixed_electron_band_energy(energies, occupied_state_count, number_kpoints)
-            sample = {
-                "occupied_state_count": occupied_state_count,
-                "band_energy": energy_value,
-                "discrete_fermi": fermi_value,
-                "highest_occupied": highest_value,
-                "lowest_unoccupied": lowest_value,
-                "projected_chi_IFT": projected_chi_ift,
-            }
-            save_orientation_sample(
+            projected_chi_sample = collect_bz_response(calc)
+            save_ift_sample(
                 sample_path,
                 direction,
-                theta,
-                phi,
-                fermi_axis,
+                chemical_potential[index],
                 omega_axis,
                 np.asarray(bz_grid),
                 ift_solver.__name__,
-                occupied_state_count,
-                energy_value,
-                fermi_value,
-                highest_value,
-                lowest_value,
-                projected_chi_ift,
+                occupation_mode,
+                electronic_kBT,
+                projected_chi_sample,
             )
-
-        band_energy[index] = sample["band_energy"]
-        discrete_fermi[index] = sample["discrete_fermi"]
-        highest_occupied[index] = sample["highest_occupied"]
-        lowest_unoccupied[index] = sample["lowest_unoccupied"]
-        projected_chi_samples.append(sample["projected_chi_IFT"])
+        projected_chi_samples.append(projected_chi_sample)
 
     projected_chi_ift = np.asarray(projected_chi_samples)
     tangential_chi_ift = project_tangential(
         projected_chi_ift, directions
     )
 
+    band_energy = free_energy
     energy_offset = np.mean(band_energy)
     energy_expansion, energy_fit = SphericalHarmonicExpansion.fit(
         directions,
@@ -377,8 +709,9 @@ def run():
         directions,
         theta_axis,
         phi_axis,
-        band_energy,
-        discrete_fermi,
+        internal_energy,
+        free_energy,
+        chemical_potential,
         highest_occupied,
         lowest_unoccupied,
     )
@@ -386,7 +719,7 @@ def run():
     output_path = main_dir / "AngleDependentDynamicsMap.npz"
     np.savez_compressed(
         output_path,
-        format_version=1,
+        format_version=2,
         directions=directions,
         orientation_weights=np.full(
             number_of_orientations,
@@ -394,11 +727,21 @@ def run():
         ),
         theta=theta_axis,
         phi=phi_axis,
-        fermi_axis_eV=fermi_axis,
+        reference_direction=reference_direction,
+        reference_fermi_eV=reference_fermi,
+        filling_source=filling_source,
+        chemical_potential_eV=chemical_potential,
+        fermi_axis_eV=chemical_potential[:, None],
         omega_axis_eV=omega_axis,
         bz_grid=np.asarray(bz_grid),
-        occupied_state_count=occupied_state_count,
-        electrons_per_cell=occupied_state_count / number_kpoints,
+        occupation_mode=occupation_mode,
+        kBT_eV=electronic_kBT,
+        nominal_occupied_state_count=int(
+            round(target_electrons_per_cell * number_kpoints)
+        ),
+        electrons_per_cell=target_electrons_per_cell,
+        internal_energy_eV_per_cell=internal_energy,
+        free_energy_eV_per_cell=free_energy,
         band_energy_eV_per_cell=band_energy,
         energy_offset_eV_per_cell=energy_offset,
         energy_surface_gradient_eV_per_cell=energy_gradient,
@@ -425,14 +768,26 @@ def run():
     )
 
     metadata = {
-        "format_version": 1,
+        "format_version": 2,
         "sampling": "equal-area antipodal Fibonacci sphere",
         "number_of_orientations": number_of_orientations,
         "harmonic_degree": harmonic_degree,
         "energy_model": (
-            "zero-temperature force-theorem band energy at fixed electron "
-            "number; this is not a self-consistent DFT total energy"
+            "fixed-electron-number force-theorem electronic free energy; "
+            "for Fermi-Dirac occupations this includes the independent-"
+            "electron entropy term and is not a self-consistent DFT total "
+            "energy"
         ),
+        "two_pass_mapping": (
+            "pass 1 solves the orientation-dependent chemical potential and "
+            "free energy at fixed electrons/cell; pass 2 evaluates IFT using "
+            "that chemical potential and the same occupation convention"
+        ),
+        "occupation_mode": occupation_mode,
+        "kBT_eV": electronic_kBT,
+        "reference_fermi_eV": reference_fermi,
+        "filling_source": filling_source,
+        "target_electrons_per_cell": target_electrons_per_cell,
         "projected_chi_IFT_axes": [
             "orientation",
             "drive_projection_1",
