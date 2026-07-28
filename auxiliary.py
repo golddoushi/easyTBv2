@@ -17,6 +17,10 @@ global time0
 time0=0
 SYMPREC=1e-4
 
+BOHR_MAGNETON_EV_PER_TESLA = 5.7883818060e-5
+HBAR_EV_FS = 0.6582119569
+ELECTRON_GAMMA_RAD_PER_FS_T = 1.76085963023e-4
+
 def getVBM(energies:np.ndarray,fermi=0.) -> np.ndarray:
     '''
     Caculate the highest occupied band energy at a grid of BZ.
