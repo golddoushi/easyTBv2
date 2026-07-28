@@ -233,8 +233,9 @@ class BZLineTask:
 
 def solveAHC(param):
     calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
-                                   fermiList=param['fermi'],
                                    currentProjectionList    =param['projected shells for applying current'],
+                                   fermiList=param['fermi'],finiteTemperatureOccupations=param.get('finite temperature occupations', False),kBT=param.get('kBT', 0.026),
+                                   verbose=param["verbose"],
                                    )
     return {"energies":calc.energies,
             "projected Berry curv":calc.projected_BerryCurv,
@@ -489,7 +490,9 @@ def solveIFTorque_VG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
+                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                   kBT=param.get('kBT', 0.026),verbose=param["verbose"],
                                    )
     return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
@@ -502,7 +505,9 @@ def solveIFTorque_LG_DM(param):
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
+                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                   kBT=param.get('kBT', 0.026),verbose=param["verbose"],
                                    )
     return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
@@ -563,6 +568,11 @@ def solveVelocity(param):
 def solveVelocity_diag(param):
     calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
+
+def solveEnergy(param):
+    calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                skip_low=param.get('skip low',False),verbose=param['verbose'])
+    return {"energies":calc.energies,"iq":param["iq"]}
 
 def solveMagneticMoment(param):
     spin_eig, orbital_LC_eig, orbital_IC_eig=None, None, None

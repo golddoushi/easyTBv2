@@ -31,7 +31,7 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, 
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/PbSn/"
+    mainDir="./mcalc/FeCl2/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -171,12 +171,12 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
     
-    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
-    fermiAxis=np.array([fermi,])
+    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
+    #fermiAxis=np.array([fermi,])
     omegaAxis=np.linspace(0.5,2.0,21)
     model.setFermi(fermi)
     
-    #'''
+    '''
     # check band intepolation
     spin_proj, orbital_proj= True, False
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
@@ -238,7 +238,7 @@ def run():
     recordOmegaIndexList=[41]
     recordFermiIndexList=[0]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveBPVE_VG_DM,
+    calc=BZGridTask(model, solveAHC,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -254,6 +254,8 @@ def run():
                           'record fermi ids':recordFermiIndexList,
 
                           "mag type": "total", # Type of Inversed Faraday effect, can be spin | orbital | total
+
+                          "finite temperature occupations": True, "kBT":0.026,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
@@ -320,7 +322,7 @@ def run():
             fout.write("\n")
     #exit()#'''
 
-    '''
+    #'''
     # output projected 2-rank conductance
     projected_sigma/=len(calc.results)
     with open("%s/secondOrderTensor.txt"%mainDir,"w") as fout:

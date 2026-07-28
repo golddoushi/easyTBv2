@@ -214,12 +214,29 @@ class Energy(Calculator):
     
     @property
     def fd_occupations(self):
-        # fd_occupations[ifermi,k1,k2,k3,iband] gives the Fermi-Dirac distribution
-        dE = self.energies[None,...,:] - self.fermiList[:,None,None,None,None]
-        fd_occupations=np.zeros_like(dE,dtype=float)
-        mask= dE < self.kBT*20
-        fd_occupations[mask]=1/(np.exp(1/self.kBT*dE[mask])+1)
-        return fd_occupations
+        """
+        Return Fermi-Dirac occupations with axes ``(fermi, *energies.shape)``.
+        
+        The piecewise evaluation avoids overflow far from the Fermi level.
+        ``kBT=0`` gives the strict zero-temperature step convention used by
+        the response calculators.
+        """
+        energies = np.asarray(self.energies, dtype=float)
+        fermiList = np.atleast_1d(np.asarray(self.fermiList, dtype=float))
+        chemical_potential = fermiList.reshape((len(fermiList),) + (1,) * energies.ndim)
+        if self.kBT < 0.0:
+            raise ValueError("kBT must be non-negative.")
+        if self.kBT == 0.0:
+            return np.asarray(energies[None, ...] < chemical_potential, dtype=float)
+        
+        scaled_energy = (energies[None, ...] - chemical_potential) / self.kBT
+        occupations = np.empty_like(scaled_energy, dtype=float)
+        positive = scaled_energy >= 0.0
+        exp_negative = np.exp(-scaled_energy[positive])
+        occupations[positive] = exp_negative / (1.0 + exp_negative)
+        exp_positive = np.exp(scaled_energy[~positive])
+        occupations[~positive] = 1.0 / (1.0 + exp_positive)
+        return occupations
     
     def getEnergyWindow(self,gap=5.0):
         energy=np.sort(self.energies.flatten()) - self.model.fermi
@@ -1027,7 +1044,7 @@ class BerryCurv(Velocity):
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
         self.calcDeltaEInverse()
-        dEInverse2 = self.deltaEInverse**2
+        dEInverse2 = self.deltaEInverse2 # The real response kernel, \frac{1}{(Em - En)(Em - En - j \eta)}
 
         velocity_K_list = [self.velocity_K]+self.projected_velocity_K_list
         berry_shape = self.kgrid+(3,3,self.energies.shape[-1])
@@ -1143,20 +1160,25 @@ class SpinOrbital(Spin, OrbitalModern_Full):
 
 class AnormalousHallConductance(BerryCurv):
 
-    def __init__(self, currentProjectionList=[], **kwarg) -> None:
+    def __init__(self, currentProjectionList=[], finiteTemperatureOccupations=False, **kwarg) -> None:
         super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
         self.Iodd = False  # inversion gives minus
         self.Todd = True   # timereversal gives minus
 
         nProjections=self.projected_BerryCurv.shape[:2]
         projected_sigma=np.zeros(nProjections+(len(self.fermiList),3,3))
-        
-        for ifermi, occupation in enumerate(self.fd_occupations):
+
+        occupations = self.fd_occupations if finiteTemperatureOccupations else None
+        for ifermi, fermi in enumerate(self.fermiList):
+            if occupations is None:
+                f = np.int8(self.energies < fermi)
+            else:
+                f = occupations[ifermi]
             for ivelocity_alpha in range(nProjections[0]):
                 for ivelocity_beta in range(nProjections[1]):
                     for ialpha in range(3):
                         for ibeta in range(3):
-                            projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]*occupation)
+                            projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]*f)
         
         #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
@@ -3001,7 +3023,8 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
 
 class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
-                 responseOmegaIndexList=[], responseFermiIndexList=None, **kwarg) -> None:
+                 responseOmegaIndexList=[], responseFermiIndexList=None,
+                 finiteTemperatureOccupations=False, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
@@ -3041,8 +3064,12 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                                            (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
                                            dtype=complex)
 
+        occupations = self.fd_occupations if finiteTemperatureOccupations else None
         for ifermi, fermi in enumerate(self.fermiList):
-            f = np.int8(self.energies < fermi)
+            if occupations is None:
+                f = np.int8(self.energies < fermi)
+            else:
+                f = occupations[ifermi]
             rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
             for iband in range(nbasis):
                 rho0[..., iband, iband] = f[..., iband]
@@ -3084,7 +3111,8 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
 
 class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[],
-                 responseOmegaIndexList=[], responseFermiIndexList=None, **kwarg) -> None:
+                 responseOmegaIndexList=[], responseFermiIndexList=None,
+                 finiteTemperatureOccupations=False, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
@@ -3134,8 +3162,12 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
         deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
 
+        occupations = self.fd_occupations if finiteTemperatureOccupations else None
         for ifermi, fermi in enumerate(self.fermiList):
-            f = np.int8(self.energies < fermi)
+            if occupations is None:
+                f = np.int8(self.energies < fermi)
+            else:
+                f = occupations[ifermi]
             rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
             for iband in range(nbasis):
                 rho0[..., iband, iband] = f[..., iband]
