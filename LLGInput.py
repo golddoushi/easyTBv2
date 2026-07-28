@@ -3,7 +3,7 @@ import numpy as np
 from LLG import IFTDevice, SOTDevice, sample_tangent_torque_map
 import matplotlib.pyplot as plt
 
-def gaussian_pulse(peak_field: float, center_time: float, intensity_fwhm: float) -> Callable[[float], float]:
+def gaussian_pulse(peak_field: float, center_times: Sequence[float], intensity_fwhm: float) -> Callable[[float], float]:
     """
     Return a Gaussian electric-field envelope in V/angstrom.
 
@@ -11,18 +11,19 @@ def gaussian_pulse(peak_field: float, center_time: float, intensity_fwhm: float)
     amplitude contains ``exp(-2 ln(2) (t-center)^2/FWHM^2)``.
     """
     peak_field = float(peak_field)
-    center_time = float(center_time)
     intensity_fwhm = float(intensity_fwhm)
     if not np.isfinite(peak_field):
         raise ValueError("peak_field must be finite.")
-    if not np.isfinite(center_time):
-        raise ValueError("center_time must be finite.")
     if not np.isfinite(intensity_fwhm) or intensity_fwhm <= 0.0:
         raise ValueError("intensity_fwhm must be finite and positive.")
 
     def envelope(time):
-        reduced_time = (time - center_time) / intensity_fwhm
-        return peak_field * np.exp(-2.0 * np.log(2.0) * reduced_time**2)
+        field_tot=0.
+        log2=np.log(2.0)
+        for center in center_times:
+            reduced_time = (time - center) / intensity_fwhm
+            field_tot += peak_field * np.exp(-2.0 * log2 * reduced_time**2)
+        return field_tot
 
     return envelope
 
@@ -48,9 +49,9 @@ def run_ift_example(
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
     pulse = gaussian_pulse(
-        peak_field=0.01,
-        center_time=100000.0,
-        intensity_fwhm=80000.0,
+        peak_field=0.1,
+        center_times=[1000. + 2000.*ipulse for ipulse in range(10)],
+        intensity_fwhm=50.0,
     )
     device = IFTDevice(
         data_directory=data_directory,
@@ -59,10 +60,10 @@ def run_ift_example(
         torque_projection=1,
         light_pulse=pulse,
         alpha=0.1,
-        theta0=1*np.pi/180,
+        theta0=5*np.pi/180,
         phi0=0*np.pi/180,
     )
-    time_axis, trajectory = device.run(t_total=200000.0, time_step=100.0)
+    time_axis, trajectory = device.run(t_total=30000.0, time_step=10.0)
 
     fig, axes = plt.subplots(2, 1, sharex=True)
     axes[0].plot(time_axis, trajectory[:, 0], label=r"m$_x$")
