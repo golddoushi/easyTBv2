@@ -1,31 +1,18 @@
 import os
-
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
-
 import json
 from pathlib import Path
-
 import numpy as np
-
 import paramReader
-
 paramReader.readGlobalConst()
 
-from SphericalHarmonics import (
-    SphericalHarmonicExpansion,
-    VectorSphericalHarmonicExpansion,
-    cartesian_to_spherical,
-    fibonacci_sphere,
-    project_tangential,
-)
+from SphericalHarmonics import SphericalHarmonicExpansion, VectorSphericalHarmonicExpansion
+from SphericalHarmonics import cartesian_to_spherical, fibonacci_sphere, project_tangential
 from auxiliary import fermiDiracOccupations
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
-
-
-BOHR_MAGNETON_EV_PER_TESLA = 5.7883818060e-5
-
+from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
 
 def collect_bz_energies(calc, bz_grid):
     """Assemble full-grid energies returned by a hybrid FFT calculation."""
@@ -41,18 +28,13 @@ def collect_bz_energies(calc, bz_grid):
         ] = result["energies"]
     return energies
 
-
 def collect_bz_response(calc):
     """Average an integrated response over the phase-shifted FFT grids."""
-    projected_chi_ift = np.zeros_like(
-        calc.results[0]["projected sigma"],
-        dtype=complex,
-    )
+    projected_chi_ift = np.zeros_like(calc.results[0]["projected sigma"], dtype=complex)
     for result in calc.results:
         projected_chi_ift += result["projected sigma"]
     projected_chi_ift /= len(calc.results)
     return projected_chi_ift
-
 
 def fixed_electron_band_energy(energies, occupied_state_count, number_kpoints):
     """
@@ -64,39 +46,21 @@ def fixed_electron_band_energy(energies, occupied_state_count, number_kpoints):
     flat_energies = np.asarray(energies).reshape(-1)
     occupied_state_count = int(occupied_state_count)
     if occupied_state_count < 1 or occupied_state_count >= len(flat_energies):
-        raise ValueError(
-            "occupied_state_count must lie between zero and the total "
-            "number of sampled states."
-        )
+        raise ValueError("occupied_state_count must lie between zero and the total number of sampled states.")
 
     partitioned = np.partition(flat_energies, occupied_state_count)
     occupied = partitioned[:occupied_state_count]
     highest_occupied = np.max(occupied)
     lowest_unoccupied = partitioned[occupied_state_count]
     discrete_fermi = 0.5 * (highest_occupied + lowest_unoccupied)
-    return (
-        np.sum(occupied) / number_kpoints,
-        discrete_fermi,
-        highest_occupied,
-        lowest_unoccupied,
-    )
+    return np.sum(occupied) / number_kpoints, discrete_fermi, highest_occupied, lowest_unoccupied
 
-
-def solve_chemical_potential(
-    energies,
-    target_electrons_per_cell,
-    number_kpoints,
-    kBT,
-    tolerance=1.0e-12,
-):
+def solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints, kBT, tol=1.0e-12):
     """Find the chemical potential giving a fixed Fermi-Dirac electron count."""
     energies = np.asarray(energies, dtype=float)
     number_bands = energies.size / number_kpoints
     if not 0.0 < target_electrons_per_cell < number_bands:
-        raise ValueError(
-            "target_electrons_per_cell must lie strictly between zero and "
-            "the number of bands."
-        )
+        raise ValueError("target_electrons_per_cell must lie strictly between zero and the number of bands.")
     if kBT <= 0.0:
         raise ValueError("A positive kBT is required for Fermi-Dirac filling.")
 
@@ -105,13 +69,9 @@ def solve_chemical_potential(
     upper = float(np.max(energies) + margin)
     for _ in range(200):
         chemical_potential = 0.5 * (lower + upper)
-        occupations = fermiDiracOccupations(
-            energies,
-            [chemical_potential],
-            kBT,
-        )[0]
+        occupations = fermiDiracOccupations(energies, [chemical_potential], kBT)[0]
         electron_count = np.sum(occupations) / number_kpoints
-        if abs(electron_count - target_electrons_per_cell) < tolerance:
+        if abs(electron_count - target_electrons_per_cell) < tol:
             return chemical_potential
         if electron_count < target_electrons_per_cell:
             lower = chemical_potential
@@ -119,14 +79,7 @@ def solve_chemical_potential(
             upper = chemical_potential
     raise RuntimeError("The fixed-number chemical-potential search did not converge.")
 
-
-def fixed_number_electronic_state(
-    energies,
-    target_electrons_per_cell,
-    number_kpoints,
-    occupation_mode,
-    kBT,
-):
+def fixed_number_electronic_state(energies, target_electrons_per_cell, number_kpoints, occupation_mode, kBT):
     """
     Evaluate the electronic energy at fixed particle number.
 
@@ -145,44 +98,21 @@ def fixed_number_electronic_state(
 
     if occupation_mode == "zero-temperature":
         if not np.isclose(state_count, nominal_occupied_count, atol=1.0e-8):
-            raise ValueError(
-                "A zero-temperature finite-grid filling must contain an "
-                "integer number of sampled states."
-            )
-        (
-            internal_energy,
-            chemical_potential,
-            highest_occupied,
-            lowest_unoccupied,
-        ) = fixed_electron_band_energy(
+            raise ValueError("A zero-temperature finite-grid filling must contain an integer number of sampled states.")
+        internal_energy, chemical_potential, highest_occupied, lowest_unoccupied, = fixed_electron_band_energy(
             energies,
             nominal_occupied_count,
-            number_kpoints,
-        )
+            number_kpoints)
         free_energy = internal_energy
     elif occupation_mode == "fermi-dirac":
-        chemical_potential = solve_chemical_potential(
-            energies,
-            target_electrons_per_cell,
-            number_kpoints,
-            kBT,
-        )
-        occupations = fermiDiracOccupations(
-            energies,
-            [chemical_potential],
-            kBT,
-        )[0]
+        chemical_potential = solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints, kBT)
+        occupations = fermiDiracOccupations(energies, [chemical_potential], kBT)[0]
         internal_energy = np.sum(occupations * energies) / number_kpoints
         entropy_kernel = np.zeros_like(occupations)
         fractional = (occupations > 0.0) & (occupations < 1.0)
         f = occupations[fractional]
-        entropy_kernel[fractional] = (
-            f * np.log(f) + (1.0 - f) * np.log1p(-f)
-        )
-        free_energy = (
-            internal_energy
-            + kBT * np.sum(entropy_kernel) / number_kpoints
-        )
+        entropy_kernel[fractional] = f * np.log(f) + (1.0 - f) * np.log1p(-f)
+        free_energy =  internal_energy + kBT * np.sum(entropy_kernel) / number_kpoints
     else:
         raise ValueError(
             "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
@@ -197,18 +127,7 @@ def fixed_number_electronic_state(
         "nominal_occupied_state_count": nominal_occupied_count,
     }
 
-
-def save_energy_sample(
-    path,
-    direction,
-    theta,
-    phi,
-    bz_grid,
-    target_electrons_per_cell,
-    occupation_mode,
-    kBT,
-    state,
-):
+def save_energy_sample(path, direction, theta, phi, bz_grid, target_electrons_per_cell, occupation_mode, kBT, state):
     """Atomically save one completed fixed-number energy calculation."""
     temporary = path.with_suffix(".tmp.npz")
     np.savez_compressed(
@@ -231,15 +150,7 @@ def save_energy_sample(
     )
     temporary.replace(path)
 
-
-def load_energy_sample(
-    path,
-    expected_direction,
-    expected_bz_grid,
-    expected_target_electrons_per_cell,
-    expected_occupation_mode,
-    expected_kBT,
-):
+def load_energy_sample(path,expected_direction,expected_bz_grid,expected_target_electrons_per_cell,expected_occupation_mode,expected_kBT):
     """Load and validate one fixed-number energy checkpoint."""
     with np.load(path) as data:
         required = {
@@ -287,18 +198,7 @@ def load_energy_sample(
             ),
         }
 
-
-def save_ift_sample(
-    path,
-    direction,
-    chemical_potential,
-    omega_axis,
-    bz_grid,
-    solver_name,
-    occupation_mode,
-    kBT,
-    projected_chi_ift,
-):
+def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_name,occupation_mode,kBT,projected_chi_ift):
     """Atomically save one completed fixed-number IFT calculation."""
     temporary = path.with_suffix(".tmp.npz")
     np.savez_compressed(
@@ -314,17 +214,8 @@ def save_ift_sample(
     )
     temporary.replace(path)
 
-
-def load_ift_sample(
-    path,
-    expected_direction,
-    expected_chemical_potential,
-    expected_omega_axis,
-    expected_bz_grid,
-    expected_solver_name,
-    expected_occupation_mode,
-    expected_kBT,
-):
+def load_ift_sample(path,expected_direction,expected_chemical_potential,expected_omega_axis,expected_bz_grid,
+                    expected_solver_name,expected_occupation_mode,expected_kBT):
     """Load and validate one fixed-number IFT checkpoint."""
     with np.load(path) as data:
         signatures_match = (
@@ -346,7 +237,6 @@ def load_ift_sample(
             )
         return data["projected_chi_IFT"].copy()
 
-
 def optical_polarization_states():
     """
     Return linear and circular unit Jones vectors in Cartesian coordinates.
@@ -359,20 +249,13 @@ def optical_polarization_states():
     vectors = [cartesian[0], cartesian[1], cartesian[2]]
     for label, ia, ib in (("xy", 0, 1), ("xz", 0, 2), ("yz", 1, 2)):
         labels.extend((f"circular_{label}+", f"circular_{label}-"))
-        vectors.extend(
-            (
+        vectors.extend((
                 (cartesian[ia] + 1j * cartesian[ib]) / np.sqrt(2.0),
                 (cartesian[ia] - 1j * cartesian[ib]) / np.sqrt(2.0),
-            )
-        )
+            ))
     return np.asarray(labels), np.asarray(vectors)
 
-
-def polarization_contracted_diagnostics(
-    reference,
-    reconstructed,
-    polarization_vectors,
-):
+def polarization_contracted_diagnostics(reference, reconstructed, polarization_vectors):
     """
     Measure vector-field errors after contraction with optical polarization.
 
@@ -444,13 +327,7 @@ def polarization_contracted_diagnostics(
         "global_relative_rms": global_relative_rms,
     }
 
-
-def paired_antipodal_vsh_cross_validation(
-    directions,
-    values,
-    harmonic_degree,
-    number_folds=5,
-):
+def paired_antipodal_vsh_cross_validation(directions, values, harmonic_degree, number_folds=5):
     """Predict every orientation from fits that exclude its antipodal pair."""
     directions = np.asarray(directions)
     values = np.asarray(values)
@@ -463,9 +340,7 @@ def paired_antipodal_vsh_cross_validation(
         -directions[number_pairs:],
         atol=1.0e-12,
     ):
-        raise ValueError(
-            "The second half of directions must be antipodal to the first."
-        )
+        raise ValueError("The second half of directions must be antipodal to the first.")
     number_folds = int(number_folds)
     if not 2 <= number_folds <= number_pairs:
         raise ValueError("number_folds must lie between 2 and the pair count.")
@@ -476,9 +351,7 @@ def paired_antipodal_vsh_cross_validation(
     pair_indices = np.arange(number_pairs)
     for ifold in range(number_folds):
         test_pairs = pair_indices[pair_indices % number_folds == ifold]
-        test_indices = np.concatenate(
-            (test_pairs, test_pairs + number_pairs)
-        )
+        test_indices = np.concatenate((test_pairs, test_pairs + number_pairs))
         training_mask = np.ones(number_orientations, dtype=bool)
         training_mask[test_indices] = False
         expansion, diagnostics = VectorSphericalHarmonicExpansion.fit(
@@ -497,20 +370,11 @@ def paired_antipodal_vsh_cross_validation(
         "condition": fold_condition,
     }
 
-
-def output_polarization_validation_table(
-    path,
-    omega_axis,
-    polarization_labels,
-    diagnostics_by_type,
-):
+def output_polarization_validation_table(path, omega_axis, polarization_labels, diagnostics_by_type):
     """Write projection- and frequency-resolved polarization fit errors."""
     with open(path, "w", encoding="utf-8") as output:
         output.write(
-            "# validation polarization drive_projection_1 "
-            "drive_projection_2 torque_projection fermi_index omega_index "
-            "omega_eV reference_rms error_rms relative_rms reference_peak "
-            "error_peak peak_normalized_error\n"
+            "#validation      polarization     drive_projection_1 drive_projection_2  torque_projection        fermi_index omega_index           omega_eV      reference_rms          error_rms       relative_rms     reference_peak         error_peak peak_normalized_error\n"
         )
         for validation_name, diagnostics in diagnostics_by_type.items():
             relative_rms = diagnostics["relative_rms"]
@@ -521,23 +385,17 @@ def output_polarization_validation_table(
                         index = (ipolarization,) + leading_index + (iomega,)
                         output.write(
                             f"{validation_name:16s} {label:16s} "
-                            + " ".join(f"{value:4d}" for value in leading_index)
-                            + f" {iomega:4d} {omega:18.10e}"
+                            + " ".join(f"{value:18d}" for value in leading_index)
+                            + f" {iomega:11d} {omega:18.10e}"
                             f" {diagnostics['reference_rms'][index]:18.10e}"
                             f" {diagnostics['error_rms'][index]:18.10e}"
                             f" {diagnostics['relative_rms'][index]:18.10e}"
                             f" {diagnostics['reference_peak'][index]:18.10e}"
                             f" {diagnostics['error_peak'][index]:18.10e}"
-                            f" {diagnostics['peak_normalized_error'][index]:18.10e}\n"
+                            f"    {diagnostics['peak_normalized_error'][index]:18.10e}\n"
                         )
 
-
-def print_polarization_validation_summary(
-    polarization_labels,
-    fit_diagnostics,
-    cross_validation_diagnostics,
-    active_signal_fraction,
-):
+def print_polarization_validation_summary(polarization_labels, fit_diagnostics, cross_validation_diagnostics, active_signal_fraction):
     """Print compact full-response diagnostics for each polarization."""
     fit_relative = fit_diagnostics["relative_rms"][:, 0, 0, 0, 0, :]
     cross_relative = cross_validation_diagnostics["relative_rms"][
@@ -568,18 +426,8 @@ def print_polarization_validation_summary(
             f"max={np.max(cross_active):.3%}"
         )
 
-
-def output_energy_table(
-    path,
-    directions,
-    theta,
-    phi,
-    internal_energy,
-    free_energy,
-    chemical_potential,
-    highest_occupied,
-    lowest_unoccupied,
-):
+def output_energy_table(path, directions, theta, phi, 
+                        internal_energy, free_energy, chemical_potential, highest_occupied, lowest_unoccupied):
     relative_energy_meV = (free_energy - np.min(free_energy)) * 1000.0
     with open(path, "w", encoding="utf-8") as output:
         output.write(
@@ -601,7 +449,6 @@ def output_energy_table(
                 f"{lowest_unoccupied[index]:18.10e}\n"
             )
 
-
 def run():
     # Electronic calculation.
     main_dir = Path("./mcalc/FeCl2")
@@ -612,11 +459,17 @@ def run():
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
+
+    # Set this only when the fixed moment magnitude is known.  If supplied,
+    # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
+    moment_magnitude_muB = 4 # mu_B
+
     omega_axis = np.linspace(0.5, 2.0, 21)
     bz_grid = (48, 48, 1)
     number_of_cores = 8
-    torque_projection_list = []
+    torque_projection_list = [(0,(0,1,2,)),]
     ift_solver = solveIFTorque_LG_DM
+    mag_type = "spin" # spin | orbital | total
 
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
@@ -632,10 +485,6 @@ def run():
         )
     if occupation_mode == "fermi-dirac" and electronic_kBT <= 0.0:
         raise ValueError("electronic_kBT must be positive in Fermi-Dirac mode.")
-
-    # Set this only when the fixed moment magnitude is known.  If supplied,
-    # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
-    moment_magnitude_muB = 4 # mu_B
 
     minimum_recommended = 2 * harmonic_degree * (harmonic_degree + 2)
     if number_of_orientations < minimum_recommended:
@@ -785,40 +634,19 @@ def run():
                 f"m=({direction[0]: .7f}, {direction[1]: .7f}, "
                 f"{direction[2]: .7f})"
             )
-            model.includeSOCFromSOI(
-                theta=theta,
-                phi=phi,
-                strength=1.0,
-                keepRegularSpinAxis=True,
-            )
-            calc = BZGridTask(
-                model,
-                solveEnergy,
+            model.includeSOCFromSOI( theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
+            calc = BZGridTask(model, solveEnergy,
                 args={},
-                BZGrid=bz_grid,
-                BZSymm=False,
-                mode="run",
-                ncores=number_of_cores,
-            )
+                BZGrid=bz_grid, BZSymm=False,
+                mode="run", ncores=number_of_cores)
             energies = collect_bz_energies(calc, bz_grid)
             sample = fixed_number_electronic_state(
-                energies,
-                target_electrons_per_cell,
-                number_kpoints,
-                occupation_mode,
-                electronic_kBT,
-            )
+                energies, target_electrons_per_cell, number_kpoints, occupation_mode, electronic_kBT)
             save_energy_sample(
                 sample_path,
-                direction,
-                theta,
-                phi,
+                direction, theta, phi,
                 np.asarray(bz_grid),
-                target_electrons_per_cell,
-                occupation_mode,
-                electronic_kBT,
-                sample,
-            )
+                target_electrons_per_cell, occupation_mode, electronic_kBT, sample)
 
         internal_energy[index] = sample["internal_energy"]
         free_energy[index] = sample["free_energy"]
@@ -842,97 +670,50 @@ def run():
                 occupation_mode,
                 electronic_kBT,
             )
-            print(
-                f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] "
-                f"loaded {sample_path.name}"
-            )
+            print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] loaded {sample_path.name}")
         else:
-            print(
-                f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] "
-                f"mu={chemical_potential[index]:.9f} eV"
-            )
-            model.includeSOCFromSOI(
-                theta=theta,
-                phi=phi,
-                strength=1.0,
-                keepRegularSpinAxis=True,
-            )
+            print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] mu={chemical_potential[index]:.9f} eV")
+            model.includeSOCFromSOI(theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
             calc = BZGridTask(
-                model,
-                ift_solver,
+                model, ift_solver,
                 args={
                     "fermi": np.asarray([chemical_potential[index]]),
                     "omega": omega_axis,
-                    "mag type": "total",
-                    "projected shells for detecting torque":
-                        torque_projection_list,
-                    "finite temperature occupations":
-                        occupation_mode == "fermi-dirac",
+                    "mag type": mag_type,
+                    "projected shells for detecting torque":[
+                        {"source":torque_projection_list, "target":torque_projection_list},
+                    ],
+                    "finite temperature occupations": occupation_mode == "fermi-dirac",
                     "kBT": electronic_kBT,
                 },
-                BZGrid=bz_grid,
-                BZSymm=False,
-                mode="run",
-                ncores=number_of_cores,
-            )
+                BZGrid=bz_grid, BZSymm=False,
+                mode="run", ncores=number_of_cores)
             projected_chi_sample = collect_bz_response(calc)
-            save_ift_sample(
-                sample_path,
-                direction,
-                chemical_potential[index],
-                omega_axis,
-                np.asarray(bz_grid),
-                ift_solver.__name__,
-                occupation_mode,
-                electronic_kBT,
-                projected_chi_sample,
-            )
+            save_ift_sample(sample_path, direction, chemical_potential[index], omega_axis,
+                np.asarray(bz_grid), ift_solver.__name__,
+                occupation_mode, electronic_kBT, projected_chi_sample,)
         projected_chi_samples.append(projected_chi_sample)
 
     projected_chi_ift = np.asarray(projected_chi_samples)
-    tangential_chi_ift = project_tangential(
-        projected_chi_ift, directions
-    )
+    tangential_chi_ift = project_tangential(projected_chi_ift, directions)
 
     band_energy = free_energy
     energy_offset = np.mean(band_energy)
     energy_expansion, energy_fit = SphericalHarmonicExpansion.fit(
-        directions,
-        band_energy - energy_offset,
-        harmonic_degree,
-    )
-    torque_expansion, torque_fit = (
-        VectorSphericalHarmonicExpansion.fit(
-            directions,
-            tangential_chi_ift,
-            harmonic_degree,
-            project=False,
-        )
-    )
+        directions, band_energy - energy_offset, harmonic_degree)
+    torque_expansion, torque_fit = VectorSphericalHarmonicExpansion.fit(
+            directions, tangential_chi_ift, harmonic_degree, project=False)
     torque_reconstructed = torque_expansion.evaluate(directions)
     torque_cross_validated, torque_cross_validation_fit = (
         paired_antipodal_vsh_cross_validation(
-            directions,
-            tangential_chi_ift,
-            harmonic_degree,
-            number_folds=validation_folds,
-        )
+            directions, tangential_chi_ift, harmonic_degree, number_folds=validation_folds)
     )
     polarization_labels, polarization_vectors = optical_polarization_states()
-    polarization_fit = polarization_contracted_diagnostics(
-        tangential_chi_ift,
-        torque_reconstructed,
-        polarization_vectors,
-    )
+    polarization_fit = polarization_contracted_diagnostics( tangential_chi_ift, torque_reconstructed, polarization_vectors)
     polarization_cross_validation = polarization_contracted_diagnostics(
-        tangential_chi_ift,
-        torque_cross_validated,
-        polarization_vectors,
-    )
+        tangential_chi_ift, torque_cross_validated, polarization_vectors)
 
-    energy_gradient = np.real_if_close(
-        energy_expansion.surface_gradient(directions)
-    )
+    energy_gradient = np.real_if_close(energy_expansion.surface_gradient(directions))
     half_orientations = number_of_orientations // 2
     energy_reversal_odd_meV = 0.5 * (band_energy[:half_orientations] - band_energy[half_orientations:]) * 1000.0
     
@@ -946,23 +727,15 @@ def run():
 
     output_energy_table(
         main_dir / "AngleDependentEnergy.txt",
-        directions,
-        theta_axis,
-        phi_axis,
-        internal_energy,
-        free_energy,
-        chemical_potential,
-        highest_occupied,
-        lowest_unoccupied,
+        directions, theta_axis, phi_axis,
+        internal_energy, free_energy, chemical_potential, highest_occupied, lowest_unoccupied,
     )
     output_polarization_validation_table(
         main_dir / "AngleDependentIFTFitValidation.txt",
         omega_axis,
         polarization_labels,
-        {
-            "fit": polarization_fit,
-            "cross_validation": polarization_cross_validation,
-        },
+        {"fit": polarization_fit,
+         "cross_validation": polarization_cross_validation,},
     )
 
     output_path = main_dir / "AngleDependentDynamicsMap.npz"
@@ -970,24 +743,15 @@ def run():
         output_path,
         format_version=2,
         directions=directions,
-        orientation_weights=np.full(
-            number_of_orientations,
-            4.0 * np.pi / number_of_orientations,
-        ),
-        theta=theta_axis,
-        phi=phi_axis,
-        reference_direction=reference_direction,
+        orientation_weights=np.full(number_of_orientations, 4.*np.pi/number_of_orientations),
+        theta=theta_axis, phi=phi_axis, reference_direction=reference_direction,
         reference_fermi_eV=reference_fermi,
         filling_source=filling_source,
         chemical_potential_eV=chemical_potential,
         fermi_axis_eV=chemical_potential[:, None],
         omega_axis_eV=omega_axis,
-        bz_grid=np.asarray(bz_grid),
-        occupation_mode=occupation_mode,
-        kBT_eV=electronic_kBT,
-        nominal_occupied_state_count=int(
-            round(target_electrons_per_cell * number_kpoints)
-        ),
+        bz_grid=np.asarray(bz_grid), occupation_mode=occupation_mode, kBT_eV=electronic_kBT,
+        nominal_occupied_state_count=int(round(target_electrons_per_cell * number_kpoints)),
         electrons_per_cell=target_electrons_per_cell,
         internal_energy_eV_per_cell=internal_energy,
         free_energy_eV_per_cell=free_energy,
@@ -995,9 +759,7 @@ def run():
         energy_offset_eV_per_cell=energy_offset,
         energy_surface_gradient_eV_per_cell=energy_gradient,
         energy_reversal_odd_meV_per_cell=energy_reversal_odd_meV,
-        moment_magnitude_muB=(
-            np.nan if moment_magnitude_muB is None else moment_magnitude_muB
-        ),
+        moment_magnitude_muB= np.nan if moment_magnitude_muB is None else moment_magnitude_muB,
         anisotropy_field_tesla=anisotropy_field_tesla,
         projected_chi_IFT=projected_chi_ift,
         tangential_projected_chi_IFT=tangential_chi_ift,
@@ -1017,9 +779,7 @@ def run():
         torque_cross_validation_prediction=torque_cross_validated,
         torque_cross_validation_folds=validation_folds,
         torque_cross_validation_fold_rank=torque_cross_validation_fit["rank"],
-        torque_cross_validation_fold_condition=torque_cross_validation_fit[
-            "condition"
-        ],
+        torque_cross_validation_fold_condition=torque_cross_validation_fit["condition"],
         polarization_labels=polarization_labels,
         polarization_vectors=polarization_vectors,
         polarization_active_signal_fraction=validation_active_signal_fraction,
@@ -1028,29 +788,15 @@ def run():
         polarization_fit_relative_rms=polarization_fit["relative_rms"],
         polarization_fit_reference_peak=polarization_fit["reference_peak"],
         polarization_fit_error_peak=polarization_fit["error_peak"],
-        polarization_fit_peak_normalized_error=polarization_fit[
-            "peak_normalized_error"
-        ],
-        polarization_fit_global_relative_rms=polarization_fit[
-            "global_relative_rms"
-        ],
-        polarization_cv_reference_rms=polarization_cross_validation[
-            "reference_rms"
-        ],
+        polarization_fit_peak_normalized_error=polarization_fit["peak_normalized_error"],
+        polarization_fit_global_relative_rms=polarization_fit["global_relative_rms"],
+        polarization_cv_reference_rms=polarization_cross_validation["reference_rms"],
         polarization_cv_error_rms=polarization_cross_validation["error_rms"],
-        polarization_cv_relative_rms=polarization_cross_validation[
-            "relative_rms"
-        ],
-        polarization_cv_reference_peak=polarization_cross_validation[
-            "reference_peak"
-        ],
+        polarization_cv_relative_rms=polarization_cross_validation["relative_rms"],
+        polarization_cv_reference_peak=polarization_cross_validation["reference_peak"],
         polarization_cv_error_peak=polarization_cross_validation["error_peak"],
-        polarization_cv_peak_normalized_error=polarization_cross_validation[
-            "peak_normalized_error"
-        ],
-        polarization_cv_global_relative_rms=polarization_cross_validation[
-            "global_relative_rms"
-        ],
+        polarization_cv_peak_normalized_error=polarization_cross_validation["peak_normalized_error"],
+        polarization_cv_global_relative_rms=polarization_cross_validation["global_relative_rms"],
     )
 
     metadata = {
@@ -1139,7 +885,5 @@ def run():
         polarization_cross_validation,
         validation_active_signal_fraction,
     )
-
-
 if __name__ == "__main__":
     run()

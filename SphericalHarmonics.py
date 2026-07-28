@@ -1,11 +1,7 @@
 """Spherical-harmonic tools for orientation-dependent magnetic data."""
-
 from __future__ import annotations
-
 from collections.abc import Sequence
-
 import numpy as np
-
 try:
     from scipy.special import sph_harm_y as _sph_harm_y
 
@@ -16,7 +12,6 @@ try:
         phi: np.ndarray,
     ) -> np.ndarray:
         return _sph_harm_y(degree, order, theta, phi)
-
 except ImportError:
     from scipy.special import sph_harm as _sph_harm
 
@@ -27,7 +22,6 @@ except ImportError:
         phi: np.ndarray,
     ) -> np.ndarray:
         return _sph_harm(order, degree, phi, theta)
-
 
 def _directions(value) -> np.ndarray:
     directions = np.asarray(value, dtype=float)
@@ -42,7 +36,6 @@ def _directions(value) -> np.ndarray:
         raise ValueError("directions must be finite and nonzero.")
     return directions / norms[:, None]
 
-
 def fibonacci_sphere(number: int, antipodal: bool = False) -> np.ndarray:
     """
     Return approximately equal-area directions without duplicated poles.
@@ -51,14 +44,11 @@ def fibonacci_sphere(number: int, antipodal: bool = False) -> np.ndarray:
     spherical-harmonic sampling rather than exact angular quadrature.
     """
     number = int(number)
-    if number < 1:
-        raise ValueError("number must be positive.")
+    if number < 1: raise ValueError("number must be positive.")
 
     if antipodal:
         if number % 2 != 0:
-            raise ValueError(
-                "An antipodal Fibonacci sphere needs an even number."
-            )
+            raise ValueError("An antipodal Fibonacci sphere needs an even number.")
         half_number = number // 2
         index = np.arange(half_number, dtype=float)
         z = 1.0 - (index + 0.5) / half_number
@@ -68,13 +58,9 @@ def fibonacci_sphere(number: int, antipodal: bool = False) -> np.ndarray:
     radius = np.sqrt(np.maximum(0.0, 1.0 - z**2))
     golden_angle = np.pi * (3.0 - np.sqrt(5.0))
     phi = np.mod(index * golden_angle, 2.0 * np.pi)
-    directions = np.column_stack(
-        (radius * np.cos(phi), radius * np.sin(phi), z)
-    )
-    if antipodal:
-        directions = np.concatenate((directions, -directions), axis=0)
+    directions = np.column_stack((radius * np.cos(phi), radius * np.sin(phi), z))
+    if antipodal: directions = np.concatenate((directions, -directions), axis=0)
     return directions
-
 
 def cartesian_to_spherical(directions) -> tuple[np.ndarray, np.ndarray]:
     """Return polar ``theta`` and azimuthal ``phi`` for Cartesian directions."""
@@ -83,56 +69,30 @@ def cartesian_to_spherical(directions) -> tuple[np.ndarray, np.ndarray]:
     phi = np.mod(np.arctan2(unit[:, 1], unit[:, 0]), 2.0 * np.pi)
     return theta, phi
 
-
 def scalar_modes(max_degree: int) -> np.ndarray:
     """Return ``(degree, order)`` rows through ``max_degree``."""
     max_degree = int(max_degree)
     if max_degree < 0:
         raise ValueError("max_degree must be nonnegative.")
-    return np.asarray(
-        [
-            (degree, order)
-            for degree in range(max_degree + 1)
-            for order in range(-degree, degree + 1)
-        ],
-        dtype=int,
-    )
-
+    return np.asarray([(degree, order) for degree in range(max_degree + 1) for order in range(-degree, degree + 1)],dtype=int)
 
 def vector_modes(max_degree: int) -> np.ndarray:
     """Return VSH ``(degree, order)`` rows; tangential modes begin at l=1."""
     max_degree = int(max_degree)
     if max_degree < 1:
         raise ValueError("max_degree must be at least one.")
-    return np.asarray(
-        [
-            (degree, order)
-            for degree in range(1, max_degree + 1)
-            for order in range(-degree, degree + 1)
-        ],
-        dtype=int,
-    )
+    return np.asarray([(degree, order) for degree in range(1, max_degree + 1) for order in range(-degree, degree + 1)],dtype=int)
 
-
-def scalar_harmonic_matrix(
-    directions,
-    modes: Sequence[Sequence[int]],
-) -> np.ndarray:
+def scalar_harmonic_matrix(directions, modes: Sequence[Sequence[int]]) -> np.ndarray:
     """Evaluate complex scalar spherical harmonics at the supplied directions."""
     theta, phi = cartesian_to_spherical(directions)
     mode_array = np.asarray(modes, dtype=int)
     matrix = np.empty((len(theta), len(mode_array)), dtype=complex)
     for imode, (degree, order) in enumerate(mode_array):
-        matrix[:, imode] = _spherical_harmonic(
-            int(degree), int(order), theta, phi
-        )
+        matrix[:, imode] = _spherical_harmonic(int(degree), int(order), theta, phi)
     return matrix
 
-
-def vector_harmonic_matrices(
-    directions,
-    modes: Sequence[Sequence[int]],
-) -> tuple[np.ndarray, np.ndarray]:
+def vector_harmonic_matrices(directions, modes: Sequence[Sequence[int]]) -> tuple[np.ndarray, np.ndarray]:
     """
     Evaluate normalized poloidal and toroidal vector spherical harmonics.
 
@@ -146,20 +106,9 @@ def vector_harmonic_matrices(
     theta, phi = cartesian_to_spherical(unit)
     sin_theta = np.sin(theta)
     if np.any(sin_theta < 1.0e-12):
-        raise ValueError(
-            "Vector harmonics are evaluated away from the coordinate poles."
-        )
-
-    e_theta = np.column_stack(
-        (
-            np.cos(theta) * np.cos(phi),
-            np.cos(theta) * np.sin(phi),
-            -sin_theta,
-        )
-    )
-    e_phi = np.column_stack(
-        (-np.sin(phi), np.cos(phi), np.zeros_like(phi))
-    )
+        raise ValueError("Vector harmonics are evaluated away from the coordinate poles.")
+    e_theta = np.column_stack((np.cos(theta) * np.cos(phi), np.cos(theta) * np.sin(phi), -sin_theta))
+    e_phi = np.column_stack((-np.sin(phi), np.cos(phi), np.zeros_like(phi)))
 
     mode_array = np.asarray(modes, dtype=int)
     harmonic_cache = {}
@@ -169,13 +118,9 @@ def vector_harmonic_matrices(
             if abs(needed_order) <= degree:
                 key = (degree, needed_order)
                 if key not in harmonic_cache:
-                    harmonic_cache[key] = _spherical_harmonic(
-                        degree, needed_order, theta, phi
-                    )
+                    harmonic_cache[key] = _spherical_harmonic(degree, needed_order, theta, phi)
 
-    poloidal = np.empty(
-        (len(theta), len(mode_array), 3), dtype=complex
-    )
+    poloidal = np.empty((len(theta), len(mode_array), 3), dtype=complex)
     for imode, (degree_raw, order_raw) in enumerate(mode_array):
         degree = int(degree_raw)
         order = int(order_raw)
@@ -183,38 +128,18 @@ def vector_harmonic_matrices(
         derivative_theta = np.zeros(len(theta), dtype=complex)
 
         if order < degree:
-            factor_plus = np.sqrt(
-                (degree - order) * (degree + order + 1)
-            )
-            derivative_theta += (
-                0.5
-                * factor_plus
-                * np.exp(-1j * phi)
-                * harmonic_cache[(degree, order + 1)]
-            )
+            factor_plus = np.sqrt((degree - order) * (degree + order + 1))
+            derivative_theta += 0.5 * factor_plus * np.exp(-1j * phi) * harmonic_cache[(degree, order + 1)]
         if order > -degree:
-            factor_minus = np.sqrt(
-                (degree + order) * (degree - order + 1)
-            )
-            derivative_theta -= (
-                0.5
-                * factor_minus
-                * np.exp(1j * phi)
-                * harmonic_cache[(degree, order - 1)]
-            )
+            factor_minus = np.sqrt((degree + order) * (degree - order + 1))
+            derivative_theta -= 0.5 * factor_minus * np.exp(1j * phi) * harmonic_cache[(degree, order - 1)]
 
         derivative_phi = 1j * order * harmonic
-        gradient = (
-            derivative_theta[:, None] * e_theta
-            + (derivative_phi / sin_theta)[:, None] * e_phi
-        )
-        poloidal[:, imode, :] = gradient / np.sqrt(
-            degree * (degree + 1)
-        )
+        gradient = derivative_theta[:, None] * e_theta + (derivative_phi / sin_theta)[:, None] * e_phi
+        poloidal[:, imode, :] = gradient / np.sqrt(degree * (degree + 1))
 
     toroidal = np.cross(unit[:, None, :], poloidal, axis=-1)
     return poloidal, toroidal
-
 
 def project_tangential(values, directions) -> np.ndarray:
     """Remove the radial component from vectors on the orientation sphere."""
@@ -229,7 +154,6 @@ def project_tangential(values, directions) -> np.ndarray:
         (slice(None),) + (None,) * (vectors.ndim - 2) + (slice(None),)
     ]
 
-
 class SphericalHarmonicExpansion:
     """Least-squares scalar spherical-harmonic expansion."""
 
@@ -240,41 +164,24 @@ class SphericalHarmonicExpansion:
         self.value_shape = tuple(value_shape)
 
     @classmethod
-    def fit(
-        cls,
-        directions,
-        values,
-        max_degree: int,
-    ) -> tuple["SphericalHarmonicExpansion", dict]:
+    def fit(cls, directions, values, max_degree: int) -> tuple["SphericalHarmonicExpansion", dict]:
         unit = _directions(directions)
         sample_values = np.asarray(values)
-        if sample_values.shape[0] != len(unit):
-            raise ValueError("values and directions have different lengths.")
+        if sample_values.shape[0] != len(unit): raise ValueError("values and directions have different lengths.")
 
         modes = scalar_modes(max_degree)
         matrix = scalar_harmonic_matrix(unit, modes)
         rhs = sample_values.reshape(len(unit), -1)
-        coefficients, _, rank, singular_values = np.linalg.lstsq(
-            matrix, rhs, rcond=None
-        )
-        expansion = cls(
-            max_degree,
-            modes,
+        coefficients, _, rank, singular_values = np.linalg.lstsq(matrix, rhs, rcond=None)
+        expansion = cls(max_degree, modes,
             coefficients.reshape((len(modes),) + sample_values.shape[1:]),
             sample_values.shape[1:],
         )
         reconstructed = expansion.evaluate(unit)
         error = reconstructed - sample_values
         rms = np.sqrt(np.mean(np.abs(error) ** 2, axis=0))
-        reference_rms = np.sqrt(
-            np.mean(np.abs(sample_values) ** 2, axis=0)
-        )
-        relative_rms = np.divide(
-            rms,
-            reference_rms,
-            out=np.zeros_like(rms, dtype=float),
-            where=reference_rms > 0.0,
-        )
+        reference_rms = np.sqrt(np.mean(np.abs(sample_values) ** 2, axis=0))
+        relative_rms = np.divide(rms, reference_rms, out=np.zeros_like(rms, dtype=float), where=reference_rms > 0.0)
         diagnostics = {
             "rank": rank,
             "condition": (
@@ -313,7 +220,6 @@ class SphericalHarmonicExpansion:
         gradient = flat_gradient.reshape((len(unit), 3) + self.value_shape)
         return np.moveaxis(gradient, 1, -1)
 
-
 class VectorSphericalHarmonicExpansion:
     """Least-squares expansion of tangential vector fields on the sphere."""
 
@@ -327,18 +233,10 @@ class VectorSphericalHarmonicExpansion:
     def _design_matrix(directions, modes) -> np.ndarray:
         poloidal, toroidal = vector_harmonic_matrices(directions, modes)
         basis = np.concatenate((poloidal, toroidal), axis=1)
-        return basis.transpose(0, 2, 1).reshape(
-            len(basis) * 3, basis.shape[1]
-        )
+        return basis.transpose(0, 2, 1).reshape(len(basis) * 3, basis.shape[1])
 
     @classmethod
-    def fit(
-        cls,
-        directions,
-        values,
-        max_degree: int,
-        project: bool = True,
-    ) -> tuple["VectorSphericalHarmonicExpansion", dict]:
+    def fit(cls, directions, values, max_degree: int, project: bool = True) -> tuple["VectorSphericalHarmonicExpansion", dict]:
         unit = _directions(directions)
         sample_values = np.asarray(values)
         if sample_values.shape[0] != len(unit):
@@ -352,27 +250,13 @@ class VectorSphericalHarmonicExpansion:
         matrix = cls._design_matrix(unit, modes)
         value_shape = sample_values.shape[1:-1]
         rhs = np.moveaxis(sample_values, -1, 1).reshape(len(unit) * 3, -1)
-        coefficients, _, rank, singular_values = np.linalg.lstsq(
-            matrix, rhs, rcond=None
-        )
-        expansion = cls(
-            max_degree,
-            modes,
-            coefficients.reshape((2, len(modes)) + value_shape),
-            value_shape,
-        )
+        coefficients, _, rank, singular_values = np.linalg.lstsq(matrix, rhs, rcond=None)
+        expansion = cls(max_degree, modes, coefficients.reshape((2, len(modes)) + value_shape), value_shape)
         reconstructed = expansion.evaluate(unit)
         error = reconstructed - sample_values
         rms = np.sqrt(np.mean(np.abs(error) ** 2, axis=(0, -1)))
-        reference_rms = np.sqrt(
-            np.mean(np.abs(sample_values) ** 2, axis=(0, -1))
-        )
-        relative_rms = np.divide(
-            rms,
-            reference_rms,
-            out=np.zeros_like(rms, dtype=float),
-            where=reference_rms > 0.0,
-        )
+        reference_rms = np.sqrt(np.mean(np.abs(sample_values) ** 2, axis=(0, -1)))
+        relative_rms = np.divide(rms, reference_rms, out=np.zeros_like(rms, dtype=float), where=reference_rms > 0.0)
         diagnostics = {
             "rank": rank,
             "condition": (

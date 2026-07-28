@@ -1,6 +1,7 @@
 from collections.abc import Callable, Sequence
 import numpy as np
 from LLG import SOTDevice, IFTDevice
+import matplotlib.pyplot as plt
 
 def gaussian_light_pulse(peak_field: float, center_time: float, intensity_fwhm: float) -> Callable[[float], float]:
     """
@@ -52,8 +53,6 @@ def run_ift_example(
         phi0=45*np.pi/180,
     )
     time_axis, trajectory = device.run(t_total=2000.0, time_step=10.0)
-
-    import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(2, 1, sharex=True)
     axes[0].plot(time_axis, trajectory[:, 0], label=r"m$_x$")
