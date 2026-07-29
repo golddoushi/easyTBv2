@@ -185,7 +185,7 @@ class SOTDevice:
         H_DL=0.30,
         sigma=np.array([0, 1, 0]),
         current_pulse=lambda time: 0,
-        gamma=1.0,
+        gamma=ELECTRON_GAMMA_RAD_PER_FS_T,
         alpha=0.1,
         theta0=0.05,
         phi0=0.0,

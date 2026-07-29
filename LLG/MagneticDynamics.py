@@ -17,6 +17,7 @@ import numpy as np
 
 
 VectorFunction = Callable[[np.ndarray, float], np.ndarray]
+TimeStepFunction = Callable[[float, np.ndarray], float]
 
 
 def _vector3(value, name: str) -> np.ndarray:
@@ -34,6 +35,99 @@ def _unit_vector(value, name: str) -> np.ndarray:
     if norm == 0.0:
         raise ValueError(f"{name} must be nonzero.")
     return vector / norm
+
+
+class PulseTimeStepSchedule:
+    """Fine integration steps near pulses and coarse steps between them."""
+
+    def __init__(self, center_times: Sequence[float], active_half_width: float, fine_step: float, coarse_step: float):
+        """
+        Construct fine-step windows around Gaussian intensity pulses.
+                
+        Parameters
+        ----------
+        - center_times : Sequence[float]
+            peak positions
+        - active_half_width : float
+            time radius of the fine sampling around peaks
+        - fine_step : float
+            time step used to sample the dynamics during the peaks, usually small
+        - coarse_step : float
+            time step used to sample the dynamics far from the peaks, usually large
+        """
+        centers = np.asarray(center_times, dtype=float)
+        if centers.ndim != 1 or len(centers) == 0:
+            raise ValueError(
+                "center_times must be a nonempty one-dimensional sequence."
+            )
+        if not np.all(np.isfinite(centers)):
+            raise ValueError("center_times must contain only finite values.")
+
+        self.active_half_width = float(active_half_width)
+        self.fine_step = float(fine_step)
+        self.coarse_step = float(coarse_step)
+        for value, name in (
+            (self.active_half_width, "active_half_width"),
+            (self.fine_step, "fine_step"),
+            (self.coarse_step, "coarse_step"),
+        ):
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive.")
+        if self.fine_step > self.coarse_step:
+            raise ValueError("fine_step must not exceed coarse_step.")
+
+        windows = sorted((center - self.active_half_width, center + self.active_half_width,)for center in centers)
+        merged = []
+        for start, stop in windows:
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], stop)
+            else:
+                merged.append([start, stop])
+        self.windows = np.asarray(merged, dtype=float)
+
+    @classmethod
+    def gaussian(cls, center_times: Sequence[float], intensity_fwhm: float, 
+                 fine_step: float, coarse_step: float, window_half_width_in_fwhm: float = 3.0,
+    ) -> "PulseTimeStepSchedule":
+        """
+        Construct fine-step windows around Gaussian intensity pulses.
+        
+        Parameters
+        ----------
+        - center_times : Sequence[float]
+            peak positions
+        - intensity_fwhm : float
+            FWHM of the peaks
+        - fine_step : float
+            time step used to sample the dynamics during the peaks, usually small, 1/10 of the fwhm
+        - coarse_step : float
+            time step used to sample the dynamics far from the peaks, usually large
+        - window_half_width_in_fwhm : float
+            time radius of the fine sampling around peaks, in unit of fwhm. default 3 is good.
+        """
+        intensity_fwhm = float(intensity_fwhm)
+        window_factor = float(window_half_width_in_fwhm)
+        if not np.isfinite(intensity_fwhm) or intensity_fwhm <= 0.0:
+            raise ValueError("intensity_fwhm must be finite and positive.")
+        if not np.isfinite(window_factor) or window_factor <= 0.0:
+            raise ValueError("window_half_width_in_fwhm must be finite and positive.")
+        return cls(center_times=center_times, active_half_width=window_factor * intensity_fwhm,
+            fine_step=fine_step, coarse_step=coarse_step)
+
+    def __call__(self, time: float, m: np.ndarray | None = None) -> float:
+        """Return a step that cannot cross a pulse-window boundary."""
+        time = float(time)
+        if not np.isfinite(time):
+            raise ValueError("time must be finite.")
+
+        index = int(np.searchsorted(self.windows[:, 1], time, side="right"))
+        if index == len(self.windows):
+            return self.coarse_step
+
+        start, stop = self.windows[index]
+        if time < start:
+            return min(self.coarse_step, start - time)
+        return min(self.fine_step, stop - time)
 
 
 class Field:
@@ -176,7 +270,12 @@ class SingleMomentLLG:
         updated = m + step * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
         return _unit_vector(updated, "updated magnetic moment")
 
-    def integrate(self, initial_m: Sequence[float], time_span: Sequence[float], time_step: float) -> tuple[np.ndarray, np.ndarray]:
+    def integrate(
+        self,
+        initial_m: Sequence[float],
+        time_span: Sequence[float],
+        time_step: float | TimeStepFunction,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Integrate the trajectory with fourth-order Runge-Kutta.
 
@@ -187,8 +286,10 @@ class SingleMomentLLG:
         time_span
             Two values ``(start, stop)`` in the chosen unit of time.
         time_step
-            Positive maximum integration step.  The last step is shortened
-            when necessary to end exactly at ``time_span[1]``.
+            Positive maximum integration step, or a callable
+            ``time_step(time, m)`` returning the next positive maximum step.
+            The last step is shortened when necessary to end exactly at
+            ``time_span[1]``.
 
         Returns
         -------
@@ -208,16 +309,25 @@ class SingleMomentLLG:
         if stop <= start:
             raise ValueError("time_span stop must be greater than start.")
 
-        step = float(time_step)
-        if not np.isfinite(step) or step <= 0.0:
-            raise ValueError("time_step must be finite and positive.")
+        if callable(time_step):
+            step_function = time_step
+        else:
+            step = float(time_step)
+            if not np.isfinite(step) or step <= 0.0:
+                raise ValueError("time_step must be finite and positive.")
+            step_function = lambda time, m: step
 
         time_values = [start]
         trajectory = [_unit_vector(initial_m, "initial_m")]
 
         while time_values[-1] < stop:
             current_time = time_values[-1]
-            current_step = min(step, stop - current_time)
+            requested_step = float(step_function(current_time, trajectory[-1]))
+            if not np.isfinite(requested_step) or requested_step <= 0.0:
+                raise ValueError(
+                    "time_step callable must return a finite positive value."
+                )
+            current_step = min(requested_step, stop - current_time)
             next_m = self._rk4_step(current_time, trajectory[-1], current_step)
             time_values.append(current_time + current_step)
             trajectory.append(next_m)
