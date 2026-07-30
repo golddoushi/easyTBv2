@@ -193,9 +193,7 @@ def load_energy_sample(path,expected_direction,expected_bz_grid,expected_target_
             "free_energy": float(data["free_energy_eV_per_cell"]),
             "highest_occupied": float(data["highest_occupied_eV"]),
             "lowest_unoccupied": float(data["lowest_unoccupied_eV"]),
-            "nominal_occupied_state_count": int(
-                data["nominal_occupied_state_count"]
-            ),
+            "nominal_occupied_state_count": int(data["nominal_occupied_state_count"]),
         }
 
 def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_name,occupation_mode,kBT,projected_chi_ift):
@@ -452,12 +450,12 @@ def output_energy_table(path, directions, theta, phi,
 
 def run():
     # Electronic calculation.
-    main_dir = Path("./mcalc/MnBi2Te4")
+    main_dir = Path("./mcalc/FeCl2")
     wannierBasis={
         "Fe": (0, 1, 2),
         "Cl": (0, 1),
     }
-    reference_fermi = 0.95
+    reference_fermi = -2.5
     reference_direction = np.asarray([0.0, 0.0, 1.0])
     # Set this directly when the electron number is known.  Otherwise it is
     # inferred from reference_fermi at reference_direction.
@@ -469,8 +467,8 @@ def run():
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.linspace(0.1, 3.0, 21)
-    bz_grid = (81, 81, 1)
+    omega_axis = np.linspace(0.5, 2.0, 21)
+    bz_grid = (48, 48, 1)
     number_of_cores = 8
     torque_projection_list = [(0,(0,1,2,)),]
     ift_solver = solveIFTorque_LG_DM

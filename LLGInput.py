@@ -18,6 +18,12 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
         phi_count=phi_count,
         drive_amplitude=drive_amplitude,
     )
+    with open(f"{mainDir}/torqueDistr.txt","w") as fout:
+        fout.write("             Phi           Theta         tau_phi       tau_theta\n")
+        for itheta in range(theta_count):
+            for iphi in range(phi_count):
+                fout.write(f"{torque_map.phi[itheta,iphi]:16.8E}{torque_map.theta[itheta,iphi]:16.8E}"
+                           f"{torque_map.phi_component[itheta,iphi]:16.8E}{torque_map.theta_component[itheta,iphi]:16.8E}\n")
     figure, axis = plt.subplots()
     arrows = axis.quiver(
         torque_map.phi,
@@ -60,6 +66,10 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
     return torque_map
 
 def plot_mag_evolution(mainDir, time_axis:Sequence, trajectory:Sequence, pulse:Callable, pulse_title:str):
+    with open(f"{mainDir}/magEvolution.txt","w") as fout:
+        fout.write(f"        Time(ps)              mx              my              mz {pulse_title:20s}\n")
+        for time, (mx,my,mz) in zip(time_axis,trajectory):
+            fout.write(f"{time:16.8E}{mx:16.8E}{my:16.8E}{mz:16.8E} {pulse(time):20.8E}\n")
     fig, axes = plt.subplots(2, 1, sharex=True)
     axes[0].plot(time_axis, trajectory[:, 0], label=r"m$_x$")
     axes[0].plot(time_axis, trajectory[:, 1], label=r"m$_y$")
@@ -67,7 +77,7 @@ def plot_mag_evolution(mainDir, time_axis:Sequence, trajectory:Sequence, pulse:C
     axes[0].set_ylabel("Magnetic orientation")
     axes[0].legend()
     axes[0].set_xlim(time_axis[0],time_axis[-1])
-    axes[1].plot(time_axis, [abs(pulse(time)) ** 2 for time in time_axis])
+    axes[1].plot(time_axis, [pulse(time) for time in time_axis])
     axes[1].set_ylabel(pulse_title)
     axes[1].set_xlabel("Time [fs]")
     axes[1].set_xlim(time_axis[0],time_axis[-1])
@@ -106,7 +116,7 @@ def step_pulse(t_pulse_on, t_pulse_off) -> Callable[[float], float]:
         return float(t_pulse_on <= time < t_pulse_off)
     return evelope
 
-def run_ift_example(data_directory="./", omega0=1.0, polarization="xy+",show_torque_map=True):
+def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     """
     Plot one optical-pulse trajectory from a saved angular electronic map.
 
@@ -114,8 +124,8 @@ def run_ift_example(data_directory="./", omega0=1.0, polarization="xy+",show_tor
     The supplied pulse is therefore the slowly varying electric-field
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
-    center_times = [10_000.0 + 100_000.0 * ipulse for ipulse in range(40)]
-    peak_field=0.1
+    center_times = [10_000.0 + 100_000.0 * ipulse for ipulse in range(30)]
+    peak_field=0.035
     intensity_fwhm = 50.0
     intensity=0.5*speed_of_light*epsilon_0*(peak_field*1E10)**2
     fluence=intensity*intensity_fwhm*np.sqrt(np.pi/(4*np.log(2)))*1E-15
@@ -134,7 +144,7 @@ def run_ift_example(data_directory="./", omega0=1.0, polarization="xy+",show_tor
         window_half_width_in_fwhm=3.0,
     )
     device = IFTDevice(
-        data_directory=data_directory,
+        data_directory=mainDir,
         omega0=omega0,
         polarization=polarization,
         torque_projection=1,
@@ -145,11 +155,12 @@ def run_ift_example(data_directory="./", omega0=1.0, polarization="xy+",show_tor
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
+        #t_total=5000,
         t_total=8_000_000.0,
         time_step=time_step,
     )
-    plot_mag_evolution(mainDir=data_directory,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"$|E(t)|^2$ [$(V/\AA)^2$]")
-    if show_torque_map: plot_tangent_torque_map(mainDir=data_directory, device=device, trajectory=trajectory)
+    plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
+    if show_torque_map: plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
     plt.show()
 
 def run_sot_example(mainDir="./",show_torque_map=True):
@@ -176,7 +187,7 @@ def run_sot_example(mainDir="./",show_torque_map=True):
     if show_torque_map: plot_tangent_torque_map(device=device, trajectory=trajectory)
     plt.show()
 
-
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(data_directory="mcalc/MnBi2Te4",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.8,polarization="xy+",show_torque_map=True)
+    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=1.7,polarization="xy+",show_torque_map=True)
