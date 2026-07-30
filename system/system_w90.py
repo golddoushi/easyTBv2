@@ -90,9 +90,7 @@ class System_w90(System):
             assert ispin==2, "separated spin-channel Wannier files require ispin=2"
             for seed in (up_seed,dn_seed):
                 for extension in ('.chk','.eig'):
-                    assert os.path.exists(seed+extension), (
-                        f"cannot find separated spin-channel file {seed+extension}"
-                    )
+                    assert os.path.exists(seed+extension),f"cannot find separated spin-channel file {seed+extension}"
 
             chk_up=W90CHK(seedname=up_seed)
             chk_dn=W90CHK(seedname=dn_seed)
@@ -107,49 +105,23 @@ class System_w90(System):
             assert ham_k_DFT_dn.nkpts==chk_dn.num_kpts
             assert ham_k_DFT_up.nbands==chk_up.num_bands
             assert ham_k_DFT_dn.nbands==chk_dn.num_bands
-            Ham_k_W_up=np.array([
-                self.toWannierGauge(H_k,ik,ik,chk_up)
-                for ik,H_k in enumerate(ham_k_DFT_up.data)
-            ])
-            Ham_k_W_dn=np.array([
-                self.toWannierGauge(H_k,ik,ik,chk_dn)
-                for ik,H_k in enumerate(ham_k_DFT_dn.data)
-            ])
+            Ham_k_W_up=np.array([self.toWannierGauge(H_k,ik,ik,chk_up) for ik,H_k in enumerate(ham_k_DFT_up.data)])
+            Ham_k_W_dn=np.array([self.toWannierGauge(H_k,ik,ik,chk_dn) for ik,H_k in enumerate(ham_k_DFT_dn.data)])
             nwann_spin=chk_up.num_wann
-            self._w90_spin_slices=(
-                slice(0,nwann_spin),
-                slice(nwann_spin,2*nwann_spin),
-            )
-            Ham_k_W=np.zeros(
-                (chk.num_kpts,2*nwann_spin,2*nwann_spin),dtype=complex,
-            )
+            self._w90_spin_slices=(slice(0,nwann_spin), slice(nwann_spin,2*nwann_spin))
+            Ham_k_W=np.zeros((chk.num_kpts,2*nwann_spin,2*nwann_spin),dtype=complex)
             Ham_k_W[:,self._w90_spin_slices[0],self._w90_spin_slices[0]]=Ham_k_W_up
             Ham_k_W[:,self._w90_spin_slices[1],self._w90_spin_slices[1]]=Ham_k_W_dn
-            chk_center=np.concatenate((
-                chk_up.wannier_centers,chk_dn.wannier_centers,
-            ),axis=0)
-            showElapsedTime(
-                extraInfo=(
-                    "spin-separated H_k_DFT read and Wannier-gauge "
-                    "transformation done"
-                )
-            )
+            chk_center=np.concatenate((chk_up.wannier_centers,chk_dn.wannier_centers),axis=0)
+            showElapsedTime(extraInfo="spin-separated H_k_DFT read and Wannier-gauge transformation done")
         else:
             chk=W90CHK(seedname=single_seed)
             self._w90_spin_chks=None
             self._w90_spin_slices=None
             showElapsedTime(extraInfo="chk read")
             ham_k_DFT=W90EIG(seedname=single_seed)
-            showElapsedTime(
-                extraInfo=(
-                    f"H_k_DFT: {ham_k_DFT.data.min():.6f} ~ "
-                    f"{ham_k_DFT.data.max():.6f} eigs. read"
-                )
-            )
-            Ham_k_W=np.array([
-                self.toWannierGauge(H_k,ik,ik,chk)
-                for ik,H_k in enumerate(ham_k_DFT.data)
-            ])
+            showElapsedTime(extraInfo=f"H_k_DFT: {ham_k_DFT.data.min():.6f} ~ {ham_k_DFT.data.max():.6f} eigs. read")
+            Ham_k_W=np.array([self.toWannierGauge(H_k,ik,ik,chk) for ik,H_k in enumerate(ham_k_DFT.data)])
             chk_center=chk.wannier_centers
             showElapsedTime(extraInfo="Wannier gauge trans. done")
 
@@ -161,9 +133,7 @@ class System_w90(System):
         self.iRvec, self.iRvecIndex, self.Ndegen = self.wigner_seitz(chk.mp_grid)
         self.nRvec=len(self.iRvec)
 
-        kpt_mp_grid = [
-            tuple(k) for k in np.array(np.round(chk.kpt_list * np.array(chk.mp_grid)[None,:]), dtype=int) % chk.mp_grid
-        ]
+        kpt_mp_grid = [tuple(k) for k in np.array(np.round(chk.kpt_list*np.array(chk.mp_grid)[None,:]), dtype=int)%chk.mp_grid]
 
         fourier_q_to_R_loc = functools.partial(
             fourier_q_to_R,
@@ -207,25 +177,13 @@ class System_w90(System):
         # 7. compute Berry connection in wannier gauge
         if getAA:
             if self.spinSeparated:
-                AA_k_W_up=self._berryConnectionWannier(
-                    up_seed,chk_up,trans_inv,
-                )
-                AA_k_W_dn=self._berryConnectionWannier(
-                    dn_seed,chk_dn,trans_inv,
-                )
-                AA_k_W=np.zeros(
-                    (chk.num_kpts,3,self.norbs,self.norbs),dtype=complex,
-                )
-                AA_k_W[
-                    :,:,self._w90_spin_slices[0],self._w90_spin_slices[0]
-                ]=AA_k_W_up
-                AA_k_W[
-                    :,:,self._w90_spin_slices[1],self._w90_spin_slices[1]
-                ]=AA_k_W_dn
+                AA_k_W_up=self._berryConnectionWannier(up_seed,chk_up,trans_inv)
+                AA_k_W_dn=self._berryConnectionWannier(dn_seed,chk_dn,trans_inv)
+                AA_k_W=np.zeros((chk.num_kpts,3,self.norbs,self.norbs),dtype=complex)
+                AA_k_W[:,:,self._w90_spin_slices[0],self._w90_spin_slices[0]]=AA_k_W_up
+                AA_k_W[:,:,self._w90_spin_slices[1],self._w90_spin_slices[1]]=AA_k_W_dn
             else:
-                AA_k_W=self._berryConnectionWannier(
-                    single_seed,chk,trans_inv,
-                )
+                AA_k_W=self._berryConnectionWannier(single_seed,chk,trans_inv)
 
             # 8. FFT to obtain AA_W in R-space
             self.AA_R_W=fourier_q_to_R_loc(AA_k_W)
@@ -325,6 +283,18 @@ class System_w90(System):
             f"mean {center_distance.mean():.3e} angstrom, "
             f"max {center_distance.max():.3e} angstrom"
         )
+
+    def getExchangeR(self, provenance="orientation finite difference", reversedModel=None):
+        provenance=self._normalizeExchangeProvenance(provenance)
+        if provenance!="collinear spin difference":
+            return super().getExchangeR(provenance=provenance,reversedModel=reversedModel)
+        assert self.spinSeparated, "collinear spin difference requires spinSeparated=True"
+        assert self._included_soi_R is None, "collinear spin difference must be constructed before V_SOC is included"
+        assert self._soi_global_spin_frame is None
+        self.exchange_R=self._exchangeFromCollinearSpinDifference()
+        self.exchangeProvenance=provenance
+        if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
+        return self.exchange_R
 
     def _berryConnectionWannier(
         self,seedname:str,chk:W90CHK,trans_inv:bool,

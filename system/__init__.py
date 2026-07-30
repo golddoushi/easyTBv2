@@ -18,6 +18,9 @@ class System:
         self.norbs:int=-1  
         # real-space hamiltonian produced by ab inito
         self.ham_R:np.ndarray=None
+        # exchange part of the real-space Hamiltonian
+        self.exchange_R:np.ndarray=None
+        self.exchangeProvenance:str=None
         # real-space energy matrix produced by openmx
         self.energy_R:np.ndarray=None
         # position x overlap
@@ -1610,6 +1613,73 @@ class System:
             print(f"  H_01: {len(self.H_01_R)} hopping matrices")
             print(f"  H_10: {len(self.H_m10_R)} hopping matrices\n")
 
+    @staticmethod
+    def _normalizeExchangeProvenance(provenance):
+        return " ".join(str(provenance).strip().lower().replace("_"," ").replace("-"," ").split())
+
+    def _exchangeFromCollinearSpinDifference(self):
+        assert self.ispin==2 and self.norbs%2==0, "collinear spin difference requires two equally sized spin channels"
+        half_norbs=self.norbs//2
+        ham_up=self.ham_R[:,:half_norbs,:half_norbs]
+        ham_dn=self.ham_R[:,half_norbs:,half_norbs:]
+        spin_mixing=max(np.max(np.abs(self.ham_R[:,:half_norbs,half_norbs:])),
+                        np.max(np.abs(self.ham_R[:,half_norbs:,:half_norbs])))
+        assert spin_mixing<1e-10, f"collinear spin difference requires block-diagonal spin channels, found spin mixing {spin_mixing:.3e} eV"
+        delta_R=0.5*(ham_up-ham_dn)
+        exchange_R=np.zeros_like(self.ham_R)
+        exchange_R[:,:half_norbs,:half_norbs]=delta_R
+        exchange_R[:,half_norbs:,half_norbs:]=-delta_R
+        return exchange_R
+
+    def getExchangeR(self, provenance="orientation finite difference", reversedModel=None):
+        r'''
+        Construct the exchange part of the real-space Hamiltonian.
+
+        ``orientation finite difference`` requires another System represented
+        in the same local basis but with the magnetic orientation reversed:
+
+        .. math:: H_{\rm XC}=[H(\mathbf m)-H(-\mathbf m)]/2.
+
+        ``onsite pauli estimate`` removes the spin-independent Pauli component
+        from the home-cell Hamiltonian. This is an approximation because any
+        onsite SOC, Zeeman, or other spin-dependent term is also retained.
+        '''
+        provenance=self._normalizeExchangeProvenance(provenance)
+        if provenance=="orientation finite difference":
+            assert reversedModel is not None, "orientation finite difference requires reversedModel"
+            assert self.norbs==reversedModel.norbs, f"basis sizes differ: {self.norbs} and {reversedModel.norbs}"
+            assert np.allclose(self.lattice,reversedModel.lattice,atol=1e-10,rtol=0), "the two models have different lattices"
+            assert set(map(tuple,self.iRvec))==set(map(tuple,reversedModel.iRvec)), "the two models contain different R vectors"
+            reversed_ham_R=np.zeros_like(self.ham_R)
+            for iR,Rvec in enumerate(self.iRvec):
+                reversed_ham_R[iR]=reversedModel.ham_R[reversedModel.iRvecIndex[tuple(Rvec)]]
+            if self.overlap or reversedModel.overlap:
+                assert self.overlap and reversedModel.overlap, "both models must use the same overlap convention"
+                reversed_overlap_R=np.zeros_like(self.overlap_R)
+                for iR,Rvec in enumerate(self.iRvec):
+                    reversed_overlap_R[iR]=reversedModel.overlap_R[reversedModel.iRvecIndex[tuple(Rvec)]]
+                overlap_error=np.max(np.abs(self.overlap_R-reversed_overlap_R))
+                assert overlap_error<1e-8, f"the two models use different overlap matrices, max difference {overlap_error:.3e}"
+            self.exchange_R=0.5*(self.ham_R-reversed_ham_R)
+        elif provenance=="onsite pauli estimate":
+            assert self.ispin==2 and self.norbs%2==0, "onsite Pauli estimate requires two equally sized spin channels"
+            iR0=self.iRvecIndex.get((0,0,0),None)
+            assert iR0 is not None, "cannot find the home-cell R=(0,0,0) Hamiltonian"
+            half_norbs=self.norbs//2
+            H0=self.ham_R[iR0]
+            Huu=H0[:half_norbs,:half_norbs]
+            Hdd=H0[half_norbs:,half_norbs:]
+            self.exchange_R=np.zeros_like(self.ham_R)
+            self.exchange_R[iR0,:half_norbs,:half_norbs]=0.5*(Huu-Hdd)
+            self.exchange_R[iR0,half_norbs:,half_norbs:]=-0.5*(Huu-Hdd)
+            self.exchange_R[iR0,:half_norbs,half_norbs:]=H0[:half_norbs,half_norbs:]
+            self.exchange_R[iR0,half_norbs:,:half_norbs]=H0[half_norbs:,:half_norbs]
+        else:
+            raise ValueError(f"unsupported exchange provenance {provenance!r}")
+        self.exchangeProvenance=provenance
+        if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
+        return self.exchange_R
+
     def addExchangeSplitting(self, projection, exchange_vector):
         """
         Adds an exchange splitting (Zeeman-like term) to specified atoms and shells.
@@ -1644,6 +1714,9 @@ class System:
         # 2. Map and apply the exchange splitting
         half_norbs = self.norbs // 2
         applied_orbitals = 0
+        if self.exchange_R is None:
+            self.exchange_R=np.zeros_like(self.ham_R)
+        self.exchangeProvenance="explicit"
         
         for iatom, shells in projection:
             atom_info = self.atomicOrbInfoList[iatom]
@@ -1662,6 +1735,8 @@ class System:
                     if abs(Mz) > 1e-8:
                         self.ham_R[iR0, I_up, I_up] += Mz
                         self.ham_R[iR0, I_dn, I_dn] -= Mz
+                        self.exchange_R[iR0, I_up, I_up] += Mz
+                        self.exchange_R[iR0, I_dn, I_dn] -= Mz
                     
                     # Apply Mx * sigma_x + My * sigma_y (Off-diagonal spin-flip terms)
                     if abs(Mx) > 1e-8 or abs(My) > 1e-8:
@@ -1669,6 +1744,8 @@ class System:
                         # H_dn_up = Mx + i My
                         self.ham_R[iR0, I_up, I_dn] += (Mx - 1j * My)
                         self.ham_R[iR0, I_dn, I_up] += (Mx + 1j * My)
+                        self.exchange_R[iR0, I_up, I_dn] += (Mx - 1j * My)
+                        self.exchange_R[iR0, I_dn, I_up] += (Mx + 1j * My)
                     
                     applied_orbitals += 1
                     
@@ -2060,6 +2137,10 @@ class System:
         if hasattr(self, 'ham_R') and self.ham_R is not None:
             self.ham_R = transform_matrix(self.ham_R)
             if self.verbose: print("Transformed Hamiltonian (ham_R).")
+
+        if self.exchange_R is not None:
+            self.exchange_R = transform_matrix(self.exchange_R)
+            if self.verbose: print("Transformed exchange Hamiltonian (exchange_R).")
             
         if hasattr(self, 'overlap_R') and self.overlap_R is not None:
             self.overlap_R = transform_matrix(self.overlap_R)

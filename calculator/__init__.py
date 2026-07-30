@@ -362,12 +362,16 @@ class Orbital(Energy):
 class SpinTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
         '''
-        Compute spin torque matrix in eigen-basis
+        Compute full spin torque matrix in eigen-basis
 
         T = -i [mu_S, H]
 
         In eigen-basis, H is diagonalized eigen-energy and mu_S is computed
         in the parent Spin class in units of mu_B.
+
+        NOTE: the full spin torque includes exchange torque \Tau_{XC}, spin-orbital-torque \Tau_{SO}
+        and the spin-flux \Nabla \cdot J_S. Only \Tau_{XC} corresponds to the transfer of electron spin
+        to the macroscopic spin magnetization order. 
 
         Indexing
         --------
@@ -421,6 +425,74 @@ class SpinTorque(Spin):
                 (proj1_K[..., None, None, None, :, :] @ self.spinTorqueAA_K + self.spinTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
             )
         if self.verbose==2: showElapsedTime(extraInfo=f"high-order spin torque in eig.-basis finished")
+
+class SpinExchangeTorque(Spin):
+    def __init__(self, spinTorqueProjectionList=[], **kwarg):
+        '''
+        Compute the exchange part of the spin torque in the eigen-basis.
+        PHYSICAL REVIEW RESEARCH 4, L042022 (2022), eq. S11
+        Describes transfer of spin angular momentum of electrons to the magnetic order parameter
+
+        T_XC = -i [mu_S, H_XC], where H_XC is model.exchange_R. Unlike the
+        total Hamiltonian, H_XC is generally not diagonal in the eigen-basis,
+        so the commutator must be evaluated by matrix multiplication.
+
+        The exposed spinTorque_K and projected_spinTorque_K_list attributes
+        intentionally match SpinTorque, allowing response classes to switch
+        torque definitions without changing their tensor contractions.
+
+        Indexing
+        --------
+        self.spinTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives spin torque matrix in eigen-basis.
+        idirection can be 0 | 1 | 2, corresponding to x | y | z.
+        '''
+        super().__init__(**kwarg)
+        assert self.model.exchange_R is not None, "SpinExchangeTorque requires model.exchange_R; call model.getExchangeR first"
+        assert self.model.exchange_R.shape==self.model.ham_R.shape, f"exchange_R shape {self.model.exchange_R.shape} differs from ham_R shape {self.model.ham_R.shape}"
+
+        exchange_R=self.model.exchange_R
+        if self.phase:
+            assert len(self.phaseshift)==self.model.nRvec, f"{len(self.phaseshift)=} {self.model.nRvec=}"
+            exchange_R=exchange_R*self.phaseshift[:,None,None]
+        self.exchange_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+        for iR,Rvec in enumerate(self.model.iRvec):
+            self.exchange_R_intepolated[tuple(Rvec)]=exchange_R[iR]
+        self.exchange_K_AO=np.fft.ifftn(self.exchange_R_intepolated,axes=(0,1,2))*np.prod(self.kgrid)
+        self.exchange_K=self.vectors.conj().swapaxes(-2,-1) @ self.exchange_K_AO @ self.vectors
+
+        spin=self.spin_K
+        exchange=self.exchange_K[...,None,:,:]
+        self.spinExchangeTorque_K=-1j*(spin@exchange-exchange@spin)
+        self.spinTorque_K=self.spinExchangeTorque_K
+        self.projected_spinExchangeTorque_K_list=[]
+        for spinTorqueProjection in spinTorqueProjectionList:
+            proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
+            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
+            projected=(proj1_K@self.spinExchangeTorque_K+self.spinExchangeTorque_K@proj2_K)/2
+            self.projected_spinExchangeTorque_K_list.append(projected)
+        self.projected_spinTorque_K_list=self.projected_spinExchangeTorque_K_list
+        if self.verbose==2: showElapsedTime(extraInfo="spin exchange torque in eig.-basis finished")
+
+    def buildHighOrderSpinTorque(self, spinTorqueProjectionList=[]):
+        '''
+        Build zero vector-potential vertices for the exchange torque operator.
+
+        H_XC is a field-independent local effective potential. The optical
+        field changes its expectation through the driven density matrix, not
+        through explicit A-dependent exchange-torque vertices.
+        '''
+        nbasis=self.energies.shape[-1]
+        self.spinExchangeTorqueA_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
+        self.spinExchangeTorqueAA_K=np.zeros(self.kgrid+(3,3,3,nbasis,nbasis),dtype=complex)
+        self.spinTorqueA_K=self.spinExchangeTorqueA_K
+        self.spinTorqueAA_K=self.spinExchangeTorqueAA_K
+        self.projected_spinExchangeTorqueA_K_list=[np.zeros_like(self.spinExchangeTorqueA_K) for _ in spinTorqueProjectionList]
+        self.projected_spinExchangeTorqueAA_K_list=[np.zeros_like(self.spinExchangeTorqueAA_K) for _ in spinTorqueProjectionList]
+        self.projected_spinTorqueA_K_list=self.projected_spinExchangeTorqueA_K_list
+        self.projected_spinTorqueAA_K_list=self.projected_spinExchangeTorqueAA_K_list
+        if self.verbose==2: showElapsedTime(extraInfo="zero high-order spin exchange torque vertices finished")
 
 class OrbitalTorque(Orbital):
     def __init__(self, orbitalTorqueProjectionList=[], **kwarg):
@@ -1409,7 +1481,6 @@ class SecondOrderAHC_BCP_FermiSea(BerryConnectionPolarizabilityDipole):
         
         self.sigma=np.sum(self.response,axis=(0,1,2,))/np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo="2nd-order anomalous Hall conductance (Fermi sea) finished")
-
 
 class SecondOrderAHC_BCP_FermiSurf(BerryConnectionPolarizability, FermiScan):
     Iodd = True
@@ -2893,11 +2964,12 @@ class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
+class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity-gauge time-dependent density matrix propagation.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
+        The spin part is solely contributed by the exchange torque, not the full torque, suitable to fed to LLG dynamics 
 
         Indexing
         --------
@@ -3010,13 +3082,14 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
 
     _rk4_step = InverseFaradayEffect_TDSE._rk4_step
 
-class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
+class InverseFaradayTorque_LG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
+        The spin part is solely contributed by the exchange torque, not the full torque, suitable to fed to LLG dynamics 
 
         Indexing
         --------
@@ -3105,6 +3178,7 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
+        The spin part is solely contributed by the exchange torque, not the full torque, suitable to fed to LLG dynamics 
 
         Indexing
         --------
@@ -3208,7 +3282,6 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
         self.projected_sigma = self.projected_chi_IFT
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFT density matrix finished")
-
 
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
@@ -3543,10 +3616,11 @@ class OrbitalGalvanicConductance_diag(OrbitalVelocityCorrelation_diag):
         self.projected_sigma=projected_sigma/np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"Intra-band orbital Galvanic conductance finished")
 
-class SpintorqueVelocityCorrelation(SpinTorque,Velocity):
+class SpintorqueVelocityCorrelation(SpinExchangeTorque,Velocity):
     def __init__(self, velocityProjectionList=[], spinTorqueProjectionList=[], **kwarg) -> None:
         '''
         Calc. correlation func of spin torque and velocity \Omega^{alpha,gamma}_{k,mn}.
+        Only the exchange torque, not the full torque, suitable to fed to LLG dynamics 
 
         alpha can be x, y, z, denoting the (cart.) space direction. 
         gamma can be x, y, or z, corresponding to the spin magnetic-moment torque orientation.
@@ -3556,7 +3630,8 @@ class SpintorqueVelocityCorrelation(SpinTorque,Velocity):
         --------
         spinBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList,spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList,
+                         spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
         self.calcDeltaEInverse()
         dEInverse2 = self.deltaEInverse**2
 
@@ -3573,6 +3648,7 @@ class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):
     def __init__(self, currentProjectionList=[], spinTorqueProjectionList=[], **kwarg) -> None:
         '''
         Inter band contributions on the spin torque Galvanic conductance in (1/cell eV /(V/angst.) hbar/2)
+        Only the exchange torque, not the full torque, suitable to fed to LLG dynamics 
         '''
         super().__init__(velocityProjectionList=currentProjectionList, spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
 

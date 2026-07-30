@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from system import System
 from auxiliary import obtainProjectionsPlain, obtainProjections
@@ -56,8 +57,14 @@ class System_tb(System):
         super().__init__()
         # atomic orbital basis are normalized but nonothorgonal
         self.overlap=False
+        if spinSeparated is None:
+            single_path=os.path.join(mainDir,hamR+"_hr.dat")
+            up_path=os.path.join(mainDir,hamR+".up_hr.dat")
+            dn_path=os.path.join(mainDir,hamR+".dn_hr.dat")
+            spinSeparated=ispin==2 and not os.path.exists(single_path) and os.path.exists(up_path) and os.path.exists(dn_path)
+        self.spinSeparated=bool(spinSeparated)
         # read in real-space ham
-        hrDat=readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated, cutoff=cutoff)
+        hrDat=readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, self.spinSeparated, cutoff=cutoff)
         self.iRvec=hrDat['iRvec']
         self.iRvecIndex=hrDat['iRvecIndex']
         self.nRvec=len(self.iRvec)
@@ -90,6 +97,16 @@ class System_tb(System):
         # compute orbital angular moment operator
         self.atomOrbAM=self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
+
+    def getExchangeR(self, provenance="orientation finite difference", reversedModel=None):
+        provenance=self._normalizeExchangeProvenance(provenance)
+        if provenance!="collinear spin difference":
+            return super().getExchangeR(provenance=provenance,reversedModel=reversedModel)
+        assert self.spinSeparated, "collinear spin difference requires spinSeparated=True"
+        self.exchange_R=self._exchangeFromCollinearSpinDifference()
+        self.exchangeProvenance=provenance
+        if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
+        return self.exchange_R
     
     def orbitalAngularMomentCubic(self):
         '''
