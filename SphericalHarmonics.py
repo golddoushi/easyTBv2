@@ -152,6 +152,90 @@ def project_tangential(values, directions) -> np.ndarray:
         (slice(None),) + (None,) * (vectors.ndim - 2) + (slice(None),)
     ]
 
+
+def _polar_rotation_matrices(rotations) -> np.ndarray:
+    matrices = np.asarray(rotations, dtype=float)
+    if matrices.ndim == 2:
+        matrices = matrices[None, :, :]
+    if matrices.ndim != 3 or matrices.shape[1:] != (3, 3):
+        raise ValueError("rotations must have shape (noperation, 3, 3).")
+    if not np.all(np.isfinite(matrices)):
+        raise ValueError("rotations must contain only finite values.")
+    metric_error = np.max(np.abs(matrices @ matrices.swapaxes(-1, -2) - np.eye(3)[None, :, :]))
+    determinant = np.linalg.det(matrices)
+    if metric_error > 1.0e-8 or np.max(abs(abs(determinant) - 1.0)) > 1.0e-8:
+        raise ValueError("rotations must be orthogonal matrices.")
+    return matrices
+
+
+def axial_rotation_matrices(polar_rotations) -> np.ndarray:
+    """Return axial-vector matrices ``det(R) R`` from polar rotations."""
+    polar = _polar_rotation_matrices(polar_rotations)
+    determinant = np.linalg.det(polar)
+    return determinant[:, None, None] * polar
+
+
+def transform_ift_tensor(values, polar_rotation) -> np.ndarray:
+    """
+    Transform ``chi_ab,c`` with two polar inputs and one axial output.
+
+    The final three axes of ``values`` must be
+    ``(drive_cartesian_1, drive_cartesian_2, torque_cartesian)``.
+    """
+    tensor = np.asarray(values)
+    if tensor.ndim < 3 or tensor.shape[-3:] != (3, 3, 3):
+        raise ValueError("IFT values must end in three Cartesian axes.")
+    polar = _polar_rotation_matrices(polar_rotation)
+    if len(polar) != 1:
+        raise ValueError("transform_ift_tensor expects one rotation.")
+    polar = polar[0]
+    axial = np.linalg.det(polar) * polar
+    return np.einsum(
+        "ai,bj,ck,...ijk->...abc",
+        polar,
+        polar,
+        axial,
+        tensor,
+        optimize=True,
+    )
+
+
+def augment_scalar_axial_orbits(directions, values, polar_rotations):
+    """Augment scalar orientation data by spatial-symmetry orbits."""
+    unit = _directions(directions)
+    sample_values = np.asarray(values)
+    if sample_values.shape[0] != len(unit):
+        raise ValueError("values and directions have different lengths.")
+    axial = axial_rotation_matrices(polar_rotations)
+    orbit_directions = np.einsum("gij,nj->gni", axial, unit)
+    orbit_values = np.broadcast_to(
+        sample_values[None, ...],
+        (len(axial),) + sample_values.shape,
+    )
+    return orbit_directions.reshape((-1, 3)), orbit_values.reshape((-1,) + sample_values.shape[1:])
+
+
+def augment_ift_axial_orbits(directions, values, polar_rotations):
+    """
+    Augment IFT samples using polar drive and axial moment/torque actions.
+
+    ``values`` must have shape ``(norientation, ..., 3, 3, 3)``.
+    """
+    unit = _directions(directions)
+    sample_values = np.asarray(values)
+    assert sample_values.shape[0] == len(unit), "values and directions have different lengths."
+    if sample_values.ndim < 4 or sample_values.shape[-3:] != (3, 3, 3):
+        raise ValueError("IFT values must end in three Cartesian axes.")
+
+    polar = _polar_rotation_matrices(polar_rotations)
+    axial = axial_rotation_matrices(polar)
+    orbit_directions = np.einsum("gij,nj->gni", axial, unit)
+    orbit_values = np.einsum(
+        "gai,gbj,gck,n...ijk->gn...abc",
+        polar, polar, axial, sample_values, optimize=True)
+    return orbit_directions.reshape((-1, 3)), orbit_values.reshape((-1,) + sample_values.shape[1:])
+
+
 class SphericalHarmonicExpansion:
     """Least-squares scalar spherical-harmonic expansion."""
 
@@ -191,6 +275,19 @@ class SphericalHarmonicExpansion:
             "relative_rms": relative_rms,
         }
         return expansion, diagnostics
+
+    @classmethod
+    def fit_scalar_axial_symmetry(
+        cls,
+        directions,
+        values,
+        max_degree: int,
+        polar_rotations,
+    ) -> tuple["SphericalHarmonicExpansion", dict]:
+        """Fit scalar orientation data after full spatial-orbit augmentation."""
+        orbit_directions, orbit_values = augment_scalar_axial_orbits(
+            directions, values, polar_rotations)
+        return cls.fit(orbit_directions, orbit_values, max_degree)
 
     def evaluate(self, directions) -> np.ndarray:
         unit = _directions(directions)
@@ -266,6 +363,25 @@ class VectorSphericalHarmonicExpansion:
             "relative_rms": relative_rms,
         }
         return expansion, diagnostics
+
+    @classmethod
+    def fit_ift_symmetry(
+        cls,
+        directions,
+        values,
+        max_degree: int,
+        polar_rotations,
+        project: bool = True,
+    ) -> tuple["VectorSphericalHarmonicExpansion", dict]:
+        """Fit a tangent IFT tensor after full spatial-orbit augmentation."""
+        orbit_directions, orbit_values = augment_ift_axial_orbits(
+            directions, values, polar_rotations)
+        return cls.fit(
+            orbit_directions,
+            orbit_values,
+            max_degree,
+            project=project,
+        )
 
     def evaluate(self, directions) -> np.ndarray:
         unit = _directions(directions)

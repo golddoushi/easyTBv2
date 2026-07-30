@@ -8,8 +8,15 @@ import paramReader
 paramReader.readGlobalConst()
 
 from SphericalHarmonics import SphericalHarmonicExpansion, VectorSphericalHarmonicExpansion
-from SphericalHarmonics import cartesian_to_spherical, fibonacci_sphere, project_tangential
+from SphericalHarmonics import (
+    axial_rotation_matrices,
+    cartesian_to_spherical,
+    fibonacci_sphere,
+    project_tangential,
+    transform_ift_tensor,
+)
 from auxiliary import fermiDiracOccupations
+from auxiliary import getWholeSymmetryOperator, SYMPREC
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
 from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
@@ -325,7 +332,209 @@ def polarization_contracted_diagnostics(reference, reconstructed, polarization_v
         "global_relative_rms": global_relative_rms,
     }
 
-def paired_antipodal_vsh_cross_validation(directions, values, harmonic_degree, number_folds=5):
+
+def crystal_symmetry_operations(model, tolerance=SYMPREC):
+    """Return Cartesian point operations and their primitive-cell atom maps."""
+    symmetry = getWholeSymmetryOperator(model.posinfo, symprec=tolerance)
+    if hasattr(symmetry, "rotations"):
+        fractional_rotations = np.asarray(symmetry.rotations, dtype=int)
+        translations = np.asarray(symmetry.translations, dtype=float)
+    else:
+        fractional_rotations = np.asarray(
+            symmetry["rotations"],
+            dtype=int,
+        )
+        translations = np.asarray(
+            symmetry["translations"],
+            dtype=float,
+        )
+    positions = np.asarray(model.posinfo["pos ions (frac.)"], dtype=float)
+    lattice = np.asarray(model.lattice, dtype=float)
+    labels = [atom["label"] for atom in model.atomicOrbInfoList]
+    cartesian_basis = lattice.T
+    cartesian_basis_inverse = np.linalg.inv(cartesian_basis)
+
+    operations = []
+    for fractional_rotation, translation in zip(
+        fractional_rotations,
+        translations,
+    ):
+        polar_rotation = (
+            cartesian_basis
+            @ fractional_rotation
+            @ cartesian_basis_inverse
+        )
+        metric_error = np.max(
+            abs(polar_rotation @ polar_rotation.T - np.eye(3))
+        )
+        if metric_error > max(100.0 * tolerance, 1.0e-6):
+            raise RuntimeError(
+                "Crystal operation is not orthogonal in Cartesian "
+                f"coordinates; metric residual={metric_error:.3e}."
+            )
+        left, _, right = np.linalg.svd(polar_rotation)
+        polar_rotation = left @ right
+        atom_map = []
+        for iatom, position in enumerate(positions):
+            transformed = fractional_rotation @ position + translation
+            difference = positions - transformed[None, :]
+            difference -= np.rint(difference)
+            distance = np.linalg.norm(difference @ lattice, axis=1)
+            compatible = np.asarray(
+                [label == labels[iatom] for label in labels]
+            )
+            distance[~compatible] = np.inf
+            mapped_atom = int(np.argmin(distance))
+            if distance[mapped_atom] > tolerance:
+                raise RuntimeError(
+                    "Could not determine the atom map for a crystal "
+                    f"symmetry operation; residual={distance[mapped_atom]:.3e} "
+                    f"angstrom for atom {iatom}."
+                )
+            atom_map.append(mapped_atom)
+        operations.append(
+            {
+                "polar_rotation": polar_rotation,
+                "fractional_rotation": fractional_rotation,
+                "translation": translation,
+                "atom_map": np.asarray(atom_map, dtype=int),
+            }
+        )
+    return operations
+
+
+def _projection_signature(selection, atomic_orbital_info):
+    signature = {}
+    for atom_id, shell_ids in selection:
+        atom_id = int(atom_id)
+        if not 0 <= atom_id < len(atomic_orbital_info):
+            raise IndexError(f"Projected atom {atom_id} is out of range.")
+        selected = signature.setdefault(atom_id, set())
+        for shell_id in shell_ids:
+            shell_id = int(shell_id)
+            if not 0 <= shell_id < len(
+                atomic_orbital_info[atom_id]["orbital index"]
+            ):
+                raise IndexError(
+                    f"Projected shell {shell_id} is out of range for atom "
+                    f"{atom_id}."
+                )
+            selected.add(shell_id)
+    return {
+        atom_id: tuple(sorted(shell_ids))
+        for atom_id, shell_ids in signature.items()
+    }
+
+
+def projection_preserving_operations(
+    operations,
+    projection,
+    atomic_orbital_info,
+):
+    """
+    Select operations preserving source and target atom-shell sets separately.
+    """
+    source = _projection_signature(
+        projection.get("source", []),
+        atomic_orbital_info,
+    )
+    target = _projection_signature(
+        projection.get("target", []),
+        atomic_orbital_info,
+    )
+
+    preserved = []
+    for operation in operations:
+        atom_map = operation["atom_map"]
+        transformed_source = {
+            int(atom_map[atom_id]): shell_ids
+            for atom_id, shell_ids in source.items()
+        }
+        transformed_target = {
+            int(atom_map[atom_id]): shell_ids
+            for atom_id, shell_ids in target.items()
+        }
+        if transformed_source == source and transformed_target == target:
+            preserved.append(operation)
+    if not preserved:
+        raise RuntimeError(
+            "No crystal symmetry operation preserves the requested "
+            "projection. The identity should always survive; check the "
+            "projection atom and shell indexes."
+        )
+    return preserved
+
+
+def fit_projection_resolved_ift_symmetry(
+    directions,
+    values,
+    harmonic_degree,
+    rotation_groups,
+):
+    """Fit every torque-projection slot with its preserving subgroup."""
+    values = np.asarray(values)
+    if values.ndim < 5 or values.shape[-3:] != (3, 3, 3):
+        raise ValueError("IFT values must end in three Cartesian axes.")
+    number_projections = values.shape[3]
+    if len(rotation_groups) != number_projections:
+        raise ValueError(
+            "One symmetry rotation group is required per torque projection."
+        )
+
+    expansions = []
+    diagnostics_by_projection = []
+    for iprojection, rotations in enumerate(rotation_groups):
+        selected = values[:, :, :, iprojection : iprojection + 1, ...]
+        expansion, diagnostics = (
+            VectorSphericalHarmonicExpansion.fit_ift_symmetry(
+                directions,
+                selected,
+                harmonic_degree,
+                rotations,
+                project=False,
+            )
+        )
+        expansions.append(expansion)
+        diagnostics_by_projection.append(diagnostics)
+
+    coefficients = np.concatenate(
+        [expansion.coefficients for expansion in expansions],
+        axis=4,
+    )
+    expansion = VectorSphericalHarmonicExpansion(
+        harmonic_degree,
+        expansions[0].modes,
+        coefficients,
+        values.shape[1:-1],
+    )
+    diagnostics = {
+        "rank": np.asarray(
+            [item["rank"] for item in diagnostics_by_projection],
+            dtype=int,
+        ),
+        "condition": np.asarray(
+            [item["condition"] for item in diagnostics_by_projection],
+            dtype=float,
+        ),
+        "rms": np.concatenate(
+            [item["rms"] for item in diagnostics_by_projection],
+            axis=2,
+        ),
+        "relative_rms": np.concatenate(
+            [item["relative_rms"] for item in diagnostics_by_projection],
+            axis=2,
+        ),
+    }
+    return expansion, diagnostics
+
+
+def paired_antipodal_vsh_cross_validation(
+    directions,
+    values,
+    harmonic_degree,
+    number_folds=5,
+    polar_rotations=None,
+):
     """Predict every orientation from fits that exclude its antipodal pair."""
     directions = np.asarray(directions)
     values = np.asarray(values)
@@ -352,12 +561,23 @@ def paired_antipodal_vsh_cross_validation(directions, values, harmonic_degree, n
         test_indices = np.concatenate((test_pairs, test_pairs + number_pairs))
         training_mask = np.ones(number_orientations, dtype=bool)
         training_mask[test_indices] = False
-        expansion, diagnostics = VectorSphericalHarmonicExpansion.fit(
-            directions[training_mask],
-            values[training_mask],
-            harmonic_degree,
-            project=False,
-        )
+        if polar_rotations is None:
+            expansion, diagnostics = VectorSphericalHarmonicExpansion.fit(
+                directions[training_mask],
+                values[training_mask],
+                harmonic_degree,
+                project=False,
+            )
+        else:
+            expansion, diagnostics = (
+                VectorSphericalHarmonicExpansion.fit_ift_symmetry(
+                    directions[training_mask],
+                    values[training_mask],
+                    harmonic_degree,
+                    polar_rotations,
+                    project=False,
+                )
+            )
         predictions[test_indices] = expansion.evaluate(
             directions[test_indices]
         )
@@ -367,6 +587,108 @@ def paired_antipodal_vsh_cross_validation(directions, values, harmonic_degree, n
         "rank": fold_rank,
         "condition": fold_condition,
     }
+
+
+def projected_ift_cross_validation(
+    directions,
+    values,
+    harmonic_degree,
+    rotation_groups,
+    number_folds=5,
+):
+    """Cross-validate each projection with the same subgroup used in fitting."""
+    predictions = []
+    ranks = []
+    conditions = []
+    for iprojection, rotations in enumerate(rotation_groups):
+        selected = values[:, :, :, iprojection : iprojection + 1, ...]
+        prediction, diagnostics = paired_antipodal_vsh_cross_validation(
+            directions,
+            selected,
+            harmonic_degree,
+            number_folds=number_folds,
+            polar_rotations=rotations,
+        )
+        predictions.append(prediction)
+        ranks.append(diagnostics["rank"])
+        conditions.append(diagnostics["condition"])
+    return np.concatenate(predictions, axis=3), {
+        "rank": np.asarray(ranks, dtype=int),
+        "condition": np.asarray(conditions, dtype=float),
+    }
+
+
+def ift_symmetry_covariance_diagnostics(
+    expansion,
+    directions,
+    rotation_groups,
+):
+    """Measure covariance residuals of every fitted projection subgroup."""
+    directions = np.asarray(directions, dtype=float)
+    operation_errors = []
+    for iprojection, rotations in enumerate(rotation_groups):
+        selected_coefficients = expansion.coefficients[
+            :, :, :, :, iprojection : iprojection + 1, ...
+        ]
+        selected_shape = list(expansion.value_shape)
+        selected_shape[2] = 1
+        selected_expansion = VectorSphericalHarmonicExpansion(
+            expansion.max_degree,
+            expansion.modes,
+            selected_coefficients,
+            tuple(selected_shape),
+        )
+        reference = selected_expansion.evaluate(directions)
+        errors = []
+        for polar_rotation in rotations:
+            axial_rotation = axial_rotation_matrices(
+                polar_rotation
+            )[0]
+            transformed_directions = directions @ axial_rotation.T
+            left = selected_expansion.evaluate(transformed_directions)
+            right = transform_ift_tensor(reference, polar_rotation)
+            error_rms = np.sqrt(np.mean(abs(left - right) ** 2))
+            reference_rms = np.sqrt(
+                0.5 * np.mean(abs(left) ** 2 + abs(right) ** 2)
+            )
+            errors.append(
+                error_rms / reference_rms
+                if reference_rms > 0.0
+                else 0.0
+            )
+        operation_errors.append(errors)
+    return operation_errors
+
+
+def global_relative_error_by_projection(
+    reference,
+    reconstructed,
+    projection_axis=3,
+):
+    """Return an all-component relative RMS for each projection slot."""
+    reference = np.asarray(reference)
+    reconstructed = np.asarray(reconstructed)
+    if reference.shape != reconstructed.shape:
+        raise ValueError("Reference and reconstructed responses must match.")
+    projection_axis = int(projection_axis) % reference.ndim
+    reduction_axes = tuple(
+        axis for axis in range(reference.ndim)
+        if axis != projection_axis
+    )
+    reference_power = np.sum(np.abs(reference) ** 2, axis=reduction_axes)
+    error_power = np.sum(
+        np.abs(reconstructed - reference) ** 2,
+        axis=reduction_axes,
+    )
+    return np.sqrt(
+        np.divide(
+            error_power,
+            reference_power,
+            out=np.zeros_like(reference_power, dtype=float),
+            where=reference_power > 0.0,
+        )
+    )
+
 
 def output_polarization_validation_table(path, omega_axis, polarization_labels, diagnostics_by_type):
     """Write projection- and frequency-resolved polarization fit errors."""
@@ -396,16 +718,10 @@ def output_polarization_validation_table(path, omega_axis, polarization_labels, 
 def print_polarization_validation_summary(polarization_labels, fit_diagnostics, cross_validation_diagnostics, active_signal_fraction):
     """Print compact full-response diagnostics for each polarization."""
     fit_relative = fit_diagnostics["relative_rms"][:, 0, 0, 0, 0, :]
-    cross_relative = cross_validation_diagnostics["relative_rms"][
-        :, 0, 0, 0, 0, :
-    ]
-    reference_rms = cross_validation_diagnostics["reference_rms"][
-        :, 0, 0, 0, 0, :
-    ]
+    cross_relative = cross_validation_diagnostics["relative_rms"][:, 0, 0, 0, 0, :]
+    reference_rms = cross_validation_diagnostics["reference_rms"][:, 0, 0, 0, 0, :]
     fit_global = fit_diagnostics["global_relative_rms"][:, 0, 0, 0, 0]
-    cross_global = cross_validation_diagnostics["global_relative_rms"][
-        :, 0, 0, 0, 0
-    ]
+    cross_global = cross_validation_diagnostics["global_relative_rms"][:, 0, 0, 0, 0]
 
     print(
         "IFT polarization validation for the full response "
@@ -450,12 +766,15 @@ def output_energy_table(path, directions, theta, phi,
 
 def run():
     # Electronic calculation.
-    main_dir = Path("./mcalc/FeCl2")
+    main_dir = Path("./mcalc/MnBi2Te4")
     wannierBasis={
         "Fe": (0, 1, 2),
+        "Mn": (0, 1, 2),
         "Cl": (0, 1),
+        "Bi": (0, 1),
+        "Te": (0, 1),
     }
-    reference_fermi = -2.5
+    reference_fermi = 0.95
     reference_direction = np.asarray([0.0, 0.0, 1.0])
     # Set this directly when the electron number is known.  Otherwise it is
     # inferred from reference_fermi at reference_direction.
@@ -467,10 +786,16 @@ def run():
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.linspace(0.5, 2.0, 21)
-    bz_grid = (48, 48, 1)
+    omega_axis = np.linspace(0.1, 3.0, 21)
+    bz_grid = (81, 81, 1)
     number_of_cores = 8
     torque_projection_list = [(0,(0,1,2,)),]
+    torque_projection_specs = [
+        {
+            "source": torque_projection_list,
+            "target": torque_projection_list,
+        },
+    ]
     ift_solver = solveIFTorque_LG_DM
     mag_type = "spin" # spin | orbital | total
 
@@ -481,6 +806,7 @@ def run():
     resume_completed_orientations = True
     validation_folds = 5
     validation_active_signal_fraction = 0.05
+    enforce_crystal_symmetry = True
 
     assert occupation_mode in {"zero-temperature", "fermi-dirac"}, "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
     if occupation_mode == "fermi-dirac" and electronic_kBT <= 0.0: raise ValueError("electronic_kBT must be positive in Fermi-Dirac mode.")
@@ -488,7 +814,9 @@ def run():
     minimum_recommended = 2 * harmonic_degree * (harmonic_degree + 2)
     assert number_of_orientations >= minimum_recommended, f"Use at least {minimum_recommended} orientations for a stable degree-{harmonic_degree} VSH fit."
 
-    model = None
+    model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
+    model.symmerizeCollinearAndSOI()
+    model.setFermi(reference_fermi)
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
     energy_sample_dir = main_dir / "AngleDependentEnergySamples"
@@ -539,20 +867,14 @@ def run():
         filling_source = "reference Fermi level"
     else:
         reference_theta, reference_phi = cartesian_to_spherical(reference_direction[None, :])
-        if model is None:
-            model = System_w90(mainDir=str(main_dir) + os.sep,
-                    projections=wannierBasis,
-                    ispin=2, spinSeparated=True)
-            model.symmerizeCollinearAndSOI()
-            model.setFermi(reference_fermi)
+        #exit()
         model.includeSOCFromSOI(
             theta=reference_theta[0],
             phi=reference_phi[0],
             strength=1.0,
             keepRegularSpinAxis=True,
         )
-        reference_calc = BZGridTask(model, solveEnergy,
-            args={},
+        reference_calc = BZGridTask(model, solveEnergy, args={},
             BZGrid=bz_grid, BZSymm=False,
             mode="run", ncores=number_of_cores)
         reference_energies = collect_bz_energies(reference_calc, bz_grid)
@@ -595,13 +917,9 @@ def run():
                 f"m=({direction[0]: .7f}, {direction[1]: .7f}, "
                 f"{direction[2]: .7f})"
             )
-            if model is None:
-                model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
-                model.symmerizeCollinearAndSOI()
-                model.setFermi(reference_fermi)
-            model.includeSOCFromSOI( theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
-            calc = BZGridTask(model, solveEnergy,
-                args={},
+            #exit()
+            model.includeSOCFromSOI(theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
+            calc = BZGridTask(model, solveEnergy, args={},
                 BZGrid=bz_grid, BZSymm=False,
                 mode="run", ncores=number_of_cores)
             energies = collect_bz_energies(calc, bz_grid)
@@ -634,11 +952,8 @@ def run():
             )
             print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] loaded {sample_path.name}")
         else:
-            print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] mu={chemical_potential[index]:.9f} eV")
-            if model is None:
-                model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
-                model.symmerizeCollinearAndSOI()
-                model.setFermi(reference_fermi)
+            print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] mu={chemical_potential[index]:.9f} eV")   
+            #exit() 
             model.includeSOCFromSOI(theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
             calc = BZGridTask(
                 model, ift_solver,
@@ -646,9 +961,7 @@ def run():
                     "fermi": np.asarray([chemical_potential[index]]),
                     "omega": omega_axis,
                     "mag type": mag_type,
-                    "projected shells for detecting torque":[
-                        {"source":torque_projection_list, "target":torque_projection_list},
-                    ],
+                    "projected shells for detecting torque": torque_projection_specs,
                     "finite temperature occupations": occupation_mode == "fermi-dirac",
                     "kBT": electronic_kBT,
                 },
@@ -662,21 +975,115 @@ def run():
 
     projected_chi_ift = np.asarray(projected_chi_samples)
     tangential_chi_ift = project_tangential(projected_chi_ift, directions)
-    #print(projected_chi_ift.shape)
-    #print(tangential_chi_ift.shape)
-    #exit()
 
     band_energy = free_energy
     energy_offset = np.mean(band_energy)
-    energy_expansion, energy_fit = SphericalHarmonicExpansion.fit(
-        directions, band_energy - energy_offset, harmonic_degree)
-    torque_expansion, torque_fit = VectorSphericalHarmonicExpansion.fit(
-            directions, tangential_chi_ift, harmonic_degree, project=False)
-    torque_reconstructed = torque_expansion.evaluate(directions)
-    torque_cross_validated, torque_cross_validation_fit = (
-        paired_antipodal_vsh_cross_validation(
-            directions, tangential_chi_ift, harmonic_degree, number_folds=validation_folds)
+
+    crystal_operations = crystal_symmetry_operations(model)
+    if enforce_crystal_symmetry:
+        projection_operation_groups = [crystal_operations]
+        projection_operation_groups.extend(
+            projection_preserving_operations(
+                crystal_operations,
+                projection,
+                model.atomicOrbInfoList,)
+            for projection in torque_projection_specs
+        )
+    else:
+        identity_operations = [
+            operation
+            for operation in crystal_operations
+            if np.allclose(
+                operation["polar_rotation"],
+                np.eye(3),
+                atol=1.0e-10,)
+        ]
+        assert len(identity_operations) == 1, "Expected exactly one identity crystal operation."
+        projection_operation_groups = [ identity_operations for _ in range(tangential_chi_ift.shape[3])]
+
+    assert len(projection_operation_groups) == tangential_chi_ift.shape[3], (
+            "The number of torque projection specifications does not match "
+            "the response projection axis.")
+    rotation_groups = [np.asarray(
+            [operation["polar_rotation"] for operation in operations],
+            dtype=float,) for operations in projection_operation_groups
+    ]
+    subgroup_indices = [
+        np.asarray([next(index for index, crystal_operation in enumerate(crystal_operations)
+                    if crystal_operation is operation) for operation in operations], dtype=int,)
+        for operations in projection_operation_groups
+    ]
+
+    full_rotations = rotation_groups[0]
+    unconstrained_torque_expansion, unconstrained_torque_fit = (
+        VectorSphericalHarmonicExpansion.fit(
+            directions,
+            tangential_chi_ift,
+            harmonic_degree,
+            project=False,
+        )
     )
+    if enforce_crystal_symmetry:
+        energy_expansion, energy_fit = (
+            SphericalHarmonicExpansion.fit_scalar_axial_symmetry(
+                directions,
+                band_energy - energy_offset,
+                harmonic_degree,
+                full_rotations,
+            )
+        )
+        torque_expansion, torque_fit = (
+            fit_projection_resolved_ift_symmetry(
+                directions,
+                tangential_chi_ift,
+                harmonic_degree,
+                rotation_groups,
+            )
+        )
+    else:
+        energy_expansion, energy_fit = SphericalHarmonicExpansion.fit(
+            directions,
+            band_energy - energy_offset,
+            harmonic_degree,
+        )
+        torque_expansion = unconstrained_torque_expansion
+        torque_fit = unconstrained_torque_fit
+    torque_reconstructed = torque_expansion.evaluate(directions)
+    unconstrained_torque_reconstructed = (
+        unconstrained_torque_expansion.evaluate(directions)
+    )
+    torque_fit_global_relative_rms = global_relative_error_by_projection(tangential_chi_ift, torque_reconstructed)
+    unconstrained_torque_fit_global_relative_rms = global_relative_error_by_projection(tangential_chi_ift, unconstrained_torque_reconstructed)
+    
+    torque_cross_validated, torque_cross_validation_fit = (
+        projected_ift_cross_validation(
+            directions,
+            tangential_chi_ift,
+            harmonic_degree,
+            rotation_groups,
+            number_folds=validation_folds,
+        )
+    )
+    covariance_test_directions = fibonacci_sphere(64)
+    pre_enforcement_symmetry_covariance_errors = (
+        ift_symmetry_covariance_diagnostics(
+            unconstrained_torque_expansion,
+            covariance_test_directions,
+            rotation_groups,
+        )
+    )
+    symmetry_covariance_errors = ift_symmetry_covariance_diagnostics(
+        torque_expansion,
+        covariance_test_directions,
+        rotation_groups,
+    )
+    pre_enforcement_symmetry_covariance_rms = np.asarray([
+            np.sqrt(np.mean(np.square(errors))) for errors in pre_enforcement_symmetry_covariance_errors])
+    pre_enforcement_symmetry_covariance_max = np.asarray([
+            np.max(errors) for errors in pre_enforcement_symmetry_covariance_errors])
+    symmetry_covariance_rms = np.asarray([
+            np.sqrt(np.mean(np.square(errors))) for errors in symmetry_covariance_errors])
+    symmetry_covariance_max = np.asarray([np.max(errors) for errors in symmetry_covariance_errors])
     polarization_labels, polarization_vectors = optical_polarization_states()
     polarization_fit = polarization_contracted_diagnostics( tangential_chi_ift, torque_reconstructed, polarization_vectors)
     polarization_cross_validation = polarization_contracted_diagnostics(
@@ -703,14 +1110,24 @@ def run():
         main_dir / "AngleDependentIFTFitValidation.txt",
         omega_axis,
         polarization_labels,
-        {"fit": polarization_fit,
-         "cross_validation": polarization_cross_validation,},
+        {
+            "fit": polarization_fit,
+            "cross_validation": polarization_cross_validation,
+        },
     )
+
+    subgroup_counts = np.asarray([len(rotations) for rotations in rotation_groups], dtype=int)
+    maximum_subgroup_size = int(np.max(subgroup_counts))
+    subgroup_rotations = np.full((len(rotation_groups), maximum_subgroup_size, 3, 3), np.nan)
+    subgroup_operation_indices = np.full((len(rotation_groups), maximum_subgroup_size), -1, dtype=int)
+    for iprojection, (rotations, indices) in enumerate(zip(rotation_groups, subgroup_indices)):
+        subgroup_rotations[iprojection, : len(rotations)] = rotations
+        subgroup_operation_indices[iprojection, : len(indices)] = indices
 
     output_path = main_dir / "AngleDependentDynamicsMap.npz"
     np.savez_compressed(
         output_path,
-        format_version=2,
+        format_version=3,
         directions=directions,
         orientation_weights=np.full(number_of_orientations, 4.*np.pi/number_of_orientations),
         theta=theta_axis, phi=phi_axis, reference_direction=reference_direction,
@@ -745,10 +1162,29 @@ def run():
         torque_fit_condition=torque_fit["condition"],
         torque_fit_rms=torque_fit["rms"],
         torque_fit_relative_rms=torque_fit["relative_rms"],
+        torque_fit_global_relative_rms_by_projection=torque_fit_global_relative_rms,
+        torque_unconstrained_fit_rank=unconstrained_torque_fit["rank"],
+        torque_unconstrained_fit_condition=unconstrained_torque_fit["condition"],
+        torque_unconstrained_fit_rms=unconstrained_torque_fit["rms"],
+        torque_unconstrained_fit_relative_rms=unconstrained_torque_fit["relative_rms"],
+        torque_unconstrained_fit_global_relative_rms_by_projection=unconstrained_torque_fit_global_relative_rms,
         torque_cross_validation_prediction=torque_cross_validated,
         torque_cross_validation_folds=validation_folds,
         torque_cross_validation_fold_rank=torque_cross_validation_fit["rank"],
         torque_cross_validation_fold_condition=torque_cross_validation_fit["condition"],
+        crystal_symmetry_enforced=enforce_crystal_symmetry,
+        crystal_symmetry_polar_rotations=np.asarray([operation["polar_rotation"] for operation in crystal_operations]),
+        crystal_symmetry_fractional_rotations=np.asarray([operation["fractional_rotation"] for operation in crystal_operations]),
+        crystal_symmetry_translations=np.asarray([operation["translation"] for operation in crystal_operations]),
+        crystal_symmetry_atom_maps=np.asarray([operation["atom_map"] for operation in crystal_operations]),
+        torque_projection_symmetry_operation_counts=subgroup_counts,
+        torque_projection_symmetry_operation_indices=subgroup_operation_indices,
+        torque_projection_symmetry_polar_rotations=subgroup_rotations,
+        torque_projection_specs_json=json.dumps(torque_projection_specs, sort_keys=True),
+        torque_pre_enforcement_symmetry_covariance_relative_rms=pre_enforcement_symmetry_covariance_rms,
+        torque_pre_enforcement_symmetry_covariance_relative_max=pre_enforcement_symmetry_covariance_max,
+        torque_symmetry_covariance_relative_rms=symmetry_covariance_rms,
+        torque_symmetry_covariance_relative_max=symmetry_covariance_max,
         polarization_labels=polarization_labels,
         polarization_vectors=polarization_vectors,
         polarization_active_signal_fraction=validation_active_signal_fraction,
@@ -769,7 +1205,7 @@ def run():
     )
 
     metadata = {
-        "format_version": 2,
+        "format_version": 3,
         "sampling": "equal-area antipodal Fibonacci sphere",
         "number_of_orientations": number_of_orientations,
         "harmonic_degree": harmonic_degree,
@@ -819,6 +1255,25 @@ def run():
             "IFT values remain electronic response coefficients. Contract "
             "with the complex optical field and convert units before LLG."
         ),
+        "crystal_symmetry": (
+            "Scalar energy and tangent IFT VSH fits are augmented by complete "
+            "spatial-symmetry orbits. The total-torque slot uses the full "
+            "crystallographic point group. Each projected slot uses the "
+            "subgroup that preserves its source and target atom-shell sets "
+            "separately. Electric-field axes transform as polar vectors; "
+            "moment direction and torque transform as axial vectors."
+        ),
+        "crystal_symmetry_enforced": enforce_crystal_symmetry,
+        "crystal_point_group_order": len(crystal_operations),
+        "torque_projection_specs": torque_projection_specs,
+        "torque_projection_subgroup_orders": subgroup_counts.tolist(),
+        "symmetry_diagnostics": (
+            "The pre-enforcement covariance residual is measured from the "
+            "ordinary unconstrained VSH fit. The post-enforcement residual "
+            "is measured from the saved symmetry-constrained fit. Global "
+            "fit errors combine all tensor entries and frequencies within "
+            "each torque-projection slot."
+        ),
         "polarization_validation": (
             "The fit metrics reconstruct all samples. Cross-validation uses "
             f"{validation_folds} folds and keeps each antipodal pair in the "
@@ -833,14 +1288,35 @@ def run():
 
     relative_energy_meV = (band_energy - np.min(band_energy)) * 1000.0
     torque_relative_rms = np.asarray(torque_fit["relative_rms"])
+    torque_fit_condition = np.atleast_1d(torque_fit["condition"])
     print(f"Saved {output_path}")
     print(f"Band-energy anisotropy range: {np.ptp(relative_energy_meV):.9e} meV/cell")
     print(f"Energy reversal-odd residual: RMS={np.sqrt(np.mean(energy_reversal_odd_meV**2)):.6e}, max={np.max(np.abs(energy_reversal_odd_meV)):.6e} meV/cell")
     print(f"Energy fit: condition={energy_fit['condition']:.6e}, relative RMS={float(energy_fit['relative_rms']):.6e}")
     print(
-        f"IFT VSH fit: condition={torque_fit['condition']:.6e}, "
+        "IFT VSH fit: condition range="
+        f"{np.min(torque_fit_condition):.6e}--"
+        f"{np.max(torque_fit_condition):.6e}, "
         f"median relative RMS={np.median(torque_relative_rms):.6e}, "
         f"maximum relative RMS={np.max(torque_relative_rms):.6e}"
+    )
+    print(
+        "IFT symmetry before enforcement: relative RMS="
+        f"{pre_enforcement_symmetry_covariance_rms.tolist()}, "
+        "relative max="
+        f"{pre_enforcement_symmetry_covariance_max.tolist()}"
+    )
+    print(
+        "IFT symmetry after enforcement: subgroup orders="
+        f"{subgroup_counts.tolist()}, relative RMS="
+        f"{symmetry_covariance_rms.tolist()}, relative max="
+        f"{symmetry_covariance_max.tolist()}"
+    )
+    print(
+        "IFT global fit error by projection: unconstrained="
+        f"{unconstrained_torque_fit_global_relative_rms.tolist()}, "
+        "symmetry-constrained="
+        f"{torque_fit_global_relative_rms.tolist()}"
     )
     print(
         "IFT VSH cross-validation: "
