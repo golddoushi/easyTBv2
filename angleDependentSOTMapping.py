@@ -816,6 +816,7 @@ def run():
 
     model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
     model.symmerizeCollinearAndSOI()
+    model.getExchangeR(provenance="collinear spin difference")
     model.setFermi(reference_fermi)
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)

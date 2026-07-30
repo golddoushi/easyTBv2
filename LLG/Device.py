@@ -429,7 +429,7 @@ class IFTDevice:
         return self.tensor_expansion.evaluate(direction[None, :])[0]
 
     def ift_response(self, m) -> np.ndarray:
-        """Return the polarization-contracted IFT response coefficient."""
+        """Return the polarization-contracted magnetic-order torque coefficient."""
         direction = np.asarray(m, dtype=float)
         response = self.ift_expansion.evaluate(direction[None, :])[0]
         return np.real(response)
@@ -439,9 +439,16 @@ class IFTDevice:
         return self.drive_torque(m, self.light_pulse(time))
 
     def drive_torque(self, m, drive_amplitude=1.0) -> np.ndarray:
-        """Return IFT at a specified field amplitude in V/angstrom."""
+        """
+        Return the IFT contribution to d(m)/dt at a specified field amplitude.
+
+        The electronic response stores g*mu_B times the angular-momentum
+        torque transferred to the magnetic order. The LLG variable points
+        along the magnetic moment, opposite to its electronic angular
+        momentum, which supplies the reaction minus sign below.
+        """
         amplitude = complex(drive_amplitude)
-        return self.ift_response(m) * abs(amplitude) ** 2 / (HBAR_EV_FS * self.moment_magnitude_muB)
+        return -self.ift_response(m) * abs(amplitude) ** 2 / (HBAR_EV_FS * self.moment_magnitude_muB)
     
     def _optical_torque(self, m, time) -> np.ndarray:
         return self.optical_torque(m, time)

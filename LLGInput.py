@@ -147,7 +147,9 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         data_directory=mainDir,
         omega0=omega0,
         polarization=polarization,
-        torque_projection=1,
+        # A single-moment LLG represents the complete cell magnetic mode.
+        # Atom-projected exchange torques require a multisublattice LLG.
+        torque_projection=0,
         light_pulse=pulse,
         external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
         alpha=0.001,

@@ -369,8 +369,8 @@ class SpinTorque(Spin):
         In eigen-basis, H is diagonalized eigen-energy and mu_S is computed
         in the parent Spin class in units of mu_B.
 
-        NOTE: the full spin torque includes exchange torque \Tau_{XC}, spin-orbital-torque \Tau_{SO}
-        and the spin-flux \Nabla \cdot J_S. Only \Tau_{XC} corresponds to the transfer of electron spin
+        NOTE: the full spin torque includes exchange torque Tau_XC, spin-orbit torque Tau_SO,
+        and the spin-flux divergence. Only Tau_XC corresponds to the transfer of electron spin
         to the macroscopic spin magnetization order. 
 
         Indexing
@@ -429,13 +429,20 @@ class SpinTorque(Spin):
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
         '''
-        Compute the exchange part of the spin torque in the eigen-basis.
+        Compute the magnetic-order exchange torque in the eigen-basis.
         PHYSICAL REVIEW RESEARCH 4, L042022 (2022), eq. S11
-        Describes transfer of spin angular momentum of electrons to the magnetic order parameter
+        Describes transfer of spin angular momentum from electrons to the
+        magnetic order parameter.
 
-        T_XC = -i [mu_S, H_XC], where H_XC is model.exchange_R. Unlike the
-        total Hamiltonian, H_XC is generally not diagonal in the eigen-basis,
-        so the commutator must be evaluated by matrix multiplication.
+        For mu_S = -g_S mu_B S/hbar, the paper's
+        T_M = -[S,H_XC]/(i hbar) is represented in magnetic-moment units by
+        -i[mu_S,H_XC] = g_S mu_B T_M. H_XC is model.exchange_R. Unlike the
+        total Hamiltonian, it is generally not diagonal in the eigen-basis,
+        so the commutator is evaluated by matrix multiplication.
+
+        This is an energy-like torque in mu_B eV. Converting it to the time
+        derivative of a magnetic-moment direction requires the gyromagnetic
+        reaction sign; IFTDevice performs that conversion.
 
         The exposed spinTorque_K and projected_spinTorque_K_list attributes
         intentionally match SpinTorque, allowing response classes to switch
@@ -3171,7 +3178,7 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
         self.projected_sigma = self.projected_chi_IFT
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
-class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
+class InverseFaradayTorque_VG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:
