@@ -431,7 +431,8 @@ def output_energy_table(path, directions, theta, phi,
     relative_energy_meV = (free_energy - np.min(free_energy)) * 1000.0
     with open(path, "w", encoding="utf-8") as output:
         output.write(
-            "# index mx my mz theta phi internal_energy_eV_per_cell "
+            "#index                mx                my                mz "
+            "            theta               phi internal_energy_eV_per_cell "
             "free_energy_eV_per_cell relative_free_energy_meV_per_cell "
             "chemical_potential_eV "
             "highest_occupied_eV lowest_unoccupied_eV\n"
@@ -441,17 +442,21 @@ def output_energy_table(path, directions, theta, phi,
                 f"{index:6d}"
                 f"{direction[0]:18.10e}{direction[1]:18.10e}"
                 f"{direction[2]:18.10e}{theta[index]:18.10e}"
-                f"{phi[index]:18.10e}{internal_energy[index]:22.12e}"
-                f"{free_energy[index]:22.12e}"
-                f"{relative_energy_meV[index]:22.12e}"
-                f"{chemical_potential[index]:18.10e}"
-                f"{highest_occupied[index]:18.10e}"
-                f"{lowest_unoccupied[index]:18.10e}\n"
+                f"{phi[index]:18.10e}      {internal_energy[index]:22.12e}"
+                f"  {free_energy[index]:22.12e}"
+                f"            {relative_energy_meV[index]:22.12e}"
+                f"    {chemical_potential[index]:18.10e}"
+                f"  {highest_occupied[index]:18.10e}"
+                f"   {lowest_unoccupied[index]:18.10e}\n"
             )
 
 def run():
     # Electronic calculation.
     main_dir = Path("./mcalc/MnBi2Te4")
+    wannierBasis={
+        "Fe": (0, 1, 2),
+        "Cl": (0, 1),
+    }
     reference_fermi = 0.95
     reference_direction = np.asarray([0.0, 0.0, 1.0])
     # Set this directly when the electron number is known.  Otherwise it is
@@ -479,19 +484,12 @@ def run():
     validation_folds = 5
     validation_active_signal_fraction = 0.05
 
-    if occupation_mode not in {"zero-temperature", "fermi-dirac"}:
-        raise ValueError(
-            "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
-        )
-    if occupation_mode == "fermi-dirac" and electronic_kBT <= 0.0:
-        raise ValueError("electronic_kBT must be positive in Fermi-Dirac mode.")
+    assert occupation_mode in {"zero-temperature", "fermi-dirac"}, "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
+    if occupation_mode == "fermi-dirac" and electronic_kBT <= 0.0: raise ValueError("electronic_kBT must be positive in Fermi-Dirac mode.")
 
     minimum_recommended = 2 * harmonic_degree * (harmonic_degree + 2)
-    if number_of_orientations < minimum_recommended:
-        raise ValueError(
-            f"Use at least {minimum_recommended} orientations for a stable "
-            f"degree-{harmonic_degree} VSH fit."
-        )
+    assert number_of_orientations >= minimum_recommended, f"Use at least {minimum_recommended} orientations for a stable degree-{harmonic_degree} VSH fit."
+
     model = None
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
@@ -512,16 +510,8 @@ def run():
     reference_path = energy_sample_dir / "reference_filling.npz"
     if fixed_electrons_per_cell is not None:
         target_electrons_per_cell = float(fixed_electrons_per_cell)
-        if not 0.0 < target_electrons_per_cell < model.norbs:
-            raise ValueError(
-                "fixed_electrons_per_cell must lie between zero and the "
-                "number of model orbitals."
-            )
         filling_source = "explicit electrons/cell"
-        print(
-            "Using explicit filling: "
-            f"{target_electrons_per_cell:.12f} electrons/cell"
-        )
+        print(f"Using explicit filling: {target_electrons_per_cell:.12f} electrons/cell")
     elif resume_completed_orientations and reference_path.exists():
         with np.load(reference_path) as data:
             reference_matches = (
@@ -547,25 +537,14 @@ def run():
             target_electrons_per_cell = float(
                 data["target_electrons_per_cell"]
             )
-        print(
-            "Loaded reference filling: "
-            f"{target_electrons_per_cell:.12f} electrons/cell"
-        )
+        print(f"Loaded reference filling: {target_electrons_per_cell:.12f} electrons/cell")
         filling_source = "reference Fermi level"
     else:
         reference_theta, reference_phi = cartesian_to_spherical(reference_direction[None, :])
         if model is None:
-            model = System_w90(
-                    mainDir=str(main_dir) + os.sep,
-                    cutoff=-0.002,
-                    poscar="POSCAR",
-                    projections={
-                        "Fe": (0, 1, 2),
-                        "Cl": (0, 1),
-                    },
-                    ispin=2,
-                    spinSeparated=True,
-            )
+            model = System_w90(mainDir=str(main_dir) + os.sep,
+                    projections=wannierBasis,
+                    ispin=2, spinSeparated=True)
             model.symmerizeCollinearAndSOI()
             model.setFermi(reference_fermi)
         model.includeSOCFromSOI(
@@ -605,13 +584,8 @@ def run():
         sample_path = energy_sample_dir / f"orientation_{index:04d}.npz"
         if resume_completed_orientations and sample_path.exists():
             sample = load_energy_sample(
-                sample_path,
-                direction,
-                np.asarray(bz_grid),
-                target_electrons_per_cell,
-                occupation_mode,
-                electronic_kBT,
-            )
+                sample_path, direction, np.asarray(bz_grid),
+                target_electrons_per_cell, occupation_mode, electronic_kBT)
             print(
                 f"[energy {index + 1:4d}/{number_of_orientations:4d}] "
                 f"loaded {sample_path.name}, "
@@ -623,7 +597,10 @@ def run():
                 f"m=({direction[0]: .7f}, {direction[1]: .7f}, "
                 f"{direction[2]: .7f})"
             )
-            assert model is not None
+            if model is None:
+                model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
+                model.symmerizeCollinearAndSOI()
+                model.setFermi(reference_fermi)
             model.includeSOCFromSOI( theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
             calc = BZGridTask(model, solveEnergy,
                 args={},
@@ -660,7 +637,10 @@ def run():
             print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] loaded {sample_path.name}")
         else:
             print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] mu={chemical_potential[index]:.9f} eV")
-            assert model is not None
+            if model is None:
+                model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
+                model.symmerizeCollinearAndSOI()
+                model.setFermi(reference_fermi)
             model.includeSOCFromSOI(theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
             calc = BZGridTask(
                 model, ift_solver,
@@ -684,6 +664,9 @@ def run():
 
     projected_chi_ift = np.asarray(projected_chi_samples)
     tangential_chi_ift = project_tangential(projected_chi_ift, directions)
+    #print(projected_chi_ift.shape)
+    #print(tangential_chi_ift.shape)
+    #exit()
 
     band_energy = free_energy
     energy_offset = np.mean(band_energy)
