@@ -146,9 +146,7 @@ def project_tangential(values, directions) -> np.ndarray:
     unit = _directions(directions)
     vectors = np.asarray(values)
     if vectors.shape[0] != len(unit) or vectors.shape[-1] != 3:
-        raise ValueError(
-            "values must have shape (norientation, ..., 3)."
-        )
+        raise ValueError("values must have shape (norientation, ..., 3).")
     radial = np.einsum("ni,n...i->n...", unit, vectors)
     return vectors - radial[..., None] * unit[
         (slice(None),) + (None,) * (vectors.ndim - 2) + (slice(None),)

@@ -451,8 +451,8 @@ def output_energy_table(path, directions, theta, phi,
 
 def run():
     # Electronic calculation.
-    main_dir = Path("./mcalc/FeCl2")
-    reference_fermi = -2.5
+    main_dir = Path("./mcalc/MnBi2Te4")
+    reference_fermi = 0.95
     reference_direction = np.asarray([0.0, 0.0, 1.0])
     # Set this directly when the electron number is known.  Otherwise it is
     # inferred from reference_fermi at reference_direction.
@@ -462,10 +462,10 @@ def run():
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
-    moment_magnitude_muB = 4 # mu_B
+    moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.linspace(0.5, 2.0, 21)
-    bz_grid = (48, 48, 1)
+    omega_axis = np.linspace(0.1, 3.0, 21)
+    bz_grid = (81, 81, 1)
     number_of_cores = 8
     torque_projection_list = [(0,(0,1,2,)),]
     ift_solver = solveIFTorque_LG_DM
@@ -492,21 +492,7 @@ def run():
             f"Use at least {minimum_recommended} orientations for a stable "
             f"degree-{harmonic_degree} VSH fit."
         )
-
-    model = System_w90(
-        mainDir=str(main_dir) + os.sep,
-        cutoff=-0.002,
-        poscar="POSCAR",
-        projections={
-            "Fe": (0, 1, 2),
-            "Cl": (0, 1),
-        },
-        ispin=2,
-        spinSeparated=True,
-    )
-    model.symmerizeCollinearAndSOI()
-    model.setFermi(reference_fermi)
-
+    model = None
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
     energy_sample_dir = main_dir / "AngleDependentEnergySamples"
@@ -567,28 +553,34 @@ def run():
         )
         filling_source = "reference Fermi level"
     else:
-        reference_theta, reference_phi = cartesian_to_spherical(
-            reference_direction[None, :]
-        )
+        reference_theta, reference_phi = cartesian_to_spherical(reference_direction[None, :])
+        if model is None:
+            model = System_w90(
+                    mainDir=str(main_dir) + os.sep,
+                    cutoff=-0.002,
+                    poscar="POSCAR",
+                    projections={
+                        "Fe": (0, 1, 2),
+                        "Cl": (0, 1),
+                    },
+                    ispin=2,
+                    spinSeparated=True,
+            )
+            model.symmerizeCollinearAndSOI()
+            model.setFermi(reference_fermi)
         model.includeSOCFromSOI(
             theta=reference_theta[0],
             phi=reference_phi[0],
             strength=1.0,
             keepRegularSpinAxis=True,
         )
-        reference_calc = BZGridTask(
-            model,
-            solveEnergy,
+        reference_calc = BZGridTask(model, solveEnergy,
             args={},
-            BZGrid=bz_grid,
-            BZSymm=False,
-            mode="run",
-            ncores=number_of_cores,
-        )
+            BZGrid=bz_grid, BZSymm=False,
+            mode="run", ncores=number_of_cores)
         reference_energies = collect_bz_energies(reference_calc, bz_grid)
         reference_occupations = fermiDiracOccupations(
-            reference_energies,
-            [reference_fermi],
+            reference_energies, [reference_fermi],
             electronic_kBT if occupation_mode == "fermi-dirac" else 0.0,
         )[0]
         target_electrons_per_cell = (
@@ -605,10 +597,7 @@ def run():
             target_electrons_per_cell=target_electrons_per_cell,
         )
         temporary.replace(reference_path)
-        print(
-            "Determined reference filling: "
-            f"{target_electrons_per_cell:.12f} electrons/cell"
-        )
+        print(f"Determined reference filling: {target_electrons_per_cell:.12f} electrons/cell")
         filling_source = "reference Fermi level"
 
     # Pass 1: determine mu(m) and the fixed-number energy landscape.
@@ -634,6 +623,7 @@ def run():
                 f"m=({direction[0]: .7f}, {direction[1]: .7f}, "
                 f"{direction[2]: .7f})"
             )
+            assert model is not None
             model.includeSOCFromSOI( theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
             calc = BZGridTask(model, solveEnergy,
                 args={},
@@ -642,10 +632,7 @@ def run():
             energies = collect_bz_energies(calc, bz_grid)
             sample = fixed_number_electronic_state(
                 energies, target_electrons_per_cell, number_kpoints, occupation_mode, electronic_kBT)
-            save_energy_sample(
-                sample_path,
-                direction, theta, phi,
-                np.asarray(bz_grid),
+            save_energy_sample(sample_path, direction, theta, phi, np.asarray(bz_grid),
                 target_electrons_per_cell, occupation_mode, electronic_kBT, sample)
 
         internal_energy[index] = sample["internal_energy"]
@@ -673,6 +660,7 @@ def run():
             print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] loaded {sample_path.name}")
         else:
             print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] mu={chemical_potential[index]:.9f} eV")
+            assert model is not None
             model.includeSOCFromSOI(theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
             calc = BZGridTask(
                 model, ift_solver,

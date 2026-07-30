@@ -106,7 +106,7 @@ def step_pulse(t_pulse_on, t_pulse_off) -> Callable[[float], float]:
         return float(t_pulse_on <= time < t_pulse_off)
     return evelope
 
-def run_ift_example(data_directory="mcalc/MnBi2Te4", omega0=1.0, polarization="xy+",show_torque_map=True):
+def run_ift_example(data_directory="./", omega0=1.0, polarization="xy+",show_torque_map=True):
     """
     Plot one optical-pulse trajectory from a saved angular electronic map.
 
@@ -179,4 +179,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(show_torque_map=True)
+    run_ift_example(data_directory="mcalc/MnBi2Te4",show_torque_map=True)

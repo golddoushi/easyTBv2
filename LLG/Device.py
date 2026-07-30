@@ -17,14 +17,12 @@ def _as_field(value) -> Field:
         return Field(value)
     raise TypeError("additional_field must be a Field or callable.")
 
-
 def _as_torque(value) -> Torque:
     if isinstance(value, Torque):
         return value
     if callable(value):
         return Torque(value)
     raise TypeError("additional_torque must be a Torque or callable.")
-
 
 def _polarization_vector(polarization) -> np.ndarray:
     aliases = {
@@ -65,7 +63,6 @@ def _polarization_vector(polarization) -> np.ndarray:
         raise ValueError("polarization must be finite and nonzero.")
     return vector / norm
 
-
 @dataclass(frozen=True)
 class TangentTorqueMap:
     """Drive-torque vector field sampled on the magnetic orientation sphere."""
@@ -85,7 +82,6 @@ class TangentTorqueMap:
     def components(self) -> np.ndarray:
         """Return ``(T_theta, T_phi)`` on the last axis."""
         return np.stack((self.theta_component, self.phi_component), axis=-1)
-
 
 def sample_tangent_torque_map(
     device,
@@ -174,8 +170,6 @@ def sample_tangent_torque_map(
         phi_component=np.sum(cartesian * phi_basis, axis=-1),
     )
 
-
-
 class SOTDevice:
     def __init__(
         self,
@@ -241,7 +235,6 @@ class SOTDevice:
         self.time = time_axis[-1]
         return time_axis, trajectory
 
-
 class IFTDevice:
     """
     Couple an angle-dependent electronic IFT map to a single-moment LLG.
@@ -297,34 +290,22 @@ class IFTDevice:
         with np.load(path) as data:
             missing = self.REQUIRED_MAP_KEYS.difference(data.files)
             if missing:
-                raise RuntimeError(
-                    f"{path} lacks required map arrays: {sorted(missing)}"
-                )
+                raise RuntimeError(f"{path} lacks required map arrays: {sorted(missing)}")
             harmonic_degree = int(data["harmonic_degree"])
             energy_modes = data["energy_harmonic_modes"].copy()
-            energy_coefficients = data[
-                "energy_harmonic_coefficients"
-            ].copy()
+            energy_coefficients = data["energy_harmonic_coefficients"].copy()
             torque_modes = data["torque_harmonic_modes"].copy()
             torque_coefficients = data["torque_vsh_coefficients"].copy()
             self.omega_axis_eV = data["omega_axis_eV"].copy()
-            stored_moment = (
-                float(data["moment_magnitude_muB"])
-                if "moment_magnitude_muB" in data.files
-                else np.nan
-            )
+            stored_moment = float(data["moment_magnitude_muB"]) if "moment_magnitude_muB" in data.files else np.nan
 
         if moment_magnitude_muB is None:
             moment_magnitude_muB = stored_moment
         self.moment_magnitude_muB = float(moment_magnitude_muB)
-        if (
-            not np.isfinite(self.moment_magnitude_muB)
-            or self.moment_magnitude_muB <= 0.0
-        ):
+        if not np.isfinite(self.moment_magnitude_muB) or self.moment_magnitude_muB <= 0.0:
             raise ValueError(
                 "A positive moment_magnitude_muB is required either as an "
-                "IFTDevice argument or in the saved map."
-            )
+                "IFTDevice argument or in the saved map.")
 
         self.energy_expansion = SphericalHarmonicExpansion(
             harmonic_degree,
@@ -339,12 +320,7 @@ class IFTDevice:
                 "(family, mode, drive_proj_1, drive_proj_2, torque_proj, "
                 "fermi, omega, drive_1, drive_2)."
             )
-        selection = (
-            drive_projection_1,
-            drive_projection_2,
-            torque_projection,
-            fermi_index,
-        )
+        selection = (drive_projection_1, drive_projection_2, torque_projection, fermi_index)
         selection_shape = torque_coefficients.shape[2:6]
         for index, size, name in zip(
             selection,
