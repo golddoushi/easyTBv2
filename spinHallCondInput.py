@@ -31,8 +31,8 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, 
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
-    model=System_w90(
+    mainDir="./mcalc/2D-random-spin-ife/"
+    model=System_tb(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -68,12 +68,13 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        spinSeparated=True,
+        #spinSeparated=True,
     )
-    #'''
+    '''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
+    model.getExchangeR(provenance="collinear spin difference")
     model.includeSOCFromSOI(
         theta=np.pi/2,phi=0,strength=1,keepRegularSpinAxis=True,
     )#'''
@@ -157,7 +158,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
+    #fermi=-2.5         # VASP 2H-FeCl2 U=2.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -167,11 +168,11 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    #fermi=0            # model hamiltonian
+    fermi=0            # model hamiltonian
     
     #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.linspace(0.5,2.0,21)
+    omegaAxis=np.linspace(1.0,2.0,51)
     model.setFermi(fermi)
     
     '''
@@ -231,10 +232,10 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(48,48,1)
+    BZGrid=(8,8,1)
     BZSymm=False
-    recordOmegaIndexList=[41]
-    recordFermiIndexList=[0]
+    recordOmegaIndexList=[]
+    recordFermiIndexList=[]
     BZDistributionRepeat=(1,1,0)
     calc=BZGridTask(model, solveIFTorque_LG_DM,
                     args={"fermi":fermiAxis, 
@@ -251,9 +252,9 @@ def run():
                           'record frequency ids':recordOmegaIndexList,
                           'record fermi ids':recordFermiIndexList,
 
-                          "mag type": "total", # Type of Inversed Faraday effect, can be spin | orbital | total
+                          "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
 
-                          "finite temperature occupations": True, "kBT":0.026,
+                          "finite temperature occupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',

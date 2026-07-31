@@ -124,8 +124,8 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     The supplied pulse is therefore the slowly varying electric-field
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
-    center_times = [10_000.0 + 100_000.0 * ipulse for ipulse in range(30)]
-    peak_field=0.035
+    center_times = [2_000_000.0 + 100_000.0 * ipulse for ipulse in range(20)]
+    peak_field=0.06
     intensity_fwhm = 50.0
     intensity=0.5*speed_of_light*epsilon_0*(peak_field*1E10)**2
     fluence=intensity*intensity_fwhm*np.sqrt(np.pi/(4*np.log(2)))*1E-15
@@ -140,7 +140,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         center_times=center_times,
         intensity_fwhm=intensity_fwhm,
         fine_step=10.0,
-        coarse_step=2500.0,
+        coarse_step=1500.0,
         window_half_width_in_fwhm=3.0,
     )
     device = IFTDevice(
@@ -151,13 +151,13 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         # Atom-projected exchange torques require a multisublattice LLG.
         torque_projection=0,
         light_pulse=pulse,
-        external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
-        alpha=0.001,
+        external_field=np.array([1.0, 0.0, 0.0]),  # in Tesla
+        alpha=0.01,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        #t_total=5000,
+        #t_total=20000,
         t_total=8_000_000.0,
         time_step=time_step,
     )
@@ -191,5 +191,7 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.8,polarization="xy+",show_torque_map=True)
-    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=1.7,polarization="xy+",show_torque_map=True)
+    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.68,polarization="xy-",show_torque_map=True)
+    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=1.695,polarization="xy-",show_torque_map=True)
+    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.13,polarization="xy-",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.855,polarization="xy-",show_torque_map=True)

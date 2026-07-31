@@ -484,27 +484,29 @@ def solveIFE_BlochAcceleration_TDSE(param):
 def solveIFTorque_TDSE(param):
     torqueProjectionList = param.get('projected shells for detecting torque',
                                      param.get('projected shells for detecting spin accumulation', []))
-    calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
-                                   include_offdiag=param.get('include offdiag', True),
-                                   E0=param.get('E0', 0.001),
-                                   n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
-                                   )
+    calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
+                                     eta=param.get('eta', 0.06582),
+                                     fermiList=param['fermi'],omegaList=param['omega'],
+                                     torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
+                                     include_offdiag=param.get('include offdiag', True),
+                                     E0=param.get('E0', 0.001),
+                                     n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
+                                    )
     return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,"energies":calc.energies,
             "iq": param["iq"]}
 
 def solveIFTorque_VG_DM(param):
     torqueProjectionList = param.get('projected shells for detecting torque',
                                      param.get('projected shells for detecting spin accumulation', []))
-    calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
-                                   responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
-                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
-                                   kBT=param.get('kBT', 0.026),verbose=param["verbose"],
-                                   )
+    calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
+                                     eta=param.get('eta', 0.06582),
+                                     fermiList=param['fermi'],omegaList=param['omega'],
+                                     torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
+                                     responseOmegaIndexList=param.get('record frequency ids', []),
+                                     responseFermiIndexList=param.get('record fermi ids', None),
+                                     finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                     kBT=param.get('kBT', 0.026),verbose=param["verbose"],
+                                    )
     return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}
@@ -512,14 +514,15 @@ def solveIFTorque_VG_DM(param):
 def solveIFTorque_LG_DM(param):
     torqueProjectionList = param.get('projected shells for detecting torque',
                                      param.get('projected shells for detecting spin accumulation', []))
-    calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
-                                   fermiList=param['fermi'],omegaList=param['omega'],
-                                   torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
-                                   responseOmegaIndexList=param.get('record frequency ids', []),
-                                   responseFermiIndexList=param.get('record fermi ids', None),
-                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
-                                   kBT=param.get('kBT', 0.026),verbose=param["verbose"],
-                                   )
+    calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
+                                     eta=param.get('eta', 0.06582),
+                                     fermiList=param['fermi'],omegaList=param['omega'],
+                                     torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
+                                     responseOmegaIndexList=param.get('record frequency ids', []),
+                                     responseFermiIndexList=param.get('record fermi ids', None),
+                                     finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                     kBT=param.get('kBT', 0.026),verbose=param["verbose"],
+                                    )
     return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
             "iq": param["iq"]}

@@ -28,20 +28,16 @@ def collect_bz_energies(calc, bz_grid):
 
     for result in calc.results:
         iq = result["iq"]
-        energies[
-            iq[0] :: calc.QGrid[0],
-            iq[1] :: calc.QGrid[1],
-            iq[2] :: calc.QGrid[2],
-        ] = result["energies"]
+        energies[iq[0] :: calc.QGrid[0], iq[1] :: calc.QGrid[1], iq[2] :: calc.QGrid[2]] = result["energies"]
     return energies
 
 def collect_bz_response(calc):
     """Average an integrated response over the phase-shifted FFT grids."""
-    projected_chi_ift = np.zeros_like(calc.results[0]["projected sigma"], dtype=complex)
+    projected_response = np.zeros_like(calc.results[0]["projected sigma"], dtype=complex)
     for result in calc.results:
-        projected_chi_ift += result["projected sigma"]
-    projected_chi_ift /= len(calc.results)
-    return projected_chi_ift
+        projected_response += result["projected sigma"]
+    projected_response /= len(calc.results)
+    return projected_response
 
 def fixed_electron_band_energy(energies, occupied_state_count, number_kpoints):
     """
@@ -74,7 +70,7 @@ def solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints
     margin = max(40.0 * kBT, 1.0)
     lower = float(np.min(energies) - margin)
     upper = float(np.max(energies) + margin)
-    for _ in range(200):
+    for _ in range(200): # Bisector searching for the chemical potential that gives correct filling
         chemical_potential = 0.5 * (lower + upper)
         occupations = fermiDiracOccupations(energies, [chemical_potential], kBT)[0]
         electron_count = np.sum(occupations) / number_kpoints
@@ -107,9 +103,7 @@ def fixed_number_electronic_state(energies, target_electrons_per_cell, number_kp
         if not np.isclose(state_count, nominal_occupied_count, atol=1.0e-8):
             raise ValueError("A zero-temperature finite-grid filling must contain an integer number of sampled states.")
         internal_energy, chemical_potential, highest_occupied, lowest_unoccupied, = fixed_electron_band_energy(
-            energies,
-            nominal_occupied_count,
-            number_kpoints)
+            energies, nominal_occupied_count, number_kpoints)
         free_energy = internal_energy
     elif occupation_mode == "fermi-dirac":
         chemical_potential = solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints, kBT)
@@ -121,9 +115,7 @@ def fixed_number_electronic_state(energies, target_electrons_per_cell, number_kp
         entropy_kernel[fractional] = f * np.log(f) + (1.0 - f) * np.log1p(-f)
         free_energy =  internal_energy + kBT * np.sum(entropy_kernel) / number_kpoints
     else:
-        raise ValueError(
-            "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
-        )
+        raise ValueError("occupation_mode must be 'zero-temperature' or 'fermi-dirac'.")
 
     return {
         "chemical_potential": chemical_potential,
@@ -134,6 +126,9 @@ def fixed_number_electronic_state(energies, target_electrons_per_cell, number_kp
         "nominal_occupied_state_count": nominal_occupied_count,
     }
 
+#+--------------------------------------+
+#| File I/O for electronic computations |
+#+--------------------------------------+
 def save_energy_sample(path, direction, theta, phi, bz_grid, target_electrons_per_cell, occupation_mode, kBT, state):
     """Atomically save one completed fixed-number energy calculation."""
     temporary = path.with_suffix(".tmp.npz")
@@ -151,9 +146,7 @@ def save_energy_sample(path, direction, theta, phi, bz_grid, target_electrons_pe
         free_energy_eV_per_cell=state["free_energy"],
         highest_occupied_eV=state["highest_occupied"],
         lowest_unoccupied_eV=state["lowest_unoccupied"],
-        nominal_occupied_state_count=state[
-            "nominal_occupied_state_count"
-        ],
+        nominal_occupied_state_count=state["nominal_occupied_state_count"],
     )
     temporary.replace(path)
 
@@ -171,29 +164,19 @@ def load_energy_sample(path,expected_direction,expected_bz_grid,expected_target_
             "free_energy_eV_per_cell",
         }
         missing = required.difference(data.files)
-        if missing:
-            raise RuntimeError(
-                f"{path} is an obsolete checkpoint; missing {sorted(missing)}."
-            )
+        if missing: raise RuntimeError(f"{path} is an obsolete checkpoint; missing {sorted(missing)}.")
         direction = data["direction"]
-        if not np.allclose(direction, expected_direction, atol=1.0e-12):
-            raise RuntimeError(
-                f"Sampling direction in {path} does not match this run."
-            )
+        assert np.allclose(direction, expected_direction, atol=1.0e-12), (
+            f"Sampling direction in {path} does not match this run.")
         signatures_match = (
             np.array_equal(data["bz_grid"], expected_bz_grid)
-            and np.isclose(
-                float(data["target_electrons_per_cell"]),
-                expected_target_electrons_per_cell,
-            )
+            and np.isclose(float(data["target_electrons_per_cell"]), expected_target_electrons_per_cell)
             and str(data["occupation_mode"]) == expected_occupation_mode
             and np.isclose(float(data["kBT_eV"]), expected_kBT)
         )
-        if not signatures_match:
-            raise RuntimeError(
+        assert signatures_match,(
                 f"Electronic calculation settings in {path} do not match "
-                "this run. Remove the sample directory or restore its settings."
-            )
+                "this run. Remove the sample directory or restore its settings.")
         return {
             "chemical_potential": float(data["chemical_potential_eV"]),
             "internal_energy": float(data["internal_energy_eV_per_cell"]),
@@ -225,23 +208,21 @@ def load_ift_sample(path,expected_direction,expected_chemical_potential,expected
     with np.load(path) as data:
         signatures_match = (
             np.allclose(data["direction"], expected_direction, atol=1.0e-12)
-            and np.isclose(
-                float(data["chemical_potential_eV"]),
-                expected_chemical_potential,
-            )
+            and np.isclose(float(data["chemical_potential_eV"]), expected_chemical_potential)
             and np.array_equal(data["omega_axis_eV"], expected_omega_axis)
             and np.array_equal(data["bz_grid"], expected_bz_grid)
             and str(data["solver_name"]) == expected_solver_name
             and str(data["occupation_mode"]) == expected_occupation_mode
             and np.isclose(float(data["kBT_eV"]), expected_kBT)
         )
-        if not signatures_match:
-            raise RuntimeError(
+        assert signatures_match,(
                 f"IFT settings in {path} do not match this run. Remove the "
-                "IFT sample directory or restore its settings."
-            )
+                "IFT sample directory or restore its settings.")
         return data["projected_chi_IFT"].copy()
 
+#+----------------------------------------------------------+
+#| Optical contraction to give response at polarized states +
+#+----------------------------------------------------------+
 def optical_polarization_states():
     """
     Return linear and circular unit Jones vectors in Cartesian coordinates.
@@ -270,43 +251,27 @@ def polarization_contracted_diagnostics(reference, reconstructed, polarization_v
     """
     reference = np.asarray(reference)
     reconstructed = np.asarray(reconstructed)
-    if reference.shape != reconstructed.shape:
-        raise ValueError("Reference and reconstructed responses must match.")
-    if reference.shape[-3:] != (3, 3, 3):
-        raise ValueError("Response axes must end in (3, 3, 3).")
+    assert reference.shape == reconstructed.shape, "Reference and reconstructed responses must match."
+    assert reference.shape[-3:] == (3, 3, 3), "Response axes must end in (3, 3, 3)."
 
     polarization_vectors = np.asarray(polarization_vectors, dtype=complex)
     contracted_reference = np.einsum(
         "pa,pb,n...abc->np...c",
-        polarization_vectors,
-        polarization_vectors.conj(),
-        reference,
-    )
+        polarization_vectors, polarization_vectors.conj(), reference)
     contracted_reconstructed = np.einsum(
         "pa,pb,n...abc->np...c",
-        polarization_vectors,
-        polarization_vectors.conj(),
-        reconstructed,
-    )
+        polarization_vectors, polarization_vectors.conj(), reconstructed)
     error = contracted_reconstructed - contracted_reference
 
-    reference_rms = np.sqrt(
-        np.mean(np.abs(contracted_reference) ** 2, axis=(0, -1))
-    )
+    reference_rms = np.sqrt(np.mean(np.abs(contracted_reference) ** 2, axis=(0, -1)))
     error_rms = np.sqrt(np.mean(np.abs(error) ** 2, axis=(0, -1)))
     relative_rms = np.divide(
-        error_rms,
-        reference_rms,
-        out=np.zeros_like(error_rms, dtype=float),
-        where=reference_rms > 0.0,
+        error_rms, reference_rms, out=np.zeros_like(error_rms, dtype=float), where=reference_rms > 0.0
     )
     reference_peak = np.max(np.abs(contracted_reference), axis=(0, -1))
     error_peak = np.max(np.abs(error), axis=(0, -1))
     peak_normalized_error = np.divide(
-        error_peak,
-        reference_peak,
-        out=np.zeros_like(error_peak, dtype=float),
-        where=reference_peak > 0.0,
+        error_peak, reference_peak, out=np.zeros_like(error_peak, dtype=float), where=reference_peak > 0.0
     )
 
     reference_power = np.sum(
@@ -315,12 +280,7 @@ def polarization_contracted_diagnostics(reference, reconstructed, polarization_v
     )
     error_power = np.sum(np.abs(error) ** 2, axis=(0, -2, -1))
     global_relative_rms = np.sqrt(
-        np.divide(
-            error_power,
-            reference_power,
-            out=np.zeros_like(error_power, dtype=float),
-            where=reference_power > 0.0,
-        )
+        np.divide(error_power, reference_power, out=np.zeros_like(error_power, dtype=float), where=reference_power > 0.0)
     )
     return {
         "reference_rms": reference_rms,
@@ -331,7 +291,6 @@ def polarization_contracted_diagnostics(reference, reconstructed, polarization_v
         "peak_normalized_error": peak_normalized_error,
         "global_relative_rms": global_relative_rms,
     }
-
 
 def crystal_symmetry_operations(model, tolerance=SYMPREC):
     """Return Cartesian point operations and their primitive-cell atom maps."""
@@ -402,7 +361,6 @@ def crystal_symmetry_operations(model, tolerance=SYMPREC):
         )
     return operations
 
-
 def _projection_signature(selection, atomic_orbital_info):
     signature = {}
     for atom_id, shell_ids in selection:
@@ -424,7 +382,6 @@ def _projection_signature(selection, atomic_orbital_info):
         atom_id: tuple(sorted(shell_ids))
         for atom_id, shell_ids in signature.items()
     }
-
 
 def projection_preserving_operations(
     operations,
@@ -463,7 +420,6 @@ def projection_preserving_operations(
             "projection atom and shell indexes."
         )
     return preserved
-
 
 def fit_projection_resolved_ift_symmetry(
     directions,
@@ -527,7 +483,6 @@ def fit_projection_resolved_ift_symmetry(
     }
     return expansion, diagnostics
 
-
 def paired_antipodal_vsh_cross_validation(
     directions,
     values,
@@ -588,7 +543,6 @@ def paired_antipodal_vsh_cross_validation(
         "condition": fold_condition,
     }
 
-
 def projected_ift_cross_validation(
     directions,
     values,
@@ -616,7 +570,6 @@ def projected_ift_cross_validation(
         "rank": np.asarray(ranks, dtype=int),
         "condition": np.asarray(conditions, dtype=float),
     }
-
 
 def ift_symmetry_covariance_diagnostics(
     expansion,
@@ -659,27 +612,15 @@ def ift_symmetry_covariance_diagnostics(
         operation_errors.append(errors)
     return operation_errors
 
-
-def global_relative_error_by_projection(
-    reference,
-    reconstructed,
-    projection_axis=3,
-):
+def global_relative_error_by_projection(reference, reconstructed, projection_axis=3):
     """Return an all-component relative RMS for each projection slot."""
     reference = np.asarray(reference)
     reconstructed = np.asarray(reconstructed)
-    if reference.shape != reconstructed.shape:
-        raise ValueError("Reference and reconstructed responses must match.")
+    assert reference.shape == reconstructed.shape, "Reference and reconstructed responses must match."
     projection_axis = int(projection_axis) % reference.ndim
-    reduction_axes = tuple(
-        axis for axis in range(reference.ndim)
-        if axis != projection_axis
-    )
+    reduction_axes = tuple(axis for axis in range(reference.ndim) if axis != projection_axis)
     reference_power = np.sum(np.abs(reference) ** 2, axis=reduction_axes)
-    error_power = np.sum(
-        np.abs(reconstructed - reference) ** 2,
-        axis=reduction_axes,
-    )
+    error_power = np.sum(np.abs(reconstructed - reference) ** 2, axis=reduction_axes)
     return np.sqrt(
         np.divide(
             error_power,
@@ -689,19 +630,19 @@ def global_relative_error_by_projection(
         )
     )
 
-
 def output_polarization_validation_table(path, omega_axis, polarization_labels, diagnostics_by_type):
     """Write projection- and frequency-resolved polarization fit errors."""
     with open(path, "w", encoding="utf-8") as output:
         output.write(
-            "#validation      polarization     drive_projection_1 drive_projection_2  torque_projection        fermi_index omega_index           omega_eV      reference_rms          error_rms       relative_rms     reference_peak         error_peak peak_normalized_error\n"
+            "#validation      polarization     drive_projection_1 drive_projection_2  torque_projection        "
+            "fermi_index omega_index           omega_eV      reference_rms          error_rms       "
+            "relative_rms     reference_peak         error_peak peak_normalized_error\n"
         )
-        for validation_name, diagnostics in diagnostics_by_type.items():
-            relative_rms = diagnostics["relative_rms"]
-            leading_shape = relative_rms.shape[1:-1]
-            for ipolarization, label in enumerate(polarization_labels):
-                for leading_index in np.ndindex(leading_shape):
-                    for iomega, omega in enumerate(omega_axis):
+        leading_shape=diagnostics_by_type["fit"]["relative_rms"].shape[1:-1]
+        for iomega, omega in enumerate(omega_axis):
+            for leading_index in np.ndindex(leading_shape):
+                for ipolarization, label in enumerate(polarization_labels):
+                    for validation_name, diagnostics in diagnostics_by_type.items():
                         index = (ipolarization,) + leading_index + (iomega,)
                         output.write(
                             f"{validation_name:16s} {label:16s} "
@@ -728,10 +669,7 @@ def print_polarization_validation_summary(polarization_labels, fit_diagnostics, 
         f"(active frequencies >= {active_signal_fraction:.0%} of peak RMS):"
     )
     for ipolarization, label in enumerate(polarization_labels):
-        active = (
-            reference_rms[ipolarization]
-            >= active_signal_fraction * np.max(reference_rms[ipolarization])
-        )
+        active = reference_rms[ipolarization] >= active_signal_fraction * np.max(reference_rms[ipolarization])
         cross_active = cross_relative[ipolarization, active]
         print(
             f"  {label:16s} fit global={fit_global[ipolarization]:.3%}, "
@@ -802,7 +740,7 @@ def run():
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
     harmonic_degree = 6
-    number_of_orientations = 200
+    number_of_orientations = 800
     resume_completed_orientations = True
     validation_folds = 5
     validation_active_signal_fraction = 0.05
@@ -1086,7 +1024,7 @@ def run():
             np.sqrt(np.mean(np.square(errors))) for errors in symmetry_covariance_errors])
     symmetry_covariance_max = np.asarray([np.max(errors) for errors in symmetry_covariance_errors])
     polarization_labels, polarization_vectors = optical_polarization_states()
-    polarization_fit = polarization_contracted_diagnostics( tangential_chi_ift, torque_reconstructed, polarization_vectors)
+    polarization_fit = polarization_contracted_diagnostics(tangential_chi_ift, torque_reconstructed, polarization_vectors)
     polarization_cross_validation = polarization_contracted_diagnostics(
         tangential_chi_ift, torque_cross_validated, polarization_vectors)
 

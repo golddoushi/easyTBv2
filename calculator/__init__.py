@@ -2971,7 +2971,7 @@ class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity-gauge time-dependent density matrix propagation.
@@ -3089,7 +3089,7 @@ class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
 
     _rk4_step = InverseFaradayEffect_TDSE._rk4_step
 
-class InverseFaradayTorque_LG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:
@@ -3178,7 +3178,7 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
         self.projected_sigma = self.projected_chi_IFT
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
-class InverseFaradayTorque_VG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:

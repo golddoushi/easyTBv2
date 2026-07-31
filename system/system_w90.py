@@ -255,35 +255,19 @@ class System_w90(System):
             f"up/down Wannier functions, found {chk_up.num_wann} and "
             f"{chk_dn.num_wann}"
         )
-        assert chk_up.num_kpts==chk_dn.num_kpts, (
-            "spin-up and spin-down checkpoints have different k-point counts"
-        )
-        assert np.array_equal(chk_up.mp_grid,chk_dn.mp_grid), (
-            "spin-up and spin-down checkpoints have different Monkhorst-Pack grids"
-        )
-        assert np.allclose(
-            chk_up.real_lattice,chk_dn.real_lattice,atol=1e-10,rtol=0,
-        ), "spin-up and spin-down checkpoints have different real lattices"
-        assert np.allclose(
-            chk_up.recip_lattice,chk_dn.recip_lattice,atol=1e-10,rtol=0,
-        ), "spin-up and spin-down checkpoints have different reciprocal lattices"
+        assert chk_up.num_kpts==chk_dn.num_kpts, "spin-up and spin-down checkpoints have different k-point counts"
+        assert np.array_equal(chk_up.mp_grid,chk_dn.mp_grid), "spin-up and spin-down checkpoints have different Monkhorst-Pack grids"
+        assert np.allclose(chk_up.real_lattice,chk_dn.real_lattice,atol=1e-10,rtol=0), "spin-up and spin-down checkpoints have different real lattices"
+        assert np.allclose(chk_up.recip_lattice,chk_dn.recip_lattice,atol=1e-10,rtol=0), "spin-up and spin-down checkpoints have different reciprocal lattices"
         dk=chk_up.kpt_list-chk_dn.kpt_list
         dk-=np.rint(dk)
-        assert np.max(np.abs(dk))<1e-10, (
-            "spin-up and spin-down checkpoints have differently ordered k points"
-        )
+        assert np.max(np.abs(dk))<1e-10, "spin-up and spin-down checkpoints have differently ordered k points"
 
         center_delta=chk_up.wannier_centers-chk_dn.wannier_centers
         center_frac=center_delta@np.linalg.inv(chk_up.real_lattice)
         center_frac-=np.rint(center_frac)
-        center_distance=np.linalg.norm(
-            center_frac@chk_up.real_lattice,axis=1,
-        )
-        print(
-            "paired up/down Wannier-center distance: "
-            f"mean {center_distance.mean():.3e} angstrom, "
-            f"max {center_distance.max():.3e} angstrom"
-        )
+        center_distance=np.linalg.norm(center_frac@chk_up.real_lattice, axis=1)
+        print(f"paired up/down Wannier-center distance: mean {center_distance.mean():.3e} angstrom, max {center_distance.max():.3e} angstrom")
 
     def getExchangeR(self, provenance="orientation finite difference", reversedModel=None):
         provenance=self._normalizeExchangeProvenance(provenance)
@@ -297,40 +281,22 @@ class System_w90(System):
         if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
         return self.exchange_R
 
-    def _berryConnectionWannier(
-        self,seedname:str,chk:W90CHK,trans_inv:bool,
-    ):
-        M_k_DFT=W90MMN(
-            seedname=seedname,
-            kpt_list=chk.kpt_list,
-            reci_lat=chk.recip_lattice,
-        )
+    def _berryConnectionWannier(self,seedname:str,chk:W90CHK,trans_inv:bool):
+        M_k_DFT=W90MMN(seedname=seedname, kpt_list=chk.kpt_list, reci_lat=chk.recip_lattice)
         assert M_k_DFT.nbands==chk.num_bands
         assert M_k_DFT.nkpts==chk.num_kpts
         showElapsedTime(extraInfo=f"{seedname}.mmn read")
-        Mmn_k_W=np.array([
-            [
-                self.toWannierGauge(
-                    Mmnk1k2,ik1,M_k_DFT.innkpt[ik1,ib],chk,
-                )
-                for ib,Mmnk1k2 in enumerate(Mmnk1)
-            ]
-            for ik1,Mmnk1 in enumerate(M_k_DFT.Mmn)
+        Mmn_k_W=np.array([[self.toWannierGauge(Mmnk1k2,ik1,M_k_DFT.innkpt[ik1,ib],chk) 
+                           for ib,Mmnk1k2 in enumerate(Mmnk1)]
+                           for ik1,Mmnk1 in enumerate(M_k_DFT.Mmn)
         ])
-        AA_k_W=np.zeros(
-            (chk.num_kpts,3,chk.num_wann,chk.num_wann),dtype=complex,
-        )
+        AA_k_W=np.zeros((chk.num_kpts,3,chk.num_wann,chk.num_wann),dtype=complex)
         delta=np.eye(chk.num_wann)
         diagonal=np.arange(chk.num_wann,dtype=int)
         for ikpt,MMNk in enumerate(Mmn_k_W):
-            for bvec,wb,overlap in zip(
-                M_k_DFT.bvecs[ikpt],M_k_DFT.wbvecs,MMNk,
-            ):
+            for bvec,wb,overlap in zip(M_k_DFT.bvecs[ikpt],M_k_DFT.wbvecs,MMNk):
                 # Eq. 44, PRB 74, 195118 (2006).
-                contribution=(
-                    1j*wb*bvec[:,None,None]*
-                    (overlap-delta)[None,:,:]
-                )
+                contribution= 1j*wb*bvec[:,None,None] * (overlap-delta)[None,:,:]
                 if trans_inv:
                     # Translationally invariant diagonal, Eq. 13,
                     # PRB 56, 12847 (1997).
@@ -352,26 +318,13 @@ class System_w90(System):
                 AA_k_W[ikpt]+=contribution
         return AA_k_W
 
-    def toWannierGaugeCross(
-        self,mat:np.ndarray,ik1:int,ik2:int,
-        chk_bra:W90CHK,chk_ket:W90CHK,
-    ):
+    def toWannierGaugeCross(self,mat:np.ndarray,ik1:int,ik2:int,chk_bra:W90CHK,chk_ket:W90CHK):
         '''
         Transform a matrix whose bra and ket use different Wannier gauges.
         '''
-        assert mat.shape[-2:]==(
-            chk_bra.num_bands,chk_ket.num_bands,
-        )
-        mat=mat[
-            ...,
-            chk_bra.win_min[ik1]:chk_bra.win_max[ik1],
-            chk_ket.win_min[ik2]:chk_ket.win_max[ik2],
-        ]
-        return (
-            chk_bra.v_matrix[ik1].conj()@
-            mat@
-            chk_ket.v_matrix[ik2].T
-        )
+        assert mat.shape[-2:]==(chk_bra.num_bands,chk_ket.num_bands,)
+        mat=mat[..., chk_bra.win_min[ik1]:chk_bra.win_max[ik1], chk_ket.win_min[ik2]:chk_ket.win_max[ik2]]
+        return  chk_bra.v_matrix[ik1].conj() @ mat @ chk_ket.v_matrix[ik2].T
 
     def _resolveSOIFile(self,soi):
         if soi is None:
