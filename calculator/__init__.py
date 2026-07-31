@@ -200,7 +200,7 @@ class Energy(Calculator):
 
         deltaEInverse[ik1, ik2, ik3, ieig, jeig] = 1/(E_{ki} - E_{kj} - 1j*eta)
         '''
-        self.deltaE = self.energies[:,:,:,:,None] - self.energies[:,:,:,None,:]
+        self.deltaE = self.energies[...,:,None] - self.energies[...,None,:]
         self.deltaEInverse =np.zeros_like(self.deltaE, dtype=complex)
         self.deltaEInverse_pure =np.zeros_like(self.deltaE, dtype=float)
         self.deltaEInverse2=np.zeros_like(self.deltaE, dtype=complex)
@@ -851,6 +851,26 @@ class Velocity(Energy):
                         )
             del connectionDerivative1, connectionDerivative2, partialV
             if self.verbose==2: showElapsedTime(extraInfo=f"higer order velocity modification with position operators finished")
+
+class Dipole(Velocity):
+    def __init__(self, **kwarg) -> None:
+        '''
+        Compute the off-diagonal dipole matrix in the Hamiltonian gauge.
+
+        Indexing
+        --------
+        self.r_K[ik1, ik2, ik3, idirection, m, n] gives
+        r_mn = v_mn / (i * (E_m - E_n)). Diagonal and numerically
+        degenerate matrix elements are set to zero.
+        '''
+        super().__init__(**kwarg)
+
+        norb = self.energies.shape[-1]
+        self.calcDeltaEInverse()
+
+        self.dipoleOffDiagonalMask = 1.0 - np.eye(norb)
+        self.r_K = self.velocity_K * self.deltaEInverse_pure[..., None, :, :]  / 1j * self.dipoleOffDiagonalMask
+        if self.verbose==2: showElapsedTime(extraInfo=f"dipole operators (off diagonal) finished")
 
 class OrbitalModern_LC(Velocity):
     def __init__(self, orbitalProjectionList=[], _computeOrbitalModernLC=True, **kwarg,):
@@ -1952,35 +1972,21 @@ class BulkPhotovoltaicConductance_VG_DM(Velocity):
         self.projected_sigma = self.sigma_VG_DM[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge BPVE density matrix finished")
 
-class BulkPhotovoltaicConductance_LG_Shift(Velocity):
+class BulkPhotovoltaicConductance_LG_Shift(Dipole):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
         Calculates the Universal Shift Current (BPVE) using the Sipe-Shkrebtii Length Gauge.
         Natively evaluates BOTH the Linear Shift Current and Circular Shift Current.
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
-        #self.calcDeltaEInverse()
-        #omega_nm = self.deltaE 
-        #inv_omega = self.deltaEInverse
-
-        # 2D energy arrays, index [ik1, ik2, ik3, m, n]
-        E_m_2 = self.energies[..., :, None]
-        E_n_2 = self.energies[..., None, :]
-        omega_mn = E_m_2 - E_n_2
-        nondegenerate=abs(omega_mn)>self.degen
-        inv_omega = np.zeros_like(omega_mn,dtype=float)
-        inv_omega[nondegenerate]=1/(omega_mn[nondegenerate])
-
-        norbs = self.model.norbs - self.ibmin
-        off_diag = 1.0 - np.eye(norbs)
+        omega_mn = self.deltaE
+        inv_omega = self.deltaEInverse_pure
+        off_diag = self.dipoleOffDiagonalMask
         
         # Tensor Shape: [ifermi, iomega, ialpha(drive), ibeta(drive), igamma(current)]
         self.sigma_shift = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
-        # 1. Compute Dipole Matrices (r^a_nm)
-        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
-
-        # 2. Compute Group Velocity Differences (Delta^a_nm)
+        # 1. Compute Group Velocity Differences (Delta^a_nm)
         v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1) 
         Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :] 
 
@@ -1991,12 +1997,12 @@ class BulkPhotovoltaicConductance_LG_Shift(Velocity):
 
             for ialpha in range(3): # Drive E-field a
                 v_a = self.velocity_K[..., ialpha, :, :]
-                r_a = r_K[..., ialpha, :, :]
+                r_a = self.r_K[..., ialpha, :, :]
                 for ibeta in range(3): # Drive E-field b
                     v_b = self.velocity_K[..., ibeta, :, :]
-                    r_b = r_K[..., ibeta, :, :]
+                    r_b = self.r_K[..., ibeta, :, :]
                     for igamma in range(3): # Measured Current c
-                        r_c = r_K[..., igamma, :, :]
+                        r_c = self.r_K[..., igamma, :, :]
                         Delta_c = Delta_v[..., igamma, :, :]
 
                         # Generalized derivatives of the optical matrix elements
@@ -2035,7 +2041,7 @@ class BulkPhotovoltaicConductance_LG_Shift(Velocity):
 
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Shift Current finished")
 
-class BulkPhotovoltaicConductance_LG_Injection(Velocity):
+class BulkPhotovoltaicConductance_LG_Injection(Dipole):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
         Calculates the Circular Injection Current (Circular BPVE) using the 
@@ -2044,25 +2050,13 @@ class BulkPhotovoltaicConductance_LG_Injection(Velocity):
         # No high order velocity needed! This makes LG much faster than VG.
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
         
-        # 2D energy arrays, index [ik1, ik2, ik3, m, n]
-        E_m_2 = self.energies[..., :, None]
-        E_n_2 = self.energies[..., None, :]
-        omega_mn = E_m_2 - E_n_2
-        nondegenerate=abs(omega_mn)>self.degen
-        inv_omega = np.zeros_like(omega_mn,dtype=float)
-        inv_omega[nondegenerate]=1/(omega_mn[nondegenerate])
-        
-        norbs = self.model.norbs - self.ibmin
-        off_diag = 1.0 - np.eye(norbs)
+        omega_mn = self.deltaE
         
         # Tensor Shape: [ifermi, iomega, ialpha(drive), ibeta(drive), igamma(current)]
         # Must be COMPLEX because the Circular BPVE susceptibility is purely imaginary!
         self.sigma_inj = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
-        # 1. Compute Interband Dipole Matrices (r^a_nm)
-        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
-
-        # 2. Compute Group Velocity Differences (Delta^c_nm)
+        # 1. Compute Group Velocity Differences (Delta^c_nm)
         v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1) 
         Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :] 
 
@@ -2079,10 +2073,10 @@ class BulkPhotovoltaicConductance_LG_Injection(Velocity):
             L_mn = 2.0 * L_mn_pos
 
             for ialpha in range(3): # Drive E-field a
-                r_a = r_K[..., ialpha, :, :]
+                r_a = self.r_K[..., ialpha, :, :]
                 
                 for ibeta in range(3): # Drive E-field b
-                    r_b = r_K[..., ibeta, :, :]
+                    r_b = self.r_K[..., ibeta, :, :]
                     
                     # Full Complex Optical Transition Tensor
                     # Real part drives Linear Injection (if magnetic)
@@ -2113,7 +2107,7 @@ class BulkPhotovoltaicConductance_LG_Injection(Velocity):
 
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Injection Current finished")
 
-class BulkPhotovoltaicConductance_LG_DM(Velocity):
+class BulkPhotovoltaicConductance_LG_DM(Dipole):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
         Calculates the length-gauge BPVE using the frequency-domain Liouville
@@ -2133,22 +2127,17 @@ class BulkPhotovoltaicConductance_LG_DM(Velocity):
         self.sigma_LG_DM = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
         norbs = self.energies.shape[-1]
-        off_diag = 1.0 - np.eye(norbs)
+        off_diag = self.dipoleOffDiagonalMask
         diag = np.eye(norbs)
-
-        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
-        nondegenerate = abs(deltaE_mn) > self.degen
-        inv_deltaE = np.zeros_like(deltaE_mn, dtype=float)
-        inv_deltaE[nondegenerate] = 1.0 / deltaE_mn[nondegenerate]
-
-        r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
+        deltaE_mn = self.deltaE
+        inv_deltaE = self.deltaEInverse_pure
 
         v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1)
         Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :]
 
         r_deriv_K = np.zeros(self.kgrid + (3, 3, norbs, norbs), dtype=complex)
         for ideriv in range(3):
-            r_deriv = r_K[..., ideriv, :, :]
+            r_deriv = self.r_K[..., ideriv, :, :]
             Delta_deriv = Delta_v[..., ideriv, :, :]
             for idir in range(3):
                 v_dir = self.velocity_K[..., idir, :, :]
@@ -2166,11 +2155,11 @@ class BulkPhotovoltaicConductance_LG_DM(Velocity):
             for iomega, Omega in enumerate(self.omegaList):
                 def rho1(idir, frequency):
                     denominator = deltaE_mn - frequency - 1j * self.eta
-                    return f_nm_source * r_K[..., idir, :, :] / denominator
+                    return f_nm_source * self.r_K[..., idir, :, :] / denominator
 
                 def covariant_derivative_rho1(ideriv, idir, frequency):
                     denominator = deltaE_mn - frequency - 1j * self.eta
-                    numerator = f_nm_source * r_K[..., idir, :, :]
+                    numerator = f_nm_source * self.r_K[..., idir, :, :]
                     rho = numerator / denominator
 
                     offdiag_part = (
@@ -2181,7 +2170,7 @@ class BulkPhotovoltaicConductance_LG_DM(Velocity):
                     # The diagonal covariant derivative is not captured by the
                     # off-diagonal generalized derivative. This is the density
                     # population source that produces injection current.
-                    diag_part = -1j * (r_K[..., ideriv, :, :] @ rho - rho @ r_K[..., ideriv, :, :]) * diag
+                    diag_part = -1j * (self.r_K[..., ideriv, :, :] @ rho - rho @ self.r_K[..., ideriv, :, :]) * diag
                     return offdiag_part + diag_part
 
                 for a in range(3):
@@ -2345,7 +2334,7 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
     
-class BulkPhotovoltaicConductance_TDSE_LG_Naive(Velocity):
+class BulkPhotovoltaicConductance_TDSE_LG_Naive(Dipole):
     def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, **kwarg) -> None:
         '''
         Calculates the LG DC response using isolated k-point TDSE.
@@ -2361,15 +2350,6 @@ class BulkPhotovoltaicConductance_TDSE_LG_Naive(Velocity):
         for i in range(self.model.norbs):
             H_diag[..., i, i] = self.energies[..., i]
 
-        # 2. Interband Dipole Matrix r_{nm} = v_{nm} / (i * omega_{mn})
-        omega_mn = self.energies[..., :, None] - self.energies[..., None, :]
-        inv_omega = np.zeros_like(omega_mn, dtype=float)
-        nondegenerate = abs(omega_mn) > self.degen
-        inv_omega[nondegenerate] = 1.0 / omega_mn[nondegenerate]
-        
-        off_diag = 1.0 - np.eye(self.model.norbs)
-        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
-
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
             rho0 = np.zeros_like(H_diag)
@@ -2384,7 +2364,7 @@ class BulkPhotovoltaicConductance_TDSE_LG_Naive(Velocity):
                 n_cycles_measure = 1
 
                 for ialpha in range(3): # Direction of the driving E-field
-                    r_alpha = r_K[..., ialpha, :, :]
+                    r_alpha = self.r_K[..., ialpha, :, :]
                     rho = rho0.copy()
                     t = 0.0
                     
@@ -2428,7 +2408,7 @@ def _normalize_response_index_list(index_list, axis_length):
         return []
     return [int(index) for index in index_list if 0 <= int(index) < axis_length]
 
-class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
+class InverseFaradayEffect_LG(Dipole, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
                  responseFermiIndexList=None, **kwarg) -> None:
         '''
@@ -2445,14 +2425,6 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
         M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
-
-        omega_mn = self.energies[..., :, None] - self.energies[..., None, :]
-        inv_omega = np.zeros_like(omega_mn, dtype=float)
-        nondegenerate = abs(omega_mn) > self.degen
-        inv_omega[nondegenerate] = 1.0 / omega_mn[nondegenerate]
-        
-        off_diag = 1.0 - np.eye(nbasis)
-        r_K = self.velocity_K * inv_omega[..., None, :, :] / 1j * off_diag
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
@@ -2495,9 +2467,9 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
                 for c in range(3):
                     M_c = M_K[..., c, :, :]
                     for a in range(3):
-                        r_a = r_K[..., a, :, :]
+                        r_a = self.r_K[..., a, :, :]
                         for b in range(3):
-                            r_b = r_K[..., b, :, :]
+                            r_b = self.r_K[..., b, :, :]
                             
                             Mrr_ba = np.einsum('...mn, ...nl, ...lm -> ...mnl', M_c, r_b, r_a)
                             Mrr_ab = np.einsum('...mn, ...nl, ...lm -> ...mnl', M_c, r_a, r_b)
@@ -2512,7 +2484,7 @@ class InverseFaradayEffect_LG(Velocity, Spin, Orbital):
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
 
-class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
+class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
                  responseFermiIndexList=None, **kwarg) -> None:
         '''
@@ -2530,13 +2502,7 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
-        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
-        inv_deltaE = np.zeros_like(deltaE_mn, dtype=float)
-        nondegenerate = abs(deltaE_mn) > self.degen
-        inv_deltaE[nondegenerate] = 1.0 / deltaE_mn[nondegenerate]
-
-        off_diag = 1.0 - np.eye(nbasis)
-        r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
+        deltaE_mn = self.deltaE
 
         self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
@@ -2563,15 +2529,15 @@ class InverseFaradayEffect_LG_DM(Velocity, Spin, Orbital):
                     return source / (deltaE_mn - frequency - 1j * self.eta)
 
                 rho1_cache = {
-                    (direction, sign): rho1(r_K[..., direction, :, :], sign * Omega)
+                    (direction, sign): rho1(self.r_K[..., direction, :, :], sign * Omega)
                     for direction in range(3)
                     for sign in (-1, 1)
                 }
 
                 for a in range(3):
-                    r_a = r_K[..., a, :, :]
+                    r_a = self.r_K[..., a, :, :]
                     for b in range(3):
-                        r_b = r_K[..., b, :, :]
+                        r_b = self.r_K[..., b, :, :]
                         source = (
                             r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
                             + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
@@ -3108,7 +3074,7 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
 
     _rk4_step = InverseFaradayEffect_TDSE._rk4_step
 
-class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
+class InverseFaradayTorque_LG_DM(Dipole, SpinTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:
@@ -3133,22 +3099,16 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
             if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
             if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
 
-        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
-        inv_deltaE = np.zeros_like(deltaE_mn, dtype=float)
-        nondegenerate = abs(deltaE_mn) > self.degen
-        inv_deltaE[nondegenerate] = 1.0 / deltaE_mn[nondegenerate]
-
-        off_diag = 1.0 - np.eye(nbasis)
-        r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
+        deltaE_mn = self.deltaE
 
         # H_LG(t) = H0 - E_a(t) r_a, hence the full torque contains
         # T_c(E) = -i[mu_c,H_LG] = T_c(0) + E_a i[mu_c,r_a].
         proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]:
-            self.buildSpinTorquePositionCommutator(r_K)
+            self.buildSpinTorquePositionCommutator(self.r_K)
             proj_torqueE_K[0] += self.spinTorqueE_K
         if ife_type in ["total", "orbital"]:
-            self.buildOrbitalTorquePositionCommutator(r_K)
+            self.buildOrbitalTorquePositionCommutator(self.r_K)
             proj_torqueE_K[0] += self.orbitalTorqueE_K
         for iproj in range(len(torqueProjectionList)):
             if ife_type in ["total", "spin"]: proj_torqueE_K[iproj+1] += self.projected_spinTorqueE_K_list[iproj]
@@ -3182,15 +3142,15 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                     return source / (deltaE_mn - frequency - 1j * self.eta)
 
                 rho1_cache = {
-                    (direction, sign): rho1(r_K[..., direction, :, :], sign * Omega)
+                    (direction, sign): rho1(self.r_K[..., direction, :, :], sign * Omega)
                     for direction in range(3)
                     for sign in (-1, 1)
                 }
                 
                 for a in range(3):
-                    r_a = r_K[..., a, :, :]
+                    r_a = self.r_K[..., a, :, :]
                     for b in range(3):
-                        r_b = r_K[..., b, :, :]
+                        r_b = self.r_K[..., b, :, :]
 
                         source = (
                             r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
