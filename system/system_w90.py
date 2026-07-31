@@ -6,6 +6,7 @@ import warnings
 from numpy.core.multiarray import array as array, zeros as zeros
 from system import System
 from auxiliary import obtainProjections, obtainProjectionsPlain, showElapsedTime, iterate3dpm, fourier_q_to_R, reindexOrbitalsQE2VASP
+from auxiliary import SYMPREC
 from fileio import readHrDat, readPOSCAR, readRDat
 from fileio import W90CHK, W90MMN, W90EIG, W90SOI
 
@@ -651,10 +652,7 @@ class System_w90(System):
                         soc_R[iR]-soc_R[iR_minus].conj().T
                     ))),
                 )
-        assert real_space_error<1e-8, (
-            f"assembled SOI Hamiltonian violates real-space Hermiticity: "
-            f"{real_space_error:.3e} eV"
-        )
+        assert real_space_error<SYMPREC*0.2, f"assembled SOI Hamiltonian violates real-space Hermiticity: {real_space_error:.3e} eV"
 
         if replace and self._included_soi_R is not None:
             self.ham_R-=self._included_soi_R
