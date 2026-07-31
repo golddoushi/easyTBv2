@@ -237,7 +237,7 @@ def run():
     recordOmegaIndexList=[]
     recordFermiIndexList=[]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveIFTorque_VG_DM,
+    calc=BZGridTask(model, solveIFTorque_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

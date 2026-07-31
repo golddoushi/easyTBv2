@@ -428,6 +428,25 @@ class SpinTorque(Spin):
             )
         if self.verbose==2: showElapsedTime(extraInfo=f"spin torque, velocity commutation operator in eig.-basis finished")
 
+    def buildSpinTorquePositionCommutator(self, position_K):
+        '''Build the electric-field torque vertex i[mu_S,r_a] for length-gauge calculations.'''
+        nbasis = self.energies.shape[-1]
+        self.spinTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        for c in range(3):
+            spin_c = self.spin_K[..., c, :, :]
+            for a in range(3):
+                position_a = position_K[..., a, :, :]
+                self.spinTorqueE_K[..., c, a, :, :] = 1j * (spin_c @ position_a - position_a @ spin_c)
+
+        self.projected_spinTorqueE_K_list = []
+        for spinTorqueProjection in self.spinTorqueProjectionList:
+            proj1 = projectionOperator(spinTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj2 = projectionOperator(spinTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
+            proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
+            self.projected_spinTorqueE_K_list.append((proj1_K @ self.spinTorqueE_K + self.spinTorqueE_K @ proj2_K) / 2)
+        if self.verbose==2: showElapsedTime(extraInfo="spin torque, position commutation operator in eig.-basis finished")
+
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
         '''
@@ -567,6 +586,25 @@ class OrbitalTorque(Orbital):
             )
         if self.verbose==2: showElapsedTime(extraInfo=f"orbital torque, velocity commutation operator in eig.-basis finished")
 
+    def buildOrbitalTorquePositionCommutator(self, position_K):
+        '''Build the electric-field torque vertex i[mu_L,r_a] for length-gauge calculations.'''
+        nbasis = self.energies.shape[-1]
+        self.orbitalTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        for c in range(3):
+            orbital_c = self.orbital_K[..., c, :, :]
+            for a in range(3):
+                position_a = position_K[..., a, :, :]
+                self.orbitalTorqueE_K[..., c, a, :, :] = 1j * (orbital_c @ position_a - position_a @ orbital_c)
+
+        self.projected_orbitalTorqueE_K_list = []
+        for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
+            proj1 = projectionOperator(orbitalTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj2 = projectionOperator(orbitalTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
+            proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
+            self.projected_orbitalTorqueE_K_list.append((proj1_K @ self.orbitalTorqueE_K + self.orbitalTorqueE_K @ proj2_K) / 2)
+        if self.verbose==2: showElapsedTime(extraInfo="orbital torque, position commutation operator in eig.-basis finished")
+
 class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], gS:float=2.0, **kwarg):
         '''
@@ -661,14 +699,14 @@ class Velocity(Energy):
         
         RH_R_W=self.model.RHam_R
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        r_R=self.model.AA_R_W
-        r_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+        AA_R_W=self.model.AA_R_W # Berry connection in local gauge
+        AA_R_W_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
         if self.phase:
             RH_R_W=RH_R_W*self.phaseshift[:,None,None,None]
-            r_R=r_R*self.phaseshift[:,None,None,None]
+            AA_R_W=AA_R_W*self.phaseshift[:,None,None,None]
         for iR, Rvec in enumerate(self.model.iRvec):
             self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
-            r_R_intepolated[tuple(Rvec)]=r_R[iR]
+            AA_R_W_intepolated[tuple(Rvec)]=AA_R_W[iR]
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
         vectors=self.vectors[:,:,:,None,:,:]
@@ -678,10 +716,10 @@ class Velocity(Energy):
         # Gauge-Covariant Geometric Corrections for velocity
         # ==========================================================
         # v_a = H^(1)_a - i[r_a, H^(0)]
-        r_K        =  np.fft.ifftn(r_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        self.position_K = vectors.conj().swapaxes(-2,-1) @ r_K @ vectors # position matrix in eigen representation
-        r_K_H = self.position_K * self.energies[...,None,None,:]
-        self.velocity_K = velocity_bare_K -1j*(r_K_H - r_K_H.conj().swapaxes(-2,-1))
+        AA_K_W        =  np.fft.ifftn(AA_R_W_intepolated,axes=(0,1,2,))*np.prod(self.kgrid) # Berry connection in Bloch gauge
+        AA_K_H = vectors.conj().swapaxes(-2,-1) @ AA_K_W @ vectors # Berry connection in Hamiltonian gauge
+        AA_K_H_dot_H = AA_K_H * self.energies[...,None,None,:]            # gauge correction term, the commutator [AA_K, Ham.]
+        self.velocity_K = velocity_bare_K - 1j*(AA_K_H_dot_H - AA_K_H_dot_H.conj().swapaxes(-2,-1)) # gauge-covariant velocity
 
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
         # check hermity
@@ -739,9 +777,9 @@ class Velocity(Energy):
             vectors=self.vectors[:,:,:,None,None,None,:,:]
             self.u_K = vectors.conj().swapaxes(-2,-1) @ RRRHam_K @ vectors
 
-            # ==========================================================
-            # Gauge-Covariant Geometric Corrections
-            # ==========================================================
+            # ==============================================================
+            # Gauge-Covariant Geometric Corrections for high order velocity
+            # ==============================================================
             def comm(A, B):
                 # Helper to compute commutator [A, B] broadcasting over k-grid
                 return A @ B - B @ A
@@ -749,53 +787,31 @@ class Velocity(Energy):
             # Ordinary k derivatives of the Wannier-gauge connection.
             # These terms vanish in the diagonal tight-binding limit, but are
             # required when the off-diagonal position matrix depends on k.
-            r1_R_intepolated = np.zeros(
-                self.kgrid + (3, 3, self.model.norbs, self.model.norbs),
-                dtype=complex,
-            )
+            r1_R_intepolated = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
             for iR, Rvec in enumerate(self.model.iRvec):
                 R_cart = Rvec @ self.model.lattice
-                r1_R_intepolated[tuple(Rvec)] = (
-                    1j * R_cart[:, None, None, None]
-                    * r_R[iR][None, :, :, :]
-                )
+                r1_R_intepolated[tuple(Rvec)] = 1j * R_cart[:, None, None, None] * AA_R_W[iR][None, :, :, :]
 
-            r1_K_AO = np.fft.ifftn(
-                r1_R_intepolated, axes=(0, 1, 2)
-            ) * np.prod(self.kgrid)
+            r1_K_AO = np.fft.ifftn(r1_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
             vectors1 = self.vectors[..., None, None, :, :]
-            connectionDerivative1 = (
-                vectors1.conj().swapaxes(-2, -1) @ r1_K_AO @ vectors1
-            )
+            connectionDerivative1 = vectors1.conj().swapaxes(-2, -1) @ r1_K_AO @ vectors1
             del r1_R_intepolated, r1_K_AO, vectors1
 
             # Construct the larger second-derivative tensor only after the
             # first-derivative FFT buffers have been released.
-            r2_R_intepolated = np.zeros(
-                self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs),
-                dtype=complex,
-            )
+            r2_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
             for iR, Rvec in enumerate(self.model.iRvec):
                 R_cart = Rvec @ self.model.lattice
                 r2_R_intepolated[tuple(Rvec)] = (
-                    -R_cart[:, None, None, None, None]
-                    * R_cart[None, :, None, None, None]
-                    * r_R[iR][None, None, :, :, :]
+                    -R_cart[:, None, None, None, None] * R_cart[None, :, None, None, None] * AA_R_W[iR][None, None, :, :, :]
                 )
-            r2_K_AO = np.fft.ifftn(
-                r2_R_intepolated, axes=(0, 1, 2)
-            ) * np.prod(self.kgrid)
+            r2_K_AO = np.fft.ifftn(r2_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
             vectors2 = self.vectors[..., None, None, None, :, :]
-            connectionDerivative2 = (
-                vectors2.conj().swapaxes(-2, -1) @ r2_K_AO @ vectors2
-            )
+            connectionDerivative2 = vectors2.conj().swapaxes(-2, -1) @ r2_K_AO @ vectors2
             del r2_R_intepolated, r2_K_AO, vectors2
 
             # Store the bare spatial moments and H in the eigenbasis.
-            H0 = (
-                self.energies[..., :, None]
-                * np.eye(self.energies.shape[-1], dtype=complex)
-            )
+            H0 = self.energies[..., :, None] * np.eye(self.energies.shape[-1], dtype=complex)
             H1 = velocity_bare_K
             H2 = self.w_K.copy()
 
@@ -806,11 +822,11 @@ class Velocity(Energy):
                     partialV[..., a, b, :, :] = (
                         H2[..., a, b, :, :]
                         - 1j * comm(connectionDerivative1[..., b, a, :, :], H0)
-                        - 1j * comm(self.position_K[..., a, :, :], H1[..., b, :, :])
+                        - 1j * comm(AA_K_H[..., a, :, :], H1[..., b, :, :])
                     )
                     # w_ab = D_b v_a
                     self.w_K[..., a, b, :, :] = (partialV[..., a, b, :, :] 
-                        - 1j * comm(self.position_K[..., b, :, :], self.velocity_K[..., a, :, :])
+                        - 1j * comm(AA_K_H[..., b, :, :], self.velocity_K[..., a, :, :])
                     )
 
             # u_abc = D_c w_ab.  connectionDerivative1[..., b, a]
@@ -824,14 +840,14 @@ class Velocity(Energy):
                             - 1j * comm(connectionDerivative2[..., c, b, a, :, :], H0)
                             - 1j * comm(connectionDerivative1[..., b, a, :, :], H1[..., c, :, :])
                             - 1j * comm(connectionDerivative1[..., c, a, :, :], H1[..., b, :, :])
-                            - 1j * comm(self.position_K[..., a, :, :], H2[..., b, c, :, :])
+                            - 1j * comm(AA_K_H[..., a, :, :], H2[..., b, c, :, :])
                         )
                         partialW = (partial2V
                             - 1j * comm(connectionDerivative1[..., c, b, :, :], self.velocity_K[..., a, :, :])
-                            - 1j * comm(self.position_K[..., b, :, :], partialV[..., a, c, :, :])
+                            - 1j * comm(AA_K_H[..., b, :, :], partialV[..., a, c, :, :])
                         )
                         self.u_K[..., a, b, c, :, :] = (partialW
-                            - 1j * comm(self.position_K[..., c, :, :], self.w_K[..., a, b, :, :])
+                            - 1j * comm(AA_K_H[..., c, :, :], self.w_K[..., a, b, :, :])
                         )
             del connectionDerivative1, connectionDerivative2, partialV
             if self.verbose==2: showElapsedTime(extraInfo=f"higer order velocity modification with position operators finished")
@@ -3127,28 +3143,16 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
 
         # H_LG(t) = H0 - E_a(t) r_a, hence the full torque contains
         # T_c(E) = -i[mu_c,H_LG] = T_c(0) + E_a i[mu_c,r_a].
-        torqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]:
-            for c in range(3):
-                mu_c = self.spin_K[..., c, :, :]
-                for a in range(3):
-                    r_a = r_K[..., a, :, :]
-                    torqueE_K[..., c, a, :, :] += 1j * (mu_c @ r_a - r_a @ mu_c)
+            self.buildSpinTorquePositionCommutator(r_K)
+            proj_torqueE_K[0] += self.spinTorqueE_K
         if ife_type in ["total", "orbital"]:
-            for c in range(3):
-                mu_c = self.orbital_K[..., c, :, :]
-                for a in range(3):
-                    r_a = r_K[..., a, :, :]
-                    torqueE_K[..., c, a, :, :] += 1j * (mu_c @ r_a - r_a @ mu_c)
-
-        proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + torqueE_K.shape, dtype=complex)
-        proj_torqueE_K[0] = torqueE_K
-        for iproj, torqueProjection in enumerate(torqueProjectionList):
-            proj1 = projectionOperator(torqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj2 = projectionOperator(torqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
-            proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
-            proj_torqueE_K[iproj+1] = (proj1_K @ torqueE_K + torqueE_K @ proj2_K) / 2
+            self.buildOrbitalTorquePositionCommutator(r_K)
+            proj_torqueE_K[0] += self.orbitalTorqueE_K
+        for iproj in range(len(torqueProjectionList)):
+            if ife_type in ["total", "spin"]: proj_torqueE_K[iproj+1] += self.projected_spinTorqueE_K_list[iproj]
+            if ife_type in ["total", "orbital"]: proj_torqueE_K[iproj+1] += self.projected_orbitalTorqueE_K_list[iproj]
 
         self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
         responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
