@@ -853,7 +853,7 @@ class Velocity(Energy):
             if self.verbose==2: showElapsedTime(extraInfo=f"higer order velocity modification with position operators finished")
 
 class Dipole(Velocity):
-    def __init__(self, **kwarg) -> None:
+    def __init__(self, highOrderDipole=False, **kwarg) -> None:
         '''
         Compute the off-diagonal dipole matrix in the Hamiltonian gauge.
 
@@ -862,15 +862,38 @@ class Dipole(Velocity):
         self.r_K[ik1, ik2, ik3, idirection, m, n] gives
         r_mn = v_mn / (i * (E_m - E_n)). Diagonal and numerically
         degenerate matrix elements are set to zero.
-        '''
-        super().__init__(**kwarg)
 
-        norb = self.energies.shape[-1]
+        If highOrderDipole is True,
+        self.r_deriv_K[ik1, ik2, ik3, ideriv, idirection, m, n]
+        gives the generalized derivative D_ideriv r^idirection_mn.
+        '''
+        highOrderVelocity = bool(kwarg.pop("highOrderVelocity", False) or highOrderDipole)
+        super().__init__(highOrderVelocity=highOrderVelocity, **kwarg)
+
+        norbs = self.energies.shape[-1]
         self.calcDeltaEInverse()
 
-        self.dipoleOffDiagonalMask = 1.0 - np.eye(norb)
-        self.r_K = self.velocity_K * self.deltaEInverse_pure[..., None, :, :]  / 1j * self.dipoleOffDiagonalMask
+        off_diag = 1.0 - np.eye(norbs)
+        self.r_K = self.velocity_K * self.deltaEInverse_pure[..., None, :, :]  / 1j * off_diag
         if self.verbose==2: showElapsedTime(extraInfo=f"dipole operators (off diagonal) finished")
+
+        if highOrderDipole:
+            velocity_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1)
+            deltaVelocity = velocity_diag[..., :, :, None] - velocity_diag[..., :, None, :]
+            self.r_deriv_K = np.zeros(self.kgrid + (3, 3, norbs, norbs), dtype=complex)
+            for ideriv in range(3):
+                r_derivative_direction = self.r_K[..., ideriv, :, :]
+                deltaVelocity_deriv = deltaVelocity[..., ideriv, :, :]
+                for idirection in range(3):
+                    velocity_direction = self.velocity_K[..., idirection, :, :]
+                    commutator = r_derivative_direction @ velocity_direction \
+                        - velocity_direction @ r_derivative_direction
+                    self.r_deriv_K[..., ideriv, idirection, :, :] = (
+                        self.w_K[..., ideriv, idirection, :, :]
+                        - velocity_direction * deltaVelocity_deriv * self.deltaEInverse_pure
+                        - 1j * commutator
+                    ) * self.deltaEInverse_pure / 1j * off_diag
+            if self.verbose==2: showElapsedTime(extraInfo=f"generalized k-derivatives of dipole operators finished")
 
 class OrbitalModern_LC(Velocity):
     def __init__(self, orbitalProjectionList=[], _computeOrbitalModernLC=True, **kwarg,):
@@ -1978,17 +2001,11 @@ class BulkPhotovoltaicConductance_LG_Shift(Dipole):
         Calculates the Universal Shift Current (BPVE) using the Sipe-Shkrebtii Length Gauge.
         Natively evaluates BOTH the Linear Shift Current and Circular Shift Current.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderDipole=True, **kwarg)
         omega_mn = self.deltaE
-        inv_omega = self.deltaEInverse_pure
-        off_diag = self.dipoleOffDiagonalMask
         
         # Tensor Shape: [ifermi, iomega, ialpha(drive), ibeta(drive), igamma(current)]
         self.sigma_shift = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
-
-        # 1. Compute Group Velocity Differences (Delta^a_nm)
-        v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1) 
-        Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :] 
 
         for iomega, Omega in enumerate(self.omegaList):
             L_mn_pos = (1/np.pi) * self.eta / ((omega_mn - Omega)**2 + self.eta**2)
@@ -1996,29 +2013,12 @@ class BulkPhotovoltaicConductance_LG_Shift(Dipole):
             L_mn = L_mn_pos + L_mn_neg
 
             for ialpha in range(3): # Drive E-field a
-                v_a = self.velocity_K[..., ialpha, :, :]
                 r_a = self.r_K[..., ialpha, :, :]
                 for ibeta in range(3): # Drive E-field b
-                    v_b = self.velocity_K[..., ibeta, :, :]
                     r_b = self.r_K[..., ibeta, :, :]
                     for igamma in range(3): # Measured Current c
-                        r_c = self.r_K[..., igamma, :, :]
-                        Delta_c = Delta_v[..., igamma, :, :]
-
-                        # Generalized derivatives of the optical matrix elements
-                        # along the measured-current direction.
-                        comm_a = r_c @ v_a - v_a @ r_c
-                        comm_b = r_c @ v_b - v_b @ r_c
-                        r_a_deriv_c = (
-                            self.w_K[..., igamma, ialpha, :, :]
-                            - v_a * Delta_c * inv_omega
-                            - 1j * comm_a
-                        ) * inv_omega / 1j * off_diag
-                        r_b_deriv_c = (
-                            self.w_K[..., igamma, ibeta, :, :]
-                            - v_b * Delta_c * inv_omega
-                            - 1j * comm_b
-                        ) * inv_omega / 1j * off_diag
+                        r_a_deriv_c = self.r_deriv_K[..., igamma, ialpha, :, :]
+                        r_b_deriv_c = self.r_deriv_K[..., igamma, ibeta, :, :]
 
                         # Shift current is symmetric in the two optical fields.
                         I_mn = -0.5j * (r_b.conj() * r_a_deriv_c + r_a.conj() * r_b_deriv_c)
@@ -2118,7 +2118,7 @@ class BulkPhotovoltaicConductance_LG_DM(Dipole):
         is not expected to be identical to the Lorentzian-only LG formulas away
         from the clean resonant limit.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderDipole=True, **kwarg)
 
         self.projected_response = np.zeros((len(velocityProjectionList)+1, len(velocityProjectionList)+1, len(velocityProjectionList)+1,
                                          self.kgrid[0], self.kgrid[1], self.kgrid[2],
@@ -2127,26 +2127,12 @@ class BulkPhotovoltaicConductance_LG_DM(Dipole):
         self.sigma_LG_DM = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
 
         norbs = self.energies.shape[-1]
-        off_diag = self.dipoleOffDiagonalMask
+        off_diag = 1.0 - np.eye(norbs)
         diag = np.eye(norbs)
         deltaE_mn = self.deltaE
-        inv_deltaE = self.deltaEInverse_pure
 
         v_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1)
         Delta_v = v_diag[..., :, :, None] - v_diag[..., :, None, :]
-
-        r_deriv_K = np.zeros(self.kgrid + (3, 3, norbs, norbs), dtype=complex)
-        for ideriv in range(3):
-            r_deriv = self.r_K[..., ideriv, :, :]
-            Delta_deriv = Delta_v[..., ideriv, :, :]
-            for idir in range(3):
-                v_dir = self.velocity_K[..., idir, :, :]
-                comm = r_deriv @ v_dir - v_dir @ r_deriv
-                r_deriv_K[..., ideriv, idir, :, :] = (
-                    self.w_K[..., ideriv, idir, :, :]
-                    - v_dir * Delta_deriv * inv_deltaE
-                    - 1j * comm
-                ) * inv_deltaE / 1j * off_diag
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
@@ -2163,7 +2149,7 @@ class BulkPhotovoltaicConductance_LG_DM(Dipole):
                     rho = numerator / denominator
 
                     offdiag_part = (
-                        f_nm_source * r_deriv_K[..., ideriv, idir, :, :] / denominator
+                        f_nm_source * self.r_deriv_K[..., ideriv, idir, :, :] / denominator
                         - numerator * Delta_v[..., ideriv, :, :] / denominator**2
                     ) * off_diag
 
