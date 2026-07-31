@@ -31,8 +31,8 @@ from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, 
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/2D-random-spin-ife/"
-    model=System_tb(
+    mainDir="./mcalc/FeCl2/"
+    model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -68,15 +68,15 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        #spinSeparated=True,
+        spinSeparated=True,
     )
-    '''
+    #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="collinear spin difference")
     model.includeSOCFromSOI(
-        theta=np.pi/2,phi=0,strength=1,keepRegularSpinAxis=True,
+        theta=0,phi=0,strength=1,keepRegularSpinAxis=True,
     )#'''
 
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually
@@ -158,7 +158,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-2.5         # VASP 2H-FeCl2 U=2.0
+    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -168,11 +168,11 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
     
     #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.linspace(1.0,2.0,51)
+    omegaAxis=np.linspace(0.5,2.0,51)
     model.setFermi(fermi)
     
     '''
@@ -232,12 +232,12 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(8,8,1)
+    BZGrid=(48,48,1)
     BZSymm=False
     recordOmegaIndexList=[]
     recordFermiIndexList=[]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveIFTorque_LG_DM,
+    calc=BZGridTask(model, solveIFTorque_VG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

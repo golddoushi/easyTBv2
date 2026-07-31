@@ -382,16 +382,18 @@ class SpinTorque(Spin):
 
         self.spinTorque_K=-1j*(self.spin_K*self.energies[...,None,None,:] - self.spin_K*self.energies[...,None,:,None])
         if self.verbose==2: showElapsedTime(extraInfo=f"spin torque in eig.-basis finished")
+
+        self.spinTorqueProjectionList=spinTorqueProjectionList
         self.projected_spinTorque_K_list=[]
-        
-        for spinTorqueProjection in spinTorqueProjectionList:
+        for spinTorqueProjection in self.spinTorqueProjectionList:
             proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_spinTorque_K_list.append((proj1_K@self.spinTorque_K + self.spinTorque_K@proj2_K)/2)
+        
 
-    def buildHighOrderSpinTorque(self, spinTorqueProjectionList=[]):
+    def buildSpinTorqueVelocityCommutator(self):
         '''
         Build vector-potential torque vertices for velocity-gauge calculations.
 
@@ -413,7 +415,7 @@ class SpinTorque(Spin):
 
         self.projected_spinTorqueA_K_list = []
         self.projected_spinTorqueAA_K_list = []
-        for spinTorqueProjection in spinTorqueProjectionList:
+        for spinTorqueProjection in self.spinTorqueProjectionList:
             proj1 = projectionOperator(spinTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
             proj2 = projectionOperator(spinTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
             proj1_K = self.projectorInEigenBasis(proj1)
@@ -424,7 +426,7 @@ class SpinTorque(Spin):
             self.projected_spinTorqueAA_K_list.append(
                 (proj1_K[..., None, None, None, :, :] @ self.spinTorqueAA_K + self.spinTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
             )
-        if self.verbose==2: showElapsedTime(extraInfo=f"high-order spin torque in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"spin torque, velocity commutation operator in eig.-basis finished")
 
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
@@ -520,16 +522,17 @@ class OrbitalTorque(Orbital):
 
         self.orbitalTorque_K=-1j*(self.orbital_K*self.energies[...,None,None,:] - self.orbital_K*self.energies[...,None,:,None])
         if self.verbose==2: showElapsedTime(extraInfo=f"orbital torque in eig.-basis finished")
+
+        self.orbitalTorqueProjectionList=orbitalTorqueProjectionList
         self.projected_orbitalTorque_K_list=[]
-        
-        for orbitalTorqueProjection in orbitalTorqueProjectionList:
+        for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
             proj1=projectionOperator(orbitalTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(orbitalTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_orbitalTorque_K_list.append((proj1_K@self.orbitalTorque_K + self.orbitalTorque_K@proj2_K)/2)
 
-    def buildHighOrderOrbitalTorque(self, orbitalTorqueProjectionList=[]):
+    def buildOrbitalTorqueVelocityCommutator(self):
         '''
         Build vector-potential torque vertices for velocity-gauge calculations.
 
@@ -551,7 +554,7 @@ class OrbitalTorque(Orbital):
 
         self.projected_orbitalTorqueA_K_list = []
         self.projected_orbitalTorqueAA_K_list = []
-        for orbitalTorqueProjection in orbitalTorqueProjectionList:
+        for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
             proj1 = projectionOperator(orbitalTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
             proj2 = projectionOperator(orbitalTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
             proj1_K = self.projectorInEigenBasis(proj1)
@@ -562,7 +565,7 @@ class OrbitalTorque(Orbital):
             self.projected_orbitalTorqueAA_K_list.append(
                 (proj1_K[..., None, None, None, :, :] @ self.orbitalTorqueAA_K + self.orbitalTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
             )
-        if self.verbose==2: showElapsedTime(extraInfo=f"high-order orbital torque in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"orbital torque, velocity commutation operator in eig.-basis finished")
 
 class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], gS:float=2.0, **kwarg):
@@ -2976,7 +2979,7 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
         '''
         Computing light-induced d.c. torque with velocity-gauge time-dependent density matrix propagation.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is solely contributed by the exchange torque, not the full torque, suitable to fed to LLG dynamics 
+        The spin part is the full electronic torque -i[mu_S,H_VG(t)].
 
         Indexing
         --------
@@ -2986,8 +2989,8 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
-        if ife_type in ["total", "spin"]: self.buildHighOrderSpinTorque(torqueProjectionList)
-        if ife_type in ["total", "orbital"]: self.buildHighOrderOrbitalTorque(torqueProjectionList)
+        if ife_type in ["total", "spin"]: self.buildSpinTorqueVelocityCommutator()
+        if ife_type in ["total", "orbital"]: self.buildOrbitalTorqueVelocityCommutator()
 
         nbasis = self.energies.shape[-1]
         proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
@@ -3096,11 +3099,11 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
         '''
         Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is solely contributed by the exchange torque, not the full torque, suitable to fed to LLG dynamics 
+        The spin part is the full electronic torque -i[mu_S,H_LG(t)].
 
         Indexing
         --------
-        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
+        - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, 
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
@@ -3121,6 +3124,31 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
 
         off_diag = 1.0 - np.eye(nbasis)
         r_K = self.velocity_K * inv_deltaE[..., None, :, :] / 1j * off_diag
+
+        # H_LG(t) = H0 - E_a(t) r_a, hence the full torque contains
+        # T_c(E) = -i[mu_c,H_LG] = T_c(0) + E_a i[mu_c,r_a].
+        torqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]:
+            for c in range(3):
+                mu_c = self.spin_K[..., c, :, :]
+                for a in range(3):
+                    r_a = r_K[..., a, :, :]
+                    torqueE_K[..., c, a, :, :] += 1j * (mu_c @ r_a - r_a @ mu_c)
+        if ife_type in ["total", "orbital"]:
+            for c in range(3):
+                mu_c = self.orbital_K[..., c, :, :]
+                for a in range(3):
+                    r_a = r_K[..., a, :, :]
+                    torqueE_K[..., c, a, :, :] += 1j * (mu_c @ r_a - r_a @ mu_c)
+
+        proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + torqueE_K.shape, dtype=complex)
+        proj_torqueE_K[0] = torqueE_K
+        for iproj, torqueProjection in enumerate(torqueProjectionList):
+            proj1 = projectionOperator(torqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj2 = projectionOperator(torqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
+            proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
+            proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
+            proj_torqueE_K[iproj+1] = (proj1_K @ torqueE_K + torqueE_K @ proj2_K) / 2
 
         self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
         responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
@@ -3168,7 +3196,15 @@ class InverseFaradayTorque_LG_DM(Velocity, SpinTorque, OrbitalTorque):
                         for iproj_T, T_K in enumerate(proj_T_K):
                             for c in range(3):
                                 T_c_nm = T_K[..., c, :, :].swapaxes(-1, -2)
-                                chi_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
+                                TE_c_b_nm = proj_torqueE_K[iproj_T, ..., c, b, :, :].swapaxes(-1, -2)
+                                TE_c_a_nm = proj_torqueE_K[iproj_T, ..., c, a, :, :].swapaxes(-1, -2)
+                                obs2_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
+                                obs1_k = np.sum(
+                                    rho1_cache[(a, -1)] * TE_c_b_nm
+                                    + rho1_cache[(b, 1)] * TE_c_a_nm,
+                                    axis=(-2, -1),
+                                )
+                                chi_k = obs2_k + obs1_k
                                 self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
                                 irecord_fermi = responseFermiRecord.get(ifermi)
                                 if irecord_fermi is not None and irecord_omega is not None:
@@ -3185,11 +3221,11 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is solely contributed by the exchange torque, not the full torque, suitable to fed to LLG dynamics 
+        The spin part is the full electronic torque -i[mu_S,H_VG(t)].
 
         Indexing
         --------
-        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
+        - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, 
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
@@ -3199,12 +3235,12 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         proj_TA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         proj_TAA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: 
-            self.buildHighOrderSpinTorque(torqueProjectionList)
+            self.buildSpinTorqueVelocityCommutator()
             proj_T_K[0] += self.spinTorque_K
             proj_TA_K[0] += self.spinTorqueA_K
             proj_TAA_K[0] += self.spinTorqueAA_K
         if ife_type in ["total", "orbital"]: 
-            self.buildHighOrderOrbitalTorque(torqueProjectionList)
+            self.buildOrbitalTorqueVelocityCommutator()
             proj_T_K[0] += self.orbitalTorque_K
             proj_TA_K[0] += self.orbitalTorqueA_K
             proj_TAA_K[0] += self.orbitalTorqueAA_K
