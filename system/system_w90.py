@@ -517,15 +517,12 @@ class System_w90(System):
 
     def _rotateSOIToGlobalSpinFrame(self,theta,phi):
         """Apply the spin-frame convention used by ``includeSOCFromSOI``."""
-        self.rotateSpinBasisToGlobal(
-            alpha=phi,beta=theta,gamma=-phi,
-        )
+        self.rotateSpinBasisToGlobal(alpha=phi,beta=theta,gamma=-phi)
         self._soi_global_spin_frame=(float(theta),float(phi))
 
     def includeSOCFromSOI(
         self,soi=None,theta=0.,phi=0.,strength=1.,replace=True,
-        keepRegularSpinAxis=True,
-    ):
+        keepRegularSpinAxis=True):
         r'''
         Add the SOC Hamiltonian for a chosen magnetization direction.
 

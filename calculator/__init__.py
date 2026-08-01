@@ -426,17 +426,17 @@ class SpinTorque(Spin):
             self.projected_spinTorqueAA_K_list.append(
                 (proj1_K[..., None, None, None, :, :] @ self.spinTorqueAA_K + self.spinTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
             )
-        if self.verbose==2: showElapsedTime(extraInfo=f"spin torque, velocity commutation operator in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"velocity corrected spin torque in eig.-basis finished")
 
-    def buildSpinTorquePositionCommutator(self, position_K):
+    def buildSpinTorqueDipoleCommutator(self):
         '''Build the electric-field torque vertex i[mu_S,r_a] for length-gauge calculations.'''
         nbasis = self.energies.shape[-1]
         self.spinTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         for c in range(3):
             spin_c = self.spin_K[..., c, :, :]
             for a in range(3):
-                position_a = position_K[..., a, :, :]
-                self.spinTorqueE_K[..., c, a, :, :] = 1j * (spin_c @ position_a - position_a @ spin_c)
+                r_a = self.r_K[..., a, :, :]
+                self.spinTorqueE_K[..., c, a, :, :] = 1j * (spin_c @ r_a - r_a @ spin_c)
 
         self.projected_spinTorqueE_K_list = []
         for spinTorqueProjection in self.spinTorqueProjectionList:
@@ -445,7 +445,7 @@ class SpinTorque(Spin):
             proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
             proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
             self.projected_spinTorqueE_K_list.append((proj1_K @ self.spinTorqueE_K + self.spinTorqueE_K @ proj2_K) / 2)
-        if self.verbose==2: showElapsedTime(extraInfo="spin torque, position commutation operator in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo="Dipole corrected spin torque in eig.-basis finished")
 
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
@@ -492,6 +492,8 @@ class SpinExchangeTorque(Spin):
         exchange=self.exchange_K[...,None,:,:]
         self.spinExchangeTorque_K=-1j*(spin@exchange-exchange@spin)
         self.spinTorque_K=self.spinExchangeTorque_K
+
+        self.spinTorqueProjectionList = spinTorqueProjectionList
         self.projected_spinExchangeTorque_K_list=[]
         for spinTorqueProjection in spinTorqueProjectionList:
             proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
@@ -503,7 +505,7 @@ class SpinExchangeTorque(Spin):
         self.projected_spinTorque_K_list=self.projected_spinExchangeTorque_K_list
         if self.verbose==2: showElapsedTime(extraInfo="spin exchange torque in eig.-basis finished")
 
-    def buildHighOrderSpinTorque(self, spinTorqueProjectionList=[]):
+    def buildSpinTorqueVelocityCommutator(self):
         '''
         Build zero vector-potential vertices for the exchange torque operator.
 
@@ -516,11 +518,26 @@ class SpinExchangeTorque(Spin):
         self.spinExchangeTorqueAA_K=np.zeros(self.kgrid+(3,3,3,nbasis,nbasis),dtype=complex)
         self.spinTorqueA_K=self.spinExchangeTorqueA_K
         self.spinTorqueAA_K=self.spinExchangeTorqueAA_K
-        self.projected_spinExchangeTorqueA_K_list=[np.zeros_like(self.spinExchangeTorqueA_K) for _ in spinTorqueProjectionList]
-        self.projected_spinExchangeTorqueAA_K_list=[np.zeros_like(self.spinExchangeTorqueAA_K) for _ in spinTorqueProjectionList]
+        self.projected_spinExchangeTorqueA_K_list=[np.zeros_like(self.spinExchangeTorqueA_K) for _ in self.spinTorqueProjectionList]
+        self.projected_spinExchangeTorqueAA_K_list=[np.zeros_like(self.spinExchangeTorqueAA_K) for _ in self.spinTorqueProjectionList]
         self.projected_spinTorqueA_K_list=self.projected_spinExchangeTorqueA_K_list
         self.projected_spinTorqueAA_K_list=self.projected_spinExchangeTorqueAA_K_list
-        if self.verbose==2: showElapsedTime(extraInfo="zero high-order spin exchange torque vertices finished")
+        if self.verbose==2: showElapsedTime(extraInfo="zero velocity corrected spin exchange torque finished")
+
+    def buildSpinTorqueDipoleCommutator(self):
+        '''
+        Build zero dipole-potential vertices for the exchange torque operator.
+    
+        H_XC is a field-independent local effective potential. The electric
+        field changes its expectation through the driven density matrix, not
+        through explicit dipole-dependent exchange-torque vertices.
+        '''
+        nbasis=self.energies.shape[-1]
+        self.spinExchangeTorqueE_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
+        self.spinTorqueE_K=self.spinExchangeTorqueE_K
+        self.projected_spinExchangeTorqueE_K_list=[np.zeros_like(self.spinExchangeTorqueE_K) for _ in self.spinTorqueProjectionList]
+        self.projected_spinTorqueE_K_list=self.projected_spinExchangeTorqueE_K_list
+        if self.verbose==2: showElapsedTime(extraInfo="zero dipole corrected spin exchange torque finished")
 
 class OrbitalTorque(Orbital):
     def __init__(self, orbitalTorqueProjectionList=[], **kwarg):
@@ -584,17 +601,17 @@ class OrbitalTorque(Orbital):
             self.projected_orbitalTorqueAA_K_list.append(
                 (proj1_K[..., None, None, None, :, :] @ self.orbitalTorqueAA_K + self.orbitalTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
             )
-        if self.verbose==2: showElapsedTime(extraInfo=f"orbital torque, velocity commutation operator in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"velocity correctd orbital torque in eig.-basis finished")
 
-    def buildOrbitalTorquePositionCommutator(self, position_K):
+    def buildOrbitalTorqueDipoleCommutator(self):
         '''Build the electric-field torque vertex i[mu_L,r_a] for length-gauge calculations.'''
         nbasis = self.energies.shape[-1]
         self.orbitalTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         for c in range(3):
             orbital_c = self.orbital_K[..., c, :, :]
             for a in range(3):
-                position_a = position_K[..., a, :, :]
-                self.orbitalTorqueE_K[..., c, a, :, :] = 1j * (orbital_c @ position_a - position_a @ orbital_c)
+                r_a = self.r_K[..., a, :, :]
+                self.orbitalTorqueE_K[..., c, a, :, :] = 1j * (orbital_c @ r_a - r_a @ orbital_c)
 
         self.projected_orbitalTorqueE_K_list = []
         for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
@@ -603,7 +620,7 @@ class OrbitalTorque(Orbital):
             proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
             proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
             self.projected_orbitalTorqueE_K_list.append((proj1_K @ self.orbitalTorqueE_K + self.orbitalTorqueE_K @ proj2_K) / 2)
-        if self.verbose==2: showElapsedTime(extraInfo="orbital torque, position commutation operator in eig.-basis finished")
+        if self.verbose==2: showElapsedTime(extraInfo="dipole corrected orbital torque in eig.-basis finished")
 
 class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], gS:float=2.0, **kwarg):
@@ -2942,12 +2959,12 @@ class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
+class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity-gauge time-dependent density matrix propagation.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is the full electronic torque -i[mu_S,H_VG(t)].
+        The spin part is the exchange electronic torque -i[mu_S,H_XC(t)].
 
         Indexing
         --------
@@ -3060,14 +3077,14 @@ class InverseFaradayTorque_TDSE(Velocity, SpinTorque, OrbitalTorque):
 
     _rk4_step = InverseFaradayEffect_TDSE._rk4_step
 
-class InverseFaradayTorque_LG_DM(Dipole, SpinTorque, OrbitalTorque):
+class InverseFaradayTorque_LG_DM(SpinTorque, OrbitalTorque, Dipole):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is the full electronic torque -i[mu_S,H_LG(t)].
+        The spin part is the exchange electronic torque -i[mu_S,H_XC(t)].
 
         Indexing
         --------
@@ -3091,10 +3108,10 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinTorque, OrbitalTorque):
         # T_c(E) = -i[mu_c,H_LG] = T_c(0) + E_a i[mu_c,r_a].
         proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]:
-            self.buildSpinTorquePositionCommutator(self.r_K)
+            self.buildSpinTorqueDipoleCommutator()
             proj_torqueE_K[0] += self.spinTorqueE_K
         if ife_type in ["total", "orbital"]:
-            self.buildOrbitalTorquePositionCommutator(self.r_K)
+            self.buildOrbitalTorqueDipoleCommutator()
             proj_torqueE_K[0] += self.orbitalTorqueE_K
         for iproj in range(len(torqueProjectionList)):
             if ife_type in ["total", "spin"]: proj_torqueE_K[iproj+1] += self.projected_spinTorqueE_K_list[iproj]
@@ -3171,7 +3188,7 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is the full electronic torque -i[mu_S,H_VG(t)].
+        The spin part is the exchange electronic torque -i[mu_S,H_XC(t)].
 
         Indexing
         --------

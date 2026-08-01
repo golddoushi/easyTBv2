@@ -76,7 +76,7 @@ def run():
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="collinear spin difference")
     model.includeSOCFromSOI(
-        theta=0,phi=0,strength=1,keepRegularSpinAxis=True,
+        theta=np.pi/2,phi=0,strength=1,keepRegularSpinAxis=True,
     )#'''
 
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually
@@ -237,7 +237,7 @@ def run():
     recordOmegaIndexList=[]
     recordFermiIndexList=[]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveIFTorque_LG_DM,
+    calc=BZGridTask(model, solveIFTorque_VG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -252,7 +252,7 @@ def run():
                           'record frequency ids':recordOmegaIndexList,
                           'record fermi ids':recordFermiIndexList,
 
-                          "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
+                          "mag type": "orbital", # Type of Inversed Faraday effect, can be spin | orbital | total
 
                           "finite temperature occupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
                     }, 
