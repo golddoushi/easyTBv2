@@ -269,8 +269,7 @@ class System_w90(System):
         center_distance=np.linalg.norm(center_frac@chk_up.real_lattice, axis=1)
         print(f"paired up/down Wannier-center distance: mean {center_distance.mean():.3e} angstrom, max {center_distance.max():.3e} angstrom")
 
-    def getExchangeR(self, provenance="orientation finite difference", reversedModel=None):
-        provenance=self._normalizeExchangeProvenance(provenance)
+    def getExchangeR(self, provenance="explicit", reversedModel=None):
         if provenance!="collinear spin difference":
             return super().getExchangeR(provenance=provenance,reversedModel=reversedModel)
         assert self.spinSeparated, "collinear spin difference requires spinSeparated=True"
@@ -278,6 +277,7 @@ class System_w90(System):
         assert self._soi_global_spin_frame is None
         self.exchange_R=self._exchangeFromCollinearSpinDifference()
         self.exchangeProvenance=provenance
+        self._storeExchangeDecomposition()
         if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
         return self.exchange_R
 
@@ -423,11 +423,8 @@ class System_w90(System):
         )
         return self.soi_R_W
 
-    def symmerizeCollinearAndSOI(
-        self,soi=None,symOpSelection:list=[],
-        print_row=(0,1,),print_col=(0,1,),
-        enforceSpinlessTimeReversal=True,
-    ):
+    def symmerizeCollinearAndSOI(self,soi=None,symOpSelection:list=[],print_row=(0,1,),print_col=(0,1,),
+        enforceSpinlessTimeReversal=True):
         r'''
         Symmetrize the SOC-free collinear Hamiltonian and Cartesian SOI
         coefficients before selecting a magnetization direction.
@@ -472,36 +469,24 @@ class System_w90(System):
         nonmagnetic_reference=[np.zeros(3) for _ in range(nions)]
 
         if enforceSpinlessTimeReversal:
-            spinless_tr_residual=float(np.max(np.abs(
-                self.ham_R-self.ham_R.conj()
-            )))
+            spinless_tr_residual=float(np.max(np.abs(self.ham_R-self.ham_R.conj())))
             self.ham_R=0.5*(self.ham_R+self.ham_R.conj())
             print(f"Projected the collinear Hamiltonian onto spinless time reversal; residual {spinless_tr_residual:.3e} eV")
-            spinless_soi_tr_residual=float(np.max(np.abs(
-                self.soi_R_W+self.soi_R_W.conj()
-            )))
+            spinless_soi_tr_residual=float(np.max(np.abs(self.soi_R_W+self.soi_R_W.conj())))
             self.soi_R_W=0.5*(self.soi_R_W-self.soi_R_W.conj())
             print(f"Projected the orbital-SOI coefficients onto spinless time reversal; residual {spinless_soi_tr_residual:.3e} eV")
 
         print("Symmetrizing the SOC-free collinear model")
-        self.symmerizeHamAndOverlap(spinor=False, 
-            symOpSelection=symOpSelection,
-            atomicMagMomList=nonmagnetic_reference,
-            print_row=print_row,
-            print_col=print_col,
+        self.symmerizeHamAndOverlap(spinor=False, symOpSelection=symOpSelection,
+            atomicMagMomList=nonmagnetic_reference, print_row=print_row, print_col=print_col,
         )
 
         print("Symmetrizing Cartesian orbital-SOI coefficients")
-        self.soi_R_W=self.symmerizeTensorInAtomicBasis(
-            self.soi_R_W,
-            axisRep=("iRvec","axial","atomic orb","atomic orb"),
+        self.soi_R_W=self.symmerizeTensorInAtomicBasis(self.soi_R_W, axisRep=("iRvec","axial","atomic orb","atomic orb"),
             spinor=False,
-            symOpSelection=symOpSelection,
-            atomicMagMomList=nonmagnetic_reference,
+            symOpSelection=symOpSelection, atomicMagMomList=nonmagnetic_reference,
             format="VASP6" if self.format=="VASP6" else "w90",
-            print_row=print_row,
-            print_col=print_col,
-            reportSymOps=False,
+            print_row=print_row, print_col=print_col, reportSymOps=False,
         )
         return self.soi_R_W
 
@@ -510,9 +495,7 @@ class System_w90(System):
         if self._soi_global_spin_frame is None:
             return
         theta,phi=self._soi_global_spin_frame
-        self.rotateSpinBasisToGlobal(
-            alpha=phi,beta=-theta,gamma=-phi,
-        )
+        self.rotateSpinBasisToGlobal(alpha=phi,beta=-theta,gamma=-phi)
         self._soi_global_spin_frame=None
 
     def _rotateSOIToGlobalSpinFrame(self,theta,phi):
@@ -520,16 +503,14 @@ class System_w90(System):
         self.rotateSpinBasisToGlobal(alpha=phi,beta=theta,gamma=-phi)
         self._soi_global_spin_frame=(float(theta),float(phi))
 
-    def includeSOCFromSOI(
-        self,soi=None,theta=0.,phi=0.,strength=1.,replace=True,
-        keepRegularSpinAxis=True):
+    def includeSOCFromSOI(self,soi=None,theta=0.,phi=0.,strength=1.,replace=True,keepRegularSpinAxis=True):
         r'''
-        Add the SOC Hamiltonian for a chosen magnetization direction.
+        Add the WISOI Hamiltonian for a chosen magnetization direction.
 
-        ``theta`` and ``phi`` are the polar and azimuthal angles of the
-        magnetization axis in the global Cartesian frame. The SOC is first
-        assembled in the local collinear basis quantized along that axis.
-        For ``theta=phi=0`` the assembled blocks are
+        Following the WISOI construction, ``theta`` and ``phi`` specify the
+        local collinear spin basis aligned with the magnetization. The orbital
+        SOI coefficients are contracted with Pauli matrices represented in
+        that local basis. For ``theta=phi=0`` the SOC blocks are
 
         .. math::
 
@@ -540,22 +521,26 @@ class System_w90(System):
             -A_z^{\downarrow\downarrow}
             \end{pmatrix}.
 
-        If ``keepRegularSpinAxis`` is True (the default), the complete model
-        is subsequently transformed with
+        If ``keepRegularSpinAxis`` is True (the default), the complete model is
+        subsequently transformed with
 
         .. math::
 
             U=R_z(\phi)R_y(\theta)R_z(-\phi)
 
-        so that ``spin[0:3]`` again denotes the global Cartesian
-        :math:`(\sigma_x,\sigma_y,\sigma_z)` operators. If False, the model
-        remains in the local magnetization-aligned spin basis.
+        so that ``spin[0:3]`` again denotes the global Cartesian operators.
+        This is a change of representation, not an additional physical
+        rotation. If False, the model remains in the local spin frame.
+
+        This WISOI construction is distinct from adding the zero-angle SOC and
+        then calling ``rotateExchangeDirection``. The latter keeps SOC fixed in
+        a global frame and is available as a separate rigid-exchange
+        approximation.
 
         If ``replace`` is True, a contribution previously added by this
         method is removed before the new direction is applied. An automatic
         global-frame rotation from an earlier call is undone before the
-        replacement, preventing rotations from accumulating during an angle
-        scan.
+        replacement, preventing spin-frame rotations from accumulating.
         '''
         self._restoreSOILocalSpinFrame()
         filename=self._resolveSOIFile(soi)
@@ -606,20 +591,20 @@ class System_w90(System):
 
         if replace and self._included_soi_R is not None:
             self.ham_R-=self._included_soi_R
+            if self.nonexchange_R is not None:
+                self.nonexchange_R-=self._included_soi_R
             self._included_soi_R=None
         self.ham_R+=soc_R
+        if self.nonexchange_R is not None:
+            self.nonexchange_R+=soc_R
         if self._included_soi_R is None:
             self._included_soi_R=soc_R.copy()
         else:
             self._included_soi_R+=soc_R
         returned_soc_R=soc_R
         if keepRegularSpinAxis:
-            spin_rotation_full=np.kron(
-                spin_rotation,np.eye(self.norbs//2,dtype=complex),
-            )
-            returned_soc_R=(
-                spin_rotation_full@soc_R@spin_rotation_full.conj().T
-            )
+            spin_rotation_full=np.kron(spin_rotation,np.eye(self.norbs//2,dtype=complex))
+            returned_soc_R=spin_rotation_full@soc_R@spin_rotation_full.conj().T
             self._rotateSOIToGlobalSpinFrame(theta,phi)
         else:
             self._refreshHamiltonianDerivedMatrices()
@@ -639,6 +624,8 @@ class System_w90(System):
         global_spin_frame=self._soi_global_spin_frame
         self._restoreSOILocalSpinFrame()
         self.ham_R-=self._included_soi_R
+        if self.nonexchange_R is not None:
+            self.nonexchange_R-=self._included_soi_R
         self._included_soi_R=None
         if global_spin_frame is None:
             self._refreshHamiltonianDerivedMatrices()

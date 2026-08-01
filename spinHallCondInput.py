@@ -36,6 +36,7 @@ def run():
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
+        #hamR="wannier90_my",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -68,22 +69,22 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        #spinSeparated=True,
+        spinSeparated=True,
     )
-    '''
+    #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
-    model.symmerizeCollinearAndSOI()
+    #model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="collinear spin difference")
-    model.includeSOCFromSOI(
-        theta=np.pi/2,phi=0,strength=1,keepRegularSpinAxis=True,
-    )#'''
+    model.includeSOCFromSOI(theta=0,phi=0,strength=1,keepRegularSpinAxis=True)
+    model.rotateExchangeDirection(theta=np.pi/2,phi=np.pi/2)
+    model.getExchangeR(provenance="explicit")
+    #'''
 
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually
     # NOTE: this is only for independent vasp_ncl + wannier90 scheme, DO NOT apply for vasp_std + V_soi scheme
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
-    model.getExchangeR(provenance="explicit")
     
     '''
     # global symmetrization
@@ -100,6 +101,7 @@ def run():
     #'''
 
     # modulate the SOC, exchange fields, baised fields, etc.
+    #model.getExchangeR(provenance="explicit")
     #model.scaleSOC(lam=0)
     #model.rotateExchangeField(projection=[(0,(0,)),(1,(0,))], theta=np.pi, phi=0.)
     #model.applyElectrostaticPotentialAtOnsites([0., 0., 0.,]) # in eV/angstrom

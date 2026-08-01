@@ -20,6 +20,9 @@ class System:
         self.ham_R:np.ndarray=None
         # exchange part of the real-space Hamiltonian
         self.exchange_R:np.ndarray=None
+        # immutable rigid-rotation reference and the complementary Hamiltonian
+        self.exchange_R_reference:np.ndarray=None
+        self.nonexchange_R:np.ndarray=None
         self.exchangeProvenance:str=None
         # real-space energy matrix produced by openmx
         self.energy_R:np.ndarray=None
@@ -1613,9 +1616,12 @@ class System:
             print(f"  H_01: {len(self.H_01_R)} hopping matrices")
             print(f"  H_10: {len(self.H_m10_R)} hopping matrices\n")
 
-    @staticmethod
-    def _normalizeExchangeProvenance(provenance):
-        return " ".join(str(provenance).strip().lower().replace("_"," ").replace("-"," ").split())
+    def _storeExchangeDecomposition(self):
+        '''Store the current exchange matrix as the rigid-rotation reference.'''
+        assert self.exchange_R is not None, "cannot store an empty exchange Hamiltonian"
+        assert self.exchange_R.shape==self.ham_R.shape
+        self.exchange_R_reference=self.exchange_R.copy()
+        self.nonexchange_R=self.ham_R-self.exchange_R
 
     def _exchangeFromCollinearSpinDifference(self):
         assert self.ispin==2 and self.norbs%2==0, "collinear spin difference requires two equally sized spin channels"
@@ -1656,7 +1662,6 @@ class System:
         - reversedModel : System
             another system with reversed magnetic moment, required by the orientation finite difference approach.
         '''
-        provenance=self._normalizeExchangeProvenance(provenance)
         if provenance=="explicit":
             assert self.ispin==2 and self.norbs%2==0, "onsite Pauli blocking requires two equally sized spin channels"
             iR0=self.iRvecIndex.get((0,0,0),None)
@@ -1718,7 +1723,44 @@ class System:
         else:
             raise ValueError(f"unsupported exchange provenance {provenance!r}")
         self.exchangeProvenance=provenance
+        self._storeExchangeDecomposition()
         if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
+        return self.exchange_R
+
+    @staticmethod
+    def _spinRotationMatrix(theta, phi, gamma=0.0):
+        '''Return U=Rz(phi) Ry(theta) Rz(gamma) in the spin-1/2 representation.'''
+        sz=np.array([[1,0],[0,-1]],dtype=complex)
+        sy=np.array([[0,-1j],[1j,0]],dtype=complex)
+        identity=np.eye(2,dtype=complex)
+
+        def rotation(angle,pauli):
+            return np.cos(angle/2)*identity-1j*np.sin(angle/2)*pauli
+
+        return rotation(phi,sz) @ rotation(theta,sy) @ rotation(gamma,sz)
+
+    def rotateExchangeDirection(self, theta, phi, gamma=0.0):
+        r'''
+        Apply a rigid active spin rotation to the complete reference exchange Hamiltonian.
+
+        The rotation is relative to ``exchange_R_reference`` saved by
+        ``getExchangeR``. It acts on every real-space and orbital matrix
+        element, including nonlocal exchange. The complementary Hamiltonian
+        ``nonexchange_R`` is not rotated. With ``gamma=0``, the convention is
+        a rotation by ``theta`` around y followed by ``phi`` around z, matching
+        the legacy ``rotateExchangeField`` convention.
+        '''
+        assert self.exchange_R_reference is not None, "call getExchangeR before rotating the exchange direction"
+        assert self.nonexchange_R is not None, "the nonexchange Hamiltonian has not been initialized"
+        assert self.ispin==2 and self.norbs%2==0, "exchange rotation requires two equally sized spin channels"
+
+        spin_rotation=self._spinRotationMatrix(theta,phi,gamma)
+        half_norbs=self.norbs//2
+        rotation_full=np.kron(spin_rotation,np.eye(half_norbs,dtype=complex))
+        self.exchange_R=rotation_full @ self.exchange_R_reference @ rotation_full.conj().T
+        self.ham_R=self.nonexchange_R+self.exchange_R
+        self._refreshHamiltonianDerivedMatrices()
+        if self.verbose: print(f"Rigid exchange rotation applied: theta={theta:.8f}, phi={phi:.8f}, gamma={gamma:.8f}")
         return self.exchange_R
 
     def addExchangeSplitting(self, projection, exchange_vector):
@@ -1791,73 +1833,10 @@ class System:
                     applied_orbitals += 1
                     
         # 3. Synchronize dependent system matrices
+        self._storeExchangeDecomposition()
         self._refreshHamiltonianDerivedMatrices()
 
         if self.verbose: showElapsedTime(extraInfo=f"Successfully applied exchange splitting to {applied_orbitals} physical spatial orbitals.")
-
-    def rotateExchangeField(self, projection, theta, phi):
-        """
-        Rotates the on-site exchange field for specified orbitals.
-        Rotation is applied via Euler angles: around y-axis by theta, then z-axis by phi.
-        """
-        if self.verbose: 
-            print(f"\n--- Rotating Exchange Field (theta={theta:.4f}, phi={phi:.4f}) ---")
-            
-        home_R_tuple = (0, 0, 0)
-        iR0 = self.iRvecIndex.get(home_R_tuple, -1)
-        if iR0 == -1:
-            for i, R in enumerate(self.iRvec):
-                if tuple(R) == home_R_tuple:
-                    iR0 = i; break
-        assert iR0 != -1, "Could not find home cell R=(0,0,0)"
-        
-        half_norbs = self.norbs // 2
-        count = 0
-        
-        cos_t, sin_t = np.cos(theta), np.sin(theta)
-        cos_p, sin_p = np.cos(phi), np.sin(phi)
-        
-        for iatom, shells in projection:
-            atom_info = self.atomicOrbInfoList[iatom]
-            for ishell in shells:
-                for iorb in atom_info["orbital index"][ishell]:
-                    if iorb >= half_norbs: continue # Only loop over spatial orbitals once
-                    I_up = iorb
-                    I_dn = I_up + half_norbs
-                    
-                    # Extract 2x2 block
-                    H_uu = self.ham_R[iR0, I_up, I_up]
-                    H_dd = self.ham_R[iR0, I_dn, I_dn]
-                    H_ud = self.ham_R[iR0, I_up, I_dn]
-                    H_du = self.ham_R[iR0, I_dn, I_up]
-                    
-                    # Project to SU(2) Pauli basis
-                    S0 = 0.5 * (H_uu + H_dd)
-                    Sz = 0.5 * (H_uu - H_dd)
-                    Sx = 0.5 * (H_ud + H_du)
-                    Sy = 0.5j * (H_ud - H_du)
-                    
-                    # 1. Rotate around y-axis by theta
-                    Sx_p = Sx * cos_t + Sz * sin_t
-                    Sy_p = Sy
-                    Sz_p = -Sx * sin_t + Sz * cos_t
-                    
-                    # 2. Rotate around z-axis by phi
-                    Sx_pp = Sx_p * cos_p - Sy_p * sin_p
-                    Sy_pp = Sx_p * sin_p + Sy_p * cos_p
-                    Sz_pp = Sz_p
-                    
-                    # Reconstruct and replace
-                    self.ham_R[iR0, I_up, I_up] = S0 + Sz_pp
-                    self.ham_R[iR0, I_dn, I_dn] = S0 - Sz_pp
-                    self.ham_R[iR0, I_up, I_dn] = Sx_pp - 1j * Sy_pp
-                    self.ham_R[iR0, I_dn, I_up] = Sx_pp + 1j * Sy_pp
-                    count += 1
-        
-        # Synchronize dependent matrices
-        self._refreshHamiltonianDerivedMatrices()
-
-        if self.verbose: showElapsedTime(extraInfo=f"Rotated exchange field for {count} spatial orbitals.")
 
     def scaleSOC(self, lam=1.0, projection=[]):
         """
@@ -2182,6 +2161,14 @@ class System:
         if self.exchange_R is not None:
             self.exchange_R = transform_matrix(self.exchange_R)
             if self.verbose: print("Transformed exchange Hamiltonian (exchange_R).")
+
+        if self.exchange_R_reference is not None:
+            self.exchange_R_reference = transform_matrix(self.exchange_R_reference)
+            if self.verbose: print("Transformed reference exchange Hamiltonian (exchange_R_reference).")
+
+        if self.nonexchange_R is not None:
+            self.nonexchange_R = transform_matrix(self.nonexchange_R)
+            if self.verbose: print("Transformed complementary Hamiltonian (nonexchange_R).")
             
         if hasattr(self, 'overlap_R') and self.overlap_R is not None:
             self.overlap_R = transform_matrix(self.overlap_R)
@@ -2194,10 +2181,6 @@ class System:
         if hasattr(self, 'AA_R_W') and self.AA_R_W is not None:
             self.AA_R_W = transform_matrix(self.AA_R_W)
             if self.verbose: print("Transformed Position Operator (AA_R_W).")
-            
-        #if hasattr(self, 'RHam_R') and self.RHam_R is not None:
-        #    self.RHam_R = transform_matrix(self.RHam_R)
-        #    if verbose: print("Transformed Velocity Operator (RHam_R).")
             
         if hasattr(self, 'RO_R') and self.RO_R is not None:
             self.RO_R = transform_matrix(self.RO_R)
