@@ -208,7 +208,7 @@ class System_w90(System):
         
         self.posinfo=readPOSCAR('%s/%s'%(mainDir,poscar))
         orb_list=obtainProjectionsPlain('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
-        assert self.norbs == sum([len(atom) for atom in orb_list])
+        assert self.norbs == sum([len(atom) for atom in orb_list]), f"{self.norbs=} {sum([len(atom) for atom in orb_list])=}"
         print("pls. check the wcc and atom coors.")
         print("At present, the atom coor will be used (for furthur symmerization)")
         reciLat=np.linalg.inv(self.posinfo['lattice'])

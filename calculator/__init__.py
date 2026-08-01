@@ -507,22 +507,45 @@ class SpinExchangeTorque(Spin):
 
     def buildSpinTorqueVelocityCommutator(self):
         '''
-        Build zero vector-potential vertices for the exchange torque operator.
+        Build vector-potential vertices for the exchange torque operator.
 
-        H_XC is a field-independent local effective potential. The optical
-        field changes its expectation through the driven density matrix, not
-        through explicit A-dependent exchange-torque vertices.
+        For H_XC(A)=H_XC-A_a v_XC,a+1/2 A_a A_b w_XC,ab, the vertices are
+        i[mu_S,v_XC,a] and -i[mu_S,w_XC,ab]. If exchangeVelocity was disabled,
+        retain the local field-independent approximation with zero vertices.
         '''
         nbasis=self.energies.shape[-1]
         self.spinExchangeTorqueA_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
         self.spinExchangeTorqueAA_K=np.zeros(self.kgrid+(3,3,3,nbasis,nbasis),dtype=complex)
+        if getattr(self,"exchangeVelocity",False):
+            assert hasattr(self,"velocity_xc_K") and hasattr(self,"w_xc_K"), \
+                "exchange velocity matrices were requested but not constructed"
+            for c in range(3):
+                spin_c=self.spin_K[...,c,:,:]
+                for a in range(3):
+                    velocity_xc_a=self.velocity_xc_K[...,a,:,:]
+                    self.spinExchangeTorqueA_K[...,c,a,:,:]=1j*(spin_c@velocity_xc_a-velocity_xc_a@spin_c)
+                    for b in range(3):
+                        w_xc_ab=self.w_xc_K[...,a,b,:,:]
+                        self.spinExchangeTorqueAA_K[...,c,a,b,:,:]=-1j*(spin_c@w_xc_ab-w_xc_ab@spin_c)
         self.spinTorqueA_K=self.spinExchangeTorqueA_K
         self.spinTorqueAA_K=self.spinExchangeTorqueAA_K
-        self.projected_spinExchangeTorqueA_K_list=[np.zeros_like(self.spinExchangeTorqueA_K) for _ in self.spinTorqueProjectionList]
-        self.projected_spinExchangeTorqueAA_K_list=[np.zeros_like(self.spinExchangeTorqueAA_K) for _ in self.spinTorqueProjectionList]
+
+        self.projected_spinExchangeTorqueA_K_list=[]
+        self.projected_spinExchangeTorqueAA_K_list=[]
+        for spinTorqueProjection in self.spinTorqueProjectionList:
+            proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj1_K=self.projectorInEigenBasis(proj1)
+            proj2_K=self.projectorInEigenBasis(proj2)
+            self.projected_spinExchangeTorqueA_K_list.append(
+                (proj1_K[...,None,None,:,:]@self.spinExchangeTorqueA_K
+                 +self.spinExchangeTorqueA_K@proj2_K[...,None,None,:,:])/2)
+            self.projected_spinExchangeTorqueAA_K_list.append(
+                (proj1_K[...,None,None,None,:,:]@self.spinExchangeTorqueAA_K
+                 +self.spinExchangeTorqueAA_K@proj2_K[...,None,None,None,:,:])/2)
         self.projected_spinTorqueA_K_list=self.projected_spinExchangeTorqueA_K_list
         self.projected_spinTorqueAA_K_list=self.projected_spinExchangeTorqueAA_K_list
-        if self.verbose==2: showElapsedTime(extraInfo="zero velocity corrected spin exchange torque finished")
+        if self.verbose==2: showElapsedTime(extraInfo="velocity corrected spin exchange torque finished")
 
     def buildSpinTorqueDipoleCommutator(self):
         '''
@@ -698,7 +721,7 @@ class Orbital_diag(FermiScan):
             self.projected_orbital_diag_K_list.append(projected_orbital_diag_K)
 
 class Velocity(Energy):
-    def __init__(self, velocityProjectionList=[], highOrderVelocity=False, **kwarg) -> None:
+    def __init__(self, velocityProjectionList=[], highOrderVelocity=False, exchangeVelocity=False, **kwarg) -> None:
         '''
         Compute velocity matrix in original basis and eigen-basis
         And the velocity projected in specific basis
@@ -712,6 +735,8 @@ class Velocity(Energy):
 
         self.projected_velocity_K_list[iproj] gives each projected velocity matrix
         '''
+        self.exchangeVelocity=exchangeVelocity
+        highOrderVelocity=bool(highOrderVelocity or exchangeVelocity)
         super().__init__(**kwarg)
         
         RH_R_W=self.model.RHam_R
@@ -737,6 +762,44 @@ class Velocity(Energy):
         AA_K_H = vectors.conj().swapaxes(-2,-1) @ AA_K_W @ vectors # Berry connection in Hamiltonian gauge
         AA_K_H_dot_H = AA_K_H * self.energies[...,None,None,:]            # gauge correction term, the commutator [AA_K, Ham.]
         self.velocity_K = velocity_bare_K - 1j*(AA_K_H_dot_H - AA_K_H_dot_H.conj().swapaxes(-2,-1)) # gauge-covariant velocity
+
+        if exchangeVelocity:
+            assert self.model.exchange_R is not None, "exchangeVelocity requires model.exchange_R; call model.getExchangeR first"
+            assert self.model.RExchange_R is not None, "RExchange_R is required; call model.getRExchange_R first"
+            assert self.model.RRExchange_R is not None, "RRExchange_R is required; call model.getRRExchange_R first"
+
+            exchange_R_W=self.model.exchange_R
+            RExchange_R_W=self.model.RExchange_R
+            RRExchange_R_W=self.model.RRExchange_R
+            if self.phase:
+                exchange_R_W=exchange_R_W*self.phaseshift[:,None,None]
+                RExchange_R_W=RExchange_R_W*self.phaseshift[:,None,None,None]
+                RRExchange_R_W=RRExchange_R_W*self.phaseshift[:,None,None,None,None]
+
+            exchange_R_interpolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+            RExchange_R_interpolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+            RRExchange_R_interpolated=np.zeros(self.kgrid+(3,3,self.model.norbs,self.model.norbs),dtype=complex)
+            for iR,Rvec in enumerate(self.model.iRvec):
+                exchange_R_interpolated[tuple(Rvec)]=exchange_R_W[iR]
+                RExchange_R_interpolated[tuple(Rvec)]=RExchange_R_W[iR]
+                RRExchange_R_interpolated[tuple(Rvec)]=RRExchange_R_W[iR]
+
+            fft_scale=np.prod(self.kgrid)
+            self.exchange_K_AO=np.fft.ifftn(exchange_R_interpolated,axes=(0,1,2))*fft_scale
+            self.RExchange_K=1j*np.fft.ifftn(RExchange_R_interpolated,axes=(0,1,2))*fft_scale
+            self.RRExchange_K=-np.fft.ifftn(RRExchange_R_interpolated,axes=(0,1,2))*fft_scale
+            del exchange_R_interpolated,RExchange_R_interpolated,RRExchange_R_interpolated
+
+            vectors0=self.vectors
+            self.exchange_K=vectors0.conj().swapaxes(-2,-1) @ self.exchange_K_AO @ vectors0
+            vectors1=self.vectors[...,None,:,:]
+            self.velocity_xc_bare_K=vectors1.conj().swapaxes(-2,-1) @ self.RExchange_K @ vectors1
+            self.velocity_xc_K=self.velocity_xc_bare_K-1j*(AA_K_H@self.exchange_K[...,None,:,:]
+                -self.exchange_K[...,None,:,:]@AA_K_H)
+            vectors2=self.vectors[...,None,None,:,:]
+            self.w_xc_bare_K=vectors2.conj().swapaxes(-2,-1) @ self.RRExchange_K @ vectors2
+            del vectors0,vectors1,vectors2
+            if self.verbose==2: showElapsedTime(extraInfo=f"bare and first-order exchange velocity finished")
 
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
         # check hermity
@@ -845,6 +908,20 @@ class Velocity(Energy):
                     self.w_K[..., a, b, :, :] = (partialV[..., a, b, :, :] 
                         - 1j * comm(AA_K_H[..., b, :, :], self.velocity_K[..., a, :, :])
                     )
+
+            if exchangeVelocity:
+                exchange0=self.exchange_K
+                exchange1=self.velocity_xc_bare_K
+                exchange2=self.w_xc_bare_K
+                self.w_xc_K=np.zeros_like(exchange2)
+                for a in range(3):
+                    for b in range(3):
+                        partialVxc=(exchange2[...,a,b,:,:]
+                            -1j*comm(connectionDerivative1[...,b,a,:,:],exchange0)
+                            -1j*comm(AA_K_H[...,a,:,:],exchange1[...,b,:,:]))
+                        self.w_xc_K[...,a,b,:,:]=(partialVxc
+                            -1j*comm(AA_K_H[...,b,:,:],self.velocity_xc_K[...,a,:,:]))
+                if self.verbose==2: showElapsedTime(extraInfo=f"second-order exchange velocity finished")
 
             # u_abc = D_c w_ab.  connectionDerivative1[..., b, a]
             # is partial_b A_a, and connectionDerivative2[..., c, b, a]
@@ -2960,7 +3037,8 @@ class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
 class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
-    def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
+    def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001,
+                 n_steps_per_cycle=100, include_offdiag=True, exchangeVelocity=True, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity-gauge time-dependent density matrix propagation.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
@@ -2972,7 +3050,7 @@ class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
         - projected_chi_IFT[0, 0, iproj_torque, ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure]
           uses iproj_torque=0 for the full torque, followed by projected torque operators.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, exchangeVelocity=exchangeVelocity,
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
         if ife_type in ["total", "spin"]: self.buildSpinTorqueVelocityCommutator()
         if ife_type in ["total", "orbital"]: self.buildOrbitalTorqueVelocityCommutator()
@@ -3184,7 +3262,7 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
 class InverseFaradayTorque_VG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
-                 finiteTemperatureOccupations=False, **kwarg) -> None:
+                 finiteTemperatureOccupations=False, exchangeVelocity=True, **kwarg) -> None:
         '''
         Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
         unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
@@ -3194,7 +3272,7 @@ class InverseFaradayTorque_VG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
         --------
         - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, 
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, exchangeVelocity=exchangeVelocity,
                          spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
         
         nbasis=self.energies.shape[-1]

@@ -20,6 +20,9 @@ class System:
         self.ham_R:np.ndarray=None
         # exchange part of the real-space Hamiltonian
         self.exchange_R:np.ndarray=None
+        # first and second real-space moments of the exchange Hamiltonian
+        self.RExchange_R:np.ndarray=None
+        self.RRExchange_R:np.ndarray=None
         # immutable rigid-rotation reference and the complementary Hamiltonian
         self.exchange_R_reference:np.ndarray=None
         self.nonexchange_R:np.ndarray=None
@@ -103,6 +106,28 @@ class System:
             R_cart = Rvec @ self.lattice
             R_tensor2 = R_cart[:, None] * R_cart[None, :]
             self.RRHam_R[iR] = self.ham_R[iR, None, None, :, :] * R_tensor2[:, :, None, None]
+
+    def getRExchange_R(self):
+        '''Build R_a H_XC(R), the bare first k derivative of the exchange Hamiltonian.'''
+        assert self.exchange_R is not None, "exchange_R is required; call getExchangeR first"
+        assert self.exchange_R.shape==self.ham_R.shape
+        self.RExchange_R=np.zeros((self.nRvec,3,self.norbs,self.norbs),dtype=complex)
+        if self.verbose: print(f"calculating R \dot H_XC,R on lattice with {self.nRvec} lattice points")
+        for iR,Rvec in enumerate(self.iRvec):
+            self.RExchange_R[iR]=self.exchange_R[iR,None,:,:]*(Rvec@self.lattice)[:,None,None]
+        return self.RExchange_R
+
+    def getRRExchange_R(self):
+        '''Build R_a R_b H_XC(R), the bare second k derivative of the exchange Hamiltonian.'''
+        assert self.exchange_R is not None, "exchange_R is required; call getExchangeR first"
+        assert self.exchange_R.shape==self.ham_R.shape
+        self.RRExchange_R=np.zeros((self.nRvec,3,3,self.norbs,self.norbs),dtype=complex)
+        if self.verbose: print(f"calculating R \dot R \dot H_XC,R on lattice with {self.nRvec} lattice points")
+        for iR,Rvec in enumerate(self.iRvec):
+            R_cart=Rvec@self.lattice
+            R_tensor2=R_cart[:,None]*R_cart[None,:]
+            self.RRExchange_R[iR]=self.exchange_R[iR,None,None,:,:]*R_tensor2[:,:,None,None]
+        return self.RRExchange_R
 
     def getRRRHam_R(self):
         # 3rd derivative spatial moment (u)
@@ -1185,6 +1210,13 @@ class System:
         if hasattr(self, 'getSpinMatrice'): self.getSpinMatrice()
         if hasattr(self, 'getOrbitalMatrice'): self.getOrbitalMatrice()
 
+    def _refreshExchangeDerivedMatrices(self):
+        if self.exchange_R is None:
+            self.RExchange_R,self.RRExchange_R=None,None
+            return
+        self.getRExchange_R()
+        self.getRRExchange_R()
+
     def shiftOrigin(self, surfaceDir, shift=None, omitRHam=False):
         """
         Shifts the origin of the unit cell along surfaceDir to minimize hoppings across the surface.
@@ -1622,6 +1654,7 @@ class System:
         assert self.exchange_R.shape==self.ham_R.shape
         self.exchange_R_reference=self.exchange_R.copy()
         self.nonexchange_R=self.ham_R-self.exchange_R
+        self._refreshExchangeDerivedMatrices()
 
     def _exchangeFromCollinearSpinDifference(self):
         assert self.ispin==2 and self.norbs%2==0, "collinear spin difference requires two equally sized spin channels"
@@ -1759,6 +1792,7 @@ class System:
         rotation_full=np.kron(spin_rotation,np.eye(half_norbs,dtype=complex))
         self.exchange_R=rotation_full @ self.exchange_R_reference @ rotation_full.conj().T
         self.ham_R=self.nonexchange_R+self.exchange_R
+        self._refreshExchangeDerivedMatrices()
         self._refreshHamiltonianDerivedMatrices()
         if self.verbose: print(f"Rigid exchange rotation applied: theta={theta:.8f}, phi={phi:.8f}, gamma={gamma:.8f}")
         return self.exchange_R
@@ -2187,6 +2221,7 @@ class System:
             if self.verbose: print("Transformed Overlap Velocity Operator (RO_R).")
             
         # 5. Trigger updates for internal operator dependencies
+        self._refreshExchangeDerivedMatrices()
         self.getRHam_R()
         if self.RRHam_R is not None: self.getRRHam_R()
         if self.RRRHam_R is not None: self.getRRRHam_R()
