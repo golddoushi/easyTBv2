@@ -3077,7 +3077,7 @@ class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
 
     _rk4_step = InverseFaradayEffect_TDSE._rk4_step
 
-class InverseFaradayTorque_LG_DM(SpinTorque, OrbitalTorque, Dipole):
+class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:
@@ -3181,7 +3181,7 @@ class InverseFaradayTorque_LG_DM(SpinTorque, OrbitalTorque, Dipole):
         self.projected_sigma = self.projected_chi_IFT
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
-class InverseFaradayTorque_VG_DM(Velocity, SpinTorque, OrbitalTorque):
+class InverseFaradayTorque_VG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, **kwarg) -> None:

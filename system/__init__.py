@@ -1631,21 +1631,62 @@ class System:
         exchange_R[:,half_norbs:,half_norbs:]=-delta_R
         return exchange_R
 
-    def getExchangeR(self, provenance="orientation finite difference", reversedModel=None):
+    def getExchangeR(self, provenance="explicit", reversedModel=None):
         r'''
         Construct the exchange part of the real-space Hamiltonian.
 
-        ``orientation finite difference`` requires another System represented
-        in the same local basis but with the magnetic orientation reversed:
-
+        Parameters
+        ----------
+        - provenance : str, "explicit" | "orientation finite difference" | "collinear spin difference"
+            the approching to build real-space exchange Hamiltonian
+        
+        ``explicit`` 
+        The default. Assume the exchange field are explicitly denoted by the onsite Pauli block, which is 
+        a usual choice in toy model but approximate in real-model. Since the SOC also can contribute.
+        
+        ``orientation finite difference`` 
+        requires another System represented in the same local basis but with the magnetic orientation reversed:
         .. math:: H_{\rm XC}=[H(\mathbf m)-H(-\mathbf m)]/2.
 
-        ``onsite pauli estimate`` removes the spin-independent Pauli component
-        from the home-cell Hamiltonian. This is an approximation because any
-        onsite SOC, Zeeman, or other spin-dependent term is also retained.
+        ``collinear spin difference`` 
+        use the difference of up and down spin tunnles in collinear Ham. Only possible for tight-binding and w90 
+        systems with definitions of collinear Ham.
+        .. math:: H_{\rm XC}=[H_{up}-H_{dn}]/2.
+        
+        - reversedModel : System
+            another system with reversed magnetic moment, required by the orientation finite difference approach.
         '''
         provenance=self._normalizeExchangeProvenance(provenance)
-        if provenance=="orientation finite difference":
+        if provenance=="explicit":
+            assert self.ispin==2 and self.norbs%2==0, "onsite Pauli blocking requires two equally sized spin channels"
+            iR0=self.iRvecIndex.get((0,0,0),None)
+            assert iR0 is not None, "cannot find the home-cell R=(0,0,0) Hamiltonian"
+            self.exchange_R=np.zeros_like(self.ham_R)
+
+            for iorb in range(self.norbs):
+                if iorb >= self.norbs//2: continue # Only loop over spatial orbitals once
+                I_up = iorb
+                I_dn = I_up + self.norbs//2
+                                
+                # Extract 2x2 block
+                H_uu = self.ham_R[iR0, I_up, I_up]
+                H_dd = self.ham_R[iR0, I_dn, I_dn]
+                H_ud = self.ham_R[iR0, I_up, I_dn]
+                H_du = self.ham_R[iR0, I_dn, I_up]
+                                
+                # Project to SU(2) Pauli basis
+                S0 = 0.5 * (H_uu + H_dd)
+                Sz = 0.5 * (H_uu - H_dd)
+                Sx = 0.5 * (H_ud + H_du)
+                Sy = 0.5j * (H_ud - H_du)
+                                
+                # Reconstruct and replace
+                self.exchange_R[iR0, I_up, I_up] =  Sz
+                self.exchange_R[iR0, I_dn, I_dn] = -Sz
+                self.exchange_R[iR0, I_up, I_dn] =  Sx - 1j * Sy
+                self.exchange_R[iR0, I_dn, I_up] =  Sx + 1j * Sy
+
+        elif provenance=="orientation finite difference":
             assert reversedModel is not None, "orientation finite difference requires reversedModel"
             assert self.norbs==reversedModel.norbs, f"basis sizes differ: {self.norbs} and {reversedModel.norbs}"
             assert np.allclose(self.lattice,reversedModel.lattice,atol=1e-10,rtol=0), "the two models have different lattices"

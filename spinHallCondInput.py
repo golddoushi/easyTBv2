@@ -68,9 +68,9 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        spinSeparated=True,
+        #spinSeparated=True,
     )
-    #'''
+    '''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
@@ -83,6 +83,7 @@ def run():
     # NOTE: this is only for independent vasp_ncl + wannier90 scheme, DO NOT apply for vasp_std + V_soi scheme
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
+    model.getExchangeR(provenance="explicit")
     
     '''
     # global symmetrization
@@ -252,7 +253,7 @@ def run():
                           'record frequency ids':recordOmegaIndexList,
                           'record fermi ids':recordFermiIndexList,
 
-                          "mag type": "orbital", # Type of Inversed Faraday effect, can be spin | orbital | total
+                          "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
 
                           "finite temperature occupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
                     }, 
