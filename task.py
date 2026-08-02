@@ -1,6 +1,5 @@
 # Module to implement the parallel tasks
 # 
-from multiprocessing import Pool
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 from auxiliary import showElapsedTime, SYMPREC

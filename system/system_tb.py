@@ -97,17 +97,7 @@ class System_tb(System):
         # compute orbital angular moment operator
         self.atomOrbAM=self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
-
-    def getExchangeR(self, provenance="explicit", reversedModel=None):
-        if provenance!="collinear spin difference":
-            return super().getExchangeR(provenance=provenance,reversedModel=reversedModel)
-        assert self.spinSeparated, "collinear spin difference requires spinSeparated=True"
-        self.exchange_R=self._exchangeFromCollinearSpinDifference()
-        self.exchangeProvenance=provenance
-        self._storeExchangeDecomposition()
-        if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
-        return self.exchange_R
-    
+   
     def orbitalAngularMomentCubic(self):
         '''
         Orbital angular moment operator represented in the cubic hamonics (s, px, py, pz, ...)

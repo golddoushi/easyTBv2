@@ -1656,19 +1656,33 @@ class System:
         self.nonexchange_R=self.ham_R-self.exchange_R
         self._refreshExchangeDerivedMatrices()
 
-    def _exchangeFromCollinearSpinDifference(self):
-        assert self.ispin==2 and self.norbs%2==0, "collinear spin difference requires two equally sized spin channels"
+    def _spinPauliPart(self):
+        r'''
+        Return the spin-traceless part of every real-space Hamiltonian block.
+
+        In a blocked spin basis this is
+
+        .. math::
+
+            H_{\rm spin}(R)=H(R)-I_s\otimes
+            \frac{H_{\uparrow\uparrow}(R)+H_{\downarrow\downarrow}(R)}{2}.
+
+        It is covariant under spin-independent reassignment of localized
+        orbitals between home cells.  It contains every spin-dependent term,
+        corresponding to exchange part only when other non-exchange but spinful
+        part e.g., SOC, Zeeman, are absent or negligible.
+        '''
+        assert self.ispin==2 and self.norbs%2==0, "Pauli decomposition requires two equally sized spin channels"
         half_norbs=self.norbs//2
-        ham_up=self.ham_R[:,:half_norbs,:half_norbs]
-        ham_dn=self.ham_R[:,half_norbs:,half_norbs:]
-        spin_mixing=max(np.max(np.abs(self.ham_R[:,:half_norbs,half_norbs:])),
-                        np.max(np.abs(self.ham_R[:,half_norbs:,:half_norbs])))
-        assert spin_mixing<1e-10, f"collinear spin difference requires block-diagonal spin channels, found spin mixing {spin_mixing:.3e} eV"
-        delta_R=0.5*(ham_up-ham_dn)
-        exchange_R=np.zeros_like(self.ham_R)
-        exchange_R[:,:half_norbs,:half_norbs]=delta_R
-        exchange_R[:,half_norbs:,half_norbs:]=-delta_R
-        return exchange_R
+        Huu=self.ham_R[:,:half_norbs,:half_norbs]
+        Hdd=self.ham_R[:,half_norbs:,half_norbs:]
+        delta_R=0.5*(Huu-Hdd)
+        spin_R=np.zeros_like(self.ham_R)
+        spin_R[:,:half_norbs,:half_norbs]=delta_R
+        spin_R[:,half_norbs:,half_norbs:]=-delta_R
+        spin_R[:,:half_norbs,half_norbs:]=self.ham_R[:,:half_norbs,half_norbs:]
+        spin_R[:,half_norbs:,:half_norbs]=self.ham_R[:,half_norbs:,:half_norbs]
+        return spin_R
 
     def getExchangeR(self, provenance="explicit", reversedModel=None):
         r'''
@@ -1676,7 +1690,9 @@ class System:
 
         Parameters
         ----------
-        - provenance : str, "explicit" | "orientation finite difference" | "collinear spin difference"
+        - provenance : str
+            ``"explicit"``, ``"orientation finite difference"``,
+            ``"collinear spin difference"``, or ``"pauli estimate"``.
             the approching to build real-space exchange Hamiltonian
         
         ``explicit`` 
@@ -1687,10 +1703,11 @@ class System:
         requires another System represented in the same local basis but with the magnetic orientation reversed:
         .. math:: H_{\rm XC}=[H(\mathbf m)-H(-\mathbf m)]/2.
 
-        ``collinear spin difference`` 
-        use the difference of up and down spin tunnles in collinear Ham. Only possible for tight-binding and w90 
-        systems with definitions of collinear Ham.
-        .. math:: H_{\rm XC}=[H_{up}-H_{dn}]/2.
+        ``pauli estimate``
+        retain the spin-traceless Pauli part of the Hamiltonian over the
+        complete real-space grid. Cannot distinguish exchange from SOC or
+        any other spin-dependent coupling. Suitable for w90 and tight-binding
+        models without SOCs. 
         
         - reversedModel : System
             another system with reversed magnetic moment, required by the orientation finite difference approach.
@@ -1740,19 +1757,8 @@ class System:
                 overlap_error=np.max(np.abs(self.overlap_R-reversed_overlap_R))
                 assert overlap_error<1e-8, f"the two models use different overlap matrices, max difference {overlap_error:.3e}"
             self.exchange_R=0.5*(self.ham_R-reversed_ham_R)
-        elif provenance=="onsite pauli estimate":
-            assert self.ispin==2 and self.norbs%2==0, "onsite Pauli estimate requires two equally sized spin channels"
-            iR0=self.iRvecIndex.get((0,0,0),None)
-            assert iR0 is not None, "cannot find the home-cell R=(0,0,0) Hamiltonian"
-            half_norbs=self.norbs//2
-            H0=self.ham_R[iR0]
-            Huu=H0[:half_norbs,:half_norbs]
-            Hdd=H0[half_norbs:,half_norbs:]
-            self.exchange_R=np.zeros_like(self.ham_R)
-            self.exchange_R[iR0,:half_norbs,:half_norbs]=0.5*(Huu-Hdd)
-            self.exchange_R[iR0,half_norbs:,half_norbs:]=-0.5*(Huu-Hdd)
-            self.exchange_R[iR0,:half_norbs,half_norbs:]=H0[:half_norbs,half_norbs:]
-            self.exchange_R[iR0,half_norbs:,:half_norbs]=H0[half_norbs:,:half_norbs]
+        elif provenance == "pauli estimate":
+            self.exchange_R=self._spinPauliPart()
         else:
             raise ValueError(f"unsupported exchange provenance {provenance!r}")
         self.exchangeProvenance=provenance

@@ -269,18 +269,6 @@ class System_w90(System):
         center_distance=np.linalg.norm(center_frac@chk_up.real_lattice, axis=1)
         print(f"paired up/down Wannier-center distance: mean {center_distance.mean():.3e} angstrom, max {center_distance.max():.3e} angstrom")
 
-    def getExchangeR(self, provenance="explicit", reversedModel=None):
-        if provenance!="collinear spin difference":
-            return super().getExchangeR(provenance=provenance,reversedModel=reversedModel)
-        assert self.spinSeparated, "collinear spin difference requires spinSeparated=True"
-        assert self._included_soi_R is None, "collinear spin difference must be constructed before V_SOC is included"
-        assert self._soi_global_spin_frame is None
-        self.exchange_R=self._exchangeFromCollinearSpinDifference()
-        self.exchangeProvenance=provenance
-        self._storeExchangeDecomposition()
-        if self.verbose: print(f"exchange_R constructed with provenance={provenance!r}, max norm={np.max(np.abs(self.exchange_R)):.6e} eV")
-        return self.exchange_R
-
     def _berryConnectionWannier(self,seedname:str,chk:W90CHK,trans_inv:bool):
         M_k_DFT=W90MMN(seedname=seedname, kpt_list=chk.kpt_list, reci_lat=chk.recip_lattice)
         assert M_k_DFT.nbands==chk.num_bands

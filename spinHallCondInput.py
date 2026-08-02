@@ -75,7 +75,7 @@ def run():
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
-    model.getExchangeR(provenance="collinear spin difference")
+    model.getExchangeR(provenance="pauli estimate")
     model.includeSOCFromSOI(theta=0,phi=0,strength=1,keepRegularSpinAxis=True)
     model.rotateExchangeDirection(theta=0,phi=0)
     #model.getExchangeR(provenance="explicit")
@@ -236,7 +236,7 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(81,81,1)
+    BZGrid=(36,36,1)
     BZSymm=False
     recordOmegaIndexList=[]
     recordFermiIndexList=[]
@@ -262,7 +262,7 @@ def run():
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
-                    ncores=8)
+                    ncores=16)
     #exit()
     #_,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
