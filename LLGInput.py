@@ -1,6 +1,6 @@
 from collections.abc import Callable, Sequence
 import numpy as np
-from LLG import IFTDevice, PulseTimeStepSchedule, SOTDevice, Field, sample_tangent_torque_map
+from LLG import IFTDevice, PulseTimeStepSchedule, SOTDevice, Field, TangentTorqueMap, sample_tangent_torque_map
 import matplotlib.pyplot as plt
 from scipy.constants import speed_of_light, epsilon_0
 
@@ -18,6 +18,20 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
         phi_count=phi_count,
         drive_amplitude=drive_amplitude,
     )
+    moment_magnitude = getattr(device, "moment_magnitude_muB", None)
+    if moment_magnitude is not None:
+        moment_magnitude = float(moment_magnitude)
+        torque_map = TangentTorqueMap(
+            theta=torque_map.theta,
+            phi=torque_map.phi,
+            direction=torque_map.direction,
+            cartesian=moment_magnitude*torque_map.cartesian,
+            theta_component=moment_magnitude*torque_map.theta_component,
+            phi_component=moment_magnitude*torque_map.phi_component,
+        )
+        colorbar_label = r"IFT efficiency of $\tau_{\theta}$ ($\mu_B$/fs)/(V/$\AA$)$^2$"
+    else:
+        colorbar_label = r"Drive contribution to $\dot{\theta}$ (fs$^{-1}$)"
     with open(f"{mainDir}/torqueDistr.txt","w") as fout:
         fout.write("             Phi           Theta         tau_phi       tau_theta\n")
         for itheta in range(theta_count):
@@ -30,8 +44,8 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
         torque_map.theta,
         torque_map.phi_component,
         torque_map.theta_component,
-        torque_map.magnitude,
-        cmap="viridis",
+        torque_map.theta_component,
+        cmap="RdBu",
         pivot="mid",
         angles="xy",
         scale_units="xy",
@@ -59,7 +73,9 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
     )
     axis.set_xlabel(r"$\phi$")
     axis.set_ylabel(r"$\theta$")
-    figure.colorbar(arrows, ax=axis, label="Tangent torque magnitude")
+    colorMagnitude=max([abs(torque_map.theta_component).max(),abs(-torque_map.theta_component).max()])    
+    arrows.set_clim(vmin=-colorMagnitude, vmax=colorMagnitude)
+    figure.colorbar(arrows, ax=axis, label=colorbar_label)
     figure.tight_layout()
     plt.savefig(mainDir+"/torqueDistr.png",dpi=300)
     plt.close()
@@ -67,7 +83,7 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
 
 def plot_mag_evolution(mainDir, time_axis:Sequence, trajectory:Sequence, pulse:Callable, pulse_title:str):
     with open(f"{mainDir}/magEvolution.txt","w") as fout:
-        fout.write(f"        Time(ps)              mx              my              mz {pulse_title:20s}\n")
+        fout.write(f"        Time(fs)              mx              my              mz {pulse_title:20s}\n")
         for time, (mx,my,mz) in zip(time_axis,trajectory):
             fout.write(f"{time:16.8E}{mx:16.8E}{my:16.8E}{mz:16.8E} {pulse(time):20.8E}\n")
     fig, axes = plt.subplots(2, 1, sharex=True)
@@ -124,7 +140,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     The supplied pulse is therefore the slowly varying electric-field
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
-    center_times = [2_000_000.0 + 100_000.0 * ipulse for ipulse in range(20)]
+    center_times = [1_000.0 + 100_000.0 * ipulse for ipulse in range(20)]
     peak_field=0.06
     intensity_fwhm = 50.0
     intensity=0.5*speed_of_light*epsilon_0*(peak_field*1E10)**2
@@ -147,18 +163,16 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         data_directory=mainDir,
         omega0=omega0,
         polarization=polarization,
-        # A single-moment LLG represents the complete cell magnetic mode.
-        # Atom-projected exchange torques require a multisublattice LLG.
         torque_projection=0,
         light_pulse=pulse,
-        external_field=np.array([1.0, 0.0, 0.0]),  # in Tesla
+        external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
         alpha=0.01,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        #t_total=20000,
-        t_total=8_000_000.0,
+        #t_total=   104_000.0,
+        t_total=3_000_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
@@ -191,7 +205,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.68,polarization="xy-",show_torque_map=True)
-    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=1.695,polarization="xy-",show_torque_map=True)
-    #run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.13,polarization="xy-",show_torque_map=True)
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.855,polarization="xy-",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.8,polarization="xy-",show_torque_map=True)
