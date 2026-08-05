@@ -92,7 +92,7 @@ def scalar_harmonic_matrix(directions, modes: Sequence[Sequence[int]]) -> np.nda
         matrix[:, imode] = _spherical_harmonic(int(degree), int(order), theta, phi)
     return matrix
 
-def vector_harmonic_matrices(directions, modes: Sequence[Sequence[int]]) -> tuple[np.ndarray, np.ndarray]:
+def vector_harmonic_matrices(directions, modes: Sequence[Sequence[int]], zerosAtPoles=True) -> tuple[np.ndarray, np.ndarray]:
     """
     Evaluate normalized poloidal and toroidal vector spherical harmonics.
 
@@ -106,6 +106,12 @@ def vector_harmonic_matrices(directions, modes: Sequence[Sequence[int]]) -> tupl
     theta, phi = cartesian_to_spherical(unit)
     sin_theta = np.sin(theta)
     if np.any(sin_theta < 1.0e-12):
+        if zerosAtPoles:
+            print(
+                "Warning: Vector harmonics are evaluated away from the coordinate poles."
+                f"for {zerosAtPoles=}, fall back to zero outputs! Take your own risk for this feature!"
+            )
+            return np.zeros((len(theta), len(modes), 3), dtype=complex), np.zeros((len(theta), len(modes), 3), dtype=complex)
         raise ValueError("Vector harmonics are evaluated away from the coordinate poles.")
     e_theta = np.column_stack((np.cos(theta) * np.cos(phi), np.cos(theta) * np.sin(phi), -sin_theta))
     e_phi = np.column_stack((-np.sin(phi), np.cos(phi), np.zeros_like(phi)))

@@ -818,7 +818,7 @@ def run():
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
-    eta = 0.06582 / 100   # in eV, eta = 0.06582 meV corresponds to relaxation time ~10 fs
+    eta = 0.06582 / 10   # in eV, eta = 0.06582 meV corresponds to relaxation time ~10 fs
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
