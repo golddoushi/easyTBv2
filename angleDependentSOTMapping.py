@@ -1,6 +1,11 @@
 import os
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager, redirect_stdout
 import json
 from pathlib import Path
 import numpy as np
@@ -20,6 +25,100 @@ from auxiliary import getWholeSymmetryOperator, SYMPREC
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
 from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
+
+_orientation_worker_model = None
+
+def initialize_orientation_worker(model=None):
+    """Give one process exclusive ownership of a reusable electronic model."""
+    global _orientation_worker_model
+    if model is not None:
+        _orientation_worker_model = model
+    if _orientation_worker_model is None:
+        raise RuntimeError("The orientation worker did not inherit or receive an electronic model.")
+
+@contextmanager
+def orientation_worker_output(verbose):
+    """Keep output from many simultaneous calculators from interleaving."""
+    if verbose:
+        yield
+    else:
+        with open(os.devnull, "w", encoding="utf-8") as sink, redirect_stdout(sink):
+            yield
+
+def solve_energy_orientation(job):
+    """Process-pool entry point for one fixed-number energy orientation."""
+    model = _orientation_worker_model
+    if model is None:
+        raise RuntimeError("Orientation worker model is not initialized.")
+    with orientation_worker_output(job["worker_verbose"]):
+        model.includeSOCFromSOI(theta=job["theta"], phi=job["phi"], strength=1.0, keepRegularSpinAxis=True)
+        calc = BZGridTask(model, solveEnergy, args={}, BZGrid=job["bz_grid"], BZSymm=False,
+            mode="run", ncores=job["bz_workers"])
+        energies = collect_bz_energies(calc, job["bz_grid"])
+        sample = fixed_number_electronic_state(
+            energies, job["target_electrons_per_cell"], job["number_kpoints"],
+            job["occupation_mode"], job["kBT"])
+    return job["index"], sample
+
+def solve_ift_orientation(job):
+    """Process-pool entry point for one orientation-resolved IFT calculation."""
+    model = _orientation_worker_model
+    if model is None:
+        raise RuntimeError("Orientation worker model is not initialized.")
+    with orientation_worker_output(job["worker_verbose"]):
+        model.includeSOCFromSOI(theta=job["theta"], phi=job["phi"], strength=1.0, keepRegularSpinAxis=True)
+        calc = BZGridTask(
+            model, job["ift_solver"],
+            args={
+                "fermi": np.asarray([job["chemical_potential"]]),
+                "omega": job["omega_axis"],
+                "mag type": job["mag_type"],
+                "projected shells for detecting torque": job["torque_projection_specs"],
+                "finite temperature occupations": job["occupation_mode"] == "fermi-dirac",
+                "kBT": job["kBT"], "eta": job["eta"],
+            },
+            BZGrid=job["bz_grid"], BZSymm=False, mode="run", ncores=job["bz_workers"])
+        projected_chi_sample = collect_bz_response(calc)
+    return job["index"], projected_chi_sample
+
+def create_orientation_executor(model, number_of_workers):
+    """Create a model-isolated process pool, preferring copy-on-write on POSIX."""
+    global _orientation_worker_model
+    _orientation_worker_model = model
+    number_of_workers = int(number_of_workers)
+    if number_of_workers <= 1:
+        initialize_orientation_worker()
+        return None, "serial"
+
+    available_methods = mp.get_all_start_methods()
+    if "fork" in available_methods:
+        start_method = "fork"
+        context = mp.get_context(start_method)
+        executor = ProcessPoolExecutor(
+            max_workers=number_of_workers, mp_context=context,
+            initializer=initialize_orientation_worker)
+    else:
+        start_method = "spawn"
+        context = mp.get_context(start_method)
+        executor = ProcessPoolExecutor(
+            max_workers=number_of_workers, mp_context=context,
+            initializer=initialize_orientation_worker, initargs=(model,))
+    return executor, start_method
+
+def completed_orientation_jobs(executor, worker, jobs):
+    """Yield completed orientation jobs, propagating worker failures promptly."""
+    if executor is None:
+        for job in jobs:
+            yield worker(job)
+        return
+    futures = [executor.submit(worker, job) for job in jobs]
+    try:
+        for future in as_completed(futures):
+            yield future.result()
+    except BaseException:
+        for future in futures:
+            future.cancel()
+        raise
 
 def collect_bz_energies(calc, bz_grid):
     """Assemble full-grid energies returned by a hybrid FFT calculation."""
@@ -704,7 +803,7 @@ def output_energy_table(path, directions, theta, phi,
 
 def run():
     # Electronic calculation.
-    main_dir = Path("./mcalc/MnBi2Te4")
+    main_dir = Path("./mcalc/FeCl2")
     wannierBasis={
         "Fe": (0, 1, 2),
         "Mn": (0, 1, 2),
@@ -712,21 +811,29 @@ def run():
         "Bi": (0, 1),
         "Te": (0, 1),
     }
-    reference_fermi = 0.95
+    reference_fermi = -2.5
     reference_direction = np.asarray([0.0, 0.0, 1.0])
     # Set this directly when the electron number is known.  Otherwise it is
     # inferred from reference_fermi at reference_direction.
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
+    eta = 0.06582 / 100   # in eV, eta = 0.06582 meV corresponds to relaxation time ~10 fs
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.linspace(0.1, 3.0, 21)
-    bz_grid = (81, 81, 1)
-    number_of_cores = 8
+    omega_axis = np.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0,])
+    bz_grid = (48, 48, 1)
+    # Primary parallelism is over magnetization directions.  A hybrid setup
+    # is also possible, provided the following worker-count product does not
+    # exceed the allocated physical cores.
+    number_of_cores = 16
+    number_of_orientation_workers = number_of_cores
+    number_of_bz_workers_per_orientation = 1
+    number_of_reference_bz_workers = number_of_cores
+    orientation_worker_verbose = False
     torque_projection_list = [(0,(0,1,2,)),]
     torque_projection_specs = [
         {
@@ -740,7 +847,7 @@ def run():
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
     harmonic_degree = 6
-    number_of_orientations = 800
+    number_of_orientations = 200
     resume_completed_orientations = True
     validation_folds = 5
     validation_active_signal_fraction = 0.05
@@ -748,6 +855,10 @@ def run():
 
     assert occupation_mode in {"zero-temperature", "fermi-dirac"}, "occupation_mode must be 'zero-temperature' or 'fermi-dirac'."
     if occupation_mode == "fermi-dirac" and electronic_kBT <= 0.0: raise ValueError("electronic_kBT must be positive in Fermi-Dirac mode.")
+    if number_of_orientation_workers < 1 or number_of_bz_workers_per_orientation < 1:
+        raise ValueError("Orientation and inner-BZ worker counts must be positive.")
+    if number_of_orientation_workers * number_of_bz_workers_per_orientation > number_of_cores:
+        raise ValueError("orientation workers times BZ workers per orientation exceeds number_of_cores.")
 
     minimum_recommended = 2 * harmonic_degree * (harmonic_degree + 2)
     assert number_of_orientations >= minimum_recommended, f"Use at least {minimum_recommended} orientations for a stable degree-{harmonic_degree} VSH fit."
@@ -815,7 +926,7 @@ def run():
         )
         reference_calc = BZGridTask(model, solveEnergy, args={},
             BZGrid=bz_grid, BZSymm=False,
-            mode="run", ncores=number_of_cores)
+            mode="run", ncores=number_of_reference_bz_workers)
         reference_energies = collect_bz_energies(reference_calc, bz_grid)
         reference_occupations = fermiDiracOccupations(
             reference_energies, [reference_fermi],
@@ -838,79 +949,116 @@ def run():
         print(f"Determined reference filling: {target_electrons_per_cell:.12f} electrons/cell")
         filling_source = "reference Fermi level"
 
-    # Pass 1: determine mu(m) and the fixed-number energy landscape.
-    for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
-        sample_path = energy_sample_dir / f"orientation_{index:04d}.npz"
-        if resume_completed_orientations and sample_path.exists():
-            sample = load_energy_sample(
-                sample_path, direction, np.asarray(bz_grid),
-                target_electrons_per_cell, occupation_mode, electronic_kBT)
+    # The model is mutable when its magnetization direction changes.  Give
+    # every orientation process a private copy and keep each inner BZ solve
+    # serial by default.  On Linux, fork shares the large immutable Wannier
+    # input arrays copy-on-write.
+    model.removeSOCFromSOI()
+    executor = None
+    executor_start_method = "not started"
+    try:
+        # Pass 1: determine mu(m) and the fixed-number energy landscape.
+        energy_jobs = []
+        loaded_energy_samples = 0
+        for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
+            sample_path = energy_sample_dir / f"orientation_{index:04d}.npz"
+            if resume_completed_orientations and sample_path.exists():
+                sample = load_energy_sample(
+                    sample_path, direction, np.asarray(bz_grid),
+                    target_electrons_per_cell, occupation_mode, electronic_kBT)
+                internal_energy[index] = sample["internal_energy"]
+                free_energy[index] = sample["free_energy"]
+                chemical_potential[index] = sample["chemical_potential"]
+                highest_occupied[index] = sample["highest_occupied"]
+                lowest_unoccupied[index] = sample["lowest_unoccupied"]
+                loaded_energy_samples += 1
+            else:
+                energy_jobs.append({
+                    "index": index, "direction": direction, "theta": theta, "phi": phi,
+                    "bz_grid": tuple(bz_grid), "bz_workers": number_of_bz_workers_per_orientation,
+                    "number_kpoints": number_kpoints,
+                    "target_electrons_per_cell": target_electrons_per_cell,
+                    "occupation_mode": occupation_mode, "kBT": electronic_kBT,
+                    "worker_verbose": orientation_worker_verbose,
+                })
+        print(
+            f"Energy pass: loaded {loaded_energy_samples}, pending {len(energy_jobs)} "
+            f"of {number_of_orientations} orientations."
+        )
+        if energy_jobs:
+            executor, executor_start_method = create_orientation_executor(model, number_of_orientation_workers)
             print(
-                f"[energy {index + 1:4d}/{number_of_orientations:4d}] "
-                f"loaded {sample_path.name}, "
-                f"mu={sample['chemical_potential']:.9f} eV"
+                f"Orientation backend: {number_of_orientation_workers} process workers "
+                f"({executor_start_method}), {number_of_bz_workers_per_orientation} "
+                "inner BZ worker(s) per orientation."
             )
-        else:
+            completed = 0
+            for index, sample in completed_orientation_jobs(executor, solve_energy_orientation, energy_jobs):
+                direction = directions[index]
+                save_energy_sample(
+                    energy_sample_dir / f"orientation_{index:04d}.npz",
+                    direction, theta_axis[index], phi_axis[index], np.asarray(bz_grid),
+                    target_electrons_per_cell, occupation_mode, electronic_kBT, sample)
+                internal_energy[index] = sample["internal_energy"]
+                free_energy[index] = sample["free_energy"]
+                chemical_potential[index] = sample["chemical_potential"]
+                highest_occupied[index] = sample["highest_occupied"]
+                lowest_unoccupied[index] = sample["lowest_unoccupied"]
+                completed += 1
+                print(
+                    f"[energy {completed:4d}/{len(energy_jobs):4d}] orientation "
+                    f"{index + 1:4d}, mu={sample['chemical_potential']:.9f} eV"
+                )
+
+        # Pass 2: evaluate IFT with the orientation-specific chemical potential
+        # and exactly the same occupation convention used in pass 1.
+        projected_chi_samples = [None] * number_of_orientations
+        ift_jobs = []
+        loaded_ift_samples = 0
+        for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
+            sample_path = ift_sample_dir / f"orientation_{index:04d}.npz"
+            if resume_completed_orientations and sample_path.exists():
+                projected_chi_samples[index] = load_ift_sample(
+                    sample_path, direction, chemical_potential[index], omega_axis, np.asarray(bz_grid),
+                    ift_solver.__name__, occupation_mode, electronic_kBT)
+                loaded_ift_samples += 1
+            else:
+                ift_jobs.append({
+                    "index": index, "direction": direction, "theta": theta, "phi": phi,
+                    "chemical_potential": chemical_potential[index], "omega_axis": omega_axis,
+                    "bz_grid": tuple(bz_grid), "bz_workers": number_of_bz_workers_per_orientation,
+                    "ift_solver": ift_solver, "mag_type": mag_type,
+                    "torque_projection_specs": torque_projection_specs,
+                    "occupation_mode": occupation_mode, "kBT": electronic_kBT, "eta": eta,
+                    "worker_verbose": orientation_worker_verbose,
+                })
+        print(
+            f"IFT pass: loaded {loaded_ift_samples}, pending {len(ift_jobs)} "
+            f"of {number_of_orientations} orientations."
+        )
+        if ift_jobs and executor is None:
+            executor, executor_start_method = create_orientation_executor(model, number_of_orientation_workers)
             print(
-                f"[energy {index + 1:4d}/{number_of_orientations:4d}] "
-                f"m=({direction[0]: .7f}, {direction[1]: .7f}, "
-                f"{direction[2]: .7f})"
+                f"Orientation backend: {number_of_orientation_workers} process workers "
+                f"({executor_start_method}), {number_of_bz_workers_per_orientation} "
+                "inner BZ worker(s) per orientation."
             )
-            #exit()
-            model.includeSOCFromSOI(theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
-            calc = BZGridTask(model, solveEnergy, args={},
-                BZGrid=bz_grid, BZSymm=False,
-                mode="run", ncores=number_of_cores)
-            energies = collect_bz_energies(calc, bz_grid)
-            sample = fixed_number_electronic_state(
-                energies, target_electrons_per_cell, number_kpoints, occupation_mode, electronic_kBT)
-            save_energy_sample(sample_path, direction, theta, phi, np.asarray(bz_grid),
-                target_electrons_per_cell, occupation_mode, electronic_kBT, sample)
-
-        internal_energy[index] = sample["internal_energy"]
-        free_energy[index] = sample["free_energy"]
-        chemical_potential[index] = sample["chemical_potential"]
-        highest_occupied[index] = sample["highest_occupied"]
-        lowest_unoccupied[index] = sample["lowest_unoccupied"]
-
-    # Pass 2: evaluate IFT with the orientation-specific chemical potential
-    # and exactly the same occupation convention used in pass 1.
-    projected_chi_samples = []
-    for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
-        sample_path = ift_sample_dir / f"orientation_{index:04d}.npz"
-        if resume_completed_orientations and sample_path.exists():
-            projected_chi_sample = load_ift_sample(
-                sample_path,
-                direction,
-                chemical_potential[index],
-                omega_axis,
-                np.asarray(bz_grid),
-                ift_solver.__name__,
-                occupation_mode,
-                electronic_kBT,
-            )
-            print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] loaded {sample_path.name}")
-        else:
-            print(f"[IFT    {index + 1:4d}/{number_of_orientations:4d}] mu={chemical_potential[index]:.9f} eV")   
-            #exit() 
-            model.includeSOCFromSOI(theta=theta, phi=phi, strength=1.0, keepRegularSpinAxis=True)
-            calc = BZGridTask(
-                model, ift_solver,
-                args={
-                    "fermi": np.asarray([chemical_potential[index]]),
-                    "omega": omega_axis,
-                    "mag type": mag_type,
-                    "projected shells for detecting torque": torque_projection_specs,
-                    "finite temperature occupations": occupation_mode == "fermi-dirac",
-                    "kBT": electronic_kBT,
-                },
-                BZGrid=bz_grid, BZSymm=False,
-                mode="run", ncores=number_of_cores)
-            projected_chi_sample = collect_bz_response(calc)
-            save_ift_sample(sample_path, direction, chemical_potential[index], omega_axis,
-                np.asarray(bz_grid), ift_solver.__name__,
-                occupation_mode, electronic_kBT, projected_chi_sample,)
-        projected_chi_samples.append(projected_chi_sample)
+        if ift_jobs:
+            completed = 0
+            for index, projected_chi_sample in completed_orientation_jobs(executor, solve_ift_orientation, ift_jobs):
+                save_ift_sample(
+                    ift_sample_dir / f"orientation_{index:04d}.npz",
+                    directions[index], chemical_potential[index], omega_axis, np.asarray(bz_grid),
+                    ift_solver.__name__, occupation_mode, electronic_kBT, projected_chi_sample)
+                projected_chi_samples[index] = projected_chi_sample
+                completed += 1
+                print(
+                    f"[IFT    {completed:4d}/{len(ift_jobs):4d}] orientation "
+                    f"{index + 1:4d}, mu={chemical_potential[index]:.9f} eV"
+                )
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
 
     projected_chi_ift = np.asarray(projected_chi_samples)
     tangential_chi_ift = project_tangential(projected_chi_ift, directions)
@@ -1076,6 +1224,10 @@ def run():
         fermi_axis_eV=chemical_potential[:, None],
         omega_axis_eV=omega_axis,
         bz_grid=np.asarray(bz_grid), occupation_mode=occupation_mode, kBT_eV=electronic_kBT,
+        number_of_cores=number_of_cores,
+        number_of_orientation_workers=number_of_orientation_workers,
+        number_of_bz_workers_per_orientation=number_of_bz_workers_per_orientation,
+        orientation_process_start_method=executor_start_method,
         nominal_occupied_state_count=int(round(target_electrons_per_cell * number_kpoints)),
         electrons_per_cell=target_electrons_per_cell,
         internal_energy_eV_per_cell=internal_energy,
@@ -1164,6 +1316,14 @@ def run():
         "reference_fermi_eV": reference_fermi,
         "filling_source": filling_source,
         "target_electrons_per_cell": target_electrons_per_cell,
+        "parallelization": {
+            "number_of_cores": number_of_cores,
+            "orientation_process_workers": number_of_orientation_workers,
+            "bz_workers_per_orientation": number_of_bz_workers_per_orientation,
+            "reference_bz_workers": number_of_reference_bz_workers,
+            "process_start_method": executor_start_method,
+            "worker_verbose": orientation_worker_verbose,
+        },
         "projected_chi_IFT_axes": [
             "orientation",
             "drive_projection_1",
