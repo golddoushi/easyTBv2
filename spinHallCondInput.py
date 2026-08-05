@@ -27,7 +27,7 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
-from fileio import writeVolumeData, output3rdFreqDenpendentData, output4thData, outputBZDistributionData
+from fileio import writeVolumeData, output3rdFreqDenpendentData, outputIFTcoeffs, output4thData, outputBZDistributionData
 
 def run():
     # Pbene, spin hall conductance
@@ -77,7 +77,9 @@ def run():
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
     model.includeSOCFromSOI(theta=0,phi=0,strength=1,keepRegularSpinAxis=True)
-    model.rotateExchangeDirection(theta=0,phi=0)
+    magnetizationTheta = np.radians(5.0)
+    magnetizationPhi = 0.0
+    model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
     #'''
 
@@ -349,10 +351,13 @@ def run():
 
     #'''
     # output projected 3-ranked, frequency-dependent complex conductance
-    output3rdFreqDenpendentData(projected_sigma.real/len(calc.results), fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis, 
+    projected_sigma_average = projected_sigma/len(calc.results)
+    output3rdFreqDenpendentData(projected_sigma_average.real, fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
                                 filePath="%s/thirdOrderFreqDependent.real.txt"%mainDir)
-    output3rdFreqDenpendentData(projected_sigma.imag/len(calc.results), fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis, 
+    output3rdFreqDenpendentData(projected_sigma_average.imag, fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
                                 filePath="%s/thirdOrderFreqDependent.imag.txt"%mainDir)
+    outputIFTcoeffs(projected_sigma_average[0,0,0], fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
+                    theta=magnetizationTheta, phi=magnetizationPhi, filePath="%s/IFTcoeffs.txt"%mainDir)
 
     if responseFunction is not None:
         for iproj1 in range(responseFunction.shape[0]):

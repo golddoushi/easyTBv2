@@ -450,20 +450,23 @@ class SpinTorque(Spin):
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
         '''
-        Compute the magnetic-order exchange torque in the eigen-basis.
+        Compute the spin exchange-torque vertex in the eigen-basis.
         PHYSICAL REVIEW RESEARCH 4, L042022 (2022), eq. S11
         Describes transfer of spin angular momentum from electrons to the
         magnetic order parameter.
 
         For mu_S = -g_S mu_B S/hbar, the paper's
         T_M = -[S,H_XC]/(i hbar) is represented in magnetic-moment units by
-        -i[mu_S,H_XC] = g_S mu_B T_M. H_XC is model.exchange_R. Unlike the
-        total Hamiltonian, it is generally not diagonal in the eigen-basis,
-        so the commutator is evaluated by matrix multiplication.
+        -i[mu_S,H_XC] = g_S mu_B T_M. It is also hbar times the exchange
+        contribution to the electronic magnetic-moment rate. H_XC is
+        model.exchange_R. Unlike the total Hamiltonian, it is generally not
+        diagonal in the eigen-basis, so the commutator is evaluated by matrix
+        multiplication.
 
-        This is an energy-like torque in mu_B eV. Converting it to the time
-        derivative of a magnetic-moment direction requires the gyromagnetic
-        reaction sign; IFTDevice performs that conversion.
+        This is an energy-like torque in mu_B eV. The LLG variable follows the
+        ordered magnetic moment, which is opposite to its angular momentum.
+        Converting this vertex to that magnetic-moment rate therefore requires
+        the reaction minus sign; IFTDevice and outputIFTcoeffs perform it.
 
         The exposed spinTorque_K and projected_spinTorque_K_list attributes
         intentionally match SpinTorque, allowing response classes to switch

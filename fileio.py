@@ -605,6 +605,113 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
                                         fout.write(f"{tensor_data[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
                 fout.write("\n")
 
+def outputIFTcoeffs(tensor_data, fermi, fermiAxis, omegaAxis, theta, phi, filePath,
+                    saveFigures=True, plotFermiIndex=None, magneticOrderReaction=True):
+    '''
+    Contract an IFT tensor with common unit-amplitude light polarizations and
+    output the induced torque in the spherical frame of the magnetic moment.
+
+    ``tensor_data[ifermi,iomega,a,b,c]`` follows
+    ``tau_c = sum_ab E_a E_b^* chi_ab,c`` and stores the electronic exchange
+    magnetic-moment torque ``-i[mu_S,H_XC]``. By default, the result is
+    multiplied by the reaction minus sign to give the torque on the magnetic
+    order used by ``IFTDevice``. Set ``magneticOrderReaction=False`` to output
+    the raw electronic torque. The angles theta and phi are in radians and
+    define the magnetic direction used for the spherical basis.
+
+    Returns
+    -------
+    np.ndarray, shape (9, len(fermiAxis), len(omegaAxis), 3)
+        Complex torque-rate coefficients in mu_B/fs/(V/angstrom)^2 for x, y,
+        z, xy+, xy-, yz+, yz-, xz+, and xz- polarization. The last axis is
+        (r, theta, phi).
+    '''
+    tensor_data = np.asarray(tensor_data)
+    fermiAxis = np.asarray(fermiAxis)
+    omegaAxis = np.asarray(omegaAxis)
+    expectedShape = (len(fermiAxis), len(omegaAxis), 3, 3, 3)
+    if tensor_data.shape != expectedShape:
+        raise ValueError(f"expect tensor_data shape {expectedShape}, got {tensor_data.shape}")
+    if not np.isfinite(theta) or not np.isfinite(phi):
+        raise ValueError("theta and phi must be finite angles in radians")
+
+    invSqrt2 = 1.0/np.sqrt(2.0)
+    polarizationNames = ('x', 'y', 'z', 'xy+', 'xy-', 'yz+', 'yz-', 'xz+', 'xz-')
+    polarizationVectors = np.array([
+        [1, 0, 0], [0, 1, 0], [0, 0, 1],
+        [1, 1j, 0], [1, -1j, 0],
+        [0, 1, 1j], [0, 1, -1j],
+        [1, 0, 1j], [1, 0, -1j],
+    ], dtype=complex)
+    polarizationVectors[3:] *= invSqrt2
+
+    torqueCartesian = np.einsum("pa,pb,foabc->pfoc", polarizationVectors,
+                                polarizationVectors.conj(), tensor_data, optimize=True)
+    sinTheta, cosTheta = np.sin(theta), np.cos(theta)
+    sinPhi, cosPhi = np.sin(phi), np.cos(phi)
+    sphericalBasis = np.array([
+        [sinTheta*cosPhi, sinTheta*sinPhi, cosTheta],
+        [cosTheta*cosPhi, cosTheta*sinPhi, -sinTheta],
+        [-sinPhi, cosPhi, 0.0],
+    ])
+    torqueSpherical = np.einsum("sc,pfoc->pfos", sphericalBasis, torqueCartesian, optimize=True)
+    reactionSign = -1.0 if magneticOrderReaction else 1.0
+    torqueRateSpherical = reactionSign*torqueSpherical/aux.HBAR_EV_FS
+
+    with open(filePath, "w") as fout:
+        fout.write("# IFT torque for normalized Jones vectors with |E(Omega)| = 1\n")
+        fout.write("# electronic q_c = sum_ab E_a E_b^* chi_ab,c; ab+ = (e_a + i e_b)/sqrt(2)\n")
+        convention = "magnetic-order reaction torque" if magneticOrderReaction else "raw electronic exchange torque"
+        fout.write(f"# torque convention: {convention}\n")
+        fout.write(f"# applied reaction sign relative to q_c: {reactionSign:+.0f}\n")
+        fout.write(f"# Values are divided by hbar = {aux.HBAR_EV_FS:.10f} eV fs; unit: mu_B/fs/(V/angstrom)^2\n")
+        fout.write(f"# magnetization theta = {theta:.12E} rad ({np.degrees(theta):.9f} deg), "
+                   f"phi = {phi:.12E} rad ({np.degrees(phi):.9f} deg)\n")
+        fout.write("# spherical components use (e_r, e_theta, e_phi); only their physical real parts are written\n")
+        fout.write(f"# maximum discarded imaginary residual = {np.max(np.abs(torqueRateSpherical.imag)):.9E}\n")
+        fout.write("   Omega(eV) Fermi-EF(eV)")
+        for polarizationName in polarizationNames:
+            for componentName in ('r', 'theta', 'phi'):
+                fout.write(f" {polarizationName}_tau_{componentName:5s}")
+        fout.write("\n")
+        for iomega, omega in enumerate(omegaAxis):
+            for ifermi, fermiEnergy in enumerate(fermiAxis):
+                fout.write(f"{omega:12.6f}{fermiEnergy-fermi:14.6f}")
+                for ipolarization in range(len(polarizationNames)):
+                    for component in range(3):
+                        fout.write(f"{torqueRateSpherical[ipolarization,ifermi,iomega,component].real:15.6E}")
+                fout.write("\n")
+
+    if saveFigures:
+        from matplotlib.figure import Figure
+
+        if plotFermiIndex is None:
+            plotFermiIndex = int(np.argmin(np.abs(fermiAxis-fermi)))
+        if not 0 <= plotFermiIndex < len(fermiAxis):
+            raise IndexError(f"plotFermiIndex={plotFermiIndex} is outside [0, {len(fermiAxis)})")
+
+        figurePolarizations = ((0, 'x'), (1, 'y'), (3, 'xy+'), (4, 'xy-'))
+        componentStyles = (('r', '#4c78a8', '--'), ('theta', '#d62728', '-'), ('phi', '#2ca02c', '-.'))
+        figureBasePath = os.path.splitext(filePath)[0]
+        for ipolarization, polarizationName in figurePolarizations:
+            figure = Figure(figsize=(6.4, 4.8))
+            axes = figure.subplots()
+            for component, (componentName, color, lineStyle) in enumerate(componentStyles):
+                axes.plot(omegaAxis, torqueRateSpherical[ipolarization,plotFermiIndex,:,component].real,
+                          color=color, linestyle=lineStyle, linewidth=2.0,
+                          label=rf"$\tau_{{{componentName}}}$")
+            axes.axhline(0.0, color='black', linewidth=0.8)
+            axes.set_xlabel("Photon energy (eV)")
+            axes.set_ylabel(r"Torque galvanic efficiency [$\mu_B\,\mathrm{fs}^{-1}/(\mathrm{V}/\mathrm{\AA})^2$]")
+            axes.set_title(f"{polarizationName}-polarized light, EF shift = "
+                           f"{fermiAxis[plotFermiIndex]-fermi:.4f} eV")
+            axes.grid(alpha=0.22, linewidth=0.7)
+            axes.legend(frameon=False)
+            figure.tight_layout()
+            figure.savefig(f"{figureBasePath}.{polarizationName}.png", dpi=300)
+            figure.clear()
+    return torqueRateSpherical
+
 def output4thData(tensor_data, fermi, fermiAxis, filePath):
     '''
     Output a Fermi-dependent fourth-rank Cartesian tensor.
