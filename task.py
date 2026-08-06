@@ -330,7 +330,6 @@ def _solve2ndAHC(param, calculatorClass):
 def solve2ndAHC_BCP_FermiSea(param):
     return _solve2ndAHC(param, SecondOrderAHC_BCP_FermiSea)
 
-
 def solve2ndAHC_BCP_FermiSurf(param):
     return _solve2ndAHC(param, SecondOrderAHC_BCP_FermiSurf)
 

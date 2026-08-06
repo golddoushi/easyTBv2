@@ -565,7 +565,7 @@ def writeVolumeData(filePath:str,lat: list | np.ndarray,grid_size:tuple | list |
                   cnt+=1
                   if cnt%5==0:fout.write("\n")
 
-def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
+def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath,saveFigures=True,plotFermiIndex=None):
     '''
     Output the fermi-denpendent frequency-dependent 3rd order tensor data
 
@@ -585,25 +585,48 @@ def output3rdFreqDenpendentData(tensor_data,fermi,fermiAxis,omegaAxis,filePath):
     with open("%s"%filePath,"w") as fout:
         fout.write("   Omega(eV)   Fermi(eV)")
         directionName=['x','y','z']
-        for iproj1 in range(tensor_data.shape[0]):
-            for iproj2 in range(tensor_data.shape[1]):
-                for iproj3 in range(tensor_data.shape[2]):
-                    for alpha1 in range(3):
-                        for alpha2 in range(3):
-                            for beta in range(3):
-                                fout.write(f"            {directionName[alpha1]}{directionName[alpha2]}{directionName[beta]}")
+        for alpha1 in range(3):
+            for alpha2 in range(3):
+                for beta in range(3):
+                    fout.write(f"            {directionName[alpha1]}{directionName[alpha2]}{directionName[beta]}")
         fout.write("\n")
         for iomega, omega in enumerate(omegaAxis):
             for ifermi, fermiEnergy in enumerate(fermiAxis):
                 fout.write(f"{omega:12.6f}{fermiEnergy-fermi:12.6f}")
-                for iproj1 in range(tensor_data.shape[0]):
-                    for iproj2 in range(tensor_data.shape[1]):
-                        for iproj3 in range(tensor_data.shape[2]):
-                            for alpha1 in range(3):
-                                for alpha2 in range(3):
-                                    for beta in range(3):
-                                        fout.write(f"{tensor_data[iproj1,iproj2,iproj3,ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
+                for alpha1 in range(3):
+                    for alpha2 in range(3):
+                        for beta in range(3):
+                            fout.write(f"{tensor_data[ifermi,iomega,alpha1,alpha2,beta]:15.6E}")
                 fout.write("\n")
+
+    if saveFigures:
+        from matplotlib.figure import Figure
+
+        if plotFermiIndex is None:
+            plotFermiIndex = int(np.argmin(np.abs(fermiAxis-fermi)))
+        if not 0 <= plotFermiIndex < len(fermiAxis):
+            raise IndexError(f"plotFermiIndex={plotFermiIndex} is outside [0, {len(fermiAxis)})")
+
+        figurePolarizations = (((0,0,), 'xx'), ((1,1,), 'yy'), ((0,1,), 'xy'), ((1,0,), 'yx'))
+        componentStyles = (('x', '#d62728', '-'), ('y', '#2ca02c', '--'), ('z', '#4c78a8', '-.'))
+        figureBasePath = os.path.splitext(filePath)[0]
+        for (ipolarization1, ipolarization2), polarizationName in figurePolarizations:
+            figure = Figure(figsize=(6.4, 4.8))
+            ax1 = figure.subplots()
+            for component, (componentName, color, lineStyle) in enumerate(componentStyles):
+                ax1.plot(omegaAxis, tensor_data[plotFermiIndex,:,ipolarization1,ipolarization2,component],
+                          color=color, linestyle=lineStyle, linewidth=2.0, label=rf"$O_{{{componentName}}}$")
+            ax1.axhline(0.0, color='black', linewidth=0.8)
+            ax1.set_xlabel("Photon energy (eV)")
+            ax1.set_ylabel(r"$\chi$")
+            ax1.set_title(f"{polarizationName} component, EF shift = "
+                           f"{fermiAxis[plotFermiIndex]-fermi:.4f} eV")
+            ax1.grid(alpha=0.22, linewidth=0.7)
+            ax1.legend(frameon=False)
+            figure.tight_layout()
+            figure.savefig(f"{figureBasePath}.{polarizationName}.png", dpi=300)
+            figure.clear()
+
 
 def outputIFTcoeffs(tensor_data, fermi, fermiAxis, omegaAxis, theta, phi, filePath,
                     saveFigures=True, plotFermiIndex=None, magneticOrderReaction=True):
@@ -712,6 +735,91 @@ def outputIFTcoeffs(tensor_data, fermi, fermiAxis, omegaAxis, theta, phi, filePa
             figure.clear()
     return torqueRateSpherical
 
+def outputIFEcoeffs(tensor_data, fermi, fermiAxis, omegaAxis, filePath,
+                    saveFigures=True, plotFermiIndex=None):
+    '''
+    Contract a frequency-domain IFE tensor with common unit-amplitude light
+    polarizations and output the induced magnetic moment in Cartesian form.
+
+    ``tensor_data[ifermi,iomega,a,b,c]`` follows
+    ``Delta M_c = sum_ab E_a E_b^* chi_ab,c``. The input must use the standard
+    complex frequency-domain tensor convention; the specially packed real
+    off-diagonal tensor returned by the TDSE calculators is not compatible.
+
+    Returns
+    -------
+    np.ndarray, shape (9, len(fermiAxis), len(omegaAxis), 3)
+        Complex magnetic-moment induction coefficients in
+        mu_B/(V/angstrom)^2 for x, y, z, xy+, xy-, yz+, yz-, xz+, and xz-
+        polarization. The last axis is Cartesian (x, y, z).
+    '''
+    tensor_data = np.asarray(tensor_data)
+    fermiAxis = np.asarray(fermiAxis)
+    omegaAxis = np.asarray(omegaAxis)
+    expectedShape = (len(fermiAxis), len(omegaAxis), 3, 3, 3)
+    if tensor_data.shape != expectedShape:
+        raise ValueError(f"expect tensor_data shape {expectedShape}, got {tensor_data.shape}")
+
+    invSqrt2 = 1.0/np.sqrt(2.0)
+    polarizationNames = ('x', 'y', 'z', 'xy+', 'xy-', 'yz+', 'yz-', 'xz+', 'xz-')
+    polarizationVectors = np.array([
+        [1, 0, 0], [0, 1, 0], [0, 0, 1],
+        [1, 1j, 0], [1, -1j, 0],
+        [0, 1, 1j], [0, 1, -1j],
+        [1, 0, 1j], [1, 0, -1j],
+    ], dtype=complex)
+    polarizationVectors[3:] *= invSqrt2
+    momentCartesian = np.einsum("pa,pb,foabc->pfoc", polarizationVectors,
+                                polarizationVectors.conj(), tensor_data, optimize=True)
+
+    with open(filePath, "w") as fout:
+        fout.write("# IFE magnetic moment for normalized Jones vectors with |E(Omega)| = 1\n")
+        fout.write("# Delta M_c = sum_ab E_a E_b^* chi_ab,c; ab+ = (e_a + i e_b)/sqrt(2)\n")
+        fout.write("# unit: mu_B/(V/angstrom)^2\n")
+        fout.write("# Cartesian components (M_x, M_y, M_z); only their physical real parts are written\n")
+        fout.write(f"# maximum discarded imaginary residual = {np.max(np.abs(momentCartesian.imag)):.9E}\n")
+        fout.write("   Omega(eV) Fermi-EF(eV)")
+        for polarizationName in polarizationNames:
+            for componentName in ('x', 'y', 'z'):
+                fout.write(f" {polarizationName}_M_{componentName}")
+        fout.write("\n")
+        for iomega, omega in enumerate(omegaAxis):
+            for ifermi, fermiEnergy in enumerate(fermiAxis):
+                fout.write(f"{omega:12.6f}{fermiEnergy-fermi:14.6f}")
+                for ipolarization in range(len(polarizationNames)):
+                    for component in range(3):
+                        fout.write(f"{momentCartesian[ipolarization,ifermi,iomega,component].real:15.6E}")
+                fout.write("\n")
+
+    if saveFigures:
+        from matplotlib.figure import Figure
+
+        if plotFermiIndex is None:
+            plotFermiIndex = int(np.argmin(np.abs(fermiAxis-fermi)))
+        if not 0 <= plotFermiIndex < len(fermiAxis):
+            raise IndexError(f"plotFermiIndex={plotFermiIndex} is outside [0, {len(fermiAxis)})")
+
+        figurePolarizations = ((0, 'x'), (1, 'y'), (3, 'xy+'), (4, 'xy-'))
+        componentStyles = (('x', '#d62728', '-'), ('y', '#2ca02c', '--'), ('z', '#4c78a8', '-.'))
+        figureBasePath = os.path.splitext(filePath)[0]
+        for ipolarization, polarizationName in figurePolarizations:
+            figure = Figure(figsize=(6.4, 4.8))
+            axes = figure.subplots()
+            for component, (componentName, color, lineStyle) in enumerate(componentStyles):
+                axes.plot(omegaAxis, momentCartesian[ipolarization,plotFermiIndex,:,component].real,
+                          color=color, linestyle=lineStyle, linewidth=2.0, label=rf"$M_{{{componentName}}}$")
+            axes.axhline(0.0, color='black', linewidth=0.8)
+            axes.set_xlabel("Photon energy (eV)")
+            axes.set_ylabel(r"Magnetic-moment induction efficiency [$\mu_B/(\mathrm{V}/\mathrm{\AA})^2$]")
+            axes.set_title(f"{polarizationName}-polarized light, EF shift = "
+                           f"{fermiAxis[plotFermiIndex]-fermi:.4f} eV")
+            axes.grid(alpha=0.22, linewidth=0.7)
+            axes.legend(frameon=False)
+            figure.tight_layout()
+            figure.savefig(f"{figureBasePath}.{polarizationName}.png", dpi=300)
+            figure.clear()
+    return momentCartesian
+
 def output4thData(tensor_data, fermi, fermiAxis, filePath):
     '''
     Output a Fermi-dependent fourth-rank Cartesian tensor.
@@ -746,8 +854,8 @@ def output4thData(tensor_data, fermi, fermiAxis, filePath):
                 fout.write(f"{tensor_data[(ifermi,)+component]:15.6E}")
             fout.write("\n")
 
-def outputBZDistributionData(tensor_data, filePath, reciLattice, componentLabels=None,
-                             bzRepeat=(0, 0, 0)):
+def outputBZDistributionData(tensor_data, filePath, reciLattice, componentLabels=None, 
+                             bzRepeat=(0, 0, 0), headerLines=None):
     '''
     Output the k-resolved distribution of a tensor response on the Brillouin zone.
 
@@ -768,6 +876,8 @@ def outputBZDistributionData(tensor_data, filePath, reciLattice, componentLabels
         bzRepeat=(1, 1, 0) writes a 2D map from -G1,-G2 to +G1,+G2
         with Gamma at the center. The default (0,0,0) preserves the one-BZ
         output.
+    - headerLines : list[str] | None
+        Optional metadata written as comment lines before the column names.
     '''
     tensor_data = np.asarray(tensor_data)
     reciLattice = np.asarray(reciLattice)
@@ -793,6 +903,9 @@ def outputBZDistributionData(tensor_data, filePath, reciLattice, componentLabels
     is_complex = np.iscomplexobj(tensor_data)
 
     with open(filePath, "w") as fout:
+        if headerLines is not None:
+            for headerLine in headerLines:
+                fout.write(f"# {headerLine}\n")
         fout.write("kx ky kz")
         for component_name in component_names:
             if is_complex:
@@ -823,6 +936,173 @@ def outputBZDistributionData(tensor_data, filePath, reciLattice, componentLabels
                 else:
                     fout.write(f"{value:15.6E}")
             fout.write("\n")
+
+def _opticalPolarizationStatesForOutput():
+    polarizationNames = ('x', 'y', 'z', 'xy+', 'xy-', 'yz+', 'yz-', 'xz+', 'xz-')
+    polarizationVectors = np.array([
+        [1, 0, 0], [0, 1, 0], [0, 0, 1],
+        [1, 1j, 0], [1, -1j, 0],
+        [0, 1, 1j], [0, 1, -1j],
+        [1, 0, 1j], [1, 0, -1j],
+    ], dtype=complex)
+    polarizationVectors[3:] /= np.sqrt(2.0)
+    return polarizationNames, polarizationVectors
+
+def _normalizeBZRepeatForOutput(bzRepeat):
+    if np.isscalar(bzRepeat):
+        bzRepeat = (int(bzRepeat), int(bzRepeat), int(bzRepeat))
+    else:
+        bzRepeat = tuple(int(value) for value in bzRepeat)
+    if len(bzRepeat) != 3 or any(value < 0 for value in bzRepeat):
+        raise ValueError(f"bzRepeat must contain three nonnegative integers, got {bzRepeat}")
+    return bzRepeat
+
+def _plotVectorResponseOnBZ(response, filePath, reciLattice, bzRepeat, componentNames,
+                            unitLabel, figureTitle=None):
+    from matplotlib.figure import Figure
+
+    kgrid = response.shape[:3]
+    if kgrid[2] != 1 or bzRepeat[2] != 0:
+        warnings.warn("BZ response figures are only generated for Nk3=1 and bzRepeat[2]=0")
+        return
+
+    axisIndices = []
+    for iaxis, ngrid in enumerate(kgrid[:2]):
+        if bzRepeat[iaxis] > 0:
+            axisIndices.append(np.arange(-bzRepeat[iaxis]*ngrid, bzRepeat[iaxis]*ngrid+1))
+        else:
+            axisIndices.append(np.arange(ngrid))
+    index1, index2 = np.meshgrid(axisIndices[0], axisIndices[1], indexing='ij')
+    fractionalCoordinates = np.zeros(index1.shape+(3,))
+    fractionalCoordinates[..., 0] = index1/kgrid[0]
+    fractionalCoordinates[..., 1] = index2/kgrid[1]
+    kCoordinates = np.einsum("ab,...b->...a", reciLattice, fractionalCoordinates, optimize=True)
+    wrapped1, wrapped2 = index1 % kgrid[0], index2 % kgrid[1]
+
+    figurePolarizations = ((0, 'x'), (1, 'y'), (3, 'xy+'), (4, 'xy-'))
+    figureBasePath = os.path.splitext(filePath)[0]
+    for ipolarization, polarizationName in figurePolarizations:
+        figure = Figure(figsize=(14.4, 4.4))
+        axes = figure.subplots(1, 3)
+        for component, componentName in enumerate(componentNames):
+            values = response[wrapped1, wrapped2, 0, ipolarization, component].real
+            magnitude = np.max(np.abs(values))
+            if magnitude == 0.0:
+                magnitude = 1.0
+            image = axes[component].pcolormesh(kCoordinates[..., 0], kCoordinates[..., 1], values,
+                                               shading='auto', cmap='RdBu_r', vmin=-magnitude, vmax=magnitude)
+            axes[component].set_xlabel(r"$k_x$ ($\mathrm{\AA}^{-1}$)")
+            axes[component].set_ylabel(r"$k_y$ ($\mathrm{\AA}^{-1}$)")
+            axes[component].set_title(componentName)
+            axes[component].set_aspect('equal', adjustable='box')
+            figure.colorbar(image, ax=axes[component], label=unitLabel, fraction=0.046, pad=0.04)
+        title = f"{polarizationName}-polarized light"
+        if figureTitle:
+            title += f", {figureTitle}"
+        figure.suptitle(title)
+        figure.tight_layout()
+        figure.savefig(f"{figureBasePath}.{polarizationName}.png", dpi=300)
+        figure.clear()
+
+def outputIFEResponseOnBZ(tensor_data, filePath, reciLattice, bzRepeat=(0, 0, 0),
+                          saveFigures=True, figureTitle=None):
+    '''
+    Contract a k-resolved IFE tensor with common light polarizations.
+
+    ``tensor_data[k1,k2,k3,a,b,c]`` follows
+    ``Delta M_c(k) = sum_ab E_a E_b^* chi_ab,c(k)``. The output table contains
+    Cartesian (M_x, M_y, M_z) for x, y, z, xy+, xy-, yz+, yz-, xz+, and xz-
+    polarization. The input must use the standard complex frequency-domain
+    tensor convention rather than the packed real TDSE convention.
+
+    Returns
+    -------
+    np.ndarray, shape (Nk1, Nk2, Nk3, 9, 3)
+        Complex k-resolved moment coefficients in mu_B/(V/angstrom)^2.
+    '''
+    tensor_data = np.asarray(tensor_data)
+    if tensor_data.ndim != 6 or tensor_data.shape[-3:] != (3, 3, 3):
+        raise ValueError(f"expect tensor_data shape (Nk1, Nk2, Nk3, 3, 3, 3), got {tensor_data.shape}")
+    reciLattice = np.asarray(reciLattice)
+    if reciLattice.shape != (3, 3):
+        raise ValueError(f"expect reciLattice shape (3, 3), got {reciLattice.shape}")
+    bzRepeat = _normalizeBZRepeatForOutput(bzRepeat)
+    polarizationNames, polarizationVectors = _opticalPolarizationStatesForOutput()
+    momentCartesian = np.einsum("pa,pb,...abc->...pc", polarizationVectors,
+                                polarizationVectors.conj(), tensor_data, optimize=True)
+    componentNames = tuple(f"{polarizationName}_M_{componentName}"
+                           for polarizationName in polarizationNames for componentName in ('x', 'y', 'z'))
+    outputBZDistributionData(momentCartesian.real.reshape(momentCartesian.shape[:3]+(-1,)), filePath=filePath,
+                             reciLattice=reciLattice, componentLabels=componentNames, bzRepeat=bzRepeat,
+                             headerLines=[
+                                 "IFE response for normalized Jones vectors with |E(Omega)| = 1",
+                                 "Delta M_c(k) = sum_ab E_a E_b^* chi_ab,c(k); ab+ = (e_a + i e_b)/sqrt(2)",
+                                 "unit: mu_B/(V/angstrom)^2; only physical real parts are written",
+                                 f"maximum discarded imaginary residual = {np.max(np.abs(momentCartesian.imag)):.9E}",
+                             ])
+    if saveFigures:
+        _plotVectorResponseOnBZ(momentCartesian, filePath, reciLattice, bzRepeat, ('M_x', 'M_y', 'M_z'),
+                                r"$\mu_B/(\mathrm{V}/\mathrm{\AA})^2$", figureTitle=figureTitle)
+    return momentCartesian
+
+def outputIFTResponseOnBZ(tensor_data, theta, phi, filePath, reciLattice, bzRepeat=(0, 0, 0),
+                          saveFigures=True, figureTitle=None, magneticOrderReaction=True):
+    '''
+    Contract a k-resolved IFT tensor and express the torque in a spherical frame.
+
+    ``tensor_data[k1,k2,k3,a,b,c]`` stores the electronic exchange torque and
+    follows ``q_c(k) = sum_ab E_a E_b^* chi_ab,c(k)``. By default the reaction
+    minus sign and 1/hbar conversion used by ``IFTDevice`` and
+    ``outputIFTcoeffs`` are applied. The output components are
+    (tau_r, tau_theta, tau_phi).
+
+    Returns
+    -------
+    np.ndarray, shape (Nk1, Nk2, Nk3, 9, 3)
+        Complex k-resolved torque-rate coefficients in
+        mu_B/fs/(V/angstrom)^2.
+    '''
+    tensor_data = np.asarray(tensor_data)
+    if tensor_data.ndim != 6 or tensor_data.shape[-3:] != (3, 3, 3):
+        raise ValueError(f"expect tensor_data shape (Nk1, Nk2, Nk3, 3, 3, 3), got {tensor_data.shape}")
+    reciLattice = np.asarray(reciLattice)
+    if reciLattice.shape != (3, 3):
+        raise ValueError(f"expect reciLattice shape (3, 3), got {reciLattice.shape}")
+    if not np.isfinite(theta) or not np.isfinite(phi):
+        raise ValueError("theta and phi must be finite angles in radians")
+    bzRepeat = _normalizeBZRepeatForOutput(bzRepeat)
+    polarizationNames, polarizationVectors = _opticalPolarizationStatesForOutput()
+    torqueCartesian = np.einsum("pa,pb,...abc->...pc", polarizationVectors,
+                                polarizationVectors.conj(), tensor_data, optimize=True)
+    sinTheta, cosTheta = np.sin(theta), np.cos(theta)
+    sinPhi, cosPhi = np.sin(phi), np.cos(phi)
+    sphericalBasis = np.array([
+        [sinTheta*cosPhi, sinTheta*sinPhi, cosTheta],
+        [cosTheta*cosPhi, cosTheta*sinPhi, -sinTheta],
+        [-sinPhi, cosPhi, 0.0],
+    ])
+    torqueSpherical = np.einsum("sc,...pc->...ps", sphericalBasis, torqueCartesian, optimize=True)
+    reactionSign = -1.0 if magneticOrderReaction else 1.0
+    torqueRateSpherical = reactionSign*torqueSpherical/aux.HBAR_EV_FS
+    componentNames = tuple(f"{polarizationName}_tau_{componentName}"
+                           for polarizationName in polarizationNames for componentName in ('r', 'theta', 'phi'))
+    convention = "magnetic-order reaction torque" if magneticOrderReaction else "raw electronic exchange torque"
+    outputBZDistributionData(torqueRateSpherical.real.reshape(torqueRateSpherical.shape[:3]+(-1,)),
+                             filePath=filePath, reciLattice=reciLattice, componentLabels=componentNames,
+                             bzRepeat=bzRepeat, headerLines=[
+                                 "IFT response for normalized Jones vectors with |E(Omega)| = 1",
+                                 "q_c(k) = sum_ab E_a E_b^* chi_ab,c(k); ab+ = (e_a + i e_b)/sqrt(2)",
+                                 f"torque convention: {convention}; reaction sign = {reactionSign:+.0f}",
+                                 f"divided by hbar = {aux.HBAR_EV_FS:.10f} eV fs; unit: mu_B/fs/(V/angstrom)^2",
+                                 f"magnetization theta = {theta:.12E} rad, phi = {phi:.12E} rad",
+                                 "spherical components (tau_r, tau_theta, tau_phi); only physical real parts are written",
+                                 f"maximum discarded imaginary residual = {np.max(np.abs(torqueRateSpherical.imag)):.9E}",
+                             ])
+    if saveFigures:
+        _plotVectorResponseOnBZ(torqueRateSpherical, filePath, reciLattice, bzRepeat,
+                                ('tau_r', 'tau_theta', 'tau_phi'),
+                                r"$\mu_B\,\mathrm{fs}^{-1}/(\mathrm{V}/\mathrm{\AA})^2$", figureTitle=figureTitle)
+    return torqueRateSpherical
 
 class FortranFileR(fortio.FortranFile):
 

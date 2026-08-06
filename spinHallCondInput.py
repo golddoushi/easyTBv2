@@ -27,11 +27,12 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
-from fileio import writeVolumeData, output3rdFreqDenpendentData, outputIFTcoeffs, output4thData, outputBZDistributionData
+from fileio import (writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeffs, outputIFTcoeffs,
+                    output4thData, outputBZDistributionData, outputIFEResponseOnBZ, outputIFTResponseOnBZ)
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/MnBi2Te4/"
+    mainDir="./mcalc/FeCl2/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -76,10 +77,9 @@ def run():
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    model.includeSOCFromSOI(theta=0,phi=0,strength=1,keepRegularSpinAxis=True)
-    magnetizationTheta = np.radians(5.0)
-    magnetizationPhi = 0.0
-    model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
+    magnetizationTheta ,magnetizationPhi = np.pi, 0.0
+    model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
+    #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
     #'''
 
@@ -118,29 +118,6 @@ def run():
     surfaceDir=0
     model.shiftOrigin(surfaceDir=surfaceDir,)
     model.cutEdge(cutDir=surfaceDir,)
-    # define the projections for bulk and edge regions, compatible with the format of projection in following
-    positionIndex=np.argsort(np.array(model.posinfo['pos ions (frac.)'])[:,surfaceDir])
-    nEdgeAtoms=4 # include two atoms for each edge
-    nBulkAtoms=int(model.posinfo['tot ions']*0.5) # include 50% central atoms
-    edgeRegion1=[(positionIndex[iatom],(0,)) for iatom in range(nEdgeAtoms)]
-    edgeRegion2=[(positionIndex[model.posinfo['tot ions']-1-iatom],(0,)) for iatom in range(nEdgeAtoms)]
-    bulkRegion=[(positionIndex[(model.posinfo['tot ions']-nBulkAtoms)//2+iatom],(0,)) for iatom in range(nBulkAtoms)]
-    print("edge region1:")
-    for atom in edgeRegion1:
-        pos=model.posinfo['pos ions (frac.)'][atom[0]]
-        print(f"atom{atom[0]:4d} {pos[0]:8.4f}{pos[1]:8.4f}{pos[2]:8.4f}")
-    print("edge region2:")
-    for atom in edgeRegion2:
-        pos=model.posinfo['pos ions (frac.)'][atom[0]]
-        print(f"atom{atom[0]:4d} {pos[0]:8.4f}{pos[1]:8.4f}{pos[2]:8.4f}")
-    print("bulk region:")
-    for atom in bulkRegion:
-        pos=model.posinfo['pos ions (frac.)'][atom[0]]
-        print(f"atom{atom[0]:4d} {pos[0]:8.4f}{pos[1]:8.4f}{pos[2]:8.4f}")
-    nBlockAtoms=4
-    blockRegionList=[]
-    for iblock in range(model.posinfo['tot ions']//nBlockAtoms):
-        blockRegionList.append([(positionIndex[iblock*nBlockAtoms+iatom],(0,)) for iatom in range(nBlockAtoms)])
     # add exchange splitting for edge atoms
     #model.addExchangeSplitting(edgeRegion1,[ 0.0, 0.5, 0.0])
     #model.addExchangeSplitting(edgeRegion2,[ 0.0,-0.5, 0.0])
@@ -163,7 +140,8 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-2.5         # VASP 2H-FeCl2 U=2.0
+    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
+    #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -174,11 +152,10 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
-    fermi=0.95
 
     #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.linspace(0.1,3.0,21)
+    omegaAxis=np.arange(0.1,3.0,0.05)
     model.setFermi(fermi)
     
     '''
@@ -238,12 +215,13 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(36,36,1)
+    BZGrid=(48,48,1)
     BZSymm=False
-    recordOmegaIndexList=[]
-    recordFermiIndexList=[]
+    recordOmegaIndexList=[6]
+    recordFermiIndexList=[0]
     BZDistributionRepeat=(1,1,0)
-    calc=BZGridTask(model, solveIFTorque_LG_DM,
+    ObservableType="IFE" # "IFE" or "IFT"; must match the selected response calculator
+    calc=BZGridTask(model, solveIFE_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -352,12 +330,24 @@ def run():
     #'''
     # output projected 3-ranked, frequency-dependent complex conductance
     projected_sigma_average = projected_sigma/len(calc.results)
-    output3rdFreqDenpendentData(projected_sigma_average.real, fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
-                                filePath="%s/thirdOrderFreqDependent.real.txt"%mainDir)
-    output3rdFreqDenpendentData(projected_sigma_average.imag, fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
-                                filePath="%s/thirdOrderFreqDependent.imag.txt"%mainDir)
-    outputIFTcoeffs(projected_sigma_average[0,0,0], fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
-                    theta=magnetizationTheta, phi=magnetizationPhi, filePath="%s/IFTcoeffs.txt"%mainDir)
+    for iproj1 in range(projected_sigma_average.shape[0]):
+        for iproj2 in range(projected_sigma_average.shape[1]):
+            for iproj3 in range(projected_sigma_average.shape[2]):
+                output3rdFreqDenpendentData(projected_sigma_average[iproj1,iproj2,iproj3].real, fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
+                                            filePath=f"{mainDir}/{ObservableType}tensor.proj{iproj1}-{iproj2}-{iproj3}.real.txt")
+                output3rdFreqDenpendentData(projected_sigma_average[iproj1,iproj2,iproj3].imag, fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
+                                            filePath=f"{mainDir}/{ObservableType}tensor.proj{iproj1}-{iproj2}-{iproj3}.imag.txt")
+                if ObservableType.upper() == "IFE":
+                    outputIFEcoeffs(projected_sigma_average[iproj1,iproj2,iproj3], 
+                                            fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
+                                            filePath=f"{mainDir}/IFEcoeffs.proj{iproj1}-{iproj2}-{iproj3}.txt")
+                elif ObservableType.upper() == "IFT":
+                    outputIFTcoeffs(projected_sigma_average[iproj1,iproj2,iproj3], 
+                                    fermi=fermi, fermiAxis=fermiAxis, omegaAxis=omegaAxis,
+                                    theta=magnetizationTheta, phi=magnetizationPhi,
+                                    filePath=f"{mainDir}/IFTcoeffs.proj{iproj1}-{iproj2}-{iproj3}.txt")
+                else:
+                    print("Observable must be 'IFE' or 'IFT'")
 
     if responseFunction is not None:
         for iproj1 in range(responseFunction.shape[0]):
@@ -365,13 +355,27 @@ def run():
                 for iproj3 in range(responseFunction.shape[2]):
                     for irecord_fermi, ifermi in enumerate(recordFermiIndexList):
                         for irecord_omega, iomega in enumerate(recordOmegaIndexList):
-                            outputBZDistributionData(
-                                responseFunction[iproj1, iproj2, iproj3, :, :, :, irecord_fermi, irecord_omega, :, :, :],
-                                filePath=(f"{mainDir}/BZDistribution.proj{iproj1}-{iproj2}-{iproj3}."
-                                          f"fermi{ifermi}.omega{iomega}.txt"),
-                                reciLattice=model.reciLattice,
-                                bzRepeat=BZDistributionRepeat
-                            )
+                            responseOnBZ = responseFunction[
+                                iproj1, iproj2, iproj3, :, :, :, irecord_fermi, irecord_omega, :, :, :]
+                            fileStem = (f"{mainDir}/BZDistribution.{ObservableType}."
+                                        f"proj{iproj1}-{iproj2}-{iproj3}.fermi{ifermi}.omega{iomega}")
+                            figureTitle = (f"EF shift = {fermiAxis[ifermi]-fermi:.4f} eV, "
+                                           f"photon energy = {omegaAxis[iomega]:.4f} eV")
+                            outputBZDistributionData(responseOnBZ, 
+                                                     filePath=f"{mainDir}/BZDistribution.{ObservableType}tensor."
+                                                     f"proj{iproj1}-{iproj2}-{iproj3}.fermi{ifermi}.omega{iomega}.txt",
+                                                     reciLattice=model.reciLattice, bzRepeat=BZDistributionRepeat)
+                            if ObservableType.upper() == "IFE":
+                                outputIFEResponseOnBZ(responseOnBZ, filePath=f"{fileStem}.txt",
+                                                     reciLattice=model.reciLattice,
+                                                     bzRepeat=BZDistributionRepeat, figureTitle=figureTitle)
+                            elif ObservableType.upper() == "IFT":
+                                outputIFTResponseOnBZ(responseOnBZ, reciLattice=model.reciLattice,
+                                                     theta=magnetizationTheta, phi=magnetizationPhi, 
+                                                     filePath=f"{fileStem}.txt",
+                                                     bzRepeat=BZDistributionRepeat, figureTitle=figureTitle)
+                            else:
+                                raise ValueError("ObservableType must be 'IFE' or 'IFT'")
     
     exit()#'''
 
