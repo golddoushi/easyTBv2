@@ -90,6 +90,8 @@ def plot_mag_evolution(mainDir, time_axis:Sequence, trajectory:Sequence, pulse:C
     axes[0].plot(time_axis, trajectory[:, 0], label=r"m$_x$")
     axes[0].plot(time_axis, trajectory[:, 1], label=r"m$_y$")
     axes[0].plot(time_axis, trajectory[:, 2], label=r"m$_z$")
+    axes[0].axhline(y= np.cos(np.radians(5)),c='black')
+    axes[0].axhline(y=-np.cos(np.radians(5)),c='black')
     axes[0].set_ylabel("Magnetic orientation")
     axes[0].legend()
     axes[0].set_xlim(time_axis[0],time_axis[-1])
@@ -124,12 +126,12 @@ def gaussian_pulse(peak_field: float, center_times: Sequence[float], intensity_f
 
     return envelope
 
-def step_pulse(t_pulse_on, t_pulse_off) -> Callable[[float], float]:
+def step_pulse(t_pulse_on, t_pulse_off, efield = 1.0) -> Callable[[float], float]:
     """
     Return a step pulse, which is unit between t_pulse_on and t_pulse_off, otherwise zero
     """
     def evelope(time):
-        return float(t_pulse_on <= time < t_pulse_off)
+        return efield*float(t_pulse_on <= time < t_pulse_off)
     return evelope
 
 def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
@@ -140,7 +142,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     The supplied pulse is therefore the slowly varying electric-field
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
-    center_times = [1_000.0 + 100_000.0 * ipulse for ipulse in range(20)]
+    center_times = [100.0 + 100_000.0 * ipulse for ipulse in range(20)]
     peak_field=0.06
     intensity_fwhm = 50.0
     intensity=0.5*speed_of_light*epsilon_0*(peak_field*1E10)**2
@@ -152,6 +154,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         center_times=center_times,
         intensity_fwhm=intensity_fwhm,
     )
+    
     time_step = PulseTimeStepSchedule.gaussian(
         center_times=center_times,
         intensity_fwhm=intensity_fwhm,
@@ -159,6 +162,11 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         coarse_step=1500.0,
         window_half_width_in_fwhm=3.0,
     )
+
+    #pulse = step_pulse(t_pulse_on = 0_000.0, t_pulse_off = 10_000_000.0, 
+    #                   efield=5*1E-4)
+    #time_step = 1500.0
+
     device = IFTDevice(
         data_directory=mainDir,
         omega0=omega0,
@@ -166,7 +174,10 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         torque_projection=0,
         light_pulse=pulse,
         external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
-        alpha=0.01,
+        use_DFT_mae=False,
+        extra_uniaxial_mae=0.125E-3,               # in eV
+        extra_uniaxial_mae_direction=(0, 0, 1), 
+        alpha=0.001,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
     )
