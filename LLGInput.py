@@ -1,6 +1,7 @@
 from collections.abc import Callable, Sequence
 import numpy as np
-from LLG import IFTDevice, PulseTimeStepSchedule, SOTDevice, Field, TangentTorqueMap, sample_tangent_torque_map
+from LLG import IFTDevice, PulseTimeStepSchedule, SOTDevice, Field, TangentTorqueMap
+from LLG import sample_raw_tangent_torque_map, sample_tangent_torque_map
 import matplotlib.pyplot as plt
 from scipy.constants import speed_of_light, epsilon_0
 
@@ -79,6 +80,84 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
     figure.tight_layout()
     plt.savefig(mainDir+"/torqueDistr.png",dpi=300)
     plt.close()
+    return torque_map
+
+def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory=None, arrow_stride=1):
+    """
+    Plot the contracted tangent torque at the raw calculated orientations.
+
+    The vector origins are the saved Fibonacci sampling directions in
+    ``AngleDependentDynamicsMap.npz``. No VSH evaluation or angular-grid
+    interpolation is used. Arrow components are ``tau_phi`` horizontally
+    and ``tau_theta`` vertically, while color represents ``tau_theta``.
+    """
+    arrow_stride = int(arrow_stride)
+    if arrow_stride < 1:
+        raise ValueError("arrow_stride must be at least 1.")
+    torque_map = sample_raw_tangent_torque_map(device, drive_amplitude=drive_amplitude)
+    moment_magnitude = float(device.moment_magnitude_muB)
+    torque_map = TangentTorqueMap(
+        theta=torque_map.theta,
+        phi=torque_map.phi,
+        direction=torque_map.direction,
+        cartesian=moment_magnitude*torque_map.cartesian,
+        theta_component=moment_magnitude*torque_map.theta_component,
+        phi_component=moment_magnitude*torque_map.phi_component,
+    )
+
+    with open(f"{mainDir}/rawTorqueDistr.txt", "w") as fout:
+        fout.write("             Phi           Theta         tau_phi       tau_theta\n")
+        for phi, theta, tau_phi, tau_theta in zip(
+            torque_map.phi, torque_map.theta, torque_map.phi_component, torque_map.theta_component
+        ):
+            fout.write(f"{phi:16.8E}{theta:16.8E}{tau_phi:16.8E}{tau_theta:16.8E}\n")
+
+    sample = slice(None, None, arrow_stride)
+    figure, axis = plt.subplots()
+    arrows = axis.quiver(
+        torque_map.phi[sample],
+        torque_map.theta[sample],
+        torque_map.phi_component[sample],
+        torque_map.theta_component[sample],
+        torque_map.theta_component[sample],
+        cmap="RdBu",
+        pivot="mid",
+        angles="xy",
+        scale_units="xy",
+    )
+    if trajectory is not None:
+        path = np.asarray(trajectory, dtype=float)
+        if path.ndim != 2 or path.shape[1] != 3:
+            raise ValueError("trajectory must have shape (ntime, 3).")
+        path = path/np.linalg.norm(path, axis=1)[:, None]
+        path_theta = np.arccos(np.clip(path[:, 2], -1.0, 1.0))
+        path_phi = np.mod(np.arctan2(path[:, 1], path[:, 0]), 2.0*np.pi)
+        axis.scatter(path_phi, path_theta, s=8, c="black", alpha=0.55, label="trajectory")
+        axis.scatter(path_phi[0], path_theta[0], s=45, facecolors="white", edgecolors="black", label="start", zorder=3)
+        axis.scatter(path_phi[-1], path_theta[-1], s=55, marker="x", c="red", label="end", zorder=3)
+        axis.legend()
+    axis.set_xlim(0.0, 2.0*np.pi)
+    axis.set_ylim(np.pi, 0.0)
+    axis.set_xticks(
+        [0.0, 0.5*np.pi, np.pi, 1.5*np.pi, 2.0*np.pi],
+        ["0", r"$\pi/2$", r"$\pi$", r"$3\pi/2$", r"$2\pi$"],
+    )
+    axis.set_yticks([0.0, 0.5*np.pi, np.pi], ["0", r"$\pi/2$", r"$\pi$"])
+    axis.set_xlabel(r"$\phi$")
+    axis.set_ylabel(r"$\theta$")
+    axis.set_title("Raw electronic IFT samples")
+    color_magnitude = np.max(np.abs(torque_map.theta_component))
+    if color_magnitude == 0.0:
+        color_magnitude = 1.0
+    arrows.set_clim(vmin=-color_magnitude, vmax=color_magnitude)
+    figure.colorbar(
+        arrows,
+        ax=axis,
+        label=r"IFT efficiency of $\tau_{\theta}$ ($\mu_B$/fs)/(V/$\AA$)$^2$",
+    )
+    figure.tight_layout()
+    figure.savefig(f"{mainDir}/rawTorqueDistr.png", dpi=300)
+    plt.close(figure)
     return torque_map
 
 def plot_mag_evolution(mainDir, time_axis:Sequence, trajectory:Sequence, pulse:Callable, pulse_title:str):
@@ -182,12 +261,14 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        #t_total=   104_000.0,
-        t_total=3_000_000.0,
+        t_total=   104_000.0,
+        #t_total=3_000_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
-    if show_torque_map: plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
+    if show_torque_map:
+        plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
+        plot_raw_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
     plt.show()
 
 def run_sot_example(mainDir="./",show_torque_map=True):

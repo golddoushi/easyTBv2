@@ -170,6 +170,88 @@ def sample_tangent_torque_map(
         phi_component=np.sum(cartesian * phi_basis, axis=-1),
     )
 
+def sample_raw_tangent_torque_map(device, drive_amplitude: float = 1.0) -> TangentTorqueMap:
+    """
+    Contract and tangent-project the raw IFT samples stored in a dynamics map.
+
+    Unlike :func:`sample_tangent_torque_map`, this function never evaluates
+    the VSH expansion. The returned vectors occupy the original electronic
+    calculation directions and use the same unit-moment source convention as
+    ``IFTDevice.drive_torque``.
+    """
+    if not np.isfinite(drive_amplitude):
+        raise ValueError("drive_amplitude must be finite.")
+    required_attributes = (
+        "map_path", "polarization", "frequency_bracket", "moment_magnitude_muB",
+        "drive_projection_1", "drive_projection_2", "torque_projection", "fermi_index",
+    )
+    missing_attributes = [name for name in required_attributes if not hasattr(device, name)]
+    if missing_attributes:
+        raise TypeError(f"device lacks raw-map selection attributes: {missing_attributes}")
+
+    with np.load(device.map_path) as data:
+        required_keys = {"directions", "theta", "phi", "projected_chi_IFT"}
+        missing_keys = required_keys.difference(data.files)
+        if missing_keys:
+            raise RuntimeError(f"{device.map_path} lacks raw map arrays: {sorted(missing_keys)}")
+        direction = np.asarray(data["directions"], dtype=float)
+        theta = np.asarray(data["theta"], dtype=float)
+        phi = np.asarray(data["phi"], dtype=float)
+        raw_tensor = data["projected_chi_IFT"]
+
+        if raw_tensor.ndim != 9:
+            raise RuntimeError(
+                "projected_chi_IFT must have axes (orientation, drive_projection_1, "
+                "drive_projection_2, torque_projection, fermi, omega, drive_1, drive_2, torque)."
+            )
+        selection = (
+            device.drive_projection_1, device.drive_projection_2,
+            device.torque_projection, device.fermi_index,
+        )
+        for index, size, name in zip(
+            selection, raw_tensor.shape[1:5],
+            ("drive_projection_1", "drive_projection_2", "torque_projection", "fermi_index"),
+        ):
+            if not 0 <= index < size:
+                raise IndexError(f"{name}={index} is outside [0, {size}).")
+        selected = raw_tensor[:,selection[0],selection[1],selection[2],selection[3],:,:,:,:]
+
+    if direction.ndim != 2 or direction.shape[1] != 3 or theta.shape != direction.shape[:1] or phi.shape != theta.shape:
+        raise RuntimeError("Raw orientation arrays have inconsistent shapes.")
+    lower, upper, weight = device.frequency_bracket
+    if not 0 <= lower < selected.shape[1] or not 0 <= upper < selected.shape[1]:
+        raise IndexError("The device frequency bracket is outside the raw omega axis.")
+    if lower == upper:
+        selected = selected[:, lower]
+    else:
+        selected = (1.0-weight)*selected[:, lower] + weight*selected[:, upper]
+
+    polarization_weight = device.polarization[:, None] * device.polarization.conj()[None, :]
+    contracted = np.einsum("ab,nabc->nc", polarization_weight, selected)
+    cartesian = -np.real(contracted)*abs(complex(drive_amplitude))**2 / (
+        HBAR_EV_FS*device.moment_magnitude_muB
+    )
+    direction_norm = np.linalg.norm(direction, axis=1)
+    if np.any(~np.isfinite(direction_norm)) or np.any(direction_norm == 0.0):
+        raise RuntimeError("Raw magnetic directions must be finite and nonzero.")
+    direction = direction/direction_norm[:, None]
+    cartesian = cartesian - np.sum(cartesian*direction, axis=1)[:, None]*direction
+
+    sin_theta = np.sin(theta)
+    cos_theta = np.cos(theta)
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+    theta_basis = np.stack((cos_theta*cos_phi, cos_theta*sin_phi, -sin_theta), axis=-1)
+    phi_basis = np.stack((-sin_phi, cos_phi, np.zeros_like(phi)), axis=-1)
+    return TangentTorqueMap(
+        theta=theta,
+        phi=phi,
+        direction=direction,
+        cartesian=cartesian,
+        theta_component=np.sum(cartesian*theta_basis, axis=-1),
+        phi_component=np.sum(cartesian*phi_basis, axis=-1),
+    )
+
 class SOTDevice:
     def __init__(
         self,
@@ -354,6 +436,11 @@ class IFTDevice:
         ):
             if not 0 <= index < size:
                 raise IndexError(f"{name}={index} is outside [0, {size}).")
+
+        self.drive_projection_1 = drive_projection_1
+        self.drive_projection_2 = drive_projection_2
+        self.torque_projection = torque_projection
+        self.fermi_index = fermi_index
 
         selected = torque_coefficients[:,:,drive_projection_1,drive_projection_2,torque_projection,fermi_index,:,:,:]
         selected, self.frequency_bracket = self._select_frequency(selected)
