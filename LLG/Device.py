@@ -316,21 +316,16 @@ class IFTDevice:
                 "A positive moment_magnitude_muB is required either as an "
                 "IFTDevice argument or in the saved map.")
 
-        if not isinstance(use_DFT_mae, (bool, np.bool_)):
-            raise TypeError("use_DFT_mae must be boolean.")
+        assert isinstance(use_DFT_mae, (bool, np.bool_)), "use_DFT_mae must be boolean."
         self.use_DFT_mae = bool(use_DFT_mae)
         self.extra_uniaxial_mae = float(extra_uniaxial_mae)
-        if not np.isfinite(self.extra_uniaxial_mae):
-            raise ValueError("extra_uniaxial_mae must be finite.")
+        assert np.isfinite(self.extra_uniaxial_mae), "extra_uniaxial_mae must be finite."
         extra_axis = np.asarray(extra_uniaxial_mae_direction, dtype=float)
-        if extra_axis.shape != (3,) or not np.all(np.isfinite(extra_axis)):
-            raise ValueError("extra_uniaxial_mae_direction must contain three finite values.")
+        assert extra_axis.shape == (3,) and np.all(np.isfinite(extra_axis)), "extra_uniaxial_mae_direction must contain three finite values."
         extra_axis_norm = np.linalg.norm(extra_axis)
-        if extra_axis_norm == 0.0:
-            raise ValueError("extra_uniaxial_mae_direction must be nonzero.")
+        assert extra_axis_norm != 0.0, "extra_uniaxial_mae_direction must be nonzero."
         self.extra_uniaxial_mae_direction = extra_axis / extra_axis_norm
-        self.extra_uniaxial_field_tesla = 2.0 * self.extra_uniaxial_mae / (
-            self.moment_magnitude_muB * BOHR_MAGNETON_EV_PER_TESLA)
+        self.extra_uniaxial_field_tesla = 2.0 * self.extra_uniaxial_mae / (self.moment_magnitude_muB * BOHR_MAGNETON_EV_PER_TESLA)
 
         self.energy_expansion = SphericalHarmonicExpansion(
             harmonic_degree,

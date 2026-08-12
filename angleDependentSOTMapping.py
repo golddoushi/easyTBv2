@@ -803,7 +803,7 @@ def output_energy_table(path, directions, theta, phi,
 
 def run():
     # Electronic calculation.
-    main_dir = Path("./mcalc/FeCl2")
+    main_dir = Path("./mcalc/MnBi2Te4")
     wannierBasis={
         "Fe": (0, 1, 2),
         "Mn": (0, 1, 2),
@@ -811,25 +811,25 @@ def run():
         "Bi": (0, 1),
         "Te": (0, 1),
     }
-    reference_fermi = -2.5
+    reference_fermi = 0.95
     reference_direction = np.asarray([0.0, 0.0, 1.0])
     # Set this directly when the electron number is known.  Otherwise it is
     # inferred from reference_fermi at reference_direction.
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
-    eta = 0.06582 / 10   # in eV, eta = 0.06582 meV corresponds to relaxation time ~10 fs
+    eta = 0.06582   # in eV, eta = 0.06582 meV corresponds to relaxation time ~10 fs
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0,])
-    bz_grid = (48, 48, 1)
+    omega_axis = np.array([0.6, 0.7, 0.8, 2.0, 2.1, 2.4, 2.8])
+    bz_grid = (180, 180, 1)
     # Primary parallelism is over magnetization directions.  A hybrid setup
     # is also possible, provided the following worker-count product does not
     # exceed the allocated physical cores.
-    number_of_cores = 16
+    number_of_cores = 8
     number_of_orientation_workers = number_of_cores
     number_of_bz_workers_per_orientation = 1
     number_of_reference_bz_workers = number_of_cores
@@ -847,7 +847,7 @@ def run():
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
     harmonic_degree = 6
-    number_of_orientations = 200
+    number_of_orientations = 800
     resume_completed_orientations = True
     validation_folds = 5
     validation_active_signal_fraction = 0.05
@@ -865,7 +865,7 @@ def run():
 
     model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
     model.symmerizeCollinearAndSOI()
-    model.getExchangeR(provenance="collinear spin difference")
+    model.getExchangeR(provenance="pauli estimate")
     model.setFermi(reference_fermi)
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
@@ -1089,8 +1089,10 @@ def run():
         projection_operation_groups = [ identity_operations for _ in range(tangential_chi_ift.shape[3])]
 
     assert len(projection_operation_groups) == tangential_chi_ift.shape[3], (
-            "The number of torque projection specifications does not match "
-            "the response projection axis.")
+            f"The number of torque projection specifications {len(projection_operation_groups)} does not match "
+            f"the response projection axis[3]: {tangential_chi_ift.shape=}."
+            f"Note: {len(torque_projection_specs)=}"
+            )
     rotation_groups = [np.asarray(
             [operation["polar_rotation"] for operation in operations],
             dtype=float,) for operations in projection_operation_groups
