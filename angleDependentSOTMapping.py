@@ -8,7 +8,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager, redirect_stdout
 import argparse
 import hashlib
+import inspect
 import json
+import warnings
 from pathlib import Path
 import numpy as np
 import paramReader
@@ -29,7 +31,8 @@ from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
 from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
 
 _orientation_worker_model = None
-IFT_CHECKPOINT_FORMAT_VERSION = 2
+_warned_legacy_ift_checkpoint = False
+IFT_CHECKPOINT_FORMAT_VERSION = 3
 
 def orientation_indices_for_shard(number_of_orientations, shard_rank, shard_count):
     """Return the deterministic modulo shard owned by one Slurm task."""
@@ -49,6 +52,8 @@ def command_line_arguments():
         help="Override SLURM_PROCID, mainly for testing or manual sharding.")
     parser.add_argument("--shard-count", type=int, default=None,
         help="Override SLURM_NTASKS. Pass the compute-node count to the aggregate stage.")
+    parser.add_argument("--harmonic-degree", type=int, default=None,
+        help="Override the VSH fitting degree during aggregation without changing electronic checkpoints.")
     return parser.parse_args()
 
 def distributed_run_settings(stage, workers_per_node=None, shard_rank=None, shard_count=None):
@@ -69,17 +74,23 @@ class StaleIFTCheckpointError(RuntimeError):
 
 def build_ift_checkpoint_signature(main_dir,solver_name,occupation_mode,kBT,eta,degen,mag_type,
                                    torque_projection_specs,exchange_provenance):
-    """Fingerprint all settings, implementation files, and model inputs affecting an IFT sample."""
+    """Fingerprint electronic settings and code without coupling checkpoints to VSH postprocessing."""
     source_dir = Path(__file__).resolve().parent
     source_files = [
-        source_dir / "angleDependentSOTMapping.py", source_dir / "calculator" / "__init__.py",
-        source_dir / "task.py", source_dir / "auxiliary.py", source_dir / "paramReader.py",
+        source_dir / "calculator" / "__init__.py", source_dir / "task.py",
+        source_dir / "auxiliary.py", source_dir / "paramReader.py",
         source_dir / "system" / "__init__.py", source_dir / "system" / "system_w90.py",
     ]
     source_hash = hashlib.sha256()
     for path in source_files:
         source_hash.update(path.relative_to(source_dir).as_posix().encode("utf-8"))
         normalized_source = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        source_hash.update(normalized_source.encode("utf-8"))
+    for function in (
+            solve_energy_orientation, solve_ift_orientation, collect_bz_energies,
+            collect_bz_response, solve_chemical_potential, fixed_number_electronic_state):
+        source_hash.update(function.__name__.encode("utf-8"))
+        normalized_source = inspect.getsource(function).replace("\r\n", "\n").replace("\r", "\n")
         source_hash.update(normalized_source.encode("utf-8"))
 
     model_inputs = []
@@ -96,9 +107,25 @@ def build_ift_checkpoint_signature(main_dir,solver_name,occupation_mode,kBT,eta,
         "kBT_eV": float(kBT), "eta_eV": float(eta), "degen_eV": float(degen), "mag_type": mag_type,
         "torque_projection_specs": torque_projection_specs,
         "exchange_provenance": exchange_provenance,
-        "source_sha256": source_hash.hexdigest(), "model_inputs": model_inputs,
+        "electronic_source_sha256": source_hash.hexdigest(), "model_inputs": model_inputs,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+def checkpoint_signatures_compatible(saved_signature, expected_signature, saved_format_version):
+    """Compare signatures, allowing semantic reuse of version-2 checkpoints."""
+    if saved_signature == expected_signature and saved_format_version == IFT_CHECKPOINT_FORMAT_VERSION:
+        return True
+    try:
+        saved_payload = json.loads(saved_signature)
+        expected_payload = json.loads(expected_signature)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if saved_format_version != 2: return False
+    saved_payload.pop("format_version", None)
+    expected_payload.pop("format_version", None)
+    saved_payload.pop("source_sha256", None)
+    expected_payload.pop("electronic_source_sha256", None)
+    return saved_payload == expected_payload
 
 def initialize_orientation_worker(model=None):
     """Give one process exclusive ownership of a reusable electronic model."""
@@ -379,10 +406,14 @@ def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_
 def load_ift_sample(path,expected_direction,expected_chemical_potential,expected_omega_axis,expected_bz_grid,
                     expected_solver_name,expected_occupation_mode,expected_kBT,expected_calculation_signature):
     """Load and validate one fixed-number IFT checkpoint."""
+    global _warned_legacy_ift_checkpoint
     with np.load(path) as data:
         required = {"checkpoint_format_version", "calculation_signature"}
         if not required.issubset(data.files):
             raise StaleIFTCheckpointError(f"{path.name} predates complete IFT checkpoint validation")
+        saved_format_version = int(data["checkpoint_format_version"])
+        signature_matches = checkpoint_signatures_compatible(
+            str(data["calculation_signature"]), expected_calculation_signature, saved_format_version)
         signatures_match = (
             np.allclose(data["direction"], expected_direction, atol=1.0e-12)
             and np.isclose(float(data["chemical_potential_eV"]), expected_chemical_potential)
@@ -391,11 +422,16 @@ def load_ift_sample(path,expected_direction,expected_chemical_potential,expected
             and str(data["solver_name"]) == expected_solver_name
             and str(data["occupation_mode"]) == expected_occupation_mode
             and np.isclose(float(data["kBT_eV"]), expected_kBT)
-            and int(data["checkpoint_format_version"]) == IFT_CHECKPOINT_FORMAT_VERSION
-            and str(data["calculation_signature"]) == expected_calculation_signature
+            and signature_matches
         )
         if not signatures_match:
             raise StaleIFTCheckpointError(f"IFT settings or implementation changed since {path.name} was written")
+        if saved_format_version == 2 and not _warned_legacy_ift_checkpoint:
+            warnings.warn(
+                "Loading version-2 IFT checkpoints by semantic electronic settings. Their legacy source hash "
+                "also covered VSH postprocessing, so postprocessing-only source edits are intentionally ignored.",
+                RuntimeWarning)
+            _warned_legacy_ift_checkpoint = True
         return data["projected_chi_IFT"].copy()
 
 #+----------------------------------------------------------+
@@ -880,7 +916,8 @@ def output_energy_table(path, directions, theta, phi,
                 f"   {lowest_unoccupied[index]:18.10e}\n"
             )
 
-def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_rank=None, shard_count=None):
+def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_rank=None, shard_count=None,
+        harmonic_degree_override=None):
     # Electronic calculation.
     main_dir = Path("./mcalc/MnBi2Te4")
     wannierBasis={
@@ -897,7 +934,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
-    eta = 0.06582/10   # eV (65.82 meV), corresponding to hbar/eta about 10 fs
+    eta = 0.06582/10   # eV (6.582 meV), corresponding to hbar/eta about 100 fs
     degen = 1.0e-3     # eV; regularizes r_mn=v_mn/(i DeltaE_mn) inside near-degenerate subspaces
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
@@ -928,7 +965,10 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
 
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
-    harmonic_degree = 6
+    harmonic_degree = 18
+    if harmonic_degree_override is not None:
+        harmonic_degree = int(harmonic_degree_override)
+        if harmonic_degree < 1: raise ValueError("harmonic_degree must be positive.")
     number_of_orientations = 8*96
     resume_completed_orientations = True
     validation_folds = 5
@@ -1557,4 +1597,5 @@ if __name__ == "__main__":
     arguments = command_line_arguments()
     run(stage=arguments.stage, workers_per_node=arguments.workers_per_node,
         bz_workers_per_orientation=arguments.bz_workers_per_orientation,
-        shard_rank=arguments.shard_rank, shard_count=arguments.shard_count)
+        shard_rank=arguments.shard_rank, shard_count=arguments.shard_count,
+        harmonic_degree_override=arguments.harmonic_degree)

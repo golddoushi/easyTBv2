@@ -83,12 +83,7 @@ class TangentTorqueMap:
         """Return ``(T_theta, T_phi)`` on the last axis."""
         return np.stack((self.theta_component, self.phi_component), axis=-1)
 
-def sample_tangent_torque_map(
-    device,
-    theta_count: int = 31,
-    phi_count: int = 61,
-    drive_amplitude: float = 1.0,
-) -> TangentTorqueMap:
+def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61, drive_amplitude: float = 1.0,) -> TangentTorqueMap:
     """
     Sample the drive-induced tangent torque over magnetic orientations.
 
@@ -112,9 +107,7 @@ def sample_tangent_torque_map(
     if not hasattr(device, "drive_torque"):
         raise TypeError("device must provide drive_torque(m, drive_amplitude).")
 
-    theta_axis = (
-        np.arange(theta_count, dtype=float) + 0.5
-    ) * np.pi / theta_count
+    theta_axis = (np.arange(theta_count, dtype=float) + 0.5) * np.pi / theta_count
     phi_axis = np.linspace(0.0, 2.0 * np.pi, phi_count, endpoint=False)
     theta, phi = np.meshgrid(theta_axis, phi_axis, indexing="ij")
 
@@ -122,24 +115,21 @@ def sample_tangent_torque_map(
     cos_theta = np.cos(theta)
     sin_phi = np.sin(phi)
     cos_phi = np.cos(phi)
-    direction = np.stack(
-        (
+    direction = np.stack((
             sin_theta * cos_phi,
             sin_theta * sin_phi,
             cos_theta,
         ),
         axis=-1,
     )
-    theta_basis = np.stack(
-        (
+    theta_basis = np.stack((
             cos_theta * cos_phi,
             cos_theta * sin_phi,
             -sin_theta,
         ),
         axis=-1,
     )
-    phi_basis = np.stack(
-        (
+    phi_basis = np.stack((
             -sin_phi,
             cos_phi,
             np.zeros_like(phi),
@@ -228,9 +218,7 @@ def sample_raw_tangent_torque_map(device, drive_amplitude: float = 1.0) -> Tange
 
     polarization_weight = device.polarization[:, None] * device.polarization.conj()[None, :]
     contracted = np.einsum("ab,nabc->nc", polarization_weight, selected)
-    cartesian = -np.real(contracted)*abs(complex(drive_amplitude))**2 / (
-        HBAR_EV_FS*device.moment_magnitude_muB
-    )
+    cartesian = -np.real(contracted)*abs(complex(drive_amplitude))**2 / (HBAR_EV_FS*device.moment_magnitude_muB)
     direction_norm = np.linalg.norm(direction, axis=1)
     if np.any(~np.isfinite(direction_norm)) or np.any(direction_norm == 0.0):
         raise RuntimeError("Raw magnetic directions must be finite and nonzero.")
