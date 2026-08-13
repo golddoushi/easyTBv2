@@ -160,6 +160,44 @@ def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61
         phi_component=np.sum(cartesian * phi_basis, axis=-1),
     )
 
+def sample_tangent_torque_at_directions(device, directions, drive_amplitude: float = 1.0) -> TangentTorqueMap:
+    """Evaluate the fitted drive torque at specified magnetic directions."""
+    if not np.isfinite(drive_amplitude):
+        raise ValueError("drive_amplitude must be finite.")
+    if not hasattr(device, "drive_torque"):
+        raise TypeError("device must provide drive_torque(m, drive_amplitude).")
+    direction = np.asarray(directions, dtype=float)
+    if direction.ndim < 2 or direction.shape[-1] != 3:
+        raise ValueError("directions must have shape (..., 3).")
+    direction_norm = np.linalg.norm(direction, axis=-1)
+    if np.any(~np.isfinite(direction_norm)) or np.any(direction_norm == 0.0):
+        raise ValueError("directions must be finite and nonzero.")
+    direction = direction/direction_norm[..., None]
+
+    flat_direction = direction.reshape(-1, 3)
+    flat_torque = np.asarray([device.drive_torque(m, drive_amplitude) for m in flat_direction], dtype=float)
+    if flat_torque.shape != flat_direction.shape:
+        raise ValueError("device.drive_torque must return a Cartesian vector.")
+    cartesian = flat_torque.reshape(direction.shape)
+    cartesian -= np.sum(cartesian*direction, axis=-1)[..., None]*direction
+
+    theta = np.arccos(np.clip(direction[..., 2], -1.0, 1.0))
+    phi = np.mod(np.arctan2(direction[..., 1], direction[..., 0]), 2.0*np.pi)
+    sin_theta = np.sin(theta)
+    cos_theta = np.cos(theta)
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+    theta_basis = np.stack((cos_theta*cos_phi, cos_theta*sin_phi, -sin_theta), axis=-1)
+    phi_basis = np.stack((-sin_phi, cos_phi, np.zeros_like(phi)), axis=-1)
+    return TangentTorqueMap(
+        theta=theta,
+        phi=phi,
+        direction=direction,
+        cartesian=cartesian,
+        theta_component=np.sum(cartesian*theta_basis, axis=-1),
+        phi_component=np.sum(cartesian*phi_basis, axis=-1),
+    )
+
 def sample_raw_tangent_torque_map(device, drive_amplitude: float = 1.0) -> TangentTorqueMap:
     """
     Contract and tangent-project the raw IFT samples stored in a dynamics map.

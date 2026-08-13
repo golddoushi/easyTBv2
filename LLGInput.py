@@ -1,8 +1,9 @@
 from collections.abc import Callable, Sequence
 import numpy as np
 from LLG import IFTDevice, PulseTimeStepSchedule, SOTDevice, Field, TangentTorqueMap
-from LLG import sample_raw_tangent_torque_map, sample_tangent_torque_map
+from LLG import sample_raw_tangent_torque_map, sample_tangent_torque_at_directions, sample_tangent_torque_map
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from scipy.constants import speed_of_light, epsilon_0
 
 def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive_amplitude=1.0, trajectory=None):
@@ -84,12 +85,14 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
 
 def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory=None, arrow_stride=1):
     """
-    Plot the contracted tangent torque at the raw calculated orientations.
+    Plot the raw torque and its pointwise comparison with the VSH fit.
 
     The vector origins are the saved Fibonacci sampling directions in
     ``AngleDependentDynamicsMap.npz``. No VSH evaluation or angular-grid
-    interpolation is used. Arrow components are ``tau_phi`` horizontally
-    and ``tau_theta`` vertically, while color represents ``tau_theta``.
+    interpolation is used for ``rawTorqueDistr.png``. The additional
+    ``rawVSHComparison.png`` overlays black raw arrows and colored VSH arrows
+    evaluated at exactly the same orientations. Its color is the local
+    tangent-vector residual normalized by the global RMS raw torque.
     """
     arrow_stride = int(arrow_stride)
     if arrow_stride < 1:
@@ -104,6 +107,22 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
         theta_component=moment_magnitude*torque_map.theta_component,
         phi_component=moment_magnitude*torque_map.phi_component,
     )
+    fitted_map = sample_tangent_torque_at_directions(
+        device, torque_map.direction, drive_amplitude=drive_amplitude
+    )
+    fitted_map = TangentTorqueMap(
+        theta=fitted_map.theta,
+        phi=fitted_map.phi,
+        direction=fitted_map.direction,
+        cartesian=moment_magnitude*fitted_map.cartesian,
+        theta_component=moment_magnitude*fitted_map.theta_component,
+        phi_component=moment_magnitude*fitted_map.phi_component,
+    )
+    residual_phi = fitted_map.phi_component-torque_map.phi_component
+    residual_theta = fitted_map.theta_component-torque_map.theta_component
+    absolute_error = np.hypot(residual_phi, residual_theta)
+    raw_rms = np.sqrt(np.mean(torque_map.phi_component**2+torque_map.theta_component**2))
+    normalized_error = np.zeros_like(absolute_error) if raw_rms == 0.0 else 100.0*absolute_error/raw_rms
 
     with open(f"{mainDir}/rawTorqueDistr.txt", "w") as fout:
         fout.write("             Phi           Theta         tau_phi       tau_theta\n")
@@ -111,6 +130,20 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
             torque_map.phi, torque_map.theta, torque_map.phi_component, torque_map.theta_component
         ):
             fout.write(f"{phi:16.8E}{theta:16.8E}{tau_phi:16.8E}{tau_theta:16.8E}\n")
+
+    with open(f"{mainDir}/rawVSHComparison.txt", "w") as fout:
+        fout.write(
+            "             Phi           Theta     raw_tau_phi   raw_tau_theta"
+            "     fit_tau_phi   fit_tau_theta     delta_phi   delta_theta"
+            "       abs_error error_pct_raw_rms\n"
+        )
+        rows = zip(
+            torque_map.phi, torque_map.theta, torque_map.phi_component, torque_map.theta_component,
+            fitted_map.phi_component, fitted_map.theta_component, residual_phi, residual_theta,
+            absolute_error, normalized_error,
+        )
+        for row in rows:
+            fout.write("".join(f"{value:16.8E}" for value in row)+"\n")
 
     sample = slice(None, None, arrow_stride)
     figure, axis = plt.subplots()
@@ -147,8 +180,7 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
     axis.set_ylabel(r"$\theta$")
     axis.set_title("Raw electronic IFT samples")
     color_magnitude = np.max(np.abs(torque_map.theta_component))
-    if color_magnitude == 0.0:
-        color_magnitude = 1.0
+    if color_magnitude == 0.0: color_magnitude = 1.0
     arrows.set_clim(vmin=-color_magnitude, vmax=color_magnitude)
     figure.colorbar(
         arrows,
@@ -157,6 +189,52 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
     )
     figure.tight_layout()
     figure.savefig(f"{mainDir}/rawTorqueDistr.png", dpi=300)
+    plt.close(figure)
+
+    raw_magnitude = np.hypot(torque_map.phi_component[sample], torque_map.theta_component[sample])
+    fitted_magnitude = np.hypot(fitted_map.phi_component[sample], fitted_map.theta_component[sample])
+    combined_magnitude = np.concatenate((raw_magnitude, fitted_magnitude))
+    reference_magnitude = np.percentile(combined_magnitude, 95.0)
+    shared_scale = reference_magnitude/0.12 if reference_magnitude > 0.0 else 1.0
+
+    figure, axis = plt.subplots()
+    axis.quiver(
+        torque_map.phi[sample], torque_map.theta[sample], torque_map.phi_component[sample],
+        torque_map.theta_component[sample], color="green", pivot="mid", angles="xy", scale_units="xy",
+        scale=shared_scale, width=0.002, alpha=1, zorder=1,
+    )
+    fitted_arrows = axis.quiver(
+        torque_map.phi[sample], torque_map.theta[sample], fitted_map.phi_component[sample],
+        fitted_map.theta_component[sample], absolute_error[sample], cmap="plasma", pivot="mid",
+        angles="xy", scale_units="xy", scale=shared_scale, width=0.002, zorder=2,
+    )
+    color_magnitude = np.max(np.abs(absolute_error))
+    if color_magnitude == 0.0: color_magnitude = 1.0
+    fitted_arrows.set_clim(vmin=0,vmax=color_magnitude)
+    axis.set_xlim(0.0, 2.0*np.pi)
+    axis.set_ylim(np.pi, 0.0)
+    axis.set_xticks(
+        [0.0, 0.5*np.pi, np.pi, 1.5*np.pi, 2.0*np.pi],
+        ["0", r"$\pi/2$", r"$\pi$", r"$3\pi/2$", r"$2\pi$"],
+    )
+    axis.set_yticks([0.0, 0.5*np.pi, np.pi], ["0", r"$\pi/2$", r"$\pi$"])
+    axis.set_xlabel(r"$\phi$")
+    axis.set_ylabel(r"$\theta$")
+    axis.set_title("Raw electronic IFT and VSH fit")
+    axis.legend(
+        handles=[
+            Line2D([0], [0], color="green", linewidth=2.5, label="Raw electronic IFT"),
+            Line2D([0], [0], color=plt.get_cmap("magma")(0.65), linewidth=2.5, label="VSH fit"),
+        ],
+        loc="best",
+    )
+    figure.colorbar(
+        fitted_arrows, ax=axis,
+        #label="Local VSH residual (% of global RMS raw torque)",
+        label=r"Local VSH residual |$\tau$| ($\mu_B$/fs)/(V/$\AA$)$^2$",
+    )
+    figure.tight_layout()
+    figure.savefig(f"{mainDir}/rawVSHComparison.png", dpi=600)
     plt.close(figure)
     return torque_map
 
@@ -261,8 +339,8 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        #t_total=   104_000.0,
-        t_total=3_000_000.0,
+        t_total=   104_000.0,
+        #t_total=3_000_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
@@ -297,4 +375,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.5,polarization="xy-",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.8,polarization="xy-",show_torque_map=True)
