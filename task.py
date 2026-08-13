@@ -484,6 +484,7 @@ def solveIFTorque_TDSE(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
+                                     degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                      include_offdiag=param.get('include offdiag', True),
@@ -498,6 +499,7 @@ def solveIFTorque_VG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
+                                     degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                      responseOmegaIndexList=param.get('record frequency ids', []),
@@ -514,6 +516,7 @@ def solveIFTorque_LG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
+                                     degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                      responseOmegaIndexList=param.get('record frequency ids', []),

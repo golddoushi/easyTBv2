@@ -239,6 +239,7 @@ def run():
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
 
                           "finite temperature occupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
+                          "degen":1e-4,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',

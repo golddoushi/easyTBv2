@@ -6,6 +6,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager, redirect_stdout
+import hashlib
 import json
 from pathlib import Path
 import numpy as np
@@ -27,6 +28,43 @@ from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
 from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
 
 _orientation_worker_model = None
+IFT_CHECKPOINT_FORMAT_VERSION = 2
+
+class StaleIFTCheckpointError(RuntimeError):
+    """Raised when a saved IFT sample was produced by incompatible settings or code."""
+
+def build_ift_checkpoint_signature(main_dir,solver_name,occupation_mode,kBT,eta,degen,mag_type,
+                                   torque_projection_specs,exchange_provenance):
+    """Fingerprint all settings, implementation files, and model inputs affecting an IFT sample."""
+    source_dir = Path(__file__).resolve().parent
+    source_files = [
+        source_dir / "angleDependentSOTMapping.py", source_dir / "calculator" / "__init__.py",
+        source_dir / "task.py", source_dir / "auxiliary.py", source_dir / "paramReader.py",
+        source_dir / "system" / "__init__.py", source_dir / "system" / "system_w90.py",
+    ]
+    source_hash = hashlib.sha256()
+    for path in source_files:
+        source_hash.update(path.relative_to(source_dir).as_posix().encode("utf-8"))
+        normalized_source = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        source_hash.update(normalized_source.encode("utf-8"))
+
+    model_inputs = []
+    for path in sorted(Path(main_dir).iterdir(), key=lambda item: item.name):
+        is_input = path.name == "POSCAR" or path.name.endswith("_hr.dat") or path.suffix.lower() in {
+            ".chk", ".eig", ".mmn", ".soi", ".win",
+        }
+        if path.is_file() and is_input:
+            model_inputs.append((path.name, path.stat().st_size))
+
+    payload = {
+        "format_version": IFT_CHECKPOINT_FORMAT_VERSION,
+        "solver_name": solver_name, "occupation_mode": occupation_mode,
+        "kBT_eV": float(kBT), "eta_eV": float(eta), "degen_eV": float(degen), "mag_type": mag_type,
+        "torque_projection_specs": torque_projection_specs,
+        "exchange_provenance": exchange_provenance,
+        "source_sha256": source_hash.hexdigest(), "model_inputs": model_inputs,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 def initialize_orientation_worker(model=None):
     """Give one process exclusive ownership of a reusable electronic model."""
@@ -75,7 +113,7 @@ def solve_ift_orientation(job):
                 "mag type": job["mag_type"],
                 "projected shells for detecting torque": job["torque_projection_specs"],
                 "finite temperature occupations": job["occupation_mode"] == "fermi-dirac",
-                "kBT": job["kBT"], "eta": job["eta"],
+                "kBT": job["kBT"], "eta": job["eta"], "degen": job["degen"],
             },
             BZGrid=job["bz_grid"], BZSymm=False, mode="run", ncores=job["bz_workers"])
         projected_chi_sample = collect_bz_response(calc)
@@ -285,7 +323,8 @@ def load_energy_sample(path,expected_direction,expected_bz_grid,expected_target_
             "nominal_occupied_state_count": int(data["nominal_occupied_state_count"]),
         }
 
-def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_name,occupation_mode,kBT,projected_chi_ift):
+def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_name,occupation_mode,kBT,
+                    calculation_signature,projected_chi_ift):
     """Atomically save one completed fixed-number IFT calculation."""
     temporary = path.with_suffix(".tmp.npz")
     np.savez_compressed(
@@ -297,14 +336,19 @@ def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_
         solver_name=solver_name,
         occupation_mode=occupation_mode,
         kBT_eV=kBT,
+        checkpoint_format_version=IFT_CHECKPOINT_FORMAT_VERSION,
+        calculation_signature=calculation_signature,
         projected_chi_IFT=projected_chi_ift,
     )
     temporary.replace(path)
 
 def load_ift_sample(path,expected_direction,expected_chemical_potential,expected_omega_axis,expected_bz_grid,
-                    expected_solver_name,expected_occupation_mode,expected_kBT):
+                    expected_solver_name,expected_occupation_mode,expected_kBT,expected_calculation_signature):
     """Load and validate one fixed-number IFT checkpoint."""
     with np.load(path) as data:
+        required = {"checkpoint_format_version", "calculation_signature"}
+        if not required.issubset(data.files):
+            raise StaleIFTCheckpointError(f"{path.name} predates complete IFT checkpoint validation")
         signatures_match = (
             np.allclose(data["direction"], expected_direction, atol=1.0e-12)
             and np.isclose(float(data["chemical_potential_eV"]), expected_chemical_potential)
@@ -313,10 +357,11 @@ def load_ift_sample(path,expected_direction,expected_chemical_potential,expected
             and str(data["solver_name"]) == expected_solver_name
             and str(data["occupation_mode"]) == expected_occupation_mode
             and np.isclose(float(data["kBT_eV"]), expected_kBT)
+            and int(data["checkpoint_format_version"]) == IFT_CHECKPOINT_FORMAT_VERSION
+            and str(data["calculation_signature"]) == expected_calculation_signature
         )
-        assert signatures_match,(
-                f"IFT settings in {path} do not match this run. Remove the "
-                "IFT sample directory or restore its settings.")
+        if not signatures_match:
+            raise StaleIFTCheckpointError(f"IFT settings or implementation changed since {path.name} was written")
         return data["projected_chi_IFT"].copy()
 
 #+----------------------------------------------------------+
@@ -818,31 +863,33 @@ def run():
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
-    eta = 0.06582   # in eV, eta = 0.06582 meV corresponds to relaxation time ~10 fs
+    eta = 0.06582   # eV (65.82 meV), corresponding to hbar/eta about 10 fs
+    degen = 1.0e-3  # eV; regularizes r_mn=v_mn/(i DeltaE_mn) inside near-degenerate subspaces
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.array([0.6, 0.7, 0.8, 2.0, 2.1, 2.4, 2.8])
+    omega_axis = np.array([ 0.7, 0.8, 0.9, 2.3, 2.4, 2.5, ])
     bz_grid = (180, 180, 1)
     # Primary parallelism is over magnetization directions.  A hybrid setup
     # is also possible, provided the following worker-count product does not
     # exceed the allocated physical cores.
-    number_of_cores = 8
+    number_of_cores = 96
     number_of_orientation_workers = number_of_cores
     number_of_bz_workers_per_orientation = 1
     number_of_reference_bz_workers = number_of_cores
     orientation_worker_verbose = False
     torque_projection_list = [(0,(0,1,2,)),]
     torque_projection_specs = [
-        {
-            "source": torque_projection_list,
-            "target": torque_projection_list,
-        },
+        #{
+        #    "source": torque_projection_list,
+        #    "target": torque_projection_list,
+        #},
     ]
     ift_solver = solveIFTorque_LG_DM
     mag_type = "spin" # spin | orbital | total
+    exchange_provenance = "pauli estimate"
 
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
@@ -865,8 +912,11 @@ def run():
 
     model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
     model.symmerizeCollinearAndSOI()
-    model.getExchangeR(provenance="pauli estimate")
+    model.getExchangeR(provenance=exchange_provenance)
     model.setFermi(reference_fermi)
+    ift_checkpoint_signature = build_ift_checkpoint_signature(
+        main_dir, ift_solver.__name__, occupation_mode, electronic_kBT, eta, degen, mag_type,
+        torque_projection_specs, exchange_provenance)
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
     energy_sample_dir = main_dir / "AngleDependentEnergySamples"
@@ -1015,27 +1065,33 @@ def run():
         projected_chi_samples = [None] * number_of_orientations
         ift_jobs = []
         loaded_ift_samples = 0
+        stale_ift_samples = []
         for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
             sample_path = ift_sample_dir / f"orientation_{index:04d}.npz"
             if resume_completed_orientations and sample_path.exists():
-                projected_chi_samples[index] = load_ift_sample(
-                    sample_path, direction, chemical_potential[index], omega_axis, np.asarray(bz_grid),
-                    ift_solver.__name__, occupation_mode, electronic_kBT)
-                loaded_ift_samples += 1
-            else:
+                try:
+                    projected_chi_samples[index] = load_ift_sample(
+                        sample_path, direction, chemical_potential[index], omega_axis, np.asarray(bz_grid),
+                        ift_solver.__name__, occupation_mode, electronic_kBT, ift_checkpoint_signature)
+                    loaded_ift_samples += 1
+                except StaleIFTCheckpointError as error:
+                    stale_ift_samples.append(str(error))
+            if projected_chi_samples[index] is None:
                 ift_jobs.append({
                     "index": index, "direction": direction, "theta": theta, "phi": phi,
                     "chemical_potential": chemical_potential[index], "omega_axis": omega_axis,
                     "bz_grid": tuple(bz_grid), "bz_workers": number_of_bz_workers_per_orientation,
                     "ift_solver": ift_solver, "mag_type": mag_type,
                     "torque_projection_specs": torque_projection_specs,
-                    "occupation_mode": occupation_mode, "kBT": electronic_kBT, "eta": eta,
+                    "occupation_mode": occupation_mode, "kBT": electronic_kBT, "eta": eta, "degen": degen,
                     "worker_verbose": orientation_worker_verbose,
                 })
         print(
             f"IFT pass: loaded {loaded_ift_samples}, pending {len(ift_jobs)} "
             f"of {number_of_orientations} orientations."
         )
+        if stale_ift_samples:
+            print(f"IFT pass: {len(stale_ift_samples)} stale checkpoint(s) will be recomputed. First reason: {stale_ift_samples[0]}")
         if ift_jobs and executor is None:
             executor, executor_start_method = create_orientation_executor(model, number_of_orientation_workers)
             print(
@@ -1049,7 +1105,8 @@ def run():
                 save_ift_sample(
                     ift_sample_dir / f"orientation_{index:04d}.npz",
                     directions[index], chemical_potential[index], omega_axis, np.asarray(bz_grid),
-                    ift_solver.__name__, occupation_mode, electronic_kBT, projected_chi_sample)
+                    ift_solver.__name__, occupation_mode, electronic_kBT,
+                    ift_checkpoint_signature, projected_chi_sample)
                 projected_chi_samples[index] = projected_chi_sample
                 completed += 1
                 print(
@@ -1226,6 +1283,7 @@ def run():
         fermi_axis_eV=chemical_potential[:, None],
         omega_axis_eV=omega_axis,
         bz_grid=np.asarray(bz_grid), occupation_mode=occupation_mode, kBT_eV=electronic_kBT,
+        eta_eV=eta, degen_eV=degen,
         number_of_cores=number_of_cores,
         number_of_orientation_workers=number_of_orientation_workers,
         number_of_bz_workers_per_orientation=number_of_bz_workers_per_orientation,
@@ -1315,6 +1373,8 @@ def run():
         ),
         "occupation_mode": occupation_mode,
         "kBT_eV": electronic_kBT,
+        "eta_eV": eta,
+        "degen_eV": degen,
         "reference_fermi_eV": reference_fermi,
         "filling_source": filling_source,
         "target_electrons_per_cell": target_electrons_per_cell,
