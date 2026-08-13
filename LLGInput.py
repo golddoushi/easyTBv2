@@ -261,8 +261,8 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        t_total=   104_000.0,
-        #t_total=3_000_000.0,
+        #t_total=   104_000.0,
+        t_total=3_000_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
@@ -297,4 +297,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.8,polarization="xy-",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.5,polarization="xy-",show_torque_map=True)

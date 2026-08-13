@@ -6,6 +6,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager, redirect_stdout
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -29,6 +30,39 @@ from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
 
 _orientation_worker_model = None
 IFT_CHECKPOINT_FORMAT_VERSION = 2
+
+def orientation_indices_for_shard(number_of_orientations, shard_rank, shard_count):
+    """Return the deterministic modulo shard owned by one Slurm task."""
+    if shard_count < 1: raise ValueError("shard_count must be positive.")
+    if not 0 <= shard_rank < shard_count: raise ValueError("shard_rank must satisfy 0 <= rank < shard_count.")
+    return list(range(shard_rank, number_of_orientations, shard_count))
+
+def command_line_arguments():
+    parser = argparse.ArgumentParser(description="Angle-dependent electronic and IFT mapping.")
+    parser.add_argument("--stage", choices=("all", "prepare", "compute", "aggregate"), default="all",
+        help="Run locally end-to-end, prepare shared filling, compute one Slurm shard, or aggregate checkpoints.")
+    parser.add_argument("--workers-per-node", type=int, default=None,
+        help="Local orientation-process count; defaults to SLURM_CPUS_PER_TASK or the detected CPU count.")
+    parser.add_argument("--bz-workers-per-orientation", type=int, default=1,
+        help="Inner BZ workers for each orientation process. Keep this at 1 for orientation-level parallelism.")
+    parser.add_argument("--shard-rank", type=int, default=None,
+        help="Override SLURM_PROCID, mainly for testing or manual sharding.")
+    parser.add_argument("--shard-count", type=int, default=None,
+        help="Override SLURM_NTASKS. Pass the compute-node count to the aggregate stage.")
+    return parser.parse_args()
+
+def distributed_run_settings(stage, workers_per_node=None, shard_rank=None, shard_count=None):
+    default_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+    workers_per_node = default_workers if workers_per_node is None else int(workers_per_node)
+    if workers_per_node < 1: raise ValueError("workers_per_node must be positive.")
+    if stage == "compute":
+        shard_rank = int(os.environ.get("SLURM_PROCID", 0)) if shard_rank is None else int(shard_rank)
+        shard_count = int(os.environ.get("SLURM_NTASKS", 1)) if shard_count is None else int(shard_count)
+    else:
+        shard_rank = 0 if shard_rank is None else int(shard_rank)
+        shard_count = 1 if shard_count is None else int(shard_count)
+    orientation_indices_for_shard(1, shard_rank, shard_count)
+    return workers_per_node, shard_rank, shard_count
 
 class StaleIFTCheckpointError(RuntimeError):
     """Raised when a saved IFT sample was produced by incompatible settings or code."""
@@ -846,7 +880,7 @@ def output_energy_table(path, directions, theta, phi,
                 f"   {lowest_unoccupied[index]:18.10e}\n"
             )
 
-def run():
+def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_rank=None, shard_count=None):
     # Electronic calculation.
     main_dir = Path("./mcalc/MnBi2Te4")
     wannierBasis={
@@ -863,21 +897,22 @@ def run():
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
-    eta = 0.06582   # eV (65.82 meV), corresponding to hbar/eta about 10 fs
-    degen = 1.0e-3  # eV; regularizes r_mn=v_mn/(i DeltaE_mn) inside near-degenerate subspaces
+    eta = 0.06582/10   # eV (65.82 meV), corresponding to hbar/eta about 10 fs
+    degen = 1.0e-3     # eV; regularizes r_mn=v_mn/(i DeltaE_mn) inside near-degenerate subspaces
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
     omega_axis = np.array([ 0.7, 0.8, 0.9, 2.3, 2.4, 2.5, ])
-    bz_grid = (180, 180, 1)
+    bz_grid = (360, 360, 1)
     # Primary parallelism is over magnetization directions.  A hybrid setup
     # is also possible, provided the following worker-count product does not
     # exceed the allocated physical cores.
-    number_of_cores = 96
+    number_of_cores, shard_rank, shard_count = distributed_run_settings(
+        stage, workers_per_node, shard_rank, shard_count)
     number_of_orientation_workers = number_of_cores
-    number_of_bz_workers_per_orientation = 1
+    number_of_bz_workers_per_orientation = int(bz_workers_per_orientation)
     number_of_reference_bz_workers = number_of_cores
     orientation_worker_verbose = False
     torque_projection_list = [(0,(0,1,2,)),]
@@ -894,7 +929,7 @@ def run():
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
     harmonic_degree = 6
-    number_of_orientations = 800
+    number_of_orientations = 8*96
     resume_completed_orientations = True
     validation_folds = 5
     validation_active_signal_fraction = 0.05
@@ -919,6 +954,10 @@ def run():
         torque_projection_specs, exchange_provenance)
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
+    selected_indices = (orientation_indices_for_shard(number_of_orientations, shard_rank, shard_count)
+                        if stage == "compute" else list(range(number_of_orientations)))
+    print(f"Mapping stage={stage}, shard={shard_rank}/{shard_count}, orientations={len(selected_indices)}, "
+          f"local workers={number_of_orientation_workers}, BZ workers/orientation={number_of_bz_workers_per_orientation}")
     energy_sample_dir = main_dir / "AngleDependentEnergySamples"
     ift_sample_dir = main_dir / "AngleDependentIFTSamples"
     energy_sample_dir.mkdir(parents=True, exist_ok=True)
@@ -938,7 +977,7 @@ def run():
         target_electrons_per_cell = float(fixed_electrons_per_cell)
         filling_source = "explicit electrons/cell"
         print(f"Using explicit filling: {target_electrons_per_cell:.12f} electrons/cell")
-    elif resume_completed_orientations and reference_path.exists():
+    elif (resume_completed_orientations or stage in {"compute", "aggregate"}) and reference_path.exists():
         with np.load(reference_path) as data:
             reference_matches = (
                 np.array_equal(data["bz_grid"], np.asarray(bz_grid))
@@ -965,6 +1004,9 @@ def run():
             )
         print(f"Loaded reference filling: {target_electrons_per_cell:.12f} electrons/cell")
         filling_source = "reference Fermi level"
+    elif stage in {"compute", "aggregate"}:
+        raise RuntimeError(
+            f"Missing {reference_path}. Run '--stage prepare' once before launching compute shards.")
     else:
         reference_theta, reference_phi = cartesian_to_spherical(reference_direction[None, :])
         #exit()
@@ -999,6 +1041,10 @@ def run():
         print(f"Determined reference filling: {target_electrons_per_cell:.12f} electrons/cell")
         filling_source = "reference Fermi level"
 
+    if stage == "prepare":
+        print(f"Preparation complete: {reference_path}")
+        return
+
     # The model is mutable when its magnetization direction changes.  Give
     # every orientation process a private copy and keep each inner BZ solve
     # serial by default.  On Linux, fork shares the large immutable Wannier
@@ -1010,9 +1056,10 @@ def run():
         # Pass 1: determine mu(m) and the fixed-number energy landscape.
         energy_jobs = []
         loaded_energy_samples = 0
-        for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
+        for index in selected_indices:
+            direction, theta, phi = directions[index], theta_axis[index], phi_axis[index]
             sample_path = energy_sample_dir / f"orientation_{index:04d}.npz"
-            if resume_completed_orientations and sample_path.exists():
+            if (resume_completed_orientations or stage == "aggregate") and sample_path.exists():
                 sample = load_energy_sample(
                     sample_path, direction, np.asarray(bz_grid),
                     target_electrons_per_cell, occupation_mode, electronic_kBT)
@@ -1022,6 +1069,8 @@ def run():
                 highest_occupied[index] = sample["highest_occupied"]
                 lowest_unoccupied[index] = sample["lowest_unoccupied"]
                 loaded_energy_samples += 1
+            elif stage == "aggregate":
+                raise RuntimeError(f"Missing energy checkpoint {sample_path}; compute all shards before aggregation.")
             else:
                 energy_jobs.append({
                     "index": index, "direction": direction, "theta": theta, "phi": phi,
@@ -1033,7 +1082,7 @@ def run():
                 })
         print(
             f"Energy pass: loaded {loaded_energy_samples}, pending {len(energy_jobs)} "
-            f"of {number_of_orientations} orientations."
+            f"of {len(selected_indices)} selected orientations."
         )
         if energy_jobs:
             executor, executor_start_method = create_orientation_executor(model, number_of_orientation_workers)
@@ -1066,9 +1115,10 @@ def run():
         ift_jobs = []
         loaded_ift_samples = 0
         stale_ift_samples = []
-        for index, (direction, theta, phi) in enumerate(zip(directions, theta_axis, phi_axis)):
+        for index in selected_indices:
+            direction, theta, phi = directions[index], theta_axis[index], phi_axis[index]
             sample_path = ift_sample_dir / f"orientation_{index:04d}.npz"
-            if resume_completed_orientations and sample_path.exists():
+            if (resume_completed_orientations or stage == "aggregate") and sample_path.exists():
                 try:
                     projected_chi_samples[index] = load_ift_sample(
                         sample_path, direction, chemical_potential[index], omega_axis, np.asarray(bz_grid),
@@ -1076,6 +1126,9 @@ def run():
                     loaded_ift_samples += 1
                 except StaleIFTCheckpointError as error:
                     stale_ift_samples.append(str(error))
+            if projected_chi_samples[index] is None and stage == "aggregate":
+                reason = stale_ift_samples[-1] if stale_ift_samples else f"missing checkpoint {sample_path}"
+                raise RuntimeError(f"Cannot aggregate orientation {index}: {reason}")
             if projected_chi_samples[index] is None:
                 ift_jobs.append({
                     "index": index, "direction": direction, "theta": theta, "phi": phi,
@@ -1088,7 +1141,7 @@ def run():
                 })
         print(
             f"IFT pass: loaded {loaded_ift_samples}, pending {len(ift_jobs)} "
-            f"of {number_of_orientations} orientations."
+            f"of {len(selected_indices)} selected orientations."
         )
         if stale_ift_samples:
             print(f"IFT pass: {len(stale_ift_samples)} stale checkpoint(s) will be recomputed. First reason: {stale_ift_samples[0]}")
@@ -1116,6 +1169,13 @@ def run():
     finally:
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
+
+    if stage == "compute":
+        print(f"Compute shard {shard_rank}/{shard_count} complete; checkpoints are ready for aggregation.")
+        return
+
+    if stage == "aggregate" and shard_count > 1:
+        executor_start_method = "Slurm sharding with node-local process pools"
 
     projected_chi_ift = np.asarray(projected_chi_samples)
     tangential_chi_ift = project_tangential(projected_chi_ift, directions)
@@ -1287,6 +1347,7 @@ def run():
         number_of_cores=number_of_cores,
         number_of_orientation_workers=number_of_orientation_workers,
         number_of_bz_workers_per_orientation=number_of_bz_workers_per_orientation,
+        slurm_shard_count=shard_count,
         orientation_process_start_method=executor_start_method,
         nominal_occupied_state_count=int(round(target_electrons_per_cell * number_kpoints)),
         electrons_per_cell=target_electrons_per_cell,
@@ -1385,6 +1446,7 @@ def run():
             "reference_bz_workers": number_of_reference_bz_workers,
             "process_start_method": executor_start_method,
             "worker_verbose": orientation_worker_verbose,
+            "slurm_shard_count": shard_count,
         },
         "projected_chi_IFT_axes": [
             "orientation",
@@ -1492,4 +1554,7 @@ def run():
         validation_active_signal_fraction,
     )
 if __name__ == "__main__":
-    run()
+    arguments = command_line_arguments()
+    run(stage=arguments.stage, workers_per_node=arguments.workers_per_node,
+        bz_workers_per_orientation=arguments.bz_workers_per_orientation,
+        shard_rank=arguments.shard_rank, shard_count=arguments.shard_count)
