@@ -333,6 +333,13 @@ class SOTDevice:
         field_like = -self.gamma * self.H_FL * np.cross(m, self.sigma)
         return float(drive_amplitude) * (damping_like + field_like)
 
+    def drive_torque_many(self, directions, drive_amplitude=1.0) -> np.ndarray:
+        """Vectorized form of :meth:`drive_torque` for phase-portrait analysis."""
+        directions = np.asarray(directions, dtype=float)
+        damping_like = -self.gamma*self.H_DL*np.cross(directions, np.cross(directions, self.sigma))
+        field_like = -self.gamma*self.H_FL*np.cross(directions, self.sigma)
+        return float(drive_amplitude)*(damping_like+field_like)
+
     def run(self, t_total=1.0, time_step=0.01):
         time_axis, trajectory = self.dynamic.integrate(
             initial_m=self.m,
@@ -598,6 +605,10 @@ class IFTDevice:
         response = self.ift_expansion.evaluate(direction[None, :])[0]
         return np.real(response)
 
+    def ift_response_many(self, directions) -> np.ndarray:
+        """Evaluate the contracted VSH response at several directions."""
+        return np.real(self.ift_expansion.evaluate(np.asarray(directions, dtype=float)))
+
     def optical_torque(self, m, time) -> np.ndarray:
         """Return the optical source torque on the unit moment in 1/fs."""
         return self.drive_torque(m, self.light_pulse(time))
@@ -613,6 +624,11 @@ class IFTDevice:
         """
         amplitude = complex(drive_amplitude)
         return -self.ift_response(m) * abs(amplitude) ** 2 / (HBAR_EV_FS * self.moment_magnitude_muB)
+
+    def drive_torque_many(self, directions, drive_amplitude=1.0) -> np.ndarray:
+        """Vectorized form of :meth:`drive_torque` for phase-portrait analysis."""
+        amplitude = complex(drive_amplitude)
+        return -self.ift_response_many(directions)*abs(amplitude)**2/(HBAR_EV_FS*self.moment_magnitude_muB)
     
     def _optical_torque(self, m, time) -> np.ndarray:
         return self.optical_torque(m, time)

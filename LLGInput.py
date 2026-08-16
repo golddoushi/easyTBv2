@@ -1,25 +1,32 @@
 from collections.abc import Callable, Sequence
 import numpy as np
 from LLG import IFTDevice, PulseTimeStepSchedule, SOTDevice, Field, TangentTorqueMap
+from LLG import TangentTorqueTopology, analyze_tangent_torque_topology
 from LLG import sample_raw_tangent_torque_map, sample_tangent_torque_at_directions, sample_tangent_torque_map
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy.constants import speed_of_light, epsilon_0
 
-def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive_amplitude=1.0, trajectory=None):
+def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive_amplitude=1.0,
+                            trajectory=None, analyze_phase_portrait=False, compute_basins=True,
+                            topology_options=None):
     """
     Plot the unit-drive source torque over magnetic orientation space.
 
     Arrow components are expressed in the local orthonormal tangent basis,
     with ``T_phi`` horizontal and ``T_theta`` vertical.  Color gives the
-    Cartesian tangent-torque magnitude.
+    Cartesian tangent-torque magnitude. With ``analyze_phase_portrait=True``,
+    the function also analyzes the autonomous ``device.drive_torque`` field.
+    That phase portrait excludes fields, anisotropy, precession, damping, and
+    the pulse envelope in the complete LLG equation.
     """
-    torque_map = sample_tangent_torque_map(
+    source_torque_map = sample_tangent_torque_map(
         device,
         theta_count=theta_count,
         phi_count=phi_count,
         drive_amplitude=drive_amplitude,
     )
+    torque_map = source_torque_map
     moment_magnitude = getattr(device, "moment_magnitude_muB", None)
     if moment_magnitude is not None:
         moment_magnitude = float(moment_magnitude)
@@ -81,7 +88,156 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
     figure.tight_layout()
     plt.savefig(mainDir+"/torqueDistr.png",dpi=300)
     plt.close()
+    if analyze_phase_portrait:
+        options = {} if topology_options is None else dict(topology_options)
+        topology = analyze_tangent_torque_topology(
+            device, torque_map=source_torque_map, drive_amplitude=drive_amplitude,
+            compute_basins=compute_basins, **options,
+        )
+        _output_torque_phase_portrait(mainDir, torque_map, topology)
     return torque_map
+
+
+def _plot_periodic_curve(axis, phi, theta, **plot_options):
+    """Plot a spherical curve without drawing across the phi branch cut."""
+    phi = np.asarray(phi).copy()
+    theta = np.asarray(theta)
+    if len(phi) > 1 and abs(np.sin(theta[0])) < 1.0e-10:
+        phi[0] = phi[1]
+    if len(phi) > 1 and abs(np.sin(theta[-1])) < 1.0e-10:
+        phi[-1] = phi[-2]
+    boundaries = np.flatnonzero(np.abs(np.diff(phi)) > np.pi)+1
+    for segment in np.split(np.arange(len(phi)), boundaries):
+        if len(segment) > 1:
+            axis.plot(phi[segment], theta[segment], **plot_options)
+
+
+def _output_torque_phase_portrait(mainDir, torque_map, topology: TangentTorqueTopology):
+    """Write and plot the fixed points, manifolds, and estimated basins."""
+    with open(f"{mainDir}/torqueFixedPoints.txt", "w") as fout:
+        fout.write("# Autonomous unit-drive optical-torque field; not the complete LLG flow.\n")
+        fout.write("# id theta phi mx my mz residual index eig1_real eig1_imag eig2_real eig2_imag classification\n")
+        for index, fixed in enumerate(topology.fixed_points):
+            eig1, eig2 = fixed.eigenvalues
+            fout.write(
+                f"{index:4d}{fixed.theta:16.8E}{fixed.phi:16.8E}"
+                f"{fixed.direction[0]:16.8E}{fixed.direction[1]:16.8E}{fixed.direction[2]:16.8E}"
+                f"{fixed.residual:16.8E}{fixed.poincare_index:5d}"
+                f"{eig1.real:16.8E}{eig1.imag:16.8E}{eig2.real:16.8E}{eig2.imag:16.8E}"
+                f" {fixed.classification}\n"
+            )
+    with open(f"{mainDir}/torqueSeparatrices.txt", "w") as fout:
+        fout.write("# saddle_id manifold branch endpoint_id point phi theta mx my mz\n")
+        for separatrix in topology.separatrices:
+            for point, (direction, phi, theta) in enumerate(zip(
+                separatrix.directions, separatrix.phi, separatrix.theta
+            )):
+                fout.write(
+                    f"{separatrix.fixed_point_index:5d} {separatrix.manifold:8s}"
+                    f"{separatrix.branch:4d}{separatrix.endpoint_index:6d}{point:7d}"
+                    f"{phi:16.8E}{theta:16.8E}{direction[0]:16.8E}{direction[1]:16.8E}{direction[2]:16.8E}\n"
+                )
+            fout.write("\n")
+    with open(f"{mainDir}/torqueBasins.txt", "w") as fout:
+        fout.write("             Phi           Theta       basin_id\n")
+        for phi, theta, basin in zip(
+            torque_map.phi.reshape(-1), torque_map.theta.reshape(-1), topology.basin_labels.reshape(-1)
+        ):
+            fout.write(f"{phi:16.8E}{theta:16.8E}{basin:12d}\n")
+
+    figure, axis = plt.subplots()
+    stable_indices = [
+        index for index, fixed in enumerate(topology.fixed_points)
+        if fixed.classification.startswith("stable")
+    ]
+    if torque_map.theta.ndim == 2 and stable_indices:
+        compact_basins = np.full(topology.basin_labels.shape, np.nan)
+        for compact_index, fixed_index in enumerate(stable_indices):
+            compact_basins[topology.basin_labels == fixed_index] = compact_index
+        theta_edges = np.linspace(0.0, np.pi, torque_map.theta.shape[0]+1)
+        phi_edges = np.linspace(0.0, 2.0*np.pi, torque_map.theta.shape[1]+1)
+        axis.pcolormesh(phi_edges, theta_edges, np.ma.masked_invalid(compact_basins),
+                        cmap=plt.get_cmap("Pastel1", len(stable_indices)), shading="flat", alpha=0.55)
+
+    arrow_sample = (slice(None, None, 2), slice(None, None, 2)) if torque_map.theta.ndim == 2 else slice(None, None, 2)
+    magnitude = np.hypot(torque_map.phi_component[arrow_sample], torque_map.theta_component[arrow_sample])
+    reference = np.percentile(magnitude, 95.0)
+    arrow_scale = reference/0.12 if reference > 0.0 else 1.0
+    axis.quiver(
+        torque_map.phi[arrow_sample], torque_map.theta[arrow_sample],
+        torque_map.phi_component[arrow_sample], torque_map.theta_component[arrow_sample],
+        color="0.45", alpha=0.75, pivot="mid", angles="xy", scale_units="xy",
+        scale=arrow_scale, width=0.0025, zorder=2,
+    )
+    for separatrix in topology.separatrices:
+        options = {
+            "color": "black" if separatrix.manifold == "stable" else "0.35",
+            "linestyle": "-" if separatrix.manifold == "stable" else "--",
+            "linewidth": 1.6 if separatrix.manifold == "stable" else 1.1,
+            "zorder": 3,
+        }
+        _plot_periodic_curve(axis, separatrix.phi, separatrix.theta, **options)
+
+    marker_styles = {
+        "stable": dict(marker="o", facecolor="#169c52", edgecolor="black"),
+        "unstable": dict(marker="^", facecolor="#d73027", edgecolor="black"),
+        "saddle": dict(marker="X", facecolor="black", edgecolor="white"),
+        "nonhyperbolic": dict(marker="D", facecolor="#7b3294", edgecolor="black"),
+    }
+    present_groups = set()
+    for index, fixed in enumerate(topology.fixed_points):
+        if fixed.classification.startswith("stable"):
+            group = "stable"
+        elif fixed.classification.startswith("unstable"):
+            group = "unstable"
+        else:
+            group = fixed.classification
+        style = marker_styles[group]
+        plot_phi = np.pi if abs(np.sin(fixed.theta)) < 1.0e-10 else fixed.phi
+        axis.scatter(plot_phi, fixed.theta, s=65, linewidth=0.8, zorder=5, **style)
+        axis.annotate(f"F{index}", (plot_phi, fixed.theta), xytext=(4, 4),
+                      textcoords="offset points", fontsize=8, zorder=6)
+        present_groups.add(group)
+
+    legend_handles = []
+    labels = {"stable": "attractor", "unstable": "repeller", "saddle": "saddle", "nonhyperbolic": "nonhyperbolic"}
+    for group in ("stable", "unstable", "saddle", "nonhyperbolic"):
+        if group in present_groups:
+            style = marker_styles[group]
+            legend_handles.append(Line2D([0], [0], linestyle="none", markersize=7,
+                                         marker=style["marker"], markerfacecolor=style["facecolor"],
+                                         markeredgecolor=style["edgecolor"], label=labels[group]))
+    if topology.separatrices:
+        legend_handles.extend([
+            Line2D([0], [0], color="black", linewidth=1.6, label="stable separatrix"),
+            Line2D([0], [0], color="0.35", linestyle="--", linewidth=1.1, label="unstable manifold"),
+        ])
+    if legend_handles:
+        axis.legend(handles=legend_handles, loc="best", fontsize=8)
+    axis.set_xlim(0.0, 2.0*np.pi)
+    axis.set_ylim(np.pi, 0.0)
+    axis.set_xticks(
+        [0.0, 0.5*np.pi, np.pi, 1.5*np.pi, 2.0*np.pi],
+        ["0", r"$\pi/2$", r"$\pi$", r"$3\pi/2$", r"$2\pi$"],
+    )
+    axis.set_yticks([0.0, 0.5*np.pi, np.pi], ["0", r"$\pi/2$", r"$\pi$"])
+    axis.set_xlabel(r"$\phi$")
+    axis.set_ylabel(r"$\theta$")
+    axis.set_title(
+        "Unit-drive optical-torque phase portrait\n"
+        f"$\\Sigma$ index={topology.poincare_index_sum}, basin coverage={100.0*topology.basin_converged_fraction:.1f}%"
+    )
+    figure.tight_layout()
+    figure.savefig(f"{mainDir}/torqueTopology.png", dpi=600)
+    plt.close(figure)
+    print(
+        f"Torque phase portrait: {len(topology.fixed_points)} fixed points, "
+        f"Poincare index sum={topology.poincare_index_sum}, "
+        f"basin coverage={100.0*topology.basin_converged_fraction:.2f}%"
+    )
+    if topology.poincare_index_sum != 2:
+        print("WARNING: isolated fixed points on a sphere should have total Poincare index 2; "
+              "the search may be incomplete or contain nonhyperbolic zeros.")
 
 def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory=None, arrow_stride=1):
     """
@@ -121,6 +277,10 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
     residual_phi = fitted_map.phi_component-torque_map.phi_component
     residual_theta = fitted_map.theta_component-torque_map.theta_component
     absolute_error = np.hypot(residual_phi, residual_theta)
+    absolute_fit = np.hypot(fitted_map.phi_component, fitted_map.theta_component)
+    absolute_raw = np.hypot(torque_map.phi_component, torque_map.theta_component)
+    max_error_idx = np.argmax(absolute_error)
+    print(f"max. abs. residual: {absolute_error[max_error_idx]:.6E} percent: {absolute_error[max_error_idx]/absolute_raw[max_error_idx]:.4f}")
     raw_rms = np.sqrt(np.mean(torque_map.phi_component**2+torque_map.theta_component**2))
     normalized_error = np.zeros_like(absolute_error) if raw_rms == 0.0 else 100.0*absolute_error/raw_rms
 
@@ -236,6 +396,20 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
     figure.tight_layout()
     figure.savefig(f"{mainDir}/rawVSHComparison.png", dpi=600)
     plt.close(figure)
+
+    figure, axis = plt.subplots()
+    axis.scatter(absolute_raw, absolute_fit)
+    axis.set_xlabel("Raw first-principles IFT susc.")
+    axis.set_ylabel("VSH-fitted first-principles IFT susc.")
+    x0,x1 = axis.get_xlim()
+    y0,y1 = axis.get_ylim()
+    axis.plot([x0,x1],[y0,y1],lw=3,color="black")
+    axis.set_xlim(x0,x1)
+    axis.set_ylim(y0,y1)
+    figure.tight_layout()
+    figure.savefig(f"{mainDir}/rawVSHComparison_line.png", dpi=300)
+    plt.close()
+
     return torque_map
 
 def plot_mag_evolution(mainDir, time_axis:Sequence, trajectory:Sequence, pulse:Callable, pulse_title:str):
@@ -334,7 +508,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         use_DFT_mae=False,
         extra_uniaxial_mae=0.125E-3,               # in eV
         extra_uniaxial_mae_direction=(0, 0, 1), 
-        alpha=0.001,
+        alpha=0.01,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
     )
@@ -345,7 +519,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
     if show_torque_map:
-        plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
+        plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None, analyze_phase_portrait=False)
         plot_raw_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
     plt.show()
 
@@ -375,4 +549,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.8,polarization="xy-",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.75,polarization="xy-",show_torque_map=True)

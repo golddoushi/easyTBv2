@@ -934,15 +934,15 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     fixed_electrons_per_cell = None
     occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
     electronic_kBT = 0.026
-    eta = 0.06582/10   # eV (6.582 meV), corresponding to hbar/eta about 100 fs
+    eta = 0.06582      # eV (6.582 meV), corresponding to hbar/eta about 100 fs
     degen = 1.0e-3     # eV; regularizes r_mn=v_mn/(i DeltaE_mn) inside near-degenerate subspaces
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.array([ 0.7, 0.8, 0.9, 2.3, 2.4, 2.5, ])
-    bz_grid = (360, 360, 1)
+    omega_axis = np.array([ 0.75, 0.8, 0.85, 2.35, 2.4, 2.45, ])
+    bz_grid = (180, 180, 1)
     # Primary parallelism is over magnetization directions.  A hybrid setup
     # is also possible, provided the following worker-count product does not
     # exceed the allocated physical cores.
@@ -965,11 +965,11 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
 
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
-    harmonic_degree = 18
+    harmonic_degree = 24
     if harmonic_degree_override is not None:
         harmonic_degree = int(harmonic_degree_override)
         if harmonic_degree < 1: raise ValueError("harmonic_degree must be positive.")
-    number_of_orientations = 8*96
+    number_of_orientations = 16*96
     resume_completed_orientations = True
     validation_folds = 5
     validation_active_signal_fraction = 0.05
