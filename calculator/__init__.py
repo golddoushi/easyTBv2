@@ -226,6 +226,24 @@ class Energy(Calculator):
             self.fermiList,
             self.kBT,
         )
+
+    @property
+    def fd_energy_derivative(self):
+        """Return ``df/dE`` for each Fermi level and band energy."""
+        return self.fdEnergyDerivatives()[0]
+
+    @property
+    def fd_energy_second_derivative(self):
+        """Return ``d2f/dE2`` for each Fermi level and band energy."""
+        return self.fdEnergyDerivatives()[1]
+
+    def fdEnergyDerivatives(self, occupations=None):
+        """Return ``df/dE`` and ``d2f/dE2`` from supplied or computed occupations."""
+        assert self.kBT > 0, "Fermi-Dirac energy derivatives require kBT > 0"
+        f = self.fd_occupations if occupations is None else np.asarray(occupations)
+        fp = -f * (1.0 - f) / self.kBT
+        fpp = f * (1.0 - f) * (1.0 - 2.0 * f) / self.kBT**2
+        return fp, fpp
     
     def getEnergyWindow(self,gap=5.0):
         energy=np.sort(self.energies.flatten()) - self.model.fermi
@@ -272,8 +290,7 @@ class FermiScan(Energy):
         while(condition_energyInRange[self.ibmax]<0.5):
             self.ibmax-=1
         # Fermi weight for each band (in energy window)
-        exp=np.exp(-1/self.kBT*abs(self.energies[None,...,self.ibmin:self.ibmax+1]-self.fermiList[:,None,None,None,None]))
-        self.fermiWeight=-1/self.kBT/(exp+1/exp+2)
+        self.fermiWeight = self.fd_energy_derivative[..., self.ibmin:self.ibmax+1]
         if self.verbose==2: showElapsedTime(extraInfo=f"Band index window: {self.ibmin=} {self.ibmax=}")
 
 class PDOS(Energy):
@@ -988,9 +1005,80 @@ class Dipole(Velocity):
                     self.r_deriv_K[..., ideriv, idirection, :, :] = (
                         self.w_K[..., ideriv, idirection, :, :]
                         - velocity_direction * deltaVelocity_deriv * self.deltaEInverse_pure
-                        - 1j * commutator
+                        + 1j * commutator
                     ) * self.deltaEInverse_pure / 1j * off_diag
             if self.verbose==2: showElapsedTime(extraInfo=f"generalized k-derivatives of dipole operators finished")
+
+    def buildBandEnergyDerivatives(self):
+        """Build first and second covariant k derivatives of band energies."""
+        velocity_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1).real
+        self.energy_deriv1_K = velocity_diag
+
+        nbands = self.energies.shape[-1]
+        self.energy_deriv2_K = np.zeros(self.kgrid + (3, 3, nbands), dtype=float)
+        for idirection in range(3):
+            velocity_direction = self.velocity_K[..., idirection, :, :]
+            for ideriv in range(3):
+                r_derivative_direction = self.r_K[..., ideriv, :, :]
+                commutator = r_derivative_direction @ velocity_direction - velocity_direction @ r_derivative_direction
+                hessian = self.w_K[..., ideriv, idirection, :, :] + 1j * commutator
+                self.energy_deriv2_K[..., ideriv, idirection, :] = np.diagonal(hessian, axis1=-2, axis2=-1).real
+        self.energy_deriv2_K = (self.energy_deriv2_K + self.energy_deriv2_K.swapaxes(-3, -2)) / 2
+
+    def fermiKDerivatives(self, ifermi):
+        """Return ``f``, ``partial_k f`` and ``partial_k partial_k f``."""
+        if self.kBT <= 0:
+            raise ValueError("Fermi-Dirac k derivatives require kBT > 0")
+        if not hasattr(self, "energy_deriv2_K"):
+            self.buildBandEnergyDerivatives()
+
+        f = self.fd_occupations[ifermi]
+        fp, fpp = self.fdEnergyDerivatives(f)
+        dfdk = fp[..., None, :] * self.energy_deriv1_K
+        d2fdk2 = (
+            fpp[..., None, None, :]
+            * self.energy_deriv1_K[..., :, None, :]
+            * self.energy_deriv1_K[..., None, :, :]
+            + fp[..., None, None, :] * self.energy_deriv2_K
+        )
+        return f, dfdk, d2fdk2
+
+    def fermiCovariantFirstDerivativeChannels(self, f, dfdk, direction):
+        """Return the intraband and interband sectors of ``C_a f``, with ``C_a=iD_a``."""
+        nbands = self.energies.shape[-1]
+        f_nm = f[..., None, :] - f[..., :, None]
+        intraband = np.zeros(f.shape + (nbands,), dtype=complex)
+        indices = np.arange(nbands)
+        intraband[..., indices, indices] = 1j * dfdk[..., direction, :]
+        interband = self.r_K[..., direction, :, :] * f_nm * (1.0 - np.eye(nbands))
+        return intraband, interband
+
+    def fermiCovariantSecondDerivativeChannels(self, f, dfdk, d2fdk2, a, b):
+        """Return II, EI, IE and EE sectors of ``C_a C_b f``, with ``C_a=iD_a``."""
+        nbands = self.energies.shape[-1]
+        indices = np.arange(nbands)
+        diag = np.eye(nbands)
+        off_diag = 1.0 - diag
+        f_nm = f[..., None, :] - f[..., :, None]
+        r_a = self.r_K[..., a, :, :]
+        r_b = self.r_K[..., b, :, :]
+
+        population_b = 1j * dfdk[..., b, :]
+        channels = {
+            "II": np.zeros(self.energies.shape + (nbands,), dtype=complex),
+            "EI": r_a * (population_b[..., None, :] - population_b[..., :, None]) * off_diag,
+        }
+        channels["II"][..., indices, indices] = -d2fdk2[..., a, b, :]
+
+        coherence_b = r_b * f_nm * off_diag
+        delta_f_a = dfdk[..., a, None, :] - dfdk[..., a, :, None]
+        semicolon = (
+            self.r_deriv_K[..., a, b, :, :] * f_nm + r_b * delta_f_a
+        ) * off_diag
+        derivative = 1j * semicolon + r_a @ coherence_b - coherence_b @ r_a
+        channels["IE"] = derivative * diag
+        channels["EE"] = derivative * off_diag
+        return channels
 
 class OrbitalModern_LC(Velocity):
     def __init__(self, orbitalProjectionList=[], _computeOrbitalModernLC=True, **kwarg,):
@@ -2569,16 +2657,27 @@ class InverseFaradayEffect_LG(Dipole, Spin, Orbital):
 
 class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
-                 responseFermiIndexList=None, **kwarg) -> None:
+                 responseFermiIndexList=None, fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Computing IFE with length gauge, using frequency-domain density matrix approach.
+        Compute IFE in the length gauge with a frequency-domain density matrix.
         unit: \muB / (V/\angst.)^2
+
+        ``fullCovariantDerivative=True`` replaces every dipole commutator by
+        ``i D_k rho`` and preserves the II, EI, IE and EE channels separately.
+        The first letter labels the second-order density-matrix sector and the
+        second letter labels the first-order sector (I: intraband, E: interband).
 
         Indexing
         --------
-        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
+        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure]
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList,
+                         highOrderDipole=fullCovariantDerivative, **kwarg)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        if self.fullCovariantDerivative and self.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
+            raise ValueError("fullCovariantDerivative requires finite eta for the dc density matrix")
 
         nbasis = self.energies.shape[-1]
         M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
@@ -2586,8 +2685,18 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         deltaE_mn = self.deltaE
-
-        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        diag = np.eye(nbasis)
+        off_diag = 1.0 - diag
+        g0_mn = 1.0 / (deltaE_mn - 1j * self.eta)
+        response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
+        self.channel_names = ("II", "EI", "IE", "EE")
+        self.channel_descriptions = {
+            "II": "second-order intraband from first-order intraband",
+            "EI": "second-order interband from first-order intraband",
+            "IE": "second-order intraband from first-order interband",
+            "EE": "second-order interband from first-order interband",
+        }
+        self.chi_IFE_channels = {name: np.zeros(response_shape, dtype=complex) for name in self.channel_names}
 
         responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
         if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
@@ -2595,67 +2704,170 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
         responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
         responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
         responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        self.projected_response = np.zeros((1, 1, 1) + self.kgrid +
-                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
-                                           dtype=complex)
+        projected_shape = ((1, 1, 1) + self.kgrid +
+                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
+        self.projected_response_channels = {
+            name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
+        }
+
+        def commutator(left, right):
+            return left @ right - right @ left
 
         for ifermi, fermi in enumerate(self.fermiList):
-            f = np.int8(self.energies < fermi)
-            rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
-            for iband in range(nbasis):
-                rho0[..., iband, iband] = f[..., iband]
+            if self.fullCovariantDerivative:
+                f, dfdk, d2fdk2 = self.fermiKDerivatives(ifermi)
+            else:
+                f = np.int8(self.energies < fermi)
+                dfdk = d2fdk2 = None
+            f_nm = f[..., None, :] - f[..., :, None]
 
             for iomega, Omega in enumerate(self.omegaList):
+                irecord_fermi = responseFermiRecord.get(ifermi)
                 irecord_omega = responseOmegaRecord.get(iomega)
-                def rho1(r, frequency):
-                    source = r @ rho0 - rho0 @ r
-                    return source / (deltaE_mn - frequency - 1j * self.eta)
-
-                rho1_cache = {
-                    (direction, sign): rho1(self.r_K[..., direction, :, :], sign * Omega)
-                    for direction in range(3)
-                    for sign in (-1, 1)
-                }
+                rho1_e_cache = {}
+                rho1_i_cache = {}
+                factor_cache = {}
+                for direction in range(3):
+                    r_direction = self.r_K[..., direction, :, :]
+                    for sign in (-1, 1):
+                        frequency = sign * Omega
+                        denominator = deltaE_mn - frequency - 1j * self.eta
+                        factor_cache[sign] = f_nm / denominator
+                        rho1_e_cache[(direction, sign)] = r_direction * factor_cache[sign] * off_diag
+                        if self.fullCovariantDerivative:
+                            rho1_i_cache[(direction, sign)] = (
+                                1j * dfdk[..., direction, :] / (-frequency - 1j * self.eta)
+                            )
 
                 for a in range(3):
                     r_a = self.r_K[..., a, :, :]
+                    rho1_e_a = rho1_e_cache[(a, -1)]
                     for b in range(3):
                         r_b = self.r_K[..., b, :, :]
-                        source = (
-                            r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
-                            + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
-                        )
-                        rho2_mn = source / (deltaE_mn - 1j * self.eta)
+                        rho1_e_b = rho1_e_cache[(b, 1)]
+                        comm_ba = commutator(r_b, rho1_e_a)
+                        comm_ab = commutator(r_a, rho1_e_b)
+
+                        rho2_channels = {
+                            "II": np.zeros_like(deltaE_mn, dtype=complex),
+                            "EI": np.zeros_like(deltaE_mn, dtype=complex),
+                            "IE": g0_mn * (comm_ba + comm_ab) * diag,
+                        }
+
+                        if self.fullCovariantDerivative:
+                            rho1_i_a = rho1_i_cache[(a, -1)]
+                            rho1_i_b = rho1_i_cache[(b, 1)]
+                            # iD acting on first-order intraband populations gives II and EI.
+                            source_ii = (
+                                -d2fdk2[..., b, a, :] / (Omega - 1j * self.eta)
+                                -d2fdk2[..., a, b, :] / (-Omega - 1j * self.eta)
+                            )
+                            indices = np.arange(nbasis)
+                            rho2_channels["II"][..., indices, indices] = source_ii / (-1j * self.eta)
+
+                            source_ei = (
+                                r_b * (rho1_i_a[..., None, :] - rho1_i_a[..., :, None])
+                                + r_a * (rho1_i_b[..., None, :] - rho1_i_b[..., :, None])
+                            )
+                            rho2_channels["EI"] = g0_mn * source_ei * off_diag
+
+                            # iD acting on first-order interband coherences gives IE and EE.
+                            denominator_minus = deltaE_mn + Omega - 1j * self.eta
+                            denominator_plus = deltaE_mn - Omega - 1j * self.eta
+                            delta_f_b = dfdk[..., b, None, :] - dfdk[..., b, :, None]
+                            delta_f_a = dfdk[..., a, None, :] - dfdk[..., a, :, None]
+                            delta_v_b = (self.energy_deriv1_K[..., b, :, None]
+                                         - self.energy_deriv1_K[..., b, None, :])
+                            delta_v_a = (self.energy_deriv1_K[..., a, :, None]
+                                         - self.energy_deriv1_K[..., a, None, :])
+                            factor_deriv_ba = (
+                                delta_f_b / denominator_minus
+                                - f_nm * delta_v_b / denominator_minus**2
+                            )
+                            factor_deriv_ab = (
+                                delta_f_a / denominator_plus
+                                - f_nm * delta_v_a / denominator_plus**2
+                            )
+                            rho1_e_a_deriv_b = (
+                                self.r_deriv_K[..., b, a, :, :] * factor_cache[-1]
+                                + r_a * factor_deriv_ba
+                            ) * off_diag
+                            rho1_e_b_deriv_a = (
+                                self.r_deriv_K[..., a, b, :, :] * factor_cache[1]
+                                + r_b * factor_deriv_ab
+                            ) * off_diag
+                            source_ee = (
+                                1j * rho1_e_a_deriv_b + comm_ba
+                                + 1j * rho1_e_b_deriv_a + comm_ab
+                            )
+                            rho2_channels["EE"] = g0_mn * source_ee * off_diag
+                        else:
+                            rho2_channels["EE"] = g0_mn * (comm_ba + comm_ab) * off_diag
+
                         for c in range(3):
                             M_c_nm = M_K[..., c, :, :].swapaxes(-1, -2)
-                            chi_k = np.sum(rho2_mn * M_c_nm, axis=(-2, -1))
-                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
-                            irecord_fermi = responseFermiRecord.get(ifermi)
-                            if irecord_fermi is not None and irecord_omega is not None:
-                                self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c] = chi_k
+                            for name in self.channel_names:
+                                chi_k = np.sum(rho2_channels[name] * M_c_nm, axis=(-2, -1))
+                                self.chi_IFE_channels[name][ifermi, iomega, a, b, c] = (
+                                    np.sum(chi_k) / np.prod(self.kgrid)
+                                )
+                                if irecord_fermi is not None and irecord_omega is not None:
+                                    self.projected_response_channels[name][
+                                        0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c
+                                    ] = chi_k
 
-        self.projected_sigma = self.chi_IFE[None,None,None,...]
+        self.chi_IFE = sum(self.chi_IFE_channels.values())
+        self.projected_response = sum(self.projected_response_channels.values())
+        self.projected_sigma = self.chi_IFE[None, None, None, ...]
+        self.projected_sigma_channels = {
+            name: response[None, None, None, ...] for name, response in self.chi_IFE_channels.items()
+        }
+        for name in self.channel_names:
+            setattr(self, f"chi_IFE_{name}", self.chi_IFE_channels[name])
+            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
+            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE density matrix finished")
 
-class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
+class InverseFaradayEffect_VG_DM(Dipole, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
-                 responseFermiIndexList=None, **kwarg) -> None:
+                 responseFermiIndexList=None, fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Computing IFE with velocity-gauge (vector potential/current coupling), using frequency-domain density matrix approach
+        Compute IFE in the velocity gauge with a frequency-domain density matrix.
         unit: \muB / (V/\angst.)^2
+
+        ``fullCovariantDerivative=True`` adds the gauge-covariant relaxation
+        vertices ``eta C_a f`` and ``i eta {C_a,C_b}f/2``, where ``C_a=iD_a``.
+        These vertices supply the intraband population response missing from
+        the clean commutator ``[v_a,f]``. II, EI, IE and EE density-matrix
+        channels are retained separately. The magnetic-moment operator is
+        assumed to have no explicit vector-potential dependence.
 
         Indexing
         --------
         - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
-        
-        nbasis=self.energies.shape[-1]
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+                         highOrderDipole=fullCovariantDerivative, **kwarg)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        if self.fullCovariantDerivative and self.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
+            raise ValueError("fullCovariantDerivative requires finite eta for gauge-covariant relaxation")
+
+        nbasis = self.energies.shape[-1]
         M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
-        self.chi_IFE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
+        self.channel_names = ("II", "EI", "IE", "EE")
+        self.channel_descriptions = {
+            "II": "second-order intraband from first-order intraband",
+            "EI": "second-order interband from first-order intraband",
+            "IE": "second-order intraband from first-order interband",
+            "EE": "second-order interband from first-order interband and the contact vertex",
+        }
+        self.chi_IFE_channels = {name: np.zeros(response_shape, dtype=complex) for name in self.channel_names}
 
         responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
         if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
@@ -2663,29 +2875,74 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
         responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
         responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
         responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        self.projected_response = np.zeros((1, 1, 1) + self.kgrid +
-                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
-                                           dtype=complex)
-        # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
-        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        projected_shape = ((1, 1, 1) + self.kgrid +
+                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
+        self.projected_response_channels = {
+            name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
+        }
+
+        deltaE_mn = self.deltaE
+        diag = np.eye(nbasis)
+        off_diag = 1.0 - diag
+        g0_mn = 1.0 / (deltaE_mn - 1j * self.eta)
+        indices = np.arange(nbasis)
+
+        def commutator(left, right):
+            return left @ right - right @ left
 
         for ifermi, fermi in enumerate(self.fermiList):
-            f = np.int8(self.energies < fermi)
+            if self.fullCovariantDerivative:
+                f, dfdk, d2fdk2 = self.fermiKDerivatives(ifermi)
+            else:
+                f = np.int8(self.energies < fermi)
+                dfdk = d2fdk2 = None
+            f_nm = f[..., None, :] - f[..., :, None]
             rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
-            for iband in range(nbasis):
-                rho0[..., iband, iband] = f[..., iband]
+            rho0[..., indices, indices] = f
+
+            relaxation_response_k = {
+                name: np.zeros(self.kgrid + (3, 3, 3), dtype=complex) for name in self.channel_names
+            }
+            if self.fullCovariantDerivative:
+                for a in range(3):
+                    for b in range(3):
+                        c2_ab = self.fermiCovariantSecondDerivativeChannels(f, dfdk, d2fdk2, a, b)
+                        c2_ba = c2_ab if a == b else self.fermiCovariantSecondDerivativeChannels(
+                            f, dfdk, d2fdk2, b, a)
+                        for name in self.channel_names:
+                            # Gauge transform of a relaxation target gives
+                            # -i*eta*rho_eq^(2) = i*eta*{C_a,C_b}f/2.
+                            source_relax = 0.5j * self.eta * (c2_ab[name] + c2_ba[name])
+                            sector = diag if name in ("II", "IE") else off_diag
+                            rho2_relax = g0_mn * source_relax * sector
+                            for c in range(3):
+                                relaxation_response_k[name][..., a, b, c] = np.sum(
+                                    rho2_relax * M_K[..., c, :, :].swapaxes(-1, -2), axis=(-2, -1)
+                                )
+                        del c2_ab, c2_ba
 
             for iomega, Omega in enumerate(self.omegaList):
+                if abs(Omega) < 1e-15:
+                    raise ValueError("velocity-gauge IFE is singular at exactly Omega=0")
+                irecord_fermi = responseFermiRecord.get(ifermi)
                 irecord_omega = responseOmegaRecord.get(iomega)
-                def rho1(v, frequency):
-                    source = v @ rho0 - rho0 @ v
-                    return source / (deltaE_mn - frequency - 1j * self.eta)
-
-                rho1_cache = {
-                    (direction, sign): rho1(self.velocity_K[..., direction, :, :], sign * Omega)
-                    for direction in range(3)
-                    for sign in (-1, 1)
-                }
+                rho1_e_cache = {}
+                rho1_i_cache = {}
+                for direction in range(3):
+                    v_direction = self.velocity_K[..., direction, :, :]
+                    source_e = commutator(v_direction, rho0)
+                    if self.fullCovariantDerivative:
+                        # -i*eta*rho_eq^(1) = eta*C_a*f in the VG equation.
+                        source_e = source_e + self.eta * self.r_K[..., direction, :, :] * f_nm * off_diag
+                    for sign in (-1, 1):
+                        frequency = sign * Omega
+                        rho1_e_cache[(direction, sign)] = (
+                            source_e / (deltaE_mn - frequency - 1j * self.eta) * off_diag
+                        )
+                        if self.fullCovariantDerivative:
+                            rho1_i_cache[(direction, sign)] = (
+                                1j * self.eta * dfdk[..., direction, :] / (-frequency - 1j * self.eta)
+                            )
 
                 for a in range(3):
                     v_a = self.velocity_K[..., a, :, :]
@@ -2693,23 +2950,53 @@ class InverseFaradayEffect_VG_DM(Velocity, Spin, Orbital):
                         v_b = self.velocity_K[..., b, :, :]
                         w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
 
-                        source_para = (
-                            v_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ v_b
-                            + v_a @ rho1_cache[(b, 1)] - rho1_cache[(b, 1)] @ v_a
+                        source_e = (
+                            commutator(v_b, rho1_e_cache[(a, -1)])
+                            + commutator(v_a, rho1_e_cache[(b, 1)])
                         )
-                        source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
-                        rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
+                        source_dia = -commutator(w_ab, rho0)
+                        rho2_channels = {
+                            "II": np.zeros_like(deltaE_mn, dtype=complex),
+                            "IE": g0_mn * source_e * diag,
+                            "EE": g0_mn * (source_e + source_dia) * off_diag,
+                        }
+                        if self.fullCovariantDerivative:
+                            population_a = rho1_i_cache[(a, -1)]
+                            population_b = rho1_i_cache[(b, 1)]
+                            source_i = (
+                                v_b * (population_a[..., None, :] - population_a[..., :, None])
+                                + v_a * (population_b[..., None, :] - population_b[..., :, None])
+                            )
+                            rho2_channels["EI"] = g0_mn * source_i * off_diag
+                        else:
+                            rho2_channels["EI"] = np.zeros_like(deltaE_mn, dtype=complex)
+
                         for c in range(3):
-                            M_c_mn = M_K[..., c, :, :]
+                            M_c_nm = M_K[..., c, :, :].swapaxes(-1, -2)
+                            for name in self.channel_names:
+                                sigma_k = (
+                                    np.sum(rho2_channels[name] * M_c_nm, axis=(-2, -1))
+                                    + relaxation_response_k[name][..., a, b, c]
+                                ) / Omega**2
+                                self.chi_IFE_channels[name][ifermi, iomega, a, b, c] = (
+                                    np.sum(sigma_k) / np.prod(self.kgrid)
+                                )
+                                if irecord_fermi is not None and irecord_omega is not None:
+                                    self.projected_response_channels[name][
+                                        0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c
+                                    ] = sigma_k
 
-                            sigma_k = np.sum(rho2_mn * M_c_mn.swapaxes(-1, -2), axis=(-1, -2)) / Omega**2
-                            self.chi_IFE[ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
-                            irecord_fermi = responseFermiRecord.get(ifermi)
-                            if irecord_fermi is not None and irecord_omega is not None:
-                                self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, c] = sigma_k
-
-        self.projected_sigma = self.chi_IFE[None,None,None,...]
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
+        self.chi_IFE = sum(self.chi_IFE_channels.values())
+        self.projected_response = sum(self.projected_response_channels.values())
+        self.projected_sigma = self.chi_IFE[None, None, None, ...]
+        self.projected_sigma_channels = {
+            name: response[None, None, None, ...] for name, response in self.chi_IFE_channels.items()
+        }
+        for name in self.channel_names:
+            setattr(self, f"chi_IFE_{name}", self.chi_IFE_channels[name])
+            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
+            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
+        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE density matrix finished")
 
 class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],

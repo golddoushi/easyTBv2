@@ -70,14 +70,14 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        spinSeparated=True,
+        #spinSeparated=True,
     )
     #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = np.pi, 0.0
+    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0.0
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -103,6 +103,7 @@ def run():
     #'''
 
     # modulate the SOC, exchange fields, baised fields, etc.
+    #magnetizationTheta ,magnetizationPhi = 0.0, 0.0
     #model.getExchangeR(provenance="explicit")
     #model.scaleSOC(lam=0)
     #model.rotateExchangeField(projection=[(0,(0,)),(1,(0,))], theta=np.pi, phi=0.)
@@ -217,11 +218,11 @@ def run():
 
     BZGrid=(48,48,1)
     BZSymm=False
-    recordOmegaIndexList=[6]
-    recordFermiIndexList=[0]
+    recordOmegaIndexList=[]#[6]
+    recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
     ObservableType="IFE" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveIFE_LG_DM,
+    calc=BZGridTask(model, solveIFE_VG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -237,6 +238,7 @@ def run():
                           'record fermi ids':recordFermiIndexList,
 
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
+                          "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
 
                           "finite temperature occupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
                           "degen":1e-4,

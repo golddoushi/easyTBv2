@@ -425,14 +425,21 @@ def solveIFE_VG(param):
             "iq": param["iq"]}
 
 def solveIFE_VG_DM(param):
-    calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                                   eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                                   degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
+                                   fullCovariantDerivative=param.get(
+                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
     return {"projected response": calc.projected_response,
             "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
+            "projected response channels": calc.projected_response_channels,
+            "projected sigma channels": calc.projected_sigma_channels,
+            "sigma channels": calc.chi_IFE_channels,
             "iq": param["iq"]}
 
 def solveIFE_LG(param):
@@ -447,14 +454,21 @@ def solveIFE_LG(param):
             "iq": param["iq"]}
 
 def solveIFE_LG_DM(param):
-    calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                                   eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                                   degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
+                                   fullCovariantDerivative=param.get(
+                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
     return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_sigma, "sigma": calc.chi_IFE,
+            "projected response channels": calc.projected_response_channels,
+            "projected sigma channels": calc.projected_sigma_channels,
+            "sigma channels": calc.chi_IFE_channels,
             "iq": param["iq"]}
 
 def solveIFE_TDSE(param):
