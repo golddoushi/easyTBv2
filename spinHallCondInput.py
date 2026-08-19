@@ -156,7 +156,7 @@ def run():
 
     #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.arange(2.0,3.05,0.05)
+    omegaAxis=np.arange(1.0,3.05,0.05)
     model.setFermi(fermi)
     
     '''
@@ -221,8 +221,8 @@ def run():
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="IFT" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveIFTorque_TDSE,
+    ObservableType="BPVE" # "IFE" or "IFT"; must match the selected response calculator
+    calc=BZGridTask(model, solveBPVE_VG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

@@ -355,14 +355,23 @@ def solveBPVE_VG(param):
             "iq":param["iq"]}
 
 def solveBPVE_VG_DM(param):
-    calc=BulkPhotovoltaicEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                                   eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                                   degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'], verbose=param['verbose'],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                   fullCovariantDerivative=param.get(
+                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                   currentProjectionList=param['projected shells for applying current'], verbose=param['verbose'],
                                    )
     return {"energies":calc.energies,
             "projected response":calc.projected_response,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
+            "projected response channels":calc.projected_response_channels,
+            "projected sigma channels":calc.projected_sigma_channels,
+            "sigma channels":calc.sigma_VG_DM_channels,
             "iq":param["iq"]}
 
 def solveBPVE_LG_Shift(param):
@@ -388,14 +397,23 @@ def solveBPVE_LG_Inject(param):
             "iq":param["iq"]}
 
 def solveBPVE_LG_DM(param):
-    calc=BulkPhotovoltaicEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                                   eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                                   degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
-                                   responseOmegaIndexList=param['record frequency ids'],
-                                   currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
+                                   responseOmegaIndexList=param.get('record frequency ids', []),
+                                   responseFermiIndexList=param.get('record fermi ids', None),
+                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                   fullCovariantDerivative=param.get(
+                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                   currentProjectionList=param['projected shells for applying current'],verbose=param["verbose"],
                                    )
     return {"energies":calc.energies,
             "projected response":calc.projected_response,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0,0],
+            "projected response channels":calc.projected_response_channels,
+            "projected sigma channels":calc.projected_sigma_channels,
+            "sigma channels":calc.sigma_LG_DM_channels,
             "iq":param["iq"]}
 
 def solveBPVE_TDSE(param):
