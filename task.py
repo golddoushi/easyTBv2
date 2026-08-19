@@ -6,7 +6,7 @@ from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
-from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicConductance_VG, BulkPhotovoltaicConductance_VG_DM, BulkPhotovoltaicConductance_LG_Shift, BulkPhotovoltaicConductance_LG_Injection, BulkPhotovoltaicConductance_LG_DM, BulkPhotovoltaicConductance_TDSE, BulkPhotovoltaicConductance_TDSE_LG_Naive
+from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
 from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
@@ -344,7 +344,7 @@ def solveINPHE_BCP(param):
     }
 
 def solveBPVE_VG(param):
-    calc=BulkPhotovoltaicConductance_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],
@@ -355,7 +355,7 @@ def solveBPVE_VG(param):
             "iq":param["iq"]}
 
 def solveBPVE_VG_DM(param):
-    calc=BulkPhotovoltaicConductance_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'], verbose=param['verbose'],
@@ -366,7 +366,7 @@ def solveBPVE_VG_DM(param):
             "iq":param["iq"]}
 
 def solveBPVE_LG_Shift(param):
-    calc=BulkPhotovoltaicConductance_LG_Shift(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_LG_Shift(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
@@ -377,7 +377,7 @@ def solveBPVE_LG_Shift(param):
             "iq":param["iq"]}
 
 def solveBPVE_LG_Inject(param):
-    calc=BulkPhotovoltaicConductance_LG_Injection(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_LG_Injection(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
@@ -388,7 +388,7 @@ def solveBPVE_LG_Inject(param):
             "iq":param["iq"]}
 
 def solveBPVE_LG_DM(param):
-    calc=BulkPhotovoltaicConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
@@ -399,7 +399,7 @@ def solveBPVE_LG_DM(param):
             "iq":param["iq"]}
 
 def solveBPVE_TDSE(param):
-    calc = BulkPhotovoltaicConductance_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = BulkPhotovoltaicEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                     fermiList=param['fermi'],omegaList=param['omega'],
                                     include_offdiag=param.get('include offdiag', True),verbose=param["verbose"],
                                     )
@@ -407,7 +407,7 @@ def solveBPVE_TDSE(param):
             "iq": param["iq"]}
 
 def solveBPVE_TDSE_LG(param):
-    calc = BulkPhotovoltaicConductance_TDSE_LG_Naive(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = BulkPhotovoltaicEffect_TDSE_LG_Naive(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],verbose=param["verbose"],
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
@@ -472,14 +472,20 @@ def solveIFE_LG_DM(param):
             "iq": param["iq"]}
 
 def solveIFE_TDSE(param):
-    calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                                   eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                                   degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
+                                   fullCovariantDerivative=param.get(
+                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
                                    n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.chi_TDSE, "energies":calc.energies,
+            "projected sigma channels": calc.projected_sigma_channels,
+            "sigma channels": calc.chi_IFE_channels,
             "iq": param["iq"]}
 
 def solveIFE_BlochAcceleration_TDSE(param):
@@ -498,14 +504,20 @@ def solveIFTorque_TDSE(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
+                                     kBT=param.get('kBT', 0.026),
                                      degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
+                                     fullCovariantDerivative=param.get(
+                                         'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                     exchangeVelocity=param.get('exchangeVelocity', param.get('exchange velocity', True)),
                                      include_offdiag=param.get('include offdiag', True),
                                      E0=param.get('E0', 0.001),
                                      n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
                                     )
     return {"projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,"energies":calc.energies,
+            "projected sigma channels": calc.projected_sigma_channels,
+            "sigma channels": calc.chi_IFT_channels,
             "iq": param["iq"]}
 
 def solveIFTorque_VG_DM(param):
@@ -519,10 +531,16 @@ def solveIFTorque_VG_DM(param):
                                      responseOmegaIndexList=param.get('record frequency ids', []),
                                      responseFermiIndexList=param.get('record fermi ids', None),
                                      finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                     fullCovariantDerivative=param.get(
+                                         'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                     exchangeVelocity=param.get('exchangeVelocity', param.get('exchange velocity', True)),
                                      kBT=param.get('kBT', 0.026),verbose=param["verbose"],
                                     )
     return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
+            "projected response channels": calc.projected_response_channels,
+            "projected sigma channels": calc.projected_sigma_channels,
+            "sigma channels": calc.chi_IFT_channels,
             "iq": param["iq"]}
 
 def solveIFTorque_LG_DM(param):
@@ -536,10 +554,15 @@ def solveIFTorque_LG_DM(param):
                                      responseOmegaIndexList=param.get('record frequency ids', []),
                                      responseFermiIndexList=param.get('record fermi ids', None),
                                      finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                     fullCovariantDerivative=param.get(
+                                         'fullCovariantDerivative', param.get('full covariant derivative', False)),
                                      kBT=param.get('kBT', 0.026),verbose=param["verbose"],
                                     )
     return {"projected response": calc.projected_response,"energies":calc.energies,
             "projected sigma": calc.projected_chi_IFT, "sigma": calc.chi_IFT,
+            "projected response channels": calc.projected_response_channels,
+            "projected sigma channels": calc.projected_sigma_channels,
+            "sigma channels": calc.chi_IFT_channels,
             "iq": param["iq"]}
 
 def solveSGC(param):

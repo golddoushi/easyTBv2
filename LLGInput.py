@@ -280,7 +280,11 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
     absolute_fit = np.hypot(fitted_map.phi_component, fitted_map.theta_component)
     absolute_raw = np.hypot(torque_map.phi_component, torque_map.theta_component)
     max_error_idx = np.argmax(absolute_error)
-    print(f"max. abs. residual: {absolute_error[max_error_idx]:.6E} percent: {absolute_error[max_error_idx]/absolute_raw[max_error_idx]:.4f}")
+    print(f"max. abs. residual in |tau|: {absolute_error[max_error_idx]:.6E} percent: {absolute_error[max_error_idx]/absolute_raw[max_error_idx]:.4f}")
+
+    max_theta_error_idx = np.argmax(abs(residual_theta))
+    print(f"max. abs. residual in |tau_theta|: {residual_theta[max_theta_error_idx]:.6E} percent: {residual_theta[max_theta_error_idx]/torque_map.theta_component[max_theta_error_idx]:.4f}")
+
     raw_rms = np.sqrt(np.mean(torque_map.phi_component**2+torque_map.theta_component**2))
     normalized_error = np.zeros_like(absolute_error) if raw_rms == 0.0 else 100.0*absolute_error/raw_rms
 
@@ -473,9 +477,9 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     The supplied pulse is therefore the slowly varying electric-field
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
-    center_times = [100.0 + 100_000.0 * ipulse for ipulse in range(20)]
-    peak_field=0.06
-    intensity_fwhm = 50.0
+    center_times = [500.0 + 100_000.0 * ipulse for ipulse in range(100)]
+    peak_field=0.025
+    intensity_fwhm = 500.0
     intensity=0.5*speed_of_light*epsilon_0*(peak_field*1E10)**2
     fluence=intensity*intensity_fwhm*np.sqrt(np.pi/(4*np.log(2)))*1E-15
     print(f"Fluence of one pulse {fluence:.3f} J/m2 {fluence*0.1:.3f} mJ/cm2")
@@ -505,16 +509,16 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         torque_projection=0,
         light_pulse=pulse,
         external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
-        use_DFT_mae=False,
-        extra_uniaxial_mae=0.125E-3,               # in eV
-        extra_uniaxial_mae_direction=(0, 0, 1), 
-        alpha=0.01,
+        #use_DFT_mae=False,
+        #extra_uniaxial_mae=0.125E-3,               # in eV
+        #extra_uniaxial_mae_direction=(0, 0, 1), 
+        alpha=0.001,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        t_total=   104_000.0,
-        #t_total=3_000_000.0,
+        #t_total=   100_400.0,
+        t_total=11_000_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
@@ -549,4 +553,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.75,polarization="xy-",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/FeCl2",omega0=1.15,polarization="y",show_torque_map=True)

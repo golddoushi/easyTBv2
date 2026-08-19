@@ -32,8 +32,8 @@ from fileio import (writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeff
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
-    model=System_w90(
+    mainDir="./mcalc/2D-random-spin-ife/"
+    model=System_tb(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -72,12 +72,12 @@ def run():
         ispin=2,
         #spinSeparated=True,
     )
-    #'''
+    '''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0.0
+    magnetizationTheta ,magnetizationPhi = 5/180*np.pi, 0.0
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -103,8 +103,8 @@ def run():
     #'''
 
     # modulate the SOC, exchange fields, baised fields, etc.
-    #magnetizationTheta ,magnetizationPhi = 0.0, 0.0
-    #model.getExchangeR(provenance="explicit")
+    magnetizationTheta ,magnetizationPhi = 0.0, 0.0
+    model.getExchangeR(provenance="explicit")
     #model.scaleSOC(lam=0)
     #model.rotateExchangeField(projection=[(0,(0,)),(1,(0,))], theta=np.pi, phi=0.)
     #model.applyElectrostaticPotentialAtOnsites([0., 0., 0.,]) # in eV/angstrom
@@ -141,7 +141,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
+    #fermi=-2.5         # VASP 2H-FeCl2 U=2.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
@@ -152,11 +152,11 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    #fermi=0            # model hamiltonian
+    fermi=0            # model hamiltonian
 
     #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.arange(0.1,3.0,0.05)
+    omegaAxis=np.arange(2.0,3.05,0.05)
     model.setFermi(fermi)
     
     '''
@@ -216,13 +216,13 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(48,48,1)
+    BZGrid=(8,8,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="IFE" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveIFE_VG_DM,
+    ObservableType="IFT" # "IFE" or "IFT"; must match the selected response calculator
+    calc=BZGridTask(model, solveIFTorque_TDSE,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

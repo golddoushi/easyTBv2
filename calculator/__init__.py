@@ -1908,7 +1908,7 @@ class IntrinsicNPHE_BCP(BerryConnectionPolarizabilityDipole,BerryConnectionPolar
 
         if self.verbose==2: showElapsedTime(extraInfo="intrinsic NPHE from BCP finished")
 
-class BulkPhotovoltaicConductance(Velocity):
+class BulkPhotovoltaicEffect(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
         Only the I3 contribution, the Tr {va vb vc} term
@@ -1984,7 +1984,7 @@ class BulkPhotovoltaicConductance(Velocity):
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Bulk photovoltaic conductance finished")
 
-class BulkPhotovoltaicConductance_VG(Velocity):
+class BulkPhotovoltaicEffect_VG(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
         Calculates the COMPLETE Velocity Gauge BPVE by summing all four Feynman diagrams, using resonator denominator approach
@@ -2111,7 +2111,7 @@ class BulkPhotovoltaicConductance_VG(Velocity):
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Full Velocity Gauge BPVE finished")
 
-class BulkPhotovoltaicConductance_VG_DM(Velocity):
+class BulkPhotovoltaicEffect_VG_DM(Velocity):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
         Calculates the Velocity Gauge BPVE using the frequency-domain
@@ -2180,7 +2180,7 @@ class BulkPhotovoltaicConductance_VG_DM(Velocity):
         self.projected_sigma = self.sigma_VG_DM[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge BPVE density matrix finished")
 
-class BulkPhotovoltaicConductance_LG_Shift(Dipole):
+class BulkPhotovoltaicEffect_LG_Shift(Dipole):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
         Calculates the Universal Shift Current (BPVE) using the Sipe-Shkrebtii Length Gauge.
@@ -2226,7 +2226,7 @@ class BulkPhotovoltaicConductance_LG_Shift(Dipole):
 
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Shift Current finished")
 
-class BulkPhotovoltaicConductance_LG_Injection(Dipole):
+class BulkPhotovoltaicEffect_LG_Injection(Dipole):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
         Calculates the Circular Injection Current (Circular BPVE) using the 
@@ -2292,7 +2292,7 @@ class BulkPhotovoltaicConductance_LG_Injection(Dipole):
 
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Injection Current finished")
 
-class BulkPhotovoltaicConductance_LG_DM(Dipole):
+class BulkPhotovoltaicEffect_LG_DM(Dipole):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], **kwarg) -> None:
         '''
         Calculates the length-gauge BPVE using the frequency-domain Liouville
@@ -2365,7 +2365,7 @@ class BulkPhotovoltaicConductance_LG_DM(Dipole):
         self.projected_sigma = self.sigma_LG_DM[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge BPVE density matrix finished")
 
-class BulkPhotovoltaicConductance_TDSE(Velocity):
+class BulkPhotovoltaicEffect_TDSE(Velocity):
     def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100,
                  highOrderVelocity=True, include_offdiag=True, **kwarg) -> None:
         '''
@@ -2505,7 +2505,7 @@ class BulkPhotovoltaicConductance_TDSE(Velocity):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
     
-class BulkPhotovoltaicConductance_TDSE_LG_Naive(Dipole):
+class BulkPhotovoltaicEffect_TDSE_LG_Naive(Dipole):
     def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, **kwarg) -> None:
         '''
         Calculates the LG DC response using isolated k-point TDSE.
@@ -3080,122 +3080,219 @@ class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE finished")
 
-class InverseFaradayEffect_TDSE(Velocity, Spin, Orbital):
-    def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100, include_offdiag=True, **kwarg) -> None:
+class InverseFaradayEffect_TDSE(Dipole, Spin, Orbital):
+    def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100,
+                 include_offdiag=True, fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Computing IFE with velocity-gauge (vector potential/current coupling), using time-dependent density matrix propagation approach
+        Compute the velocity-gauge IFE by time-domain density-matrix propagation.
         unit: \muB / (V/\angst.)^2
+
+        The propagation is resolved to first and second order in the vector
+        potential. ``fullCovariantDerivative=True`` relaxes toward the
+        field-shifted equilibrium density matrix through second order,
+
+            rho_eq(A) = f + i A_a C_a f - A_a A_b C_a C_b f / 2,
+
+        where C_a=iD_a. This is the time-domain counterpart of the covariant
+        relaxation vertices in ``InverseFaradayEffect_VG_DM``. The II, EI, IE
+        and EE channels are retained separately. No k-resolved response is
+        stored by this validation calculator.
 
         Indexing
         --------
-        - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=float)
-            off-diagonal of chi_IFE in TDSE is different from freq-domain case. 
-            chi_IFE[0,0,x,y,z] + chi_IFE[0,0,y,x,z] gives symmetric part, while chi_IFE[0,0,x,y,z] - chi_IFE[0,0,y,x,z] gives anti-symmetric part
+        - chi_TDSE[ifermi, iomega, drive1, drive2, measure]
+        - chi_IFE_channels[name][ifermi, iomega, drive1, drive2, measure]
+
+        For off-diagonal driving, ``chi_TDSE_symmetric`` and
+        ``chi_TDSE_quadrature`` contain the directly measured same-phase and
+        quadrature cross responses, respectively.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
-        
-        nbasis=self.energies.shape[-1]
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+                         highOrderDipole=fullCovariantDerivative, **kwarg)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        if self.fullCovariantDerivative and self.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
+            raise ValueError("fullCovariantDerivative requires finite eta for gauge-covariant relaxation")
+        if np.any(np.abs(self.omegaList) < 1e-15):
+            raise ValueError("velocity-gauge TDSE IFE is singular at exactly Omega=0")
+
+        nbasis = self.energies.shape[-1]
         M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]: M_K += self.spin_K
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
-        self.chi_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
-        self.chi_TDSE_symmetric = np.zeros_like(self.chi_TDSE, dtype=float)
-        self.chi_TDSE_quadrature = np.zeros_like(self.chi_TDSE, dtype=float)
-        
-        H_diag = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
-        for iband in range(nbasis):
-            H_diag[..., iband, iband] = self.energies[..., iband]
+        response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
+        self.channel_names = ("II", "EI", "IE", "EE")
+        self.channel_descriptions = {
+            "II": "second-order intraband from first-order intraband",
+            "EI": "second-order interband from first-order intraband",
+            "IE": "second-order intraband from first-order interband",
+            "EE": "second-order interband from first-order interband and the contact vertex",
+        }
+        self.chi_IFE_channels = {name: np.zeros(response_shape, dtype=complex) for name in self.channel_names}
+        self.chi_TDSE_channels = self.chi_IFE_channels
+        self.chi_TDSE_symmetric_channels = {
+            name: np.zeros(response_shape, dtype=float) for name in self.channel_names
+        }
+        self.chi_TDSE_quadrature_channels = {
+            name: np.zeros(response_shape, dtype=float) for name in self.channel_names
+        }
+        diag = np.eye(nbasis)
+        off_diag = 1.0 - diag
+        indices = np.arange(nbasis)
 
         for ifermi, fermi in enumerate(self.fermiList):
-            f = np.int8(self.energies < fermi)
-            rho0 = np.zeros_like(H_diag)
-            for i in range(nbasis):
-                rho0[..., i, i] = f[..., i]
-
-            # Calculate Unperturbed Ground State Magnetization M0
-            M0 = np.zeros(3)
-            for ic in range(3):
-                M_val0 = np.sum(rho0 * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1,-2)).real
-                M0[ic] = np.sum(M_val0)
+            if self.fullCovariantDerivative:
+                f, dfdk, d2fdk2 = self.fermiKDerivatives(ifermi)
+            else:
+                f = np.int8(self.energies < fermi)
+                dfdk = d2fdk2 = None
+            rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+            rho0[..., indices, indices] = f
 
             for iomega, Omega in enumerate(self.omegaList):
-                T = 2 * np.pi / Omega
-                dt = T / n_steps_per_cycle
-                
-                n_cycles_transient = int(np.ceil((10.0 / self.eta) / T))
+                period = 2 * np.pi / Omega
+                dt = period / n_steps_per_cycle
+                n_cycles_transient = int(np.ceil((10.0 / self.eta) / period))
                 n_cycles_measure = 1
 
                 def run_drive(directions, phases):
-                    rho = rho0.copy()
+                    drive_data = self._prepare_covariant_tdse_drive(
+                        directions, rho0, f, dfdk, d2fdk2, diag, off_diag
+                    )
+                    zero = np.zeros_like(rho0)
+                    state = tuple(zero.copy() for _ in range(6))
                     t = 0.0
                     for _ in range(n_cycles_transient * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
+                        state = self._rk4_step_channels(state, t, dt, phases, Omega, E0,
+                                                        drive_data, diag, off_diag)
                         t += dt
-                        
-                    M_dc = np.zeros(3)
+
+                    M_dc = {name: np.zeros(3) for name in self.channel_names}
                     for _ in range(n_cycles_measure * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
+                        state = self._rk4_step_channels(state, t, dt, phases, Omega, E0,
+                                                        drive_data, diag, off_diag)
                         t += dt
+                        for ichannel, name in enumerate(self.channel_names, start=2):
+                            rho2 = state[ichannel]
+                            for c in range(3):
+                                value_k = np.sum(rho2 * M_K[..., c, :, :].swapaxes(-1, -2), axis=(-2, -1)).real
+                                M_dc[name][c] += np.sum(value_k) / (n_cycles_measure * n_steps_per_cycle)
+                    normalization = E0**2 * np.prod(self.kgrid)
+                    return {name: value / normalization for name, value in M_dc.items()}
 
-                        for ic in range(3):
-                            M_val = np.sum(rho * M_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1,-2)).real
-                            M_dc[ic] += np.sum(M_val) / (n_cycles_measure * n_steps_per_cycle)
-
-                    return (M_dc - M0) / E0**2 / np.prod(self.kgrid)
-
-                diagonal_response = np.zeros((3, 3))
-                for ialpha in range(3): 
-                    response = run_drive((ialpha,), (0.0,))
-                    diagonal_response[ialpha] = response
-                    self.chi_TDSE[ifermi, iomega, ialpha, ialpha, :] = response
-                    self.chi_TDSE_symmetric[ifermi, iomega, ialpha, ialpha, :] = response
+                diagonal_response = {name: np.zeros((3, 3)) for name in self.channel_names}
+                for a in range(3):
+                    response = run_drive((a,), (0.0,))
+                    for name in self.channel_names:
+                        diagonal_response[name][a] = response[name]
+                        self.chi_IFE_channels[name][ifermi, iomega, a, a, :] = response[name]
+                        self.chi_TDSE_symmetric_channels[name][ifermi, iomega, a, a, :] = response[name]
 
                 if include_offdiag:
-                    for ialpha in range(3):
-                        for ibeta in range(ialpha + 1, 3):
-                            same_phase = run_drive((ialpha, ibeta), (0.0, 0.0))
-                            cross_symmetric = same_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
-                            
-                            quadrature_phase = run_drive((ialpha, ibeta), (0.0, -np.pi / 2))
-                            cross_quadrature = quadrature_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
-                            
-                            self.chi_TDSE_symmetric[ifermi, iomega, ialpha, ibeta, :] = cross_symmetric
-                            self.chi_TDSE_symmetric[ifermi, iomega, ibeta, ialpha, :] = cross_symmetric
-                            self.chi_TDSE_quadrature[ifermi, iomega, ialpha, ibeta, :] = cross_quadrature
-                            self.chi_TDSE_quadrature[ifermi, iomega, ibeta, ialpha, :] = -cross_quadrature
-                            
-                            # Same-phase driving gives Re[chi_ab + chi_ba]. With the
-                            # beta field shifted by -pi/2, the real DC signal gives
-                            # a circular cross response; for an antisymmetric pair,
-                            # chi_TDSE[alpha,beta] estimates Im[chi_alpha_beta].
-                            self.chi_TDSE[ifermi, iomega, ialpha, ibeta, :] = 0.5 * (cross_symmetric - cross_quadrature)
-                            self.chi_TDSE[ifermi, iomega, ibeta, ialpha, :] = 0.5 * (cross_symmetric + cross_quadrature)
-        
-        self.projected_sigma = self.chi_TDSE[None,None,None,...]
-        if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE IFE finished")
+                    for a in range(3):
+                        for b in range(a + 1, 3):
+                            same_phase = run_drive((a, b), (0.0, 0.0))
+                            quadrature_phase = run_drive((a, b), (0.0, -np.pi / 2))
+                            for name in self.channel_names:
+                                cross_symmetric = same_phase[name] - diagonal_response[name][a] - diagonal_response[name][b]
+                                cross_quadrature = quadrature_phase[name] - diagonal_response[name][a] - diagonal_response[name][b]
+                                self.chi_TDSE_symmetric_channels[name][ifermi, iomega, a, b, :] = cross_symmetric
+                                self.chi_TDSE_symmetric_channels[name][ifermi, iomega, b, a, :] = cross_symmetric
+                                self.chi_TDSE_quadrature_channels[name][ifermi, iomega, a, b, :] = cross_quadrature
+                                self.chi_TDSE_quadrature_channels[name][ifermi, iomega, b, a, :] = -cross_quadrature
+                                self.chi_IFE_channels[name][ifermi, iomega, a, b, :] = 0.5 * (
+                                    cross_symmetric - 1j * cross_quadrature
+                                )
+                                self.chi_IFE_channels[name][ifermi, iomega, b, a, :] = 0.5 * (
+                                    cross_symmetric + 1j * cross_quadrature
+                                )
 
-    def _rk4_step(self, rho, t, dt, H_diag, directions, phases, Omega, rho0, E0):
-        v_drives = [self.velocity_K[..., direction, :, :] for direction in directions]
-        w_drives = [[self.w_K[..., direction_i, direction_j, :, :]
-                     for direction_j in directions] for direction_i in directions]
-        
-        def dRho_dt(rho_state, time_val):
-            A_t = [-2 * E0 / Omega * np.sin(Omega * time_val + phase) for phase in phases]
-            H_t = H_diag
+        self.chi_IFE = sum(self.chi_IFE_channels.values())
+        self.chi_TDSE = self.chi_IFE
+        self.chi_TDSE_symmetric = sum(self.chi_TDSE_symmetric_channels.values())
+        self.chi_TDSE_quadrature = sum(self.chi_TDSE_quadrature_channels.values())
+        self.projected_sigma = self.chi_IFE[None, None, None, ...]
+        self.projected_sigma_channels = {
+            name: response[None, None, None, ...] for name, response in self.chi_IFE_channels.items()
+        }
+        self.projected_sigma_complex = self.projected_sigma
+        self.projected_sigma_complex_channels = self.projected_sigma_channels
+        for name in self.channel_names:
+            setattr(self, f"chi_IFE_{name}", self.chi_IFE_channels[name])
+            setattr(self, f"chi_TDSE_{name}", self.chi_TDSE_channels[name])
+            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
+        if self.verbose == 2: showElapsedTime(extraInfo="TDSE IFE finished")
+
+    def _prepare_covariant_tdse_drive(self, directions, rho0, f, dfdk, d2fdk2, diag, off_diag):
+        def commutator(left, right):
+            return left @ right - right @ left
+
+        data = {
+            "velocity": [self.velocity_K[..., direction, :, :] for direction in directions],
+            "comm_v_rho0": [], "comm_w_rho0": [], "q1_I": [], "q1_E": [], "c2": [],
+        }
+        data["comm_v_rho0"] = [commutator(v, rho0) for v in data["velocity"]]
+        for direction_i in directions:
+            row = []
+            for direction_j in directions:
+                w_ij = self.w_K[..., direction_i, direction_j, :, :]
+                row.append(commutator(w_ij, rho0))
+            data["comm_w_rho0"].append(row)
+
+        if self.fullCovariantDerivative:
+            for direction in directions:
+                c1_i, c1_e = self.fermiCovariantFirstDerivativeChannels(f, dfdk, direction)
+                data["q1_I"].append(1j * c1_i * diag)
+                data["q1_E"].append(1j * c1_e * off_diag)
+            for direction_i in directions:
+                row = []
+                for direction_j in directions:
+                    row.append(self.fermiCovariantSecondDerivativeChannels(
+                        f, dfdk, d2fdk2, direction_i, direction_j
+                    ))
+                data["c2"].append(row)
+        return data
+
+    def _rk4_step_channels(self, state, t, dt, phases, Omega, E0, drive_data, diag, off_diag):
+        def commutator(left, right):
+            return left @ right - right @ left
+
+        def free_evolution(rho):
+            return -1j * self.deltaE * rho - self.eta * rho
+
+        def derivative(current_state, time):
+            rho1_i, rho1_e, rho2_ii, rho2_ei, rho2_ie, rho2_ee = current_state
+            A_t = [-2 * E0 / Omega * np.sin(Omega * time + phase) for phase in phases]
+            result = [free_evolution(rho) for rho in current_state]
+
             for i, A_i in enumerate(A_t):
-                H_t = H_t - A_i * v_drives[i]
-            for i, A_i in enumerate(A_t):
+                result[1] += 1j * A_i * drive_data["comm_v_rho0"][i]
+                if self.fullCovariantDerivative:
+                    result[0] += self.eta * A_i * drive_data["q1_I"][i]
+                    result[1] += self.eta * A_i * drive_data["q1_E"][i]
+
+                source_i = 1j * A_i * commutator(drive_data["velocity"][i], rho1_i)
+                source_e = 1j * A_i * commutator(drive_data["velocity"][i], rho1_e)
+                result[3] += source_i * off_diag
+                result[4] += source_e * diag
+                result[5] += source_e * off_diag
+
                 for j, A_j in enumerate(A_t):
-                    H_t = H_t + 0.5 * A_i * A_j * w_drives[i][j]
-            comm = H_t @ rho_state - rho_state @ H_t
-            return -1j * comm - self.eta * (rho_state - rho0)
+                    result[5] -= 0.5j * A_i * A_j * drive_data["comm_w_rho0"][i][j] * off_diag
+                    if self.fullCovariantDerivative:
+                        coefficient = -0.5 * self.eta * A_i * A_j
+                        for ichannel, name in enumerate(self.channel_names, start=2):
+                            result[ichannel] += coefficient * drive_data["c2"][i][j][name]
+            return tuple(result)
 
-        k1 = dRho_dt(rho, t)
-        k2 = dRho_dt(rho + 0.5 * dt * k1, t + 0.5 * dt)
-        k3 = dRho_dt(rho + 0.5 * dt * k2, t + 0.5 * dt)
-        k4 = dRho_dt(rho + dt * k3, t + dt)
-        return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+        k1 = derivative(state, t)
+        k2 = derivative(tuple(rho + 0.5 * dt * k for rho, k in zip(state, k1)), t + 0.5 * dt)
+        k3 = derivative(tuple(rho + 0.5 * dt * k for rho, k in zip(state, k2)), t + 0.5 * dt)
+        k4 = derivative(tuple(rho + dt * k for rho, k in zip(state, k3)), t + dt)
+        return tuple(rho + (dt / 6.0) * (a + 2*b + 2*c + d)
+                     for rho, a, b, c, d in zip(state, k1, k2, k3, k4))
 
 class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], E0=0.001,
@@ -3326,62 +3423,86 @@ class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_TDSE(Dipole, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[], E0=0.001,
-                 n_steps_per_cycle=100, include_offdiag=True, exchangeVelocity=True, **kwarg) -> None:
+                 n_steps_per_cycle=100, include_offdiag=True, exchangeVelocity=True,
+                 fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Computing light-induced d.c. torque with velocity-gauge time-dependent density matrix propagation.
-        unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is the exchange electronic torque -i[mu_S,H_XC(t)].
+        Compute light-induced d.c. torque by velocity-gauge time-domain density-matrix propagation.
+        unit: \muB eV / (V/\angst.)^2; divide by \hbar in eV fs for \muB/fs / (V/\angst.)^2.
 
-        Indexing
-        --------
-        - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=float)
-        - projected_chi_IFT[0, 0, iproj_torque, ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure]
-          uses iproj_torque=0 for the full torque, followed by projected torque operators.
+        ``fullCovariantDerivative=True`` uses the field-shifted relaxation
+        target through second order and preserves II, EI, IE and EE. The
+        field-dependent torque vertices are included consistently: T1*rho1_I
+        and T2*rho0 are assigned to II, while T1*rho1_E is assigned to EE.
+        ``chi_TDSE`` is the directly comparable complex response tensor.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, exchangeVelocity=exchangeVelocity,
-                         spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+                         highOrderDipole=fullCovariantDerivative, exchangeVelocity=exchangeVelocity,
+                         spinTorqueProjectionList=torqueProjectionList,
+                         orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        if self.fullCovariantDerivative and self.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
+            raise ValueError("fullCovariantDerivative requires finite eta for gauge-covariant relaxation")
+        if np.any(np.abs(self.omegaList) < 1e-15):
+            raise ValueError("velocity-gauge TDSE IFT is singular at exactly Omega=0")
         if ife_type in ["total", "spin"]: self.buildSpinTorqueVelocityCommutator()
         if ife_type in ["total", "orbital"]: self.buildOrbitalTorqueVelocityCommutator()
 
         nbasis = self.energies.shape[-1]
-        proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        proj_TA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        proj_TAA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: proj_T_K[0] += self.spinTorque_K
-        if ife_type in ["total", "orbital"]: proj_T_K[0] += self.orbitalTorque_K
-        if ife_type in ["total", "spin"]: proj_TA_K[0] += self.spinTorqueA_K
-        if ife_type in ["total", "orbital"]: proj_TA_K[0] += self.orbitalTorqueA_K
-        if ife_type in ["total", "spin"]: proj_TAA_K[0] += self.spinTorqueAA_K
-        if ife_type in ["total", "orbital"]: proj_TAA_K[0] += self.orbitalTorqueAA_K
+        nproj = len(torqueProjectionList) + 1
+        proj_T_K = np.zeros((nproj,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        proj_TA_K = np.zeros((nproj,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        proj_TAA_K = np.zeros((nproj,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]:
+            proj_T_K[0] += self.spinTorque_K
+            proj_TA_K[0] += self.spinTorqueA_K
+            proj_TAA_K[0] += self.spinTorqueAA_K
+        if ife_type in ["total", "orbital"]:
+            proj_T_K[0] += self.orbitalTorque_K
+            proj_TA_K[0] += self.orbitalTorqueA_K
+            proj_TAA_K[0] += self.orbitalTorqueAA_K
         for iproj in range(len(torqueProjectionList)):
-            if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
-            if ife_type in ["total", "spin"]: proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
-            if ife_type in ["total", "spin"]: proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
+            if ife_type in ["total", "spin"]:
+                proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
+                proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
+                proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
+            if ife_type in ["total", "orbital"]:
+                proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
+                proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
+                proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
 
-        self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
-        self.chi_TDSE_symmetric = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
-        self.chi_TDSE_quadrature = np.zeros_like(self.chi_TDSE_symmetric)
-
-        H_diag = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
-        for iband in range(nbasis):
-            H_diag[..., iband, iband] = self.energies[..., iband]
+        response_shape = (1, 1, nproj, len(self.fermiList), len(self.omegaList), 3, 3, 3)
+        self.channel_names = ("II", "EI", "IE", "EE")
+        self.channel_descriptions = {
+            "II": "intraband channel, including T1*rho1_I and T2*rho0",
+            "EI": "second-order interband from first-order intraband",
+            "IE": "second-order intraband from first-order interband",
+            "EE": "interband channel, including T1*rho1_E and the contact Hamiltonian vertex",
+        }
+        self.projected_chi_IFT_channels = {
+            name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
+        }
+        self.projected_chi_TDSE_symmetric_channels = {
+            name: np.zeros(response_shape, dtype=float) for name in self.channel_names
+        }
+        self.projected_chi_TDSE_quadrature_channels = {
+            name: np.zeros(response_shape, dtype=float) for name in self.channel_names
+        }
+        diag = np.eye(nbasis)
+        off_diag = 1.0 - diag
+        indices = np.arange(nbasis)
 
         for ifermi, fermi in enumerate(self.fermiList):
-            f = np.int8(self.energies < fermi)
-            rho0 = np.zeros_like(H_diag)
-            for iband in range(nbasis):
-                rho0[..., iband, iband] = f[..., iband]
-
-            T0 = np.zeros((len(torqueProjectionList)+1, 3))
-            for iproj_T, T_K in enumerate(proj_T_K):
-                for ic in range(3):
-                    T_val0 = np.sum(rho0 * T_K[..., ic, :, :].swapaxes(-1, -2), axis=(-1, -2)).real
-                    T0[iproj_T, ic] = np.sum(T_val0)
+            if self.fullCovariantDerivative:
+                f, dfdk, d2fdk2 = self.fermiKDerivatives(ifermi)
+            else:
+                f = np.int8(self.energies < fermi)
+                dfdk = d2fdk2 = None
+            rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
+            rho0[..., indices, indices] = f
 
             for iomega, Omega in enumerate(self.omegaList):
                 period = 2 * np.pi / Omega
@@ -3390,76 +3511,143 @@ class InverseFaradayTorque_TDSE(Velocity, SpinExchangeTorque, OrbitalTorque):
                 n_cycles_measure = 1
 
                 def run_drive(directions, phases):
-                    rho = rho0.copy()
+                    drive_data = self._prepare_covariant_tdse_drive(
+                        directions, rho0, f, dfdk, d2fdk2, diag, off_diag
+                    )
+                    zero = np.zeros_like(rho0)
+                    state = tuple(zero.copy() for _ in range(6))
                     t = 0.0
                     for _ in range(n_cycles_transient * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
+                        state = self._rk4_step_channels(state, t, dt, phases, Omega, E0,
+                                                        drive_data, diag, off_diag)
                         t += dt
 
-                    T_dc = np.zeros((len(torqueProjectionList)+1, 3))
+                    T_dc = {name: np.zeros((nproj, 3)) for name in self.channel_names}
                     for _ in range(n_cycles_measure * n_steps_per_cycle):
-                        rho = self._rk4_step(rho, t, dt, H_diag, directions, phases, Omega, rho0, E0)
+                        state = self._rk4_step_channels(state, t, dt, phases, Omega, E0,
+                                                        drive_data, diag, off_diag)
                         t += dt
                         A_t = [-2 * E0 / Omega * np.sin(Omega * t + phase) for phase in phases]
-
-                        for iproj_T, T_K in enumerate(proj_T_K):
-                            for ic in range(3):
-                                T_op = T_K[..., ic, :, :].copy()
+                        rho1_i, rho1_e = state[:2]
+                        rho2 = dict(zip(self.channel_names, state[2:]))
+                        for iproj_T in range(nproj):
+                            for c in range(3):
+                                T0_nm = proj_T_K[iproj_T, ..., c, :, :].swapaxes(-1, -2)
+                                value_k = {
+                                    name: np.sum(rho2[name] * T0_nm, axis=(-2, -1))
+                                    for name in self.channel_names
+                                }
+                                T1 = np.zeros_like(proj_T_K[iproj_T, ..., c, :, :])
+                                T2 = np.zeros_like(T1)
                                 for i, A_i in enumerate(A_t):
-                                    T_op = T_op + A_i * proj_TA_K[iproj_T, ..., ic, directions[i], :, :]
-                                for i, A_i in enumerate(A_t):
+                                    T1 += A_i * proj_TA_K[iproj_T, ..., c, directions[i], :, :]
                                     for j, A_j in enumerate(A_t):
-                                        T_op = T_op + 0.5 * A_i * A_j * proj_TAA_K[iproj_T, ..., ic, directions[i], directions[j], :, :]
-                                T_val = np.sum(rho * T_op.swapaxes(-1, -2), axis=(-1, -2)).real
-                                T_dc[iproj_T, ic] += np.sum(T_val) / (n_cycles_measure * n_steps_per_cycle)
+                                        T2 += 0.5 * A_i * A_j * proj_TAA_K[
+                                            iproj_T, ..., c, directions[i], directions[j], :, :
+                                        ]
+                                T1_nm = T1.swapaxes(-1, -2)
+                                value_k["II"] += np.sum(rho1_i * T1_nm + rho0 * T2.swapaxes(-1, -2),
+                                                        axis=(-2, -1))
+                                value_k["EE"] += np.sum(rho1_e * T1_nm, axis=(-2, -1))
+                                for name in self.channel_names:
+                                    T_dc[name][iproj_T, c] += np.sum(value_k[name].real) / (
+                                        n_cycles_measure * n_steps_per_cycle
+                                    )
+                    normalization = E0**2 * np.prod(self.kgrid)
+                    return {name: value / normalization for name, value in T_dc.items()}
 
-                    return (T_dc - T0) / E0**2 / np.prod(self.kgrid)
-
-                diagonal_response = np.zeros((3, len(torqueProjectionList)+1, 3))
-                for ialpha in range(3):
-                    response = run_drive((ialpha,), (0.0,))
-                    diagonal_response[ialpha] = response
-                    self.projected_chi_IFT[0, 0, :, ifermi, iomega, ialpha, ialpha, :] = response
+                diagonal_response = {name: np.zeros((3, nproj, 3)) for name in self.channel_names}
+                for a in range(3):
+                    response = run_drive((a,), (0.0,))
+                    for name in self.channel_names:
+                        diagonal_response[name][a] = response[name]
+                        self.projected_chi_IFT_channels[name][0, 0, :, ifermi, iomega, a, a, :] = response[name]
+                        self.projected_chi_TDSE_symmetric_channels[name][
+                            0, 0, :, ifermi, iomega, a, a, :
+                        ] = response[name]
 
                 if include_offdiag:
-                    for ialpha in range(3):
-                        for ibeta in range(ialpha + 1, 3):
-                            same_phase = run_drive((ialpha, ibeta), (0.0, 0.0))
-                            cross_symmetric = same_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
+                    for a in range(3):
+                        for b in range(a + 1, 3):
+                            same_phase = run_drive((a, b), (0.0, 0.0))
+                            quadrature_phase = run_drive((a, b), (0.0, -np.pi / 2))
+                            for name in self.channel_names:
+                                cross_symmetric = same_phase[name] - diagonal_response[name][a] - diagonal_response[name][b]
+                                cross_quadrature = quadrature_phase[name] - diagonal_response[name][a] - diagonal_response[name][b]
+                                self.projected_chi_TDSE_symmetric_channels[name][
+                                    0, 0, :, ifermi, iomega, a, b, :
+                                ] = cross_symmetric
+                                self.projected_chi_TDSE_symmetric_channels[name][
+                                    0, 0, :, ifermi, iomega, b, a, :
+                                ] = cross_symmetric
+                                self.projected_chi_TDSE_quadrature_channels[name][
+                                    0, 0, :, ifermi, iomega, a, b, :
+                                ] = cross_quadrature
+                                self.projected_chi_TDSE_quadrature_channels[name][
+                                    0, 0, :, ifermi, iomega, b, a, :
+                                ] = -cross_quadrature
+                                self.projected_chi_IFT_channels[name][
+                                    0, 0, :, ifermi, iomega, a, b, :
+                                ] = 0.5 * (cross_symmetric - 1j * cross_quadrature)
+                                self.projected_chi_IFT_channels[name][
+                                    0, 0, :, ifermi, iomega, b, a, :
+                                ] = 0.5 * (cross_symmetric + 1j * cross_quadrature)
 
-                            quadrature_phase = run_drive((ialpha, ibeta), (0.0, -np.pi / 2))
-                            cross_quadrature = quadrature_phase - diagonal_response[ialpha] - diagonal_response[ibeta]
-
-                            self.projected_chi_IFT[0, 0, :, ifermi, iomega, ialpha, ibeta, :] = 0.5 * (cross_symmetric - cross_quadrature)
-                            self.projected_chi_IFT[0, 0, :, ifermi, iomega, ibeta, ialpha, :] = 0.5 * (cross_symmetric + cross_quadrature)
-
-                            self.chi_TDSE_symmetric[ifermi, iomega, ialpha, ibeta, :] = cross_symmetric[0]
-                            self.chi_TDSE_symmetric[ifermi, iomega, ibeta, ialpha, :] = cross_symmetric[0]
-                            self.chi_TDSE_quadrature[ifermi, iomega, ialpha, ibeta, :] = cross_quadrature[0]
-                            self.chi_TDSE_quadrature[ifermi, iomega, ibeta, ialpha, :] = -cross_quadrature[0]
-
-        self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
+        self.projected_chi_IFT = sum(self.projected_chi_IFT_channels.values())
+        self.chi_IFT_channels = {
+            name: response[0, 0, 0] for name, response in self.projected_chi_IFT_channels.items()
+        }
+        self.chi_IFT = sum(self.chi_IFT_channels.values())
         self.chi_TDSE = self.chi_IFT
+        self.chi_TDSE_channels = self.chi_IFT_channels
         self.projected_sigma = self.projected_chi_IFT
-        if self.verbose == 2: showElapsedTime(extraInfo=f"TDSE IFT finished")
+        self.projected_sigma_channels = self.projected_chi_IFT_channels
+        self.projected_chi_TDSE_symmetric = sum(self.projected_chi_TDSE_symmetric_channels.values())
+        self.projected_chi_TDSE_quadrature = sum(self.projected_chi_TDSE_quadrature_channels.values())
+        self.chi_TDSE_symmetric_channels = {
+            name: response[0, 0, 0] for name, response in self.projected_chi_TDSE_symmetric_channels.items()
+        }
+        self.chi_TDSE_quadrature_channels = {
+            name: response[0, 0, 0] for name, response in self.projected_chi_TDSE_quadrature_channels.items()
+        }
+        self.chi_TDSE_symmetric = self.projected_chi_TDSE_symmetric[0, 0, 0]
+        self.chi_TDSE_quadrature = self.projected_chi_TDSE_quadrature[0, 0, 0]
+        for name in self.channel_names:
+            setattr(self, f"chi_IFT_{name}", self.chi_IFT_channels[name])
+            setattr(self, f"chi_TDSE_{name}", self.chi_TDSE_channels[name])
+            setattr(self, f"projected_chi_IFT_{name}", self.projected_chi_IFT_channels[name])
+        if self.verbose == 2: showElapsedTime(extraInfo="TDSE IFT finished")
 
-    _rk4_step = InverseFaradayEffect_TDSE._rk4_step
+    _prepare_covariant_tdse_drive = InverseFaradayEffect_TDSE._prepare_covariant_tdse_drive
+    _rk4_step_channels = InverseFaradayEffect_TDSE._rk4_step_channels
 
 class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
-                 finiteTemperatureOccupations=False, **kwarg) -> None:
+                 finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Computing light-induced d.c. torque with length gauge, using frequency-domain density matrix approach.
-        unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
+        Compute light-induced d.c. torque in the length gauge with a frequency-domain density matrix.
+        unit: \muB eV / (V/\angst.)^2; divide by \hbar in eV fs for \muB/fs / (V/\angst.)^2.
         The spin part is the exchange electronic torque -i[mu_S,H_XC(t)].
+
+        ``fullCovariantDerivative=True`` replaces the interband-only dipole
+        commutators by iD_k and retains II, EI, IE and EE separately. Explicit
+        first-order torque vertices contracted with rho1_I and rho1_E are
+        assigned to II and EE, respectively.
 
         Indexing
         --------
         - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=False, 
-                         spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList,
+                         highOrderDipole=fullCovariantDerivative,
+                         spinTorqueProjectionList=torqueProjectionList,
+                         orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        if self.fullCovariantDerivative and self.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
+            raise ValueError("fullCovariantDerivative requires finite eta for the dc density matrix")
 
         nbasis = self.energies.shape[-1]
         # Slot 0 is the full torque; following slots are projected torque operators.
@@ -3471,6 +3659,10 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
             if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
 
         deltaE_mn = self.deltaE
+        diag = np.eye(nbasis)
+        off_diag = 1.0 - diag
+        indices = np.arange(nbasis)
+        g0_mn = 1.0 / (deltaE_mn - 1j * self.eta)
 
         # H_LG(t) = H0 - E_a(t) r_a, hence the full torque contains
         # T_c(E) = -i[mu_c,H_LG] = T_c(0) + E_a i[mu_c,r_a].
@@ -3485,181 +3677,372 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
             if ife_type in ["total", "spin"]: proj_torqueE_K[iproj+1] += self.projected_spinTorqueE_K_list[iproj]
             if ife_type in ["total", "orbital"]: proj_torqueE_K[iproj+1] += self.projected_orbitalTorqueE_K_list[iproj]
 
-        self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
+        response_shape = (1, 1, len(torqueProjectionList)+1,
+                          len(self.fermiList), len(self.omegaList), 3, 3, 3)
+        self.channel_names = ("II", "EI", "IE", "EE")
+        self.channel_descriptions = {
+            "II": "intraband channel, including torqueE*rho1_I",
+            "EI": "second-order interband from first-order intraband",
+            "IE": "second-order intraband from first-order interband",
+            "EE": "interband channel, including torqueE*rho1_E",
+        }
+        self.projected_chi_IFT_channels = {
+            name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
+        }
         responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
         if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
             responseFermiIndexList = range(len(self.fermiList))
         responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
         responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
         responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        self.projected_response = np.zeros((1, 1, len(torqueProjectionList)+1) + self.kgrid +
-                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
-                                           dtype=complex)
+        projected_response_shape = ((1, 1, len(torqueProjectionList)+1) + self.kgrid +
+                                    (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
+        self.projected_response_channels = {
+            name: np.zeros(projected_response_shape, dtype=complex) for name in self.channel_names
+        }
 
         occupations = self.fd_occupations if finiteTemperatureOccupations else None
         for ifermi, fermi in enumerate(self.fermiList):
-            if occupations is None:
+            if self.fullCovariantDerivative:
+                f, dfdk, d2fdk2 = self.fermiKDerivatives(ifermi)
+            elif occupations is None:
                 f = np.int8(self.energies < fermi)
+                dfdk = d2fdk2 = None
             else:
                 f = occupations[ifermi]
+                dfdk = d2fdk2 = None
             rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
-            for iband in range(nbasis):
-                rho0[..., iband, iband] = f[..., iband]
+            rho0[..., indices, indices] = f
+            f_nm = f[..., None, :] - f[..., :, None]
 
             for iomega, Omega in enumerate(self.omegaList):
                 irecord_omega = responseOmegaRecord.get(iomega)
-                def rho1(r, frequency):
-                    source = r @ rho0 - rho0 @ r
-                    return source / (deltaE_mn - frequency - 1j * self.eta)
+                rho1_e_cache = {}
+                rho1_i_cache = {}
+                factor_cache = {}
+                for direction in range(3):
+                    r_direction = self.r_K[..., direction, :, :]
+                    for sign in (-1, 1):
+                        frequency = sign * Omega
+                        denominator = deltaE_mn - frequency - 1j * self.eta
+                        factor_cache[sign] = f_nm / denominator
+                        rho1_e_cache[(direction, sign)] = r_direction * factor_cache[sign] * off_diag
+                        if self.fullCovariantDerivative:
+                            population = 1j * dfdk[..., direction, :] / (-frequency - 1j * self.eta)
+                            rho1_i = np.zeros_like(deltaE_mn, dtype=complex)
+                            rho1_i[..., indices, indices] = population
+                            rho1_i_cache[(direction, sign)] = rho1_i
 
-                rho1_cache = {
-                    (direction, sign): rho1(self.r_K[..., direction, :, :], sign * Omega)
-                    for direction in range(3)
-                    for sign in (-1, 1)
-                }
-                
                 for a in range(3):
                     r_a = self.r_K[..., a, :, :]
                     for b in range(3):
                         r_b = self.r_K[..., b, :, :]
+                        rho1_e_a = rho1_e_cache[(a, -1)]
+                        rho1_e_b = rho1_e_cache[(b, 1)]
+                        comm_ba = r_b @ rho1_e_a - rho1_e_a @ r_b
+                        comm_ab = r_a @ rho1_e_b - rho1_e_b @ r_a
+                        rho2_channels = {
+                            "II": np.zeros_like(deltaE_mn, dtype=complex),
+                            "EI": np.zeros_like(deltaE_mn, dtype=complex),
+                            "IE": g0_mn * (comm_ba + comm_ab) * diag,
+                        }
 
-                        source = (
-                            r_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ r_b
-                            + r_a @ rho1_cache[(b,  1)] - rho1_cache[(b,  1)] @ r_a
-                        )
-                        rho2_mn = source / (deltaE_mn - 1j * self.eta)
+                        if self.fullCovariantDerivative:
+                            rho1_i_a = rho1_i_cache[(a, -1)]
+                            rho1_i_b = rho1_i_cache[(b, 1)]
+                            source_ii = (
+                                -d2fdk2[..., b, a, :] / (Omega - 1j * self.eta)
+                                -d2fdk2[..., a, b, :] / (-Omega - 1j * self.eta)
+                            )
+                            rho2_channels["II"][..., indices, indices] = source_ii / (-1j * self.eta)
+                            source_ei = (
+                                r_b * (np.diagonal(rho1_i_a, axis1=-2, axis2=-1)[..., None, :]
+                                       - np.diagonal(rho1_i_a, axis1=-2, axis2=-1)[..., :, None])
+                                + r_a * (np.diagonal(rho1_i_b, axis1=-2, axis2=-1)[..., None, :]
+                                         - np.diagonal(rho1_i_b, axis1=-2, axis2=-1)[..., :, None])
+                            )
+                            rho2_channels["EI"] = g0_mn * source_ei * off_diag
+
+                            denominator_minus = deltaE_mn + Omega - 1j * self.eta
+                            denominator_plus = deltaE_mn - Omega - 1j * self.eta
+                            delta_f_b = dfdk[..., b, None, :] - dfdk[..., b, :, None]
+                            delta_f_a = dfdk[..., a, None, :] - dfdk[..., a, :, None]
+                            delta_v_b = (self.energy_deriv1_K[..., b, :, None]
+                                         - self.energy_deriv1_K[..., b, None, :])
+                            delta_v_a = (self.energy_deriv1_K[..., a, :, None]
+                                         - self.energy_deriv1_K[..., a, None, :])
+                            factor_deriv_ba = delta_f_b / denominator_minus - f_nm * delta_v_b / denominator_minus**2
+                            factor_deriv_ab = delta_f_a / denominator_plus - f_nm * delta_v_a / denominator_plus**2
+                            rho1_e_a_deriv_b = (
+                                self.r_deriv_K[..., b, a, :, :] * factor_cache[-1] + r_a * factor_deriv_ba
+                            ) * off_diag
+                            rho1_e_b_deriv_a = (
+                                self.r_deriv_K[..., a, b, :, :] * factor_cache[1] + r_b * factor_deriv_ab
+                            ) * off_diag
+                            source_ee = (1j * rho1_e_a_deriv_b + comm_ba
+                                         + 1j * rho1_e_b_deriv_a + comm_ab)
+                            rho2_channels["EE"] = g0_mn * source_ee * off_diag
+                        else:
+                            rho2_channels["EE"] = g0_mn * (comm_ba + comm_ab) * off_diag
+
                         for iproj_T, T_K in enumerate(proj_T_K):
                             for c in range(3):
                                 T_c_nm = T_K[..., c, :, :].swapaxes(-1, -2)
                                 TE_c_b_nm = proj_torqueE_K[iproj_T, ..., c, b, :, :].swapaxes(-1, -2)
                                 TE_c_a_nm = proj_torqueE_K[iproj_T, ..., c, a, :, :].swapaxes(-1, -2)
-                                obs2_k = np.sum(rho2_mn * T_c_nm, axis=(-2, -1))
-                                obs1_k = np.sum(
-                                    rho1_cache[(a, -1)] * TE_c_b_nm
-                                    + rho1_cache[(b, 1)] * TE_c_a_nm,
-                                    axis=(-2, -1),
+                                response_k = {
+                                    name: np.sum(rho2 * T_c_nm, axis=(-2, -1))
+                                    for name, rho2 in rho2_channels.items()
+                                }
+                                response_k["EE"] += np.sum(
+                                    rho1_e_a * TE_c_b_nm + rho1_e_b * TE_c_a_nm, axis=(-2, -1)
                                 )
-                                chi_k = obs2_k + obs1_k
-                                self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(chi_k) / np.prod(self.kgrid)
+                                if self.fullCovariantDerivative:
+                                    response_k["II"] += np.sum(
+                                        rho1_i_cache[(a, -1)] * TE_c_b_nm
+                                        + rho1_i_cache[(b, 1)] * TE_c_a_nm, axis=(-2, -1)
+                                    )
                                 irecord_fermi = responseFermiRecord.get(ifermi)
-                                if irecord_fermi is not None and irecord_omega is not None:
-                                    self.projected_response[0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, c] = chi_k
+                                for name in self.channel_names:
+                                    self.projected_chi_IFT_channels[name][
+                                        0, 0, iproj_T, ifermi, iomega, a, b, c
+                                    ] = np.sum(response_k[name]) / np.prod(self.kgrid)
+                                    if irecord_fermi is not None and irecord_omega is not None:
+                                        self.projected_response_channels[name][
+                                            0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, c
+                                        ] = response_k[name]
 
-        self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
+        self.projected_chi_IFT = sum(self.projected_chi_IFT_channels.values())
+        self.projected_response = sum(self.projected_response_channels.values())
+        self.chi_IFT_channels = {
+            name: response[0, 0, 0] for name, response in self.projected_chi_IFT_channels.items()
+        }
+        self.chi_IFT = sum(self.chi_IFT_channels.values())
         self.projected_sigma = self.projected_chi_IFT
+        self.projected_sigma_channels = self.projected_chi_IFT_channels
+        for name in self.channel_names:
+            setattr(self, f"chi_IFT_{name}", self.chi_IFT_channels[name])
+            setattr(self, f"projected_chi_IFT_{name}", self.projected_chi_IFT_channels[name])
+            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
-class InverseFaradayTorque_VG_DM(Velocity, SpinExchangeTorque, OrbitalTorque):
-    def __init__(self, ife_type="total", velocityProjectionList=[],  torqueProjectionList=[],
+class InverseFaradayTorque_VG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
+    def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
-                 finiteTemperatureOccupations=False, exchangeVelocity=True, **kwarg) -> None:
+                 finiteTemperatureOccupations=False, exchangeVelocity=True,
+                 fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Computing light-induced d.c. torque with velocity gauge, using frequency-domain density matrix approach.
-        unit: \muB eV / (V/\angst.)^2, further divide by \hbar = 0.6582119514(40) (eV fs) to get values in \muB/fs / (V/\angst.)^2
-        The spin part is the exchange electronic torque -i[mu_S,H_XC(t)].
+        Compute light-induced d.c. torque in the velocity gauge with a frequency-domain density matrix.
+        unit: \muB eV / (V/\angst.)^2; divide by \hbar in eV fs for \muB/fs / (V/\angst.)^2.
 
-        Indexing
-        --------
-        - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
+        ``fullCovariantDerivative=True`` adds the gauge-covariant relaxation
+        vertices and preserves II, EI, IE and EE. T1*rho1_I and T2*rho0 are
+        assigned to II; T1*rho1_E is assigned to EE.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, exchangeVelocity=exchangeVelocity,
-                         spinTorqueProjectionList=torqueProjectionList, orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
-        
-        nbasis=self.energies.shape[-1]
-        proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        proj_TA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        proj_TAA_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: 
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+                         highOrderDipole=fullCovariantDerivative, exchangeVelocity=exchangeVelocity,
+                         spinTorqueProjectionList=torqueProjectionList,
+                         orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        if self.fullCovariantDerivative and self.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
+            raise ValueError("fullCovariantDerivative requires finite eta for gauge-covariant relaxation")
+
+        nbasis = self.energies.shape[-1]
+        nproj = len(torqueProjectionList) + 1
+        proj_T_K = np.zeros((nproj,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
+        proj_TA_K = np.zeros((nproj,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
+        proj_TAA_K = np.zeros((nproj,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
+        if ife_type in ["total", "spin"]:
             self.buildSpinTorqueVelocityCommutator()
             proj_T_K[0] += self.spinTorque_K
             proj_TA_K[0] += self.spinTorqueA_K
             proj_TAA_K[0] += self.spinTorqueAA_K
-        if ife_type in ["total", "orbital"]: 
+        if ife_type in ["total", "orbital"]:
             self.buildOrbitalTorqueVelocityCommutator()
             proj_T_K[0] += self.orbitalTorque_K
             proj_TA_K[0] += self.orbitalTorqueA_K
             proj_TAA_K[0] += self.orbitalTorqueAA_K
         for iproj in range(len(torqueProjectionList)):
-            if ife_type in ["total", "spin"]: 
+            if ife_type in ["total", "spin"]:
                 proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
                 proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
                 proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
-            if ife_type in ["total", "orbital"]: 
+            if ife_type in ["total", "orbital"]:
                 proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
                 proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
                 proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
 
-        self.projected_chi_IFT = np.zeros((1, 1, len(torqueProjectionList)+1, len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=complex)
-        
+        response_shape = (1, 1, nproj, len(self.fermiList), len(self.omegaList), 3, 3, 3)
+        self.channel_names = ("II", "EI", "IE", "EE")
+        self.channel_descriptions = {
+            "II": "intraband channel, including T1*rho1_I and T2*rho0",
+            "EI": "second-order interband from first-order intraband",
+            "IE": "second-order intraband from first-order interband",
+            "EE": "interband channel, including T1*rho1_E and the contact Hamiltonian vertex",
+        }
+        self.projected_chi_IFT_channels = {
+            name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
+        }
         responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
         if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
             responseFermiIndexList = range(len(self.fermiList))
         responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
         responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
         responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        self.projected_response = np.zeros((1, 1, len(torqueProjectionList)+1) + self.kgrid +
-                                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3),
-                                           dtype=complex)
-        # Matrix axes are ordered as (m, n), same convention as omega_mn in LG.
-        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
+        projected_response_shape = ((1, 1, nproj) + self.kgrid +
+                                    (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
+        self.projected_response_channels = {
+            name: np.zeros(projected_response_shape, dtype=complex) for name in self.channel_names
+        }
+
+        deltaE_mn = self.deltaE
+        diag = np.eye(nbasis)
+        off_diag = 1.0 - diag
+        indices = np.arange(nbasis)
+        g0_mn = 1.0 / (deltaE_mn - 1j * self.eta)
+
+        def commutator(left, right):
+            return left @ right - right @ left
 
         occupations = self.fd_occupations if finiteTemperatureOccupations else None
         for ifermi, fermi in enumerate(self.fermiList):
-            if occupations is None:
+            if self.fullCovariantDerivative:
+                f, dfdk, d2fdk2 = self.fermiKDerivatives(ifermi)
+            elif occupations is None:
                 f = np.int8(self.energies < fermi)
+                dfdk = d2fdk2 = None
             else:
                 f = occupations[ifermi]
+                dfdk = d2fdk2 = None
+            f_nm = f[..., None, :] - f[..., :, None]
             rho0 = np.zeros(self.energies.shape + (nbasis,), dtype=complex)
-            for iband in range(nbasis):
-                rho0[..., iband, iband] = f[..., iband]
+            rho0[..., indices, indices] = f
+
+            relaxation_response_k = {
+                name: np.zeros((nproj,) + self.kgrid + (3, 3, 3), dtype=complex)
+                for name in self.channel_names
+            }
+            if self.fullCovariantDerivative:
+                for a in range(3):
+                    for b in range(3):
+                        c2_ab = self.fermiCovariantSecondDerivativeChannels(f, dfdk, d2fdk2, a, b)
+                        c2_ba = c2_ab if a == b else self.fermiCovariantSecondDerivativeChannels(
+                            f, dfdk, d2fdk2, b, a
+                        )
+                        for name in self.channel_names:
+                            source_relax = 0.5j * self.eta * (c2_ab[name] + c2_ba[name])
+                            sector = diag if name in ("II", "IE") else off_diag
+                            rho2_relax = g0_mn * source_relax * sector
+                            for iproj_T in range(nproj):
+                                for c in range(3):
+                                    relaxation_response_k[name][iproj_T, ..., a, b, c] = np.sum(
+                                        rho2_relax * proj_T_K[iproj_T, ..., c, :, :].swapaxes(-1, -2),
+                                        axis=(-2, -1)
+                                    )
+                        del c2_ab, c2_ba
 
             for iomega, Omega in enumerate(self.omegaList):
+                if abs(Omega) < 1e-15:
+                    raise ValueError("velocity-gauge IFT is singular at exactly Omega=0")
+                irecord_fermi = responseFermiRecord.get(ifermi)
                 irecord_omega = responseOmegaRecord.get(iomega)
-                def rho1(v, frequency):
-                    source = v @ rho0 - rho0 @ v
-                    return source / (deltaE_mn - frequency - 1j * self.eta)
-
-                rho1_cache = {
-                    (direction, sign): rho1(self.velocity_K[..., direction, :, :], sign * Omega)
-                    for direction in range(3)
-                    for sign in (-1, 1)
-                }
+                rho1_e_cache = {}
+                rho1_i_cache = {}
+                for direction in range(3):
+                    v_direction = self.velocity_K[..., direction, :, :]
+                    source_e = commutator(v_direction, rho0)
+                    if self.fullCovariantDerivative:
+                        source_e += self.eta * self.r_K[..., direction, :, :] * f_nm * off_diag
+                    for sign in (-1, 1):
+                        frequency = sign * Omega
+                        rho1_e_cache[(direction, sign)] = (
+                            source_e / (deltaE_mn - frequency - 1j * self.eta) * off_diag
+                        )
+                        if self.fullCovariantDerivative:
+                            population = 1j * self.eta * dfdk[..., direction, :] / (-frequency - 1j * self.eta)
+                            rho1_i = np.zeros_like(deltaE_mn, dtype=complex)
+                            rho1_i[..., indices, indices] = population
+                            rho1_i_cache[(direction, sign)] = rho1_i
 
                 for a in range(3):
                     v_a = self.velocity_K[..., a, :, :]
                     for b in range(3):
                         v_b = self.velocity_K[..., b, :, :]
                         w_ab = 0.5 * (self.w_K[..., a, b, :, :] + self.w_K[..., b, a, :, :])
-
-                        # Keep the two frequency orderings explicit. Collapsing
-                        # them into one M v_a v_b term is valid only for a == b.
-                        source_para = (
-                            v_b @ rho1_cache[(a, -1)] - rho1_cache[(a, -1)] @ v_b
-                            + v_a @ rho1_cache[(b, 1)] - rho1_cache[(b, 1)] @ v_a
+                        source_e = (
+                            commutator(v_b, rho1_e_cache[(a, -1)])
+                            + commutator(v_a, rho1_e_cache[(b, 1)])
                         )
-                        source_dia = - (w_ab @ rho0 - rho0 @ w_ab)
-                        rho2_mn = (source_para + source_dia) / (deltaE_mn - 1j * self.eta )
-                        for iproj_T, T_K in enumerate(proj_T_K):
+                        source_dia = -commutator(w_ab, rho0)
+                        rho2_channels = {
+                            "II": np.zeros_like(deltaE_mn, dtype=complex),
+                            "IE": g0_mn * source_e * diag,
+                            "EE": g0_mn * (source_e + source_dia) * off_diag,
+                        }
+                        if self.fullCovariantDerivative:
+                            rho1_i_a = rho1_i_cache[(a, -1)]
+                            rho1_i_b = rho1_i_cache[(b, 1)]
+                            population_a = np.diagonal(rho1_i_a, axis1=-2, axis2=-1)
+                            population_b = np.diagonal(rho1_i_b, axis1=-2, axis2=-1)
+                            source_i = (
+                                v_b * (population_a[..., None, :] - population_a[..., :, None])
+                                + v_a * (population_b[..., None, :] - population_b[..., :, None])
+                            )
+                            rho2_channels["EI"] = g0_mn * source_i * off_diag
+                        else:
+                            rho1_i_a = rho1_i_b = None
+                            rho2_channels["EI"] = np.zeros_like(deltaE_mn, dtype=complex)
+
+                        for iproj_T in range(nproj):
                             for c in range(3):
-                                T_c_mn = T_K[..., c, :, :]
-                                T1_c_b_nm = proj_TA_K[iproj_T, ..., c, b, :, :].swapaxes(-1, -2)
-                                T1_c_a_nm = proj_TA_K[iproj_T, ..., c, a, :, :].swapaxes(-1, -2)
-                                T2_c_ab = 0.5 * (proj_TAA_K[iproj_T, ..., c, a, b, :, :] + proj_TAA_K[iproj_T, ..., c, b, a, :, :])
-                                T2_c_ab_nm = T2_c_ab.swapaxes(-1, -2)
+                                T0_nm = proj_T_K[iproj_T, ..., c, :, :].swapaxes(-1, -2)
+                                T1_b_nm = proj_TA_K[iproj_T, ..., c, b, :, :].swapaxes(-1, -2)
+                                T1_a_nm = proj_TA_K[iproj_T, ..., c, a, :, :].swapaxes(-1, -2)
+                                T2_ab = 0.5 * (
+                                    proj_TAA_K[iproj_T, ..., c, a, b, :, :]
+                                    + proj_TAA_K[iproj_T, ..., c, b, a, :, :]
+                                )
+                                response_k = {
+                                    name: np.sum(rho2 * T0_nm, axis=(-2, -1))
+                                    + relaxation_response_k[name][iproj_T, ..., a, b, c]
+                                    for name, rho2 in rho2_channels.items()
+                                }
+                                response_k["EE"] += np.sum(
+                                    rho1_e_cache[(a, -1)] * T1_b_nm
+                                    + rho1_e_cache[(b, 1)] * T1_a_nm, axis=(-2, -1)
+                                )
+                                response_k["II"] += np.sum(
+                                    rho0 * T2_ab.swapaxes(-1, -2), axis=(-2, -1)
+                                )
+                                if self.fullCovariantDerivative:
+                                    response_k["II"] += np.sum(
+                                        rho1_i_a * T1_b_nm + rho1_i_b * T1_a_nm, axis=(-2, -1)
+                                    )
+                                for name in self.channel_names:
+                                    sigma_k = response_k[name] / Omega**2
+                                    self.projected_chi_IFT_channels[name][
+                                        0, 0, iproj_T, ifermi, iomega, a, b, c
+                                    ] = np.sum(sigma_k) / np.prod(self.kgrid)
+                                    if irecord_fermi is not None and irecord_omega is not None:
+                                        self.projected_response_channels[name][
+                                            0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, c
+                                        ] = sigma_k
 
-                                obs2_k = np.sum(rho2_mn * T_c_mn.swapaxes(-1, -2), axis=(-1, -2))
-                                obs1_k = np.sum(rho1_cache[(a, -1)] * T1_c_b_nm + rho1_cache[(b, 1)] * T1_c_a_nm, axis=(-1, -2))
-                                obs0_k = np.sum(rho0 * T2_c_ab_nm, axis=(-1, -2))
-                                sigma_k = (obs2_k + obs1_k + obs0_k) / Omega**2
-                                #sigma_k = obs2_k / Omega**2 # only include obs2_k the naive term
-                                self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, c] = np.sum(sigma_k) / np.prod(self.kgrid)
-                                irecord_fermi = responseFermiRecord.get(ifermi)
-                                if irecord_fermi is not None and irecord_omega is not None:
-                                    self.projected_response[0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, c] = sigma_k
-
-        self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
+        self.projected_chi_IFT = sum(self.projected_chi_IFT_channels.values())
+        self.projected_response = sum(self.projected_response_channels.values())
+        self.chi_IFT_channels = {
+            name: response[0, 0, 0] for name, response in self.projected_chi_IFT_channels.items()
+        }
+        self.chi_IFT = sum(self.chi_IFT_channels.values())
         self.projected_sigma = self.projected_chi_IFT
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFT density matrix finished")
+        self.projected_sigma_channels = self.projected_chi_IFT_channels
+        for name in self.channel_names:
+            setattr(self, f"chi_IFT_{name}", self.chi_IFT_channels[name])
+            setattr(self, f"projected_chi_IFT_{name}", self.projected_chi_IFT_channels[name])
+            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
+        if self.verbose == 2: showElapsedTime(extraInfo="Velocity Gauge IFT density matrix finished")
 
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
