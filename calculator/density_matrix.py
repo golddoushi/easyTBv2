@@ -8,9 +8,14 @@ responsibility of the calculator classes that consume these blocks.
 from dataclasses import dataclass
 import numpy as np
 
+DC_CHANNEL_NAMES = ("I", "E")
+DC_CHANNEL_DESCRIPTIONS = {
+    "I": "first-order intraband displaced population",
+    "E": "first-order interband coherence",
+}
 
-CHANNEL_NAMES = ("II", "EI", "IE", "EE")
-CHANNEL_DESCRIPTIONS = {
+AC_CHANNEL_NAMES = ("II", "EI", "IE", "EE")
+AC_CHANNEL_DESCRIPTIONS = {
     "II": "second-order intraband from first-order intraband",
     "EI": "second-order interband from first-order intraband",
     "IE": "second-order intraband from first-order interband",
@@ -37,6 +42,87 @@ class SecondOrderDensityMatrixBlock:
     rho1_plus: dict
     rho2: dict
 
+@dataclass
+class FirstOrderDensityMatrixBlock:
+    """First-order dc density matrices for one electric-field direction."""
+
+    rho0: np.ndarray
+    rho1: dict
+
+class LengthGaugeDCFirstOrderFermiState:
+    def __init__(self, kernel, f, fp=None):
+        self.kernel = kernel
+        self.owner = kernel.owner
+        self.f = f
+        self.fp = fp
+        self.rho0 = diagonal_matrix(f)
+        self.f_nm = f[..., None, :] - f[..., :, None]
+
+    def block(self, direction, drive_velocity=None):
+        """Return intraband and interband dc density matrices.
+
+        ``drive_velocity`` may be a projected velocity tensor with the same
+        layout as ``owner.velocity_K``. Its diagonal defines the projected
+        intraband drive, preserving the projection convention used by the
+        Hall calculators.
+        """
+        kernel = self.kernel
+        velocity = self.owner.velocity_K if drive_velocity is None else drive_velocity
+        velocity_direction = velocity[..., direction, :, :]
+        rho_e = (
+            1j * self.f_nm * kernel.deltaE_inverse_pure * kernel.g0_mn
+            * velocity_direction * kernel.off_diag
+        )
+        rho_i = np.zeros_like(rho_e)
+        if kernel.full_covariant_derivative:
+            velocity_diag = np.diagonal(velocity_direction, axis1=-2, axis2=-1).real
+            population = -self.fp * velocity_diag / self.owner.eta
+            rho_i[..., kernel.indices, kernel.indices] = population
+        return FirstOrderDensityMatrixBlock(
+            rho0=self.rho0,
+            rho1={"I": rho_i, "E": rho_e},
+        )
+
+class LengthGaugeDCFirstOrderDMKernel:
+    """Reusable dc length-gauge first-order density-matrix kernel.
+
+    The ``E`` channel is the interband coherence contributor. 
+    ``fullCovariantDerivative=True`` additionally enables the diagonal ``I`` channel, 
+    which requires finite temperature and finite relaxation energy. 
+    In the conventions of the calculator module,
+
+        rho_E[m,n] = i (f_n-f_m) v_a[m,n]
+                     / (DeltaE_mn (DeltaE_mn-i eta)),
+        rho_I[n,n] = -(df_n/dE) v_a[n,n] / eta.
+    """
+
+    channel_names = DC_CHANNEL_NAMES
+    channel_descriptions = DC_CHANNEL_DESCRIPTIONS
+
+    def __init__(self, owner, full_covariant_derivative=False, finite_temperature_occupations=False):
+        self.owner = owner
+        self.full_covariant_derivative = bool(full_covariant_derivative)
+        self.finite_temperature_occupations = bool(finite_temperature_occupations)
+        self.nbands = owner.energies.shape[-1]
+        self.diag = np.eye(self.nbands)
+        self.off_diag = 1.0 - self.diag
+        self.indices = np.arange(self.nbands)
+        self.deltaE_inverse_pure = owner.deltaEInverse_pure
+        self.g0_mn = owner.deltaEInverse
+
+        if self.full_covariant_derivative and owner.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+        if self.full_covariant_derivative and abs(owner.eta) < 1e-15:
+            raise ValueError("fullCovariantDerivative requires finite eta for the dc intraband density matrix")
+
+    def fermi_state(self, ifermi, fermi):
+        if self.full_covariant_derivative or self.finite_temperature_occupations:
+            f = self.owner.fd_occupations[ifermi]
+        else:
+            f = np.int8(self.owner.energies < fermi)
+        fp = self.owner.fdEnergyDerivatives(f)[0] if self.full_covariant_derivative else None
+        return LengthGaugeDCFirstOrderFermiState(self, f, fp)
+
 class _SecondOrderDMFrequencyState:
     '''Abstract of the 2nd order density matrix at specific real frequency'''
     def block(self) -> SecondOrderDensityMatrixBlock:
@@ -57,8 +143,8 @@ class _SecondOrderDMFermiState:
         raise NotImplementedError("The at_frequency function for this kernel is not implemented in the fermi state.")
 
 class _SecondOrderDMKernel:
-    channel_names = CHANNEL_NAMES
-    channel_descriptions = CHANNEL_DESCRIPTIONS
+    channel_names = AC_CHANNEL_NAMES
+    channel_descriptions = AC_CHANNEL_DESCRIPTIONS
 
     def __init__(self, owner, full_covariant_derivative=False, finite_temperature_occupations=False):
         self.owner = owner
@@ -262,7 +348,7 @@ class VelocityGaugeFermiState(_SecondOrderDMFermiState):
         kernel = self.kernel
         zero = np.zeros_like(kernel.deltaE_mn, dtype=complex)
         if not kernel.full_covariant_derivative:
-            return {name: zero.copy() for name in CHANNEL_NAMES}
+            return {name: zero.copy() for name in AC_CHANNEL_NAMES}
 
         c2_ab = self.owner.fermiCovariantSecondDerivativeChannels(
             self.f, self.dfdk, self.d2fdk2, a, b
@@ -271,7 +357,7 @@ class VelocityGaugeFermiState(_SecondOrderDMFermiState):
             self.f, self.dfdk, self.d2fdk2, b, a
         )
         result = {}
-        for name in CHANNEL_NAMES:
+        for name in AC_CHANNEL_NAMES:
             source = 0.5j * self.owner.eta * (c2_ab[name] + c2_ba[name])
             sector = kernel.diag if name in ("II", "IE") else kernel.off_diag
             result[name] = kernel.g0_mn * source * sector

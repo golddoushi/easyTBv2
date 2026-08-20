@@ -9,10 +9,63 @@ from auxiliary import PauliBlock, semiCirle, fermiDiracOccupations
 from scipy.special import p_roots
 from scipy.constants import elementary_charge, electron_mass, hbar, angstrom
 from scipy.constants import k as kB
-from .density_matrix import (CHANNEL_DESCRIPTIONS as DM_CHANNEL_DESCRIPTIONS,
-                             CHANNEL_NAMES as DM_CHANNEL_NAMES,
+from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIONS,
+                             AC_CHANNEL_NAMES as AC_DM_CHANNEL_NAMES,
+                             DC_CHANNEL_DESCRIPTIONS as DC_DM_CHANNEL_DESCRIPTIONS,
+                             DC_CHANNEL_NAMES as DC_DM_CHANNEL_NAMES,
+                             LengthGaugeDCFirstOrderDMKernel,
                              LengthGaugeSecondOrderDMKernel,
                              VelocityGaugeSecondOrderDMKernel)
+
+def _normalize_response_index_list(index_list, axis_length):
+    if index_list is None:
+        return []
+    return [int(index) for index in index_list if 0 <= int(index) < axis_length]
+
+def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_vertices,
+                                            observable_component_shape, responseFermiIndexList,
+                                            finiteTemperatureOccupations, fullCovariantDerivative):
+    """Contract the common dc first-order density matrix with observable vertices."""
+    owner.calcDeltaEInverse()
+    kernel = LengthGaugeDCFirstOrderDMKernel(
+        owner, fullCovariantDerivative, finiteTemperatureOccupations
+    )
+    owner.density_matrix_kernel = kernel
+    responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(owner.fermiList))
+    owner.responseFermiIndexList = tuple(responseFermiIndexList)
+    responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
+
+    projected_shape = ((len(drive_vertices), len(observable_vertices), len(owner.fermiList), 3)
+                       + tuple(observable_component_shape))
+    response_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
+                      + (len(responseFermiIndexList), 3) + tuple(observable_component_shape))
+    projected_channels = {
+        name: np.zeros(projected_shape, dtype=float) for name in kernel.channel_names
+    }
+    response_channels = {
+        name: np.zeros(response_shape, dtype=float) for name in kernel.channel_names
+    }
+
+    for ifermi, fermi in enumerate(owner.fermiList):
+        fermi_state = kernel.fermi_state(ifermi, fermi)
+        irecord = responseFermiRecord.get(ifermi)
+        for idrive, drive_vertex in enumerate(drive_vertices):
+            for ialpha in range(3):
+                block = fermi_state.block(ialpha, drive_vertex)
+                for iobservable, observable_vertex in enumerate(observable_vertices):
+                    for observable_components in np.ndindex(*observable_component_shape):
+                        vertex_index = ((slice(None),) * len(owner.kgrid) + observable_components
+                                        + (slice(None), slice(None)))
+                        observable_nm = observable_vertex[vertex_index].swapaxes(-1, -2)
+                        tensor_index = (idrive, iobservable, ifermi, ialpha) + observable_components
+                        for name in kernel.channel_names:
+                            response_k = np.sum(block.rho1[name] * observable_nm, axis=(-2, -1)).real
+                            projected_channels[name][tensor_index] = np.sum(response_k)
+                            if irecord is not None:
+                                response_index = ((idrive, iobservable) + (slice(None),) * len(owner.kgrid)
+                                                  + (irecord, ialpha) + observable_components)
+                                response_channels[name][response_index] = response_k
+    return kernel, projected_channels, response_channels
 
 class Calculator():
     Iodd = False  # inversion gives minus
@@ -1242,7 +1295,7 @@ class SpinVelocity(Velocity, Spin):
         #    projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
         #    __sV=self.spin_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
         #    self.projected_spinVelocity_K_list.append((__sV + __sV.swapaxes(-2,-1).conj())/2)
-        for spinvelocityProj in enumerate(spinvelocityProjectionList):
+        for spinvelocityProj in spinvelocityProjectionList:
             proj1=projectionOperator(spinvelocityProj['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(spinvelocityProj['target'],self.model.atomicOrbInfoList,self.model.norbs)
             
@@ -1550,44 +1603,45 @@ class AnormalousHallConductance_diag(VelocityVelocityCorrelation_diag):
 
 class AnormalousHallConductance_LG_DM(Velocity):
 
-    def __init__(self, currentProjectionList=[], **kwarg) -> None:
+    def __init__(self, currentProjectionList=[], responseFermiIndexList=None,
+                 finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Calc. AHE from the dc length-gauge Liouville density matrix.
-
-        For now, only the interband contribution is included, with denominator 1 / (DeltaE * (DeltaE - i eta)). 
+        Calculate the dc charge-current response from the common first-order
+        length-gauge density-matrix kernel. ``fullCovariantDerivative=True``
+        includes both intraband (I) and interband (E) channels.
         '''
         super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
-        self.Iodd = False  # inversion gives minus
-        self.Todd = True   # timereversal gives minus
+        self.Iodd = False
+        self.Todd = True
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.channel_names = DC_DM_CHANNEL_NAMES
+        self.channel_descriptions = dict(DC_DM_CHANNEL_DESCRIPTIONS)
 
-        nProjections = (len(currentProjectionList)+1, len(currentProjectionList)+1)
-        projected_sigma = np.zeros(nProjections + (len(self.fermiList), 3, 3))
+        velocity_vertices = [self.velocity_K] + self.projected_velocity_K_list
+        kernel, projected_channels, response_channels = _contract_dc_first_order_density_matrix(
+            self, velocity_vertices, velocity_vertices, (3,), responseFermiIndexList,
+            finiteTemperatureOccupations, self.fullCovariantDerivative
+        )
+        self.density_matrix_kernel = kernel
 
-        deltaE_mn = self.energies[..., :, None] - self.energies[..., None, :]
-        nondegenerate = abs(deltaE_mn) > self.degen
+        # Unit conversion
+        #scale=1/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        scale = 2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))
 
-        response_factor_base = np.zeros_like(deltaE_mn, dtype=complex)
-        response_factor_base[nondegenerate] = 1.0 / deltaE_mn[nondegenerate] / (deltaE_mn[nondegenerate] - 1j * self.eta)
-
-        for ifermi, fermi in enumerate(self.fermiList):
-            f = np.int8(self.energies < fermi)
-            f_nm_source = f[..., None, :] - f[..., :, None]
-            response_factor = 1j * f_nm_source * response_factor_base
-
-            for ivelocity_alpha, proj_velocity_alpha_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
-                for ivelocity_beta, proj_velocity_beta_K in enumerate([self.velocity_K] + self.projected_velocity_K_list):
-                    for ialpha in range(3):
-                        rho1_alpha = response_factor * proj_velocity_alpha_K[..., ialpha, :, :]
-                        for ibeta in range(3):
-                            current_k = np.sum(
-                                proj_velocity_beta_K[..., ibeta, :, :].swapaxes(-1, -2) * rho1_alpha,
-                                axis=(-2, -1)
-                            ).real
-                            projected_sigma[ivelocity_alpha, ivelocity_beta, ifermi, ialpha, ibeta] = np.sum(current_k)
-
-        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        self.projected_sigma = projected_sigma * (2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2])))
-        self.sigma = self.projected_sigma[0, 0]
+        self.projected_sigma_channels = {
+            name: response * scale for name, response in projected_channels.items()
+        }
+        self.projected_response_channels = response_channels
+        self.projected_sigma = sum(self.projected_sigma_channels.values())
+        self.projected_response = sum(self.projected_response_channels.values())
+        self.sigma_channels = {
+            name: response[0, 0] for name, response in self.projected_sigma_channels.items()
+        }
+        self.sigma = sum(self.sigma_channels.values())
+        for name in self.channel_names:
+            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
+            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
+            setattr(self, f"sigma_{name}", self.sigma_channels[name])
         if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix AHE finished")
 
 class BerryConnectionPolarizability(Velocity):
@@ -2127,8 +2181,8 @@ class BulkPhotovoltaicEffect_VG_DM(Dipole):
                          highOrderDipole=fullCovariantDerivative, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
 
-        self.channel_names = DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(DM_CHANNEL_DESCRIPTIONS)
+        self.channel_names = AC_DM_CHANNEL_NAMES
+        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
         self.channel_descriptions["II"] += ", including current contact vertices"
         response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
         self.sigma_VG_DM_channels = {
@@ -2354,8 +2408,8 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderDipole=True, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
 
-        self.channel_names = DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(DM_CHANNEL_DESCRIPTIONS)
+        self.channel_names = AC_DM_CHANNEL_NAMES
+        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
         response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
         self.sigma_LG_DM_channels = {
             name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
@@ -2621,11 +2675,6 @@ class BulkPhotovoltaicEffect_TDSE_LG_Naive(Dipole):
         k4 = dRho_dt(rho + dt * k3, t + dt)
         return rho + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
-def _normalize_response_index_list(index_list, axis_length):
-    if index_list is None:
-        return []
-    return [int(index) for index in index_list if 0 <= int(index) < axis_length]
-
 class InverseFaradayEffect_LG(Dipole, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
                  responseFermiIndexList=None, **kwarg) -> None:
@@ -2732,8 +2781,8 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(DM_CHANNEL_DESCRIPTIONS)
+        self.channel_names = AC_DM_CHANNEL_NAMES
+        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
         self.chi_IFE_channels = {name: np.zeros(response_shape, dtype=complex) for name in self.channel_names}
 
         responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
@@ -2815,8 +2864,8 @@ class InverseFaradayEffect_VG_DM(Dipole, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(DM_CHANNEL_DESCRIPTIONS)
+        self.channel_names = AC_DM_CHANNEL_NAMES
+        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
         self.channel_descriptions["EE"] += " and the contact vertex"
         self.chi_IFE_channels = {name: np.zeros(response_shape, dtype=complex) for name in self.channel_names}
 
@@ -3011,7 +3060,7 @@ class InverseFaradayEffect_TDSE(Dipole, Spin, Orbital):
         if ife_type in ["total", "orbital"]: M_K += self.orbital_K
 
         response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = DM_CHANNEL_NAMES
+        self.channel_names = AC_DM_CHANNEL_NAMES
         self.channel_descriptions = {
             "II": "second-order intraband from first-order intraband",
             "EI": "second-order interband from first-order intraband",
@@ -3561,7 +3610,7 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
 
         response_shape = (1, 1, len(torqueProjectionList)+1,
                           len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = DM_CHANNEL_NAMES
+        self.channel_names = AC_DM_CHANNEL_NAMES
         self.channel_descriptions = {
             "II": "intraband channel, including torqueE*rho1_I",
             "EI": "second-order interband from first-order intraband",
@@ -3686,7 +3735,7 @@ class InverseFaradayTorque_VG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
                 proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
 
         response_shape = (1, 1, nproj, len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = DM_CHANNEL_NAMES
+        self.channel_names = AC_DM_CHANNEL_NAMES
         self.channel_descriptions = {
             "II": "intraband channel, including T1*rho1_I and T2*rho0",
             "EI": "second-order interband from first-order intraband",
@@ -3839,6 +3888,50 @@ class SpinHallConductance(SpinBerryCurv):
         #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
+
+class SpinHallConductance_LG_DM(SpinVelocity):
+    def __init__(self, currentProjectionList=[], spincurrentProjectionList=[], responseFermiIndexList=None,
+                 finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
+        '''
+        Calculate the dc spin-current response from the common first-order
+        length-gauge density-matrix kernel. Tensor axes are electric-field
+        direction, spin-current flow direction and spin polarization.
+        '''
+        super().__init__(velocityProjectionList=currentProjectionList,
+                         spinvelocityProjectionList=spincurrentProjectionList, **kwarg)
+        self.Iodd = False
+        self.Todd = False
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.channel_names = DC_DM_CHANNEL_NAMES
+        self.channel_descriptions = dict(DC_DM_CHANNEL_DESCRIPTIONS)
+
+        drive_vertices = [self.velocity_K] + self.projected_velocity_K_list
+        observable_vertices = [self.spinVelocity_K] + self.projected_spinVelocity_K_list
+        kernel, projected_channels, response_channels = _contract_dc_first_order_density_matrix(
+            self, drive_vertices, observable_vertices, (3, 3), responseFermiIndexList,
+            finiteTemperatureOccupations, self.fullCovariantDerivative
+        )
+        self.density_matrix_kernel = kernel
+
+        # unit conversion
+        #scale=1/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        scale = 2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))
+
+        self.projected_sigma_channels = {
+            name: response * scale for name, response in projected_channels.items()
+        }
+        self.projected_response_channels = response_channels
+        self.projected_sigma = sum(self.projected_sigma_channels.values())
+        self.projected_response = sum(self.projected_response_channels.values())
+        self.sigma_channels = {
+            name: response[0, 0] for name, response in self.projected_sigma_channels.items()
+        }
+        self.sigma = sum(self.sigma_channels.values())
+        for name in self.channel_names:
+            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
+            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
+            setattr(self, f"sigma_{name}", self.sigma_channels[name])
+        if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix SHC finished")
 
 class OrbitalBerryCurv(OrbitalVelocity):
     def __init__(self, velocityProjectionList=[], orbitalvelocityProjectionList=[], **kwarg) -> None:

@@ -12,7 +12,7 @@ from task import BZGridTask, BZLineTask
 #| Bulk tasks |
 #+------------+
 from task import solvePDOS, solveVelocity, solveVelocity_diag
-from task import solveSHC, solveSHC_diag, solveOHC, solveStGC, solveAHC, solveAHC_LG_DM
+from task import solveSHC, solveSHC_LG_DM, solveSHC_diag, solveOHC, solveStGC, solveAHC, solveAHC_LG_DM
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_BlochAcceleration_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
@@ -32,8 +32,8 @@ from fileio import (writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeff
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/2D-random-spin-ife/"
-    model=System_tb(
+    mainDir="./mcalc/Pb/"
+    model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -103,8 +103,8 @@ def run():
     #'''
 
     # modulate the SOC, exchange fields, baised fields, etc.
-    magnetizationTheta ,magnetizationPhi = 0.0, 0.0
-    model.getExchangeR(provenance="explicit")
+    #magnetizationTheta ,magnetizationPhi = 0.0, 0.0
+    #model.getExchangeR(provenance="explicit")
     #model.scaleSOC(lam=0)
     #model.rotateExchangeField(projection=[(0,(0,)),(1,(0,))], theta=np.pi, phi=0.)
     #model.applyElectrostaticPotentialAtOnsites([0., 0., 0.,]) # in eV/angstrom
@@ -135,7 +135,7 @@ def run():
     #fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
     #fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
     #fermi=-2.41861676 # VASP Sn
-    #fermi=-2.5 # VASP Pb
+    fermi=-2.5 # VASP Pb
     #fermi= 5.65354180 # VASP Ta
     #fermi= 7.72024255 # VASP W
     #fermi=10.96516405 # VASP Pt
@@ -152,10 +152,10 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
 
-    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,101)
-    fermiAxis=np.array([fermi,])
+    fermiAxis=np.linspace(fermi-0.1,fermi+0.1,101)
+    #fermiAxis=np.array([fermi,])
     omegaAxis=np.arange(1.0,3.05,0.05)
     model.setFermi(fermi)
     
@@ -210,19 +210,19 @@ def run():
             for ienergy, energy in enumerate(fermiAxis-model.fermi):
                 fout.write(f"{ik:5d}{energy:15.6E}{spectral[0,ik,ienergy]:15.6E}{spectral[1,ik,ienergy]:15.6E}{spectral[2,ik,ienergy]:15.6E}\n")
     exit()#'''
-    '''
+    #'''
     # check the topological integer
     #calc=Chern_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(8,8,1)
+    BZGrid=(48,48,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="BPVE" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveBPVE_LG_DM,
+    ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
+    calc=BZGridTask(model, solveSHC_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -238,7 +238,7 @@ def run():
                           'record fermi ids':recordFermiIndexList,
 
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
-                          "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
+                          "full covariant derivative": False, # include full covariant formalism for LG 2nd order density-matrix
 
                           "finite temperature occupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
                           "degen":1e-4,
@@ -256,7 +256,7 @@ def run():
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
-        if 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
+        if False and 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
             if responseFunction is None:
                 local_response = result_q['projected response']
                 responseFunction = np.zeros(local_response.shape[:3] + tuple(BZGrid) + local_response.shape[6:],
@@ -288,7 +288,7 @@ def run():
             fout.write("\n")
     exit()'''
     
-    '''
+    #'''
     # output (possibly symmetrized) 3-rank conductance
     sigma/=len(calc.results)
     with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
@@ -306,7 +306,7 @@ def run():
                     for gamma in range(3):
                         fout.write(f"{s[alpha,beta,gamma]:15.6E}")
             fout.write("\n")
-    #exit()#'''
+    exit()#'''
 
     '''
     # output projected 2-rank conductance
@@ -330,7 +330,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    #'''
+    '''
     # output projected 3-ranked, frequency-dependent complex conductance
     projected_sigma_average = projected_sigma/len(calc.results)
     for iproj1 in range(projected_sigma_average.shape[0]):

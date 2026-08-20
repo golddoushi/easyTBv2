@@ -9,7 +9,7 @@ from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
 from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
-from calculator import SpinHallConductance, SpinHallConductance_diag, OrbitalHallConductance
+from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import SpinTorque, SpintorqueGalvanicConductance
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
@@ -313,9 +313,40 @@ def solveAHC_LG_DM(param):
                                 degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                                 fermiList=param['fermi'],
                                 currentProjectionList    =param['projected shells for applying current'],
+                                responseFermiIndexList=param.get('record fermi ids', None),
+                                finiteTemperatureOccupations=param.get(
+                                    'finiteTemperatureOccupations', param.get('finite temperature occupations', False)),
+                                fullCovariantDerivative=param.get(
+                                    'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                verbose=param.get('verbose', 0),
                                    )
     return {"energies":calc.energies,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
+            "projected response":calc.projected_response,
+            "projected sigma channels":calc.projected_sigma_channels,
+            "projected response channels":calc.projected_response_channels,
+            "response fermi ids":calc.responseFermiIndexList,
+            "iq":param["iq"]}
+
+def solveSHC_LG_DM(param):
+    calc=SpinHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                              eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                              degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
+                              fermiList=param['fermi'],
+                              currentProjectionList=param['projected shells for applying current'],
+                              spincurrentProjectionList=param['projected shells for detecting spincurrent'],
+                              responseFermiIndexList=param.get('record fermi ids', None),
+                              finiteTemperatureOccupations=param.get(
+                                  'finiteTemperatureOccupations', param.get('finite temperature occupations', False)),
+                              fullCovariantDerivative=param.get(
+                                  'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                              verbose=param.get('verbose', 0),)
+    return {"energies":calc.energies,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
+            "projected response":calc.projected_response,
+            "projected sigma channels":calc.projected_sigma_channels,
+            "projected response channels":calc.projected_response_channels,
+            "response fermi ids":calc.responseFermiIndexList,
             "iq":param["iq"]}
 
 def _solve2ndAHC(param, calculatorClass):
