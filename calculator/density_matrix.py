@@ -37,7 +37,13 @@ class SecondOrderDensityMatrixBlock:
     rho1_plus: dict
     rho2: dict
 
+class _SecondOrderDMFrequencyState:
+    '''Abstract of the 2nd order density matrix at specific real frequency'''
+    def block(self) -> SecondOrderDensityMatrixBlock:
+        raise NotImplementedError("The block function for this kernel is not implemented in the frequency state.")
+
 class _SecondOrderDMFermiState:
+    '''Abstract of the 2nd order density matrix at specific Fermi energy'''
     def __init__(self, kernel, f, dfdk=None, d2fdk2=None):
         self.kernel = kernel
         self.owner = kernel.owner
@@ -46,6 +52,9 @@ class _SecondOrderDMFermiState:
         self.d2fdk2 = d2fdk2
         self.rho0 = diagonal_matrix(f)
         self.f_nm = f[..., None, :] - f[..., :, None]
+
+    def at_frequency(self) -> _SecondOrderDMFrequencyState:
+        raise NotImplementedError("The at_frequency function for this kernel is not implemented in the fermi state.")
 
 class _SecondOrderDMKernel:
     channel_names = CHANNEL_NAMES
@@ -67,18 +76,24 @@ class _SecondOrderDMKernel:
         if self.full_covariant_derivative and abs(owner.eta) < 1e-15:
             raise ValueError("fullCovariantDerivative requires finite eta for the dc density matrix")
 
-    def fermi_state(self, ifermi, fermi):
-        if self.full_covariant_derivative:
+        self.state_class : _SecondOrderDMFermiState
+
+    def fermi_state(self, ifermi, fermi) -> _SecondOrderDMFermiState:
+        if self.full_covariant_derivative:     
+            # the df/dk and d2f/dk2 are to be computed only for full covariant derivate case
+            # NOTE: the \rho(0) becomes smoothed f-d, too. Because the df/dt and d2f/dk2 are only meaningful under finite temp.
             f, dfdk, d2fdk2 = self.owner.fermiKDerivatives(ifermi)
         elif self.finite_temperature_occupations:
+            # switch on the finite temperature with smoothed f-d distribution
             f = self.owner.fd_occupations[ifermi]
             dfdk = d2fdk2 = None
         else:
+            # step function, the 0K f-d distribution
             f = np.int8(self.owner.energies < fermi)
             dfdk = d2fdk2 = None
         return self.state_class(self, f, dfdk, d2fdk2)
 
-class LengthGaugeFrequencyState:
+class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
     def __init__(self, fermi_state, omega):
         self.fermi_state = fermi_state
         self.kernel = fermi_state.kernel
@@ -128,7 +143,7 @@ class LengthGaugeFrequencyState:
             population_a = np.diagonal(rho1_i_a, axis1=-2, axis2=-1)
             population_b = np.diagonal(rho1_i_b, axis1=-2, axis2=-1)
             source_ei = (
-                r_b * (population_a[..., None, :] - population_a[..., :, None])
+                  r_b * (population_a[..., None, :] - population_a[..., :, None])
                 + r_a * (population_b[..., None, :] - population_b[..., :, None])
             )
             rho2["EI"] = kernel.g0_mn * source_ei * kernel.off_diag
@@ -137,34 +152,13 @@ class LengthGaugeFrequencyState:
             denominator_plus = kernel.deltaE_mn - self.omega - 1j * owner.eta
             delta_f_b = state.dfdk[..., b, None, :] - state.dfdk[..., b, :, None]
             delta_f_a = state.dfdk[..., a, None, :] - state.dfdk[..., a, :, None]
-            delta_v_b = (
-                owner.energy_deriv1_K[..., b, :, None]
-                - owner.energy_deriv1_K[..., b, None, :]
-            )
-            delta_v_a = (
-                owner.energy_deriv1_K[..., a, :, None]
-                - owner.energy_deriv1_K[..., a, None, :]
-            )
-            factor_deriv_ba = (
-                delta_f_b / denominator_minus
-                - state.f_nm * delta_v_b / denominator_minus**2
-            )
-            factor_deriv_ab = (
-                delta_f_a / denominator_plus
-                - state.f_nm * delta_v_a / denominator_plus**2
-            )
-            rho1_e_a_deriv_b = (
-                owner.r_deriv_K[..., b, a, :, :] * self.factor[-1]
-                + r_a * factor_deriv_ba
-            ) * kernel.off_diag
-            rho1_e_b_deriv_a = (
-                owner.r_deriv_K[..., a, b, :, :] * self.factor[1]
-                + r_b * factor_deriv_ab
-            ) * kernel.off_diag
-            source_ee = (
-                1j * rho1_e_a_deriv_b + comm_ba
-                + 1j * rho1_e_b_deriv_a + comm_ab
-            )
+            delta_v_b = owner.energy_deriv1_K[..., b, :, None] - owner.energy_deriv1_K[..., b, None, :]
+            delta_v_a = owner.energy_deriv1_K[..., a, :, None] - owner.energy_deriv1_K[..., a, None, :]
+            factor_deriv_ba = delta_f_b / denominator_minus - state.f_nm * delta_v_b / denominator_minus**2
+            factor_deriv_ab = delta_f_a / denominator_plus - state.f_nm * delta_v_a / denominator_plus**2
+            rho1_e_a_deriv_b = (owner.r_deriv_K[..., b, a, :, :] * self.factor[-1] + r_a * factor_deriv_ba) * kernel.off_diag
+            rho1_e_b_deriv_a = (owner.r_deriv_K[..., a, b, :, :] * self.factor[ 1] + r_b * factor_deriv_ab) * kernel.off_diag
+            source_ee = 1j * rho1_e_a_deriv_b + comm_ba + 1j * rho1_e_b_deriv_a + comm_ab
             rho2["EE"] = kernel.g0_mn * source_ee * kernel.off_diag
         else:
             rho1_i_a = rho1_i_b = zero
@@ -177,47 +171,8 @@ class LengthGaugeFrequencyState:
             rho2=rho2,
         )
 
-    def legacy_bpve_block(self, a, b):
-        """Reproduce the pre-kernel analytic LG BPVE density matrix."""
-        kernel = self.kernel
-        owner = self.owner
-        state = self.fermi_state
-        if kernel.full_covariant_derivative:
-            return self.block(a, b)
-
-        velocity_diag = np.diagonal(owner.velocity_K, axis1=-2, axis2=-1)
-        delta_v = velocity_diag[..., :, :, None] - velocity_diag[..., :, None, :]
-
-        def derivative(ideriv, idir, sign):
-            frequency = sign * self.omega
-            denominator = kernel.deltaE_mn - frequency - 1j * owner.eta
-            numerator = state.f_nm * owner.r_K[..., idir, :, :]
-            rho1 = numerator / denominator
-            offdiag_part = (
-                state.f_nm * owner.r_deriv_K[..., ideriv, idir, :, :] / denominator
-                - numerator * delta_v[..., ideriv, :, :] / denominator**2
-            ) * kernel.off_diag
-            diag_part = -1j * commutator(owner.r_K[..., ideriv, :, :], rho1) * kernel.diag
-            return diag_part, offdiag_part
-
-        diag_ba, offdiag_ba = derivative(b, a, -1)
-        diag_ab, offdiag_ab = derivative(a, b, 1)
-        zero = np.zeros_like(kernel.deltaE_mn, dtype=complex)
-        rho2 = {
-            "II": zero.copy(),
-            "EI": zero.copy(),
-            "IE": 1j * kernel.g0_mn * (diag_ba + diag_ab) * kernel.diag,
-            "EE": 1j * kernel.g0_mn * (offdiag_ba + offdiag_ab) * kernel.off_diag,
-        }
-        return SecondOrderDensityMatrixBlock(
-            rho0=state.rho0,
-            rho1_minus={"I": zero, "E": self.rho1_e[(a, -1)]},
-            rho1_plus={"I": zero, "E": self.rho1_e[(b, 1)]},
-            rho2=rho2,
-        )
-
 class LengthGaugeFermiState(_SecondOrderDMFermiState):
-    def at_frequency(self, omega):
+    def at_frequency(self, omega): 
         return LengthGaugeFrequencyState(self, omega)
 
 class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
@@ -225,7 +180,7 @@ class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
 
     state_class = LengthGaugeFermiState
 
-class VelocityGaugeFrequencyState:
+class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
     def __init__(self, fermi_state, omega):
         self.fermi_state = fermi_state
         self.kernel = fermi_state.kernel

@@ -222,7 +222,7 @@ def run():
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
     ObservableType="BPVE" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveBPVE_VG_DM,
+    calc=BZGridTask(model, solveBPVE_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

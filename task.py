@@ -308,10 +308,11 @@ def solveStGC(param):
             "iq":param["iq"]}
 
 def solveAHC_LG_DM(param):
-    calc=AnormalousHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
-                                   fermiList=param['fermi'],
-                                   currentProjectionList    =param['projected shells for applying current'],
-                                   match_resonator=param.get('match resonator', False),
+    calc=AnormalousHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+                                eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                                degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
+                                fermiList=param['fermi'],
+                                currentProjectionList    =param['projected shells for applying current'],
                                    )
     return {"energies":calc.energies,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],

@@ -1550,13 +1550,11 @@ class AnormalousHallConductance_diag(VelocityVelocityCorrelation_diag):
 
 class AnormalousHallConductance_LG_DM(Velocity):
 
-    def __init__(self, currentProjectionList=[], match_resonator=False, **kwarg) -> None:
+    def __init__(self, currentProjectionList=[], **kwarg) -> None:
         '''
         Calc. AHE from the dc length-gauge Liouville density matrix.
 
-        The default denominator uses the physical interband dipole convention,
-        1 / (DeltaE * (DeltaE - i eta)). With match_resonator=True it uses
-        1 / (DeltaE - i eta)^2, matching BerryCurv exactly at finite eta.
+        For now, only the interband contribution is included, with denominator 1 / (DeltaE * (DeltaE - i eta)). 
         '''
         super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
         self.Iodd = False  # inversion gives minus
@@ -1569,10 +1567,7 @@ class AnormalousHallConductance_LG_DM(Velocity):
         nondegenerate = abs(deltaE_mn) > self.degen
 
         response_factor_base = np.zeros_like(deltaE_mn, dtype=complex)
-        if match_resonator:
-            response_factor_base[nondegenerate] = 1.0 / (deltaE_mn[nondegenerate] - 1j * self.eta)**2
-        else:
-            response_factor_base[nondegenerate] = 1.0 / deltaE_mn[nondegenerate] / (deltaE_mn[nondegenerate] - 1j * self.eta)
+        response_factor_base[nondegenerate] = 1.0 / deltaE_mn[nondegenerate] / (deltaE_mn[nondegenerate] - 1j * self.eta)
 
         for ifermi, fermi in enumerate(self.fermiList):
             f = np.int8(self.energies < fermi)
@@ -1590,6 +1585,7 @@ class AnormalousHallConductance_LG_DM(Velocity):
                             ).real
                             projected_sigma[ivelocity_alpha, ivelocity_beta, ifermi, ialpha, ibeta] = np.sum(current_k)
 
+        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
         self.projected_sigma = projected_sigma * (2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2])))
         self.sigma = self.projected_sigma[0, 0]
         if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix AHE finished")
@@ -2390,10 +2386,7 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
                 irecord_omega = responseOmegaRecord.get(iomega)
                 for a in range(3):
                     for b in range(3):
-                        if self.fullCovariantDerivative:
-                            block = frequency_state.block(a, b)
-                        else:
-                            block = frequency_state.legacy_bpve_block(a, b)
+                        block = frequency_state.block(a, b)
                         for c in range(3):
                             v_c_nm = self.velocity_K[..., c, :, :].swapaxes(-1, -2)
                             for name in self.channel_names:
