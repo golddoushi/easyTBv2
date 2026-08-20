@@ -116,12 +116,21 @@ class LengthGaugeDCFirstOrderDMKernel:
             raise ValueError("fullCovariantDerivative requires finite eta for the dc intraband density matrix")
 
     def fermi_state(self, ifermi, fermi):
+        f, fp = self.occupations(ifermi, fermi)
+        return LengthGaugeDCFirstOrderFermiState(self, f, fp)
+
+    def occupations(self, ifermi, fermi):
+        """Return only the band weights needed by a contracted response.
+
+        This avoids constructing diagonal density matrices when an observable
+        can be reduced to exact band-resolved response weights first.
+        """
         if self.full_covariant_derivative or self.finite_temperature_occupations:
-            f = self.owner.fd_occupations[ifermi]
+            f = self.owner.fdOccupation(fermi)
         else:
             f = np.int8(self.owner.energies < fermi)
         fp = self.owner.fdEnergyDerivatives(f)[0] if self.full_covariant_derivative else None
-        return LengthGaugeDCFirstOrderFermiState(self, f, fp)
+        return f, fp
 
 class _SecondOrderDMFrequencyState:
     '''Abstract of the 2nd order density matrix at specific real frequency'''
@@ -164,6 +173,11 @@ class _SecondOrderDMKernel:
 
         self.state_class : _SecondOrderDMFermiState
 
+    @property
+    def active_rho2_channels(self):
+        """Density-matrix channels that can be nonzero for this mode."""
+        return self.channel_names if self.full_covariant_derivative else ("IE", "EE")
+
     def fermi_state(self, ifermi, fermi) -> _SecondOrderDMFermiState:
         if self.full_covariant_derivative:     
             # the df/dk and d2f/dk2 are to be computed only for full covariant derivate case
@@ -171,7 +185,7 @@ class _SecondOrderDMKernel:
             f, dfdk, d2fdk2 = self.owner.fermiKDerivatives(ifermi)
         elif self.finite_temperature_occupations:
             # switch on the finite temperature with smoothed f-d distribution
-            f = self.owner.fd_occupations[ifermi]
+            f = self.owner.fdOccupation(fermi)
             dfdk = d2fdk2 = None
         else:
             # step function, the 0K f-d distribution
@@ -212,8 +226,8 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
         comm_ab = commutator(r_a, rho1_e_b)
         zero = np.zeros_like(kernel.deltaE_mn, dtype=complex)
         rho2 = {
-            "II": zero.copy(),
-            "EI": zero.copy(),
+            "II": zero,
+            "EI": zero,
             "IE": kernel.g0_mn * (comm_ba + comm_ab) * kernel.diag,
         }
 
@@ -278,9 +292,7 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
         self.rho1_e = {}
         self.rho1_i = {}
         for direction in range(3):
-            source_e = commutator(
-                self.owner.velocity_K[..., direction, :, :], fermi_state.rho0
-            )
+            source_e = self.owner.velocity_K[..., direction, :, :] * fermi_state.f_nm
             if self.kernel.full_covariant_derivative:
                 source_e += (
                     self.owner.eta * self.owner.r_K[..., direction, :, :]
@@ -312,10 +324,10 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
         rho1_e_a = self.rho1_e[(a, -1)]
         rho1_e_b = self.rho1_e[(b, 1)]
         source_e = commutator(v_b, rho1_e_a) + commutator(v_a, rho1_e_b)
-        source_contact = -commutator(w_ab, state.rho0)
+        source_contact = -w_ab * state.f_nm
         zero = np.zeros_like(kernel.deltaE_mn, dtype=complex)
         rho2 = {
-            "II": zero.copy(),
+            "II": zero,
             "IE": kernel.g0_mn * source_e * kernel.diag,
             "EE": kernel.g0_mn * (source_e + source_contact) * kernel.off_diag,
         }
@@ -331,7 +343,7 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
             rho2["EI"] = kernel.g0_mn * source_i * kernel.off_diag
         else:
             rho1_i_a = rho1_i_b = zero
-            rho2["EI"] = zero.copy()
+            rho2["EI"] = zero
 
         return SecondOrderDensityMatrixBlock(
             rho0=state.rho0,
