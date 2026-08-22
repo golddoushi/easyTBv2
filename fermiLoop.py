@@ -134,19 +134,22 @@ def run():
     BZGrid=(40,40,1)
     BZDistributionRepeat=(1,1,0)
     calc=BZGridTask(model, solveMagneticMoment,
-                    args={'spin proj':False,'orbital proj':True,'skip low':True,
+                    args={'spin proj':True,'orbital proj':True,'skip low':True,
                     }, 
                     BZGrid=BZGrid,BZSymm=False,
                     mode='run',
-                    ncores=8)
+                    ncores=16)
     _,_,_,nbands=calc.results[0]["energies"].shape
     energies=np.zeros(tuple(BZGrid)+(nbands,))
+    nAtoms=len(model.atomicOrbInfoList)
+    atomicWeights=np.zeros(tuple(BZGrid)+(nAtoms,nbands),dtype=float)
     spin=np.zeros(tuple(BZGrid)+(3, nbands,),dtype=complex)
     orbital_LC=np.zeros(tuple(BZGrid)+(3, nbands,),dtype=complex)
     orbital_IC=np.zeros(tuple(BZGrid)+(3, nbands,),dtype=complex)
     hasSpin, hasOrbitalLC, hasOrbitalIC=False, False, False
     for result_q in calc.results:
         energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
+        atomicWeights[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]] = result_q['atomic weights']
         if result_q["spin"] is not None:
             hasSpin=True
             spin[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['spin']
@@ -166,6 +169,8 @@ def run():
         if hasSpin:      fout.write("             Sx             Sy             Sz")
         if hasOrbitalLC: fout.write("          Lx_LC          Ly_LC          Lz_LC")
         if hasOrbitalIC: fout.write("          Lx_IC          Ly_IC          Lz_IC")
+        for iatom, atom_info in enumerate(model.atomicOrbInfoList):
+            fout.write(f" atom{iatom}_{atom_info['label']}_weight")
         fout.write("\n")
 
         for iB in range(nbands):
@@ -177,6 +182,10 @@ def run():
                 spinContour=None
                 orbitalLCContour=None
                 orbitalICContour=None
+                atomicContour=interpolatePeriodicGrid(
+                    atomicWeights[:,:,0,:,iB],
+                    contour,
+                )
                 if hasSpin:
                     spinContour=interpolatePeriodicGrid(
                         spin[:,:,0,:,iB].real,
@@ -207,6 +216,9 @@ def run():
                         if hasOrbitalIC:
                             endpoint=orbitalICContour[ipoint]
                             fout.write("".join(f"{value:15.5E}" for value in endpoint))
+                        fout.write("".join(
+                            f"{value:15.5E}" for value in atomicContour[ipoint]
+                        ))
                         fout.write("\n")
                     fout.write("\n")
 if __name__ == '__main__': # crucial for multiprocessing in Windows

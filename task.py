@@ -684,10 +684,31 @@ def solveMagneticMoment(param):
         if hasattr(calc,"orbital_IC_K"): orbital_IC_eig = calc.orbital_IC_K
     else:
         calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
+
+    # The diagonal of an atom projector in the eigenbasis is the weight of
+    # that atom in each Bloch state.  Contract only the selected rows instead
+    # of materializing the full projected band matrix.  For a non-orthogonal
+    # basis this follows the generalized-eigenproblem convention
+    # v^dagger P O v; for an orthogonal basis it reduces to |v|**2.
+    if param['model'].overlap:
+        overlap_vectors = np.einsum(
+            "...ab,...bn->...an", 
+            calc.O_K_AO, calc.vectors, optimize=True
+        )
+    else:
+        overlap_vectors = calc.vectors
+    atomic_weights = np.zeros(calc.energies.shape[:-1] + (len(param['model'].atomicOrbInfoList), calc.energies.shape[-1]), dtype=float,)
+    for iatom, atom_info in enumerate(param['model'].atomicOrbInfoList):
+        orbital_indices = [iorb for shell in atom_info['orbital index'] for iorb in shell]
+        if not orbital_indices: continue
+        atomic_weights[..., iatom, :] = np.sum(
+            calc.vectors[..., orbital_indices, :].conj()  * overlap_vectors[..., orbital_indices, :], axis=-2).real
+
     return {
         'energies': calc.energies,
         'vectors':calc.vectors,
         'spin': spin_eig, 'orbital LC': orbital_LC_eig, 'orbital IC': orbital_IC_eig,
+        'atomic weights': atomic_weights,
         "iq":param["iq"]
     }
 
