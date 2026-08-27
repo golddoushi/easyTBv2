@@ -141,7 +141,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
+    fermi=-2.5         # VASP 2H-FeCl2 U=0.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
