@@ -10,6 +10,7 @@ from contourpy import contour_generator
 from system import System_omx, System_w90, System_tb
 from task import BZGridTask, BZLineTask
 from task import solveMagneticMoment, solveBandStructure
+from fileio import outputBZDistributionData
 
 def extractPeriodicContours(energy2D:np.ndarray, level:float):
     '''
@@ -108,10 +109,10 @@ def getBZTranslations(bzRepeat):
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/AuH111/"
-    model=System_omx(
+    mainDir="./mcalc/FeCl2/"
+    model=System_w90(
         mainDir=mainDir,
-        hamR="omx",
+        #hamR="omx",
         cutoff=-0.002,
         poscar="POSCAR",
         projections={
@@ -120,18 +121,33 @@ def run():
             #"H":(0,),
             "Mo":(2,),
             "Te":(1,),
+            "Fe":(0,1,2,),
+            "Cl":(0,1,),
             "Au":(0,0,0,1,1,2,2,),
             "H":(0,0,1,),
             "Sr":(0,0,0,1,1,2,2,),
             "Ti":(0,0,0,1,1,2,),
              "O":(0,0,1,1,2,),
         },
-        ispin=2
+        ispin=2,
+        spinSeparated=True,
     )
-    fermi=-0.22660759670266*27.2113845
+    #'''
+    # Symmetrize the direction-independent collinear and orbital-SOI
+    # ingredients once, then assemble any requested magnetization direction.
+    model.symmerizeCollinearAndSOI()
+    model.getExchangeR(provenance="pauli estimate")
+    magnetizationTheta ,magnetizationPhi = 5/180*np.pi, 0.0
+    model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
+    #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
+    #model.getExchangeR(provenance="explicit")
+    #'''
+    
+    #fermi=-0.22660759670266*27.2113845  # OPENMX AuH111
+    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
     model.setFermi(fermi)
 
-    BZGrid=(40,40,1)
+    BZGrid=(36,36,1)
     BZDistributionRepeat=(1,1,0)
     calc=BZGridTask(model, solveMagneticMoment,
                     args={'spin proj':True,'orbital proj':True,'skip low':True,
@@ -159,10 +175,22 @@ def run():
         if result_q["orbital IC"] is not None:
             hasOrbitalIC=True
             orbital_IC[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['orbital IC']
-    
-    assert BZGrid[2] == 1, (
-        "Fermi curves require a two-dimensional BZ grid with BZGrid[2] == 1"
-    )
+
+    # output bands on BZ
+    for iB in range(nbands):
+        print(f"output band{iB}, \Gamma energy: {energies[0,0,0,iB]:.4f}")
+        if hasSpin:
+            outputBZDistributionData(spin[...,:,iB],f"{mainDir}/spinDistr.ib{iB}.txt",
+                                    model.reciLattice.T,bzRepeat=BZDistributionRepeat)
+        if hasOrbitalLC:
+            outputBZDistributionData(orbital_LC[...,:,iB],f"{mainDir}/orbitalLCDistr.ib{iB}.txt",
+                                    model.reciLattice.T,bzRepeat=BZDistributionRepeat)
+        if hasOrbitalIC:
+            outputBZDistributionData(orbital_IC[...,:,iB],f"{mainDir}/orbitalICDistr.ib{iB}.txt",
+                                    model.reciLattice.T,bzRepeat=BZDistributionRepeat)
+    exit()
+    # output Fermi loops
+    assert BZGrid[2] == 1, "Fermi curves require a two-dimensional BZ grid with BZGrid[2] == 1"
     bzTranslations=getBZTranslations(BZDistributionRepeat)
     with open(mainDir+"/fermi_surf.txt","w") as fout:
         fout.write(                 "             kx             ky             kz iband")
@@ -182,25 +210,13 @@ def run():
                 spinContour=None
                 orbitalLCContour=None
                 orbitalICContour=None
-                atomicContour=interpolatePeriodicGrid(
-                    atomicWeights[:,:,0,:,iB],
-                    contour,
-                )
+                atomicContour=interpolatePeriodicGrid(atomicWeights[:,:,0,:,iB], contour)
                 if hasSpin:
-                    spinContour=interpolatePeriodicGrid(
-                        spin[:,:,0,:,iB].real,
-                        contour,
-                    )
+                    spinContour=interpolatePeriodicGrid(spin[:,:,0,:,iB].real, contour)
                 if hasOrbitalLC:
-                    orbitalLCContour=interpolatePeriodicGrid(
-                        orbital_LC[:,:,0,:,iB].real,
-                        contour,
-                    )
+                    orbitalLCContour=interpolatePeriodicGrid(orbital_LC[:,:,0,:,iB].real, contour)
                 if hasOrbitalIC:
-                    orbitalICContour=interpolatePeriodicGrid(
-                        orbital_IC[:,:,0,:,iB].real,
-                        contour,
-                    )
+                    orbitalICContour=interpolatePeriodicGrid(orbital_IC[:,:,0,:,iB].real, contour)
 
                 reducedKBase=np.column_stack((contour,np.zeros(len(contour))))
                 for translation in bzTranslations:

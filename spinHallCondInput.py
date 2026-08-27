@@ -32,7 +32,7 @@ from fileio import (writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeff
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/Pb/"
+    mainDir="./mcalc/FeCl2/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -70,14 +70,14 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        #spinSeparated=True,
+        spinSeparated=True,
     )
-    '''
+    #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = 5/180*np.pi, 0.0
+    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0.0
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -135,13 +135,13 @@ def run():
     #fermi=-0.22660759670266*27.2113845 # OPENMX AuH 111
     #fermi=-0.19580173375979*27.2113845 # OPENMX Au 111
     #fermi=-2.41861676 # VASP Sn
-    fermi=-2.5 # VASP Pb
+    #fermi=-2.5 # VASP Pb
     #fermi= 5.65354180 # VASP Ta
     #fermi= 7.72024255 # VASP W
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-2.5         # VASP 2H-FeCl2 U=2.0
+    fermi=-2.5         # VASP 2H-FeCl2 U=2.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
@@ -161,7 +161,7 @@ def run():
     
     '''
     # check band intepolation
-    spin_proj, orbital_proj= True, False
+    spin_proj, orbital_proj= True, True
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
                    args={"spin proj":spin_proj, "orbital proj":orbital_proj, "degen":1e-2},
                    )

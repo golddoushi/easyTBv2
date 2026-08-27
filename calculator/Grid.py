@@ -1575,7 +1575,7 @@ class OrbitalModern_Full(OrbitalModern_IC, OrbitalModern_LC):
             )
         ]
 
-class SpinOrbital(Spin, OrbitalModern_Full):
+class SpinOrbital(Spin, Orbital):
     '''
     Compute spin, LC orbital, and IC orbital magnetism while sharing the
     eigensystem and velocity calculation.
