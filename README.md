@@ -29,7 +29,7 @@ Realistic calculations can be very expensive and can overwrite data in their
 configured `mcalc/<model>` directory.
 
 The project currently has no complete package/environment specification.
-Typical dependencies include NumPy, SciPy, Matplotlib, and the compiled
+Typical dependencies include NumPy, SciPy, Matplotlib, threadpoolctl, and the compiled
 extensions in the repository root.  See `INSTALL` for the legacy C/BLAS/FFTW
 build notes.  Windows `.pyd`/`.dll` files in this checkout are not portable to
 Linux and must be rebuilt there.
@@ -360,17 +360,46 @@ figures for `x`, `y`, `xy+`, and `xy-` when the grid is two-dimensional.
 
 ### Brillouin-Zone Tasks
 
-`BZGridTask` decomposes a target BZ grid into FFT subgrids with phase shifts and
-uses a `ThreadPoolExecutor`.  Threads share the model and avoid serializing its
-large arrays, while NumPy/compiled kernels can release the GIL.
+`BZGridTask` decomposes a target BZ grid into FFT subgrids with phase shifts.
+Its default `parallelBackend="process"` gives each worker a separate Python
+interpreter. `parallelBackend="thread"` selects the previous thread backend.
+The same backend handles AHC, SHC, BPVE, IFE, and IFT; no response formulas change.
 
-Scaling is not guaranteed up to the physical core count.  A 96-thread DM run
-can become limited by memory bandwidth, allocator pressure, or large private
-calculator arrays even when a simpler legacy SHC kernel reaches 96 cores.  The
-optimized DM contractions reduce that pressure, but production runs should
-still benchmark several `ncores` values.  Also set BLAS/OpenMP thread counts to
-one when the outer BZ task already supplies parallelism, or deliberately use a
-smaller outer pool with a measured BLAS team.
+```python
+calc = BZGridTask(model, solveIFTorque_LG_DM, args=settings, BZGrid=(99,99,1),
+                  ncores=16, parallelBackend="process", workerThreads=1)
+```
+
+The model and common settings are installed once per process. Only phase data
+are sent with each job; queued jobs are bounded, and results retain phase order
+for reproducible summation. `iq`, response tensors, channels, and BZ records
+keep their existing API. Worker failures propagate with the failed phase index.
+`ncores` is capped by the number of phase tasks; one task/worker uses the serial
+path. The Windows process pool also has the Python limit of 61 workers.
+
+Install `threadpoolctl` with `python -m pip install threadpoolctl`. For parallel
+runs, `workerThreads=1` limits loaded BLAS/OpenMP libraries and sets the worker
+environment to prevent nested numerical thread teams. These settings are
+restored on pool exit. Single-worker runs retain the caller's library settings.
+
+On Linux, a caller with one Python thread uses `fork` to share the model arrays
+copy-on-write. Otherwise the default is `spawn`, including on Windows. Set
+`processStartMethod="spawn"` explicitly when the parent uses background/native
+threads or libraries that are unsafe after fork. Spawn copies the model once
+per worker and needs more startup time/RAM. Use an importable task function and
+an `if __name__ == "__main__":` entry guard. Treat the model as read-only during
+BZ integration, and do not launch overlapping pools from threads in one parent.
+The angle-mapping outer process pool should continue to use one BZ worker per
+orientation unless nested parallelism is deliberately budgeted.
+
+On the Linux server, the reduced FeCl2 IFT sample (one Fermi point, six photon
+energies, 81 phase tasks) took 36.72 s with the old 96-thread pool and 5.69 s
+with 16 processes, with identical tensors. A fresh 81-process run averaged
+about 68 busy cores but took 10.22 s. More CPU utilization does not necessarily
+mean shorter runtime: startup, cache/memory contention, and workload size matter.
+Benchmark several worker counts for each material/grid. See `SERVER.md` for
+measurements and remote usage, `benchmark_bz_parallel.py` for repeatable timing,
+and `test_bz_parallel.py` for serial/thread/fork/spawn numerical checks.
 
 ### Angle Scans on Slurm
 

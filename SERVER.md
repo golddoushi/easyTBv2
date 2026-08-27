@@ -93,25 +93,96 @@ IFTtensor.proj0-0-0.{real,imag}.{xx,xy,yx,yy}.png
 
 The reduced run was confirmed to finish and write these artifacts.
 
-## Parallelism Diagnosis
+## Process Backend And Measurements (2026-08-27)
 
-The Linux machine itself is not the immediate cause of low utilization. The
-FeCl2 IFT calculation used an outer BZ phase grid with 81 tasks
-(`Phase grid: [9 9 1]`) and requested `ncores=96`, yet `top` showed roughly
-500-1800% CPU and `NLWP=82`: many threads existed but only about 5-18 cores
-were productive.
+`task.py` now defaults to `parallelBackend="process"` for `BZGridTask` when
+more than one phase task/worker is available. The model is installed once per
+worker, shared copy-on-write with Linux `fork`, and is not serialized for each
+phase task. `workerThreads=1` controls BLAS/OpenMP threads per worker. The
+small `threadpoolctl` dependency was installed in both the remote Python312
+and local Python310 environments. Results, channel tensors and `iq` placement
+retain their existing API; completed results are now kept in phase order.
 
-The likely cause is Python-thread execution in the LG density-matrix/IFT path:
-substantial Python-level work remains under the GIL, so thread-level BZ task
-parallelism cannot scale like the legacy numerical path. The legacy `solveSHC`
-path did reach about 9533% CPU on the same host, so scheduler access and CPU
-allocation are healthy.
+The previous thread-only bottleneck is confirmed by the following measured
+FeCl2 IFT timings. The sample had one Fermi point, six photon energies, a
+99x99x1 BZ grid, an 11x11x1 FFT grid, and 81 phase tasks. Times cover BZ task
+construction and integration, excluding model loading and plotting.
 
-For future optimization, prioritize process-level BZ parallelism, with each
-worker initializing or receiving the read-only model/calculator state safely,
-then reduce partial tensors in the parent. Avoid assuming that increasing
-`ncores` in the current threaded `BZGridTask` will improve LG/VG density-matrix
-calculators.
+| Backend | Actual workers | Wall time (s) | Average busy CPU cores |
+| --- | ---: | ---: | ---: |
+| Old threads (96 requested) | 81 | 36.72 | 7.68 |
+| Processes | 8 | 8.63 | 7.45 |
+| Processes | 16 | 5.69 | 14.50 |
+| Processes | 24 | 6.27 | 22.30 |
+| Processes | 48 | 7.68 | 40.04 |
+| Processes (96 requested, fresh interpreter) | 81 | 10.22 | 67.98 |
+
+CPU averages are total parent+child CPU seconds divided by wall time, not a
+single instantaneous `top` reading. All benchmark tensors agreed exactly.
+Windows and Linux regression checks also compared all eight LG/VG DM solver
+wrappers, both full-covariant modes, channel tensors, and recorded BZ data.
+Process error propagation, cleanup, thread limits, and worker caps were tested.
+
+Use `ncores=16` as a starting point for this small sample; it was about 6.5x
+faster than the old 96-thread run. Larger grids and other materials need their
+own measurements. Do not optimize CPU percentage alone. Independent worker
+processes remove shared-Python contention but still compete for cache/memory.
+The GIL is not established as the sole cause by this timing comparison.
+
+Example input change:
+
+```python
+calc = BZGridTask(model, solveIFTorque_LG_DM, args=settings, BZGrid=BZGrid,
+                  ncores=16, parallelBackend="process", workerThreads=1)
+```
+
+`ncores=96` remains valid and uses 81 workers for the current phase grid.
+Select `parallelBackend="thread"` for a thread comparison. Set
+`processStartMethod="spawn"` for a parent with background/native threads or
+fork-unsafe libraries. Spawn costs more memory/startup; Linux scripts normally
+use fork. Keep the model read-only during a BZ run. Avoid nesting a large BZ
+pool inside the angle-mapping process pool.
+
+With the new backend, the parent Python PID mostly coordinates work. In `top`,
+inspect its child processes too (often around 100% CPU each), or use:
+
+```bash
+ps -u codex -o pid,ppid,nlwp,pcpu,rss,etime,args
+```
+
+Repeat a small benchmark without rewriting the input script's response outputs:
+
+```bash
+cd ~/easyTBv2
+/home/codex/soft/python312/bin/python3 -u benchmark_bz_parallel.py --case thread:96 --case process:16 --output tmp/bz_check
+```
+
+The harness intercepts `BZGridTask` in `spinHallCondInput.run()`, keeps the
+actual model and settings, checks every returned field against the first case,
+then stops before final tensor/figure output. Its `--output` writes separate
+JSON timings and NPZ tensors. Keep the Fermi/frequency axes small. For reliable
+process startup timings, also run a process-only case in a fresh interpreter:
+a preceding large thread run can retain substantial allocator memory. In this
+test, 81 processes after the old thread run took 24.45 s versus 10.22 s fresh.
+
+Remote benchmark records and the original task.py backup are in:
+
+```text
+~/easyTBv2/tmp/bz_parallel_20260827/
+    task_original.py
+    benchmark.log, fecl2.json, fecl2.*.npz
+    process_scaling.log, process_scaling.json, process_scaling.*.npz
+    fresh96.log, fresh96.json, fresh96.*.npz
+    tests.log
+```
+
+A local copy is in `tmp/bz_parallel_20260827/`. The remote input settings were
+not replaced with the Windows input (their magnetization angles differ).
+The final unchanged `spinHallCondInput.py` run with 96 requested workers exited
+with status 0: BZ integration took 10.42 s, and the complete run including model
+loading and figures took 25.57 s. Its logs are `final_sample.log` and
+`final_sample.time` in the same benchmark directory. Tensor/coefficient files
+in `mcalc/FeCl2` were refreshed at server time 2026-08-27 15:51.
 
 ## Remote Safety And Practical Notes
 

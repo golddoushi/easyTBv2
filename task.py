@@ -1,6 +1,12 @@
 # Module to implement the parallel tasks
 # 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from contextlib import contextmanager
+import multiprocessing as mp
+import os
+import sys
+import threading
+from time import perf_counter
 import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
@@ -15,6 +21,47 @@ from calculator import SpinTorque, SpintorqueGalvanicConductance
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
 
+_bz_worker_state = None
+_bz_worker_thread_limit = None
+
+def _initialize_bz_worker(model, task_func, common_args, worker_threads):
+    """Install the model once per process, inherited copy-on-write with fork."""
+    from threadpoolctl import threadpool_limits
+    global _bz_worker_state, _bz_worker_thread_limit
+    _bz_worker_state = (model, task_func, common_args)
+    _bz_worker_thread_limit = threadpool_limits(limits=worker_threads)
+
+def _run_bz_task(job, model, task_func, common_args):
+    params = dict(job, model=model)
+    params.update(common_args)
+    params["verbose"] = job["verbose"]
+    return task_func(params)
+
+def _run_bz_worker(job):
+    return _run_bz_task(job, *_bz_worker_state)
+
+@contextmanager
+def _bz_numerical_threads(number):
+    """Limit loaded libraries and libraries imported later by spawned workers."""
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError as exc:
+        raise ImportError("Parallel BZGridTask requires threadpoolctl: python -m pip install threadpoolctl") from exc
+    names = ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS", "BLIS_NUM_THREADS",
+             "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")
+    saved = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ[name] = str(number)
+        with threadpool_limits(limits=number):
+            yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
 class BZGridTask:
 
     def __init__(self,model:System,
@@ -23,7 +70,10 @@ class BZGridTask:
                  BZGrid:np.ndarray|tuple|list,
                  BZSymm=False,
                  mode="run",
-                 ncores=1) -> None:
+                 ncores=1,
+                 parallelBackend="process",
+                 workerThreads=1,
+                 processStartMethod=None) -> None:
         '''
         Conduct tasks that calculate quantity on the regular grids of Brillouin zone, using mixed FFT algorithm
         
@@ -40,8 +90,25 @@ class BZGridTask:
         - mode : "run" | "show"
             "run" to run the tasks directly, ortherwise, only show the grid info.
         - ncores : int
-            parallel number
+            maximum number of phase-grid workers (capped by the number of tasks)
+        - parallelBackend : "process" | "thread"
+            processes avoid the Python GIL; threads retain the shared-memory legacy backend
+        - workerThreads : int
+            BLAS/OpenMP threads per parallel worker; serial execution is unchanged
+        - processStartMethod : None | "fork" | "spawn" | "forkserver"
+            None chooses fork on single-threaded Linux callers, spawn otherwise.
+            Spawn requires an importable taskFunc and a guarded __main__ entry point.
+            Fork shares model arrays copy-on-write; tasks must treat the model as read-only.
         '''
+        if int(ncores) != ncores or ncores < 1:
+            raise ValueError("ncores must be a positive integer")
+        if int(workerThreads) != workerThreads or workerThreads < 1:
+            raise ValueError("workerThreads must be a positive integer")
+        if parallelBackend not in ("process", "thread"):
+            raise ValueError("parallelBackend must be 'process' or 'thread'")
+        if processStartMethod is not None and processStartMethod not in mp.get_all_start_methods():
+            raise ValueError(f"Unavailable processStartMethod: {processStartMethod}")
+        ncores, workerThreads = int(ncores), int(workerThreads)
         FastGrid=np.zeros(3,dtype=int)
         for icomp, comp in enumerate(model.mp_grid):
             if comp>1: 
@@ -79,11 +146,9 @@ class BZGridTask:
                     'q':q/BZGrid,
                     'qlen':qlen,
                     'phase':np.array([np.exp(2j*np.pi*((q/BZGrid) @ Rvec)) for Rvec in model.iRvec]),
-                    'model':model,
                     'FFT grid':tuple(FastGrid),
                     'verbose':False, # quiet by default
                     }
-                    newTask.update(args)
                     if not BZSymm: 
                         tasks.append(newTask)
                         continue
@@ -102,20 +167,65 @@ class BZGridTask:
 
         showElapsedTime(extraInfo=f"find {len(tasks)} irreducible q, {len(tasks)/np.prod(self.QGrid)*100:.3f}% the whole BZ")
     
-        #pool=Pool(processes=ncores)
-        self.results=[]
-        if ncores==1: # serial run
-            for task in tasks:
-                result=taskFunc(task)
-                self.results.append(result)
-                showElapsedTime(offset=False,extraInfo=f"{len(self.results):3d}/{len(tasks):3d} finished")
-        else: # parallel run
-            for itask in range(0,len(tasks),ncores): tasks[itask]["verbose"]=2 # output one information per batch
-            with ThreadPoolExecutor(max_workers=ncores) as executor:
-                futures = [executor.submit(taskFunc, task) for task in tasks]
-                for future in as_completed(futures):
-                    self.results.append(future.result())
-        showElapsedTime(extraInfo=f"integration finished")
+        self.nworkers = min(ncores, len(tasks))
+        self.parallelBackend = "serial" if self.nworkers == 1 else parallelBackend
+        self.processStartMethod = None
+        self.workerThreads = workerThreads
+        self.results = [None] * len(tasks)
+        start = perf_counter()
+        if self.nworkers == 1:
+            for index, task in enumerate(tasks):
+                self.results[index] = _run_bz_task(task, model, taskFunc, args)
+                showElapsedTime(offset=False, extraInfo=f"{index+1:3d}/{len(tasks):3d} finished")
+        else:
+            if parallelBackend == "process":
+                start_method = processStartMethod
+                if start_method is None:
+                    start_method = "fork" if sys.platform.startswith("linux") and threading.active_count() == 1 else "spawn"
+                if start_method == "fork" and threading.active_count() != 1:
+                    raise RuntimeError("Cannot fork BZ workers from a multithreaded caller; use processStartMethod='spawn'.")
+                self.processStartMethod = start_method
+                # Windows ProcessPoolExecutor supports at most 61 worker processes.
+                if sys.platform == "win32":
+                    self.nworkers = min(self.nworkers, 61)
+            for itask in range(0, len(tasks), self.nworkers):
+                tasks[itask]["verbose"] = 2
+            print(f"BZ parallel backend: {parallelBackend}, workers: {self.nworkers}/{ncores} requested, "
+                  f"numerical threads/worker: {workerThreads}, start method: {self.processStartMethod}", flush=True)
+            with _bz_numerical_threads(workerThreads):
+                if parallelBackend == "process":
+                    executor = ProcessPoolExecutor(max_workers=self.nworkers, mp_context=mp.get_context(start_method),
+                        initializer=_initialize_bz_worker, initargs=(model, taskFunc, args, workerThreads))
+                    submit = lambda job: executor.submit(_run_bz_worker, job)
+                else:
+                    executor = ThreadPoolExecutor(max_workers=self.nworkers)
+                    submit = lambda job: executor.submit(_run_bz_task, job, model, taskFunc, args)
+                pending = {}
+                next_index, completed, last_report = 0, 0, 0
+                report_every = max(1, len(tasks)//10)
+                try:
+                    # Bound queued work and retain phase order for reproducible reductions.
+                    while next_index < len(tasks) or pending:
+                        while next_index < len(tasks) and len(pending) < 2*self.nworkers:
+                            pending[submit(tasks[next_index])] = next_index
+                            next_index += 1
+                        done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                        for future in done:
+                            index = pending.pop(future)
+                            try:
+                                self.results[index] = future.result()
+                            except Exception as exc:
+                                raise RuntimeError(f"BZ task iq={tuple(tasks[index]['iq'])} failed") from exc
+                            completed += 1
+                        if completed == len(tasks) or completed-last_report >= report_every:
+                            print(f"BZ tasks: {completed}/{len(tasks)} finished in {perf_counter()-start:.2f} s", flush=True)
+                            last_report = completed
+                finally:
+                    for future in pending:
+                        future.cancel()
+                    executor.shutdown(wait=True, cancel_futures=True)
+        self.elapsed_seconds = perf_counter() - start
+        print(f"BZ integration finished in {self.elapsed_seconds:.3f} s ({self.parallelBackend})", flush=True)
 
     def distGamma(self, model:System, q:np.ndarray):
         '''

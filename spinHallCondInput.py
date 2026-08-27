@@ -256,7 +256,7 @@ def run():
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
-        if False and 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
+        if 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
             if responseFunction is None:
                 local_response = result_q['projected response']
                 responseFunction = np.zeros(local_response.shape[:3] + tuple(BZGrid) + local_response.shape[6:],
