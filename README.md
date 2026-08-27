@@ -385,8 +385,14 @@ smaller outer pool with a measured BLAS team.
 
 `slurm_scripts/slurm.angleDependentSOTMapping.sh` launches one Slurm task per
 node and local multiprocessing inside each node.  Change `#SBATCH --nodes=N`
-to select the node count.  `--cpus-per-task` and `WORKERS_PER_NODE` control the
-local worker count.  The script sets BLAS/OpenMP thread counts to one.
+to select the node count.  `--cpus-per-task` sets the allocated cores per node;
+`ORIENTATION_WORKERS` controls the independent orientation processes and
+`BZ_WORKERS_PER_ORIENTATION` controls the shared-model BZ threads.  Their
+product must not exceed `--cpus-per-task`.  The memory-conservative default is
+one orientation process with all allocated cores assigned to its BZ task;
+increase `ORIENTATION_WORKERS` only after measuring per-node memory use.  The
+legacy `WORKERS_PER_NODE` environment variable remains an alias for
+`ORIENTATION_WORKERS`.  The script sets BLAS/OpenMP thread counts to one.
 
 Raw electronic results are saved as `orientation_XXXX.npz`; fitting is a later
 stage.  Changing the spherical-harmonic degree should not require recomputing

@@ -45,9 +45,9 @@ def command_line_arguments():
     parser.add_argument("--stage", choices=("all", "prepare", "compute", "aggregate"), default="all",
         help="Run locally end-to-end, prepare shared filling, compute one Slurm shard, or aggregate checkpoints.")
     parser.add_argument("--workers-per-node", type=int, default=None,
-        help="Local orientation-process count; defaults to SLURM_CPUS_PER_TASK or the detected CPU count.")
+        help="Local orientation-process count; defaults to the allocated CPU count.")
     parser.add_argument("--bz-workers-per-orientation", type=int, default=1,
-        help="Inner BZ workers for each orientation process. Keep this at 1 for orientation-level parallelism.")
+        help="Inner BZ workers for each orientation process; the product with --workers-per-node must not exceed the allocated CPU count.")
     parser.add_argument("--shard-rank", type=int, default=None,
         help="Override SLURM_PROCID, mainly for testing or manual sharding.")
     parser.add_argument("--shard-count", type=int, default=None,
@@ -57,9 +57,10 @@ def command_line_arguments():
     return parser.parse_args()
 
 def distributed_run_settings(stage, workers_per_node=None, shard_rank=None, shard_count=None):
-    default_workers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
-    workers_per_node = default_workers if workers_per_node is None else int(workers_per_node)
-    if workers_per_node < 1: raise ValueError("workers_per_node must be positive.")
+    allocated_cores = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+    orientation_workers = allocated_cores if workers_per_node is None else int(workers_per_node)
+    if allocated_cores < 1: raise ValueError("allocated CPU count must be positive.")
+    if orientation_workers < 1: raise ValueError("workers_per_node must be positive.")
     if stage == "compute":
         shard_rank = int(os.environ.get("SLURM_PROCID", 0)) if shard_rank is None else int(shard_rank)
         shard_count = int(os.environ.get("SLURM_NTASKS", 1)) if shard_count is None else int(shard_count)
@@ -67,7 +68,7 @@ def distributed_run_settings(stage, workers_per_node=None, shard_rank=None, shar
         shard_rank = 0 if shard_rank is None else int(shard_rank)
         shard_count = 1 if shard_count is None else int(shard_count)
     orientation_indices_for_shard(1, shard_rank, shard_count)
-    return workers_per_node, shard_rank, shard_count
+    return allocated_cores, orientation_workers, shard_rank, shard_count
 
 class StaleIFTCheckpointError(RuntimeError):
     """Raised when a saved IFT sample was produced by incompatible settings or code."""
@@ -946,9 +947,8 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     # Primary parallelism is over magnetization directions.  A hybrid setup
     # is also possible, provided the following worker-count product does not
     # exceed the allocated physical cores.
-    number_of_cores, shard_rank, shard_count = distributed_run_settings(
+    number_of_cores, number_of_orientation_workers, shard_rank, shard_count = distributed_run_settings(
         stage, workers_per_node, shard_rank, shard_count)
-    number_of_orientation_workers = number_of_cores
     number_of_bz_workers_per_orientation = int(bz_workers_per_orientation)
     number_of_reference_bz_workers = number_of_cores
     orientation_worker_verbose = False

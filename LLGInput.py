@@ -509,16 +509,16 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         torque_projection=0,
         light_pulse=pulse,
         external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
-        #use_DFT_mae=False,
-        #extra_uniaxial_mae=0.125E-3,               # in eV
-        #extra_uniaxial_mae_direction=(0, 0, 1), 
+        use_DFT_mae=False,
+        extra_uniaxial_mae=0.125E-3,               # in eV
+        extra_uniaxial_mae_direction=(0, 0, 1), 
         alpha=0.001,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        #t_total=   100_400.0,
-        t_total=11_000_000.0,
+        t_total=   100_400.0,
+        #t_total=11_000_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
@@ -553,4 +553,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/FeCl2",omega0=1.15,polarization="y",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/FeCl2@NbSe2",omega0=1.85,polarization="xy-",show_torque_map=True)
