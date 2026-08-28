@@ -59,7 +59,7 @@ def run():
             "Bi":(0,1,),
             "Te":(0,1,),
             #"Fe":(0,0,1,1,2,2,),
-            "Cl":(0,1,),
+            "Cl":(1,),
             #"Te":(1,),
             #"Cl":(0,0,1,1,2,3),
             "H":(0,),
@@ -77,7 +77,7 @@ def run():
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0.0
+    magnetizationTheta ,magnetizationPhi = 5/180*np.pi, 0.0
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -141,7 +141,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-2.5         # VASP 2H-FeCl2 U=0.0
+    fermi=-3.0         # VASP 2H-FeCl2 U=2.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
@@ -154,9 +154,9 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=0            # model hamiltonian
 
-    fermiAxis=np.linspace(fermi-0.1,fermi+0.1,101)
-    #fermiAxis=np.array([fermi,])
-    omegaAxis=np.arange(1.0,3.05,0.05)
+    #fermiAxis=np.linspace(fermi-0.1,fermi+0.1,101)
+    fermiAxis=np.array([fermi,])
+    omegaAxis=np.arange(1.0,3.05,0.5)
     model.setFermi(fermi)
     
     '''
@@ -210,19 +210,19 @@ def run():
             for ienergy, energy in enumerate(fermiAxis-model.fermi):
                 fout.write(f"{ik:5d}{energy:15.6E}{spectral[0,ik,ienergy]:15.6E}{spectral[1,ik,ienergy]:15.6E}{spectral[2,ik,ienergy]:15.6E}\n")
     exit()#'''
-    #'''
+    '''
     # check the topological integer
     #calc=Chern_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(48,48,1)
+    BZGrid=(99,99,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveSHC_LG_DM,
+    ObservableType="IFT" # "IFE" or "IFT"; must match the selected response calculator
+    calc=BZGridTask(model, solveIFTorque_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -238,10 +238,10 @@ def run():
                           'record fermi ids':recordFermiIndexList,
 
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
-                          "full covariant derivative": False, # include full covariant formalism for LG 2nd order density-matrix
+                          "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
 
-                          "finite temperature occupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
-                          "degen":1e-4,
+                          "finite temperature occupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
+                          "degen":1e-1,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
@@ -288,7 +288,7 @@ def run():
             fout.write("\n")
     exit()'''
     
-    #'''
+    '''
     # output (possibly symmetrized) 3-rank conductance
     sigma/=len(calc.results)
     with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
@@ -330,7 +330,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    '''
+    #'''
     # output projected 3-ranked, frequency-dependent complex conductance
     projected_sigma_average = projected_sigma/len(calc.results)
     for iproj1 in range(projected_sigma_average.shape[0]):
@@ -380,37 +380,7 @@ def run():
                             else:
                                 raise ValueError("ObservableType must be 'IFE' or 'IFT'")
     
-    exit()#'''
-
-    # output 4-ranked conductance
-    output4thData(sigma/len(calc.results), fermi, fermiAxis, filePath="%s/fourthOrderFreqDependent.txt"%mainDir)
-    exit()
-
-    kcoor=np.array([[[model.reciLattice@(np.array([ik1,ik2,ik3])/BZGrid) for ik3 in range(BZGrid[2])] for ik2 in range(BZGrid[1])] for ik1 in range(BZGrid[0])])
-    #'''
-    import matplotlib.pyplot as plt
-    data_grid=responseFunction[:,:,0, 0,0,0].real
-    magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
-    print(np.sum(data_grid))
-    for G in [(0,0,0,),(-1,0,0,),(0,-1,0,),(-1,-1,0,),]:
-        _kcoor=kcoor+model.reciLattice@np.array(G)
-        plt.pcolormesh(_kcoor[:,:,0,0],_kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
-    plt.colorbar()
-    plt.axis("equal")
-    plt.savefig(f"{mainDir}/BZ_distr1.png",dpi=300)
-    plt.show()
-
-    data_grid=responseFunction[:,:,0, 0,0,1].real
-    magnitude=max([abs(data_grid.max()),abs(data_grid.min())])
-    print(np.sum(data_grid))
-    for G in [(0,0,0,),(-1,0,0,),(0,-1,0,),(-1,-1,0,),]:
-        _kcoor=kcoor+model.reciLattice@np.array(G)
-        plt.pcolormesh(_kcoor[:,:,0,0],_kcoor[:,:,0,1],data_grid,vmax=magnitude,vmin=-magnitude,cmap="Spectral")
-    plt.colorbar()
-    plt.axis("equal")
-    plt.savefig(f"{mainDir}/BZ_distr2.png",dpi=300)
-    plt.show()
-    #'''
+    exit()#'''  
 
 if __name__ == '__main__': # crucial for multiprocessing in Windows
     freeze_support()

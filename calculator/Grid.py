@@ -1113,7 +1113,7 @@ class Dipole(Velocity):
                     commutator = r_derivative_direction @ velocity_direction \
                         - velocity_direction @ r_derivative_direction
                     self.r_deriv_K[..., ideriv, idirection, :, :] = (
-                        self.w_K[..., ideriv, idirection, :, :]
+                        self.w_K[..., idirection, ideriv, :, :]
                         - velocity_direction * deltaVelocity_deriv * self.deltaEInverse_pure
                         + 1j * commutator
                     ) * self.deltaEInverse_pure / 1j * off_diag
