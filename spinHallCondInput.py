@@ -27,12 +27,12 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 from calculator import Chern_FHS, Z2_FHS
 from auxiliary import showElapsedTime, getCBM, getVBM
-from fileio import (writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeffs, outputIFTcoeffs,
+from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeffs, outputIFTcoeffs,
                     output4thData, outputBZDistributionData, outputIFEResponseOnBZ, outputIFTResponseOnBZ)
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
+    mainDir="./mcalc/FeCl2@NbSe2/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -55,11 +55,13 @@ def run():
             "C":(0,1,),
             "Fe":(0,1,2,),
             "Mo":(2,),
+            "Nb":(0,2,),
             "S":(1,),
             "Bi":(0,1,),
             "Te":(0,1,),
             #"Fe":(0,0,1,1,2,2,),
             "Cl":(1,),
+            "Se":(1,),
             #"Te":(1,),
             #"Cl":(0,0,1,1,2,3),
             "H":(0,),
@@ -141,7 +143,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-3.0         # VASP 2H-FeCl2 U=2.0
+    #fermi=-3.0         # VASP 2H-FeCl2 U=2.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
@@ -152,11 +154,12 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
+    fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
     #fermi=0            # model hamiltonian
 
     #fermiAxis=np.linspace(fermi-0.1,fermi+0.1,101)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.arange(1.0,3.05,0.5)
+    omegaAxis=np.arange(0.1,3.05,1.0)
     model.setFermi(fermi)
     
     '''
@@ -216,7 +219,7 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(99,99,1)
+    BZGrid=(33,33,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]

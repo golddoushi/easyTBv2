@@ -199,7 +199,9 @@ r_mn = v_mn / (i DeltaE_mn),  m != n.
 
 The diagonal position operator of a periodic crystal is the differential part
 of `i D_k`; it is not a finite band-space matrix.  `highOrderDipole=True` builds
-the generalized derivative `r_deriv_K` used by full LG covariant derivatives.
+the generalized derivative `r_deriv_K` used by shift-response formulas and
+the current VG/TDSE covariant-relaxation construction. The full second-order
+LG DM kernel instead differentiates `f(H)` directly, as described below.
 Do not replace this object blindly with the local-basis `position_K`: the latter
 is one connection contribution, not the complete observable dipole.
 
@@ -248,6 +250,68 @@ low-frequency limits, and LG/VG cancellations.
   and the dc population are well defined.
 - `finiteTemperatureOccupations=True`: smooths occupations without enabling
   every intraband channel, where the calculator supports that distinction.
+
+### Divided-Difference Full LG
+
+`LengthGaugeSecondOrderDMKernel(..., full_covariant_derivative=True)` computes
+the equilibrium derivatives as matrix-function Frechet derivatives:
+
+```text
+F = f(H), V_a = D_a H, w[a,b] = D_b V_a
+(D_a F)_mn = f[E_m,E_n] V_a,mn
+(D_b D_a F)_mn = f[E_m,E_n] w[a,b]_mn
+  + sum_l f[E_m,E_l,E_n] (V_b,ml V_a,ln + V_a,ml V_b,ln)
+R_s X = X_mn / (E_m - E_n - s Omega - i eta)
+rho1_a(s Omega) = R_s(i D_a F)
+i D_b rho1_a = R_s(-D_b D_a F - i [V_b,rho1_a])
+rho2_ab = R_0(i D_b rho1_a(-Omega) + i D_a rho1_b(+Omega))
+```
+
+The divided differences use the analytic limits `f[x,x]=f'(x)` and
+`f[x,x,x]=f''(x)/2`, stable particle/hole expressions and a local Taylor
+expansion for nearby nodes. There is no added broadening in the geometric
+dipole, no masked inverse gap in the total kernel, and no k-neighbor exchange.
+Only resonant Liouville denominators contain `eta`. Equilibrium derivatives
+are cached per Fermi level, not recomputed for each photon energy; intermediate
+band sums never allocate a full k-by-N-by-N-by-N tensor.
+
+This path is shared by `InverseFaradayEffect_LG_DM`,
+`InverseFaradayTorque_LG_DM`, and `BulkPhotovoltaicEffect_LG_DM`. They contract
+`block.total_second_order` directly for total/BZ outputs rather than recover
+the total by subtracting potentially large channel responses. The
+`fullCovariantDerivative=False` path is unchanged.
+
+In full LG only, `degen` now controls **channel reporting blocks**, not the
+physical total: adjacent eigenvalues separated by at most `degen` belong to
+the same block (with a machine-precision floor). Actual eigenvalues are never
+flattened. `I` means within-block and `E` means between-block; for isolated
+bands these reduce to diagonal and off-diagonal matrices. Differentiating the
+block projectors preserves the former four-channel formulas away from
+degeneracies, and permits unitary changes of basis within an exactly degenerate
+block. Individual channels depend on the block convention. Tiny block gaps
+can cause cancellation in channel sums; use the separately evaluated total.
+
+This update does **not** modify the first-order Hall kernels, VG, TDSE, or
+observable-specific vertices. In particular, the orbital torque's existing
+explicit electric-field vertex still uses `r_K` and may retain cutoff
+sensitivity even though the density matrix itself does not. The spin-exchange
+torque has no such electric-field vertex. These limits must not be confused
+with a claim that all LG/VG approximations or all observables are now cutoff-free.
+
+Run `python test_lg_divided_differences.py` for scalar divided-difference limits,
+nondegenerate agreement of all four channels, exact/near degeneracies,
+block-unitary covariance, the analytic single-band intraband limit,
+independent finite-k-derivative checks with a
+nontrivial connection, and toy-model calculator/BZ/projection regressions.
+
+Validation on FeCl2 (33x33x1, mu=-3 eV, kBT=0.026 eV, eta=0.06582 eV,
+theta=5 degrees, phi=0) gave identical total spin-exchange IFT for
+degen=1e-6, 1e-3 and 0.1 eV at Omega=0, 0.01, 0.95 and 1.5 eV.
+This checks cutoff independence, not k-mesh convergence. The older
+`test.densityMatrixKernels.py` BPVE snapshot in `tmp/bpve_kernel_baseline.npz`
+was already inconsistent with the pre-update code; it was not regenerated.
+Direct pre-update/new-code comparisons agree away from degeneracies, and
+the separate Hall and VG full-covariant regression tests pass.
 
 The full-covariant metallic response is much more demanding in k space than
 the interband-only response.  It contains Fermi-surface derivatives and

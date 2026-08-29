@@ -7,6 +7,7 @@ responsibility of the calculator classes that consume these blocks.
 
 from dataclasses import dataclass
 import numpy as np
+from scipy.special import expit
 
 DC_CHANNEL_NAMES = ("I", "E")
 DC_CHANNEL_DESCRIPTIONS = {
@@ -33,6 +34,60 @@ def diagonal_matrix(values):
     matrix[..., indices, indices] = values
     return matrix
 
+def fermi_divided_difference(x, y, fermi, kBT):
+    """Stable first divided difference of the Fermi function, including x=y."""
+    if kBT <= 0:
+        raise ValueError("Fermi divided differences require kBT > 0")
+    low = (np.minimum(x, y) - fermi) / kBT
+    high = (np.maximum(x, y) - fermi) / kBT
+    distance = np.abs(np.asarray(x) - y) / kBT
+    ratio = np.ones_like(distance, dtype=float)
+    np.divide(-np.expm1(-distance), distance, out=ratio, where=distance != 0)
+    return -expit(-low) * expit(high) * ratio / kBT
+
+def fermi_second_divided_difference(x, y, z, fermi, kBT):
+    """Stable symmetric f[x,y,z]; the confluent limit is f''(x)/2.
+
+    Separated nodes use the divided-difference recurrence. Nearby nodes use
+    a Taylor series and complete homogeneous polynomials, avoiding subtraction
+    of almost equal first divided differences. All arguments may broadcast.
+    """
+    if kBT <= 0:
+        raise ValueError("Fermi divided differences require kBT > 0")
+    x, y, z = np.broadcast_arrays(x, y, z)
+    low = np.minimum(np.minimum(x, y), z)
+    high = np.maximum(np.maximum(x, y), z)
+    middle = np.maximum(np.minimum(x, y), np.minimum(np.maximum(x, y), z))
+    span = high - low
+    nearby = span <= 0.5 * kBT
+    result = np.zeros_like(span, dtype=float)
+    numerator = (fermi_divided_difference(middle, high, fermi, kBT)
+                 - fermi_divided_difference(low, middle, fermi, kBT))
+    np.divide(numerator, span, out=result, where=~nearby)
+    if np.any(nearby):
+        center = low[nearby] + 0.5 * span[nearby]
+        dx = (x[nearby] - center) / kBT
+        dy = (y[nearby] - center) / kBT
+        dz = (z[nearby] - center) / kBT
+        e1, e2, e3 = dx + dy + dz, dx * dy + dx * dz + dy * dz, dx * dy * dz
+        t = (center - fermi) / kBT
+        # Expand the smaller particle/hole occupation to retain filled-band tails.
+        occupation = expit(-np.abs(t))
+        coefficients = [occupation, -occupation * (1.0 - occupation)]
+        for order in range(1, 20):
+            convolution = sum(coefficients[j] * coefficients[order-j] for j in range(1, order))
+            coefficients.append(((2.0 * occupation - 1.0) * coefficients[order] + convolution) / (order + 1))
+        h0, h1, h2 = np.ones_like(t), np.zeros_like(t), np.zeros_like(t)
+        series = np.zeros_like(t)
+        for order in range(19):
+            coefficient = coefficients[order + 2]
+            if order % 2 == 0:
+                coefficient = np.where(t < 0, -coefficient, coefficient)
+            series += coefficient * h0
+            h0, h1, h2 = e1 * h0 - e2 * h1 + e3 * h2, h0, h1
+        result[nearby] = series / kBT**2
+    return result
+
 @dataclass
 class SecondOrderDensityMatrixBlock:
     """Density matrices for one ordered optical tensor component."""
@@ -41,6 +96,12 @@ class SecondOrderDensityMatrixBlock:
     rho1_minus: dict
     rho1_plus: dict
     rho2: dict
+    rho2_total: np.ndarray = None
+
+    @property
+    def total_second_order(self):
+        """Prefer the direct total over cancellation between reporting channels."""
+        return self.rho2_total if self.rho2_total is not None else sum(self.rho2.values())
 
 @dataclass
 class FirstOrderDensityMatrixBlock:
@@ -194,6 +255,7 @@ class _SecondOrderDMKernel:
         return self.state_class(self, f, dfdk, d2fdk2)
 
 class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
+    """Historical interband-dipole-only response (full mode uses the class below)."""
     def __init__(self, fermi_state, omega):
         self.fermi_state = fermi_state
         self.kernel = fermi_state.kernel
@@ -210,9 +272,6 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
                 denominator = self.kernel.deltaE_mn - frequency - 1j * self.owner.eta
                 self.factor[sign] = fermi_state.f_nm / denominator
                 self.rho1_e[(direction, sign)] = r_direction * self.factor[sign] * self.kernel.off_diag
-                if self.kernel.full_covariant_derivative:
-                    population = 1j * fermi_state.dfdk[..., direction, :] / (-frequency - 1j * self.owner.eta)
-                    self.rho1_i[(direction, sign)] = diagonal_matrix(population)
 
     def block(self, a, b):
         kernel = self.kernel
@@ -229,45 +288,13 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
             "II": zero,
             "EI": zero,
             "IE": kernel.g0_mn * (comm_ba + comm_ab) * kernel.diag,
+            "EE": kernel.g0_mn * (comm_ba + comm_ab) * kernel.off_diag,
         }
-
-        if kernel.full_covariant_derivative:
-            rho1_i_a = self.rho1_i[(a, -1)]
-            rho1_i_b = self.rho1_i[(b, 1)]
-            source_ii = (
-                -state.d2fdk2[..., b, a, :] / (self.omega - 1j * owner.eta)
-                -state.d2fdk2[..., a, b, :] / (-self.omega - 1j * owner.eta)
-            )
-            rho2["II"][..., kernel.indices, kernel.indices] = source_ii / (-1j * owner.eta)
-
-            population_a = np.diagonal(rho1_i_a, axis1=-2, axis2=-1)
-            population_b = np.diagonal(rho1_i_b, axis1=-2, axis2=-1)
-            source_ei = (
-                  r_b * (population_a[..., None, :] - population_a[..., :, None])
-                + r_a * (population_b[..., None, :] - population_b[..., :, None])
-            )
-            rho2["EI"] = kernel.g0_mn * source_ei * kernel.off_diag
-
-            denominator_minus = kernel.deltaE_mn + self.omega - 1j * owner.eta
-            denominator_plus = kernel.deltaE_mn - self.omega - 1j * owner.eta
-            delta_f_b = state.dfdk[..., b, None, :] - state.dfdk[..., b, :, None]
-            delta_f_a = state.dfdk[..., a, None, :] - state.dfdk[..., a, :, None]
-            delta_v_b = owner.energy_deriv1_K[..., b, :, None] - owner.energy_deriv1_K[..., b, None, :]
-            delta_v_a = owner.energy_deriv1_K[..., a, :, None] - owner.energy_deriv1_K[..., a, None, :]
-            factor_deriv_ba = delta_f_b / denominator_minus - state.f_nm * delta_v_b / denominator_minus**2
-            factor_deriv_ab = delta_f_a / denominator_plus - state.f_nm * delta_v_a / denominator_plus**2
-            rho1_e_a_deriv_b = (owner.r_deriv_K[..., b, a, :, :] * self.factor[-1] + r_a * factor_deriv_ba) * kernel.off_diag
-            rho1_e_b_deriv_a = (owner.r_deriv_K[..., a, b, :, :] * self.factor[ 1] + r_b * factor_deriv_ab) * kernel.off_diag
-            source_ee = 1j * rho1_e_a_deriv_b + comm_ba + 1j * rho1_e_b_deriv_a + comm_ab
-            rho2["EE"] = kernel.g0_mn * source_ee * kernel.off_diag
-        else:
-            rho1_i_a = rho1_i_b = zero
-            rho2["EE"] = kernel.g0_mn * (comm_ba + comm_ab) * kernel.off_diag
 
         return SecondOrderDensityMatrixBlock(
             rho0=state.rho0,
-            rho1_minus={"I": rho1_i_a, "E": rho1_e_a},
-            rho1_plus={"I": rho1_i_b, "E": rho1_e_b},
+            rho1_minus={"I": zero, "E": rho1_e_a},
+            rho1_plus={"I": zero, "E": rho1_e_b},
             rho2=rho2,
         )
 
@@ -275,10 +302,124 @@ class LengthGaugeFermiState(_SecondOrderDMFermiState):
     def at_frequency(self, omega): 
         return LengthGaugeFrequencyState(self, omega)
 
+class DividedDifferenceLGFermiState(_SecondOrderDMFermiState):
+    """Full LG equilibrium derivatives without band-connection denominators."""
+
+    def __init__(self, kernel, fermi):
+        owner = kernel.owner
+        super().__init__(kernel, owner.fdOccupation(fermi))
+        energies = owner.energies
+        v = owner.velocity_K
+        self.f_div1 = fermi_divided_difference(energies[..., :, None], energies[..., None, :], fermi, owner.kBT)
+        self.df = self.f_div1[..., None, :, :] * v
+        # w[a,b] = D_b V_a. Only an N x N intermediate is made for each band l.
+        self.d2f = self.f_div1[..., None, None, :, :] * owner.w_K
+        for l in range(kernel.nbands):
+            div2 = fermi_second_divided_difference(
+                energies[..., :, None], energies[..., l, None, None], energies[..., None, :], fermi, owner.kBT
+            )
+            for a in range(3):
+                for b in range(a, 3):
+                    term = div2 * (v[..., b, :, l, None] * v[..., a, l, None, :]
+                                   + v[..., a, :, l, None] * v[..., b, l, None, :])
+                    self.d2f[..., a, b, :, :] += term
+                    if a != b:
+                        self.d2f[..., b, a, :, :] += term
+
+        self.df_i = self.df * kernel.intra_mask[..., None, :, :]
+        self.d2f_i = np.empty_like(self.d2f)
+        # Derivative of a spectral-block projection. These inverse gaps affect
+        # channel bookkeeping only, never the direct total density matrix.
+        for b in range(3):
+            connection = kernel.inter_inverse * v[..., b, :, :]
+            for a in range(3):
+                self.d2f_i[..., a, b, :, :] = (
+                    kernel.intra_mask * (self.d2f[..., a, b, :, :] + commutator(connection, self.df[..., a, :, :]))
+                    - commutator(connection, self.df_i[..., a, :, :])
+                )
+
+    def at_frequency(self, omega):
+        return DividedDifferenceLGFrequencyState(self, omega)
+
+class DividedDifferenceLGFrequencyState(_SecondOrderDMFrequencyState):
+    """Differentiate (ad_H - s*Omega - i*eta) rho1 = i D f(H)."""
+
+    def __init__(self, fermi_state, omega):
+        self.fermi_state = fermi_state
+        self.kernel = fermi_state.kernel
+        self.owner = self.kernel.owner
+        self.omega = omega
+        self.resolvent = {}
+        self.rho1 = {}
+        self.rho1_i = {}
+        self.rho1_e = {}
+        for sign in (-1, 1):
+            self.resolvent[sign] = 1.0 / (self.kernel.deltaE_mn - sign * omega - 1j * self.owner.eta)
+            for a in range(3):
+                rho = 1j * self.resolvent[sign] * fermi_state.df[..., a, :, :]
+                self.rho1[(a, sign)] = rho
+                self.rho1_i[(a, sign)] = rho * self.kernel.intra_mask
+                self.rho1_e[(a, sign)] = rho * self.kernel.inter_mask
+
+    def block(self, a, b):
+        kernel, state = self.kernel, self.fermi_state
+        source = np.zeros_like(self.rho1[(a, -1)])
+        source_i = np.zeros_like(source)
+        for drive, derivative, sign in ((a, b, -1), (b, a, 1)):
+            v = self.owner.velocity_K[..., derivative, :, :]
+            source += self.resolvent[sign] * (
+                -state.d2f[..., drive, derivative, :, :] - 1j * commutator(v, self.rho1[(drive, sign)])
+            )
+            source_i += self.resolvent[sign] * (
+                -state.d2f_i[..., drive, derivative, :, :] - 1j * commutator(v, self.rho1_i[(drive, sign)])
+            )
+        total = kernel.g0_mn * source
+        from_i = kernel.g0_mn * source_i
+        from_e = total - from_i
+        return SecondOrderDensityMatrixBlock(
+            rho0=state.rho0,
+            rho1_minus={"I": self.rho1_i[(a, -1)], "E": self.rho1_e[(a, -1)]},
+            rho1_plus={"I": self.rho1_i[(b, 1)], "E": self.rho1_e[(b, 1)]},
+            rho2={"II": from_i * kernel.intra_mask, "EI": from_i * kernel.inter_mask,
+                  "IE": from_e * kernel.intra_mask, "EE": from_e * kernel.inter_mask},
+            rho2_total=total,
+        )
+
 class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
-    """Length-gauge Liouville kernel based on the covariant derivative."""
+    """Full LG uses divided differences; the interband-only path is unchanged.
+
+    In full mode degen groups adjacent eigenvalues into spectral blocks for
+    I/E reporting only. No energies are flattened and no gaps are masked in
+    the total. I denotes within-block matrices, E between-block matrices.
+    For isolated bands these are the usual diagonal/off-diagonal channels.
+    """
 
     state_class = LengthGaugeFermiState
+
+    def __init__(self, owner, full_covariant_derivative=False, finite_temperature_occupations=False):
+        super().__init__(owner, full_covariant_derivative, finite_temperature_occupations)
+        if self.full_covariant_derivative:
+            sectors = {"I": "within-block", "E": "between-block"}
+            self.channel_descriptions = {
+                name: f"second-order {sectors[name[0]]} from first-order {sectors[name[1]]}"
+                for name in self.channel_names
+            }
+            if not hasattr(owner, "w_K"):
+                raise ValueError("Full LG requires w_K[a,b] = D_b velocity_K[a]")
+            energies = owner.energies
+            scale = np.maximum(1.0, np.max(np.abs(energies), axis=-1, keepdims=True))
+            tolerance = np.maximum(abs(getattr(owner, "degen", 0.0)), 64 * np.finfo(float).eps * scale)
+            labels = np.concatenate((np.zeros_like(energies[..., :1], dtype=int),
+                                     np.cumsum(np.diff(energies, axis=-1) > tolerance, axis=-1)), axis=-1)
+            self.intra_mask = labels[..., :, None] == labels[..., None, :]
+            self.inter_mask = ~self.intra_mask
+            self.inter_inverse = np.zeros_like(self.deltaE_mn)
+            np.divide(1.0, self.deltaE_mn, out=self.inter_inverse, where=self.inter_mask)
+
+    def fermi_state(self, ifermi, fermi):
+        if self.full_covariant_derivative:
+            return DividedDifferenceLGFermiState(self, fermi)
+        return super().fermi_state(ifermi, fermi)
 
 class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
     def __init__(self, fermi_state, omega):

@@ -2456,7 +2456,8 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
         currentProjectionList = kwarg.pop("currentProjectionList", None)
         if currentProjectionList is not None and len(velocityProjectionList) == 0:
             velocityProjectionList = currentProjectionList
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderDipole=True, **kwarg)
+        kwarg.pop("highOrderVelocity", None)
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
 
         self.channel_names = AC_DM_CHANNEL_NAMES
@@ -2478,11 +2479,14 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
         self.projected_response_channels = {
             name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
         }
+        self.sigma_LG_DM = np.zeros(response_shape, dtype=complex)
+        self.projected_response = np.zeros(projected_shape, dtype=complex)
 
         kernel = LengthGaugeSecondOrderDMKernel(
             self, self.fullCovariantDerivative, finiteTemperatureOccupations
         )
         self.density_matrix_kernel = kernel
+        self.channel_descriptions = dict(kernel.channel_descriptions)
         velocity_observable = self.velocity_K
         for ifermi, fermi in enumerate(self.fermiList):
             fermi_state = kernel.fermi_state(ifermi, fermi)
@@ -2493,6 +2497,10 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
                 for a in range(3):
                     for b in range(3):
                         block = frequency_state.block(a, b)
+                        sigma_total_k = _contract_second_order_observable(block.total_second_order, velocity_observable)
+                        self.sigma_LG_DM[ifermi, iomega, a, b, :] = sigma_total_k.mean(axis=(0, 1, 2))
+                        if irecord_fermi is not None and irecord_omega is not None:
+                            self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :] = sigma_total_k
                         for name in kernel.active_rho2_channels:
                             sigma_k = _contract_second_order_observable(block.rho2[name], velocity_observable)
                             self.sigma_LG_DM_channels[name][ifermi, iomega, a, b, :] = (
@@ -2503,9 +2511,7 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
                                     0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :
                                 ] = sigma_k
 
-        self.sigma_LG_DM = _sum_density_matrix_channels(self.sigma_LG_DM_channels)
         self.sigma_channels = self.sigma_LG_DM_channels
-        self.projected_response = _sum_density_matrix_channels(self.projected_response_channels)
         self.projected_sigma = self.sigma_LG_DM[None, None, None, ...]
         self.projected_sigma_channels = {
             name: sigma[None, None, None, ...] for name, sigma in self.sigma_LG_DM_channels.items()
@@ -2808,17 +2814,18 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
         Compute IFE in the length gauge with a frequency-domain density matrix.
         unit: \muB / (V/\angst.)^2
 
-        ``fullCovariantDerivative=True`` replaces every dipole commutator by
-        ``i D_k rho`` and preserves the II, EI, IE and EE channels separately.
+        ``fullCovariantDerivative=True`` evaluates ``i D_k rho`` through stable
+        divided differences of f(H), preserving II, EI, IE and EE separately.
         The first letter labels the second-order density-matrix sector and the
-        second letter labels the first-order sector (I: intraband, E: interband).
+        second letter labels the first-order sector. In full mode, degen groups
+        reporting blocks (I: within-block, E: between-block), not the total.
 
         Indexing
         --------
         - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure]
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList,
-                         highOrderDipole=fullCovariantDerivative, **kwarg)
+        highOrderVelocity = bool(kwarg.pop("highOrderVelocity", False) or fullCovariantDerivative)
+        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=highOrderVelocity, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         if self.fullCovariantDerivative and self.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
@@ -2846,9 +2853,12 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
         self.projected_response_channels = {
             name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
         }
+        self.chi_IFE = np.zeros(response_shape, dtype=complex)
+        self.projected_response = np.zeros(projected_shape, dtype=complex)
 
         kernel = LengthGaugeSecondOrderDMKernel(self, self.fullCovariantDerivative)
         self.density_matrix_kernel = kernel
+        self.channel_descriptions = dict(kernel.channel_descriptions)
         for ifermi, fermi in enumerate(self.fermiList):
             fermi_state = kernel.fermi_state(ifermi, fermi)
             for iomega, Omega in enumerate(self.omegaList):
@@ -2858,6 +2868,10 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
                 for a in range(3):
                     for b in range(3):
                         block = frequency_state.block(a, b)
+                        chi_total_k = _contract_second_order_observable(block.total_second_order, M_K)
+                        self.chi_IFE[ifermi, iomega, a, b, :] = chi_total_k.mean(axis=(0, 1, 2))
+                        if irecord_fermi is not None and irecord_omega is not None:
+                            self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :] = chi_total_k
                         for name in kernel.active_rho2_channels:
                             chi_k = _contract_second_order_observable(block.rho2[name], M_K)
                             self.chi_IFE_channels[name][ifermi, iomega, a, b, :] = (
@@ -2868,8 +2882,6 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
                                     0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :
                                 ] = chi_k
 
-        self.chi_IFE = _sum_density_matrix_channels(self.chi_IFE_channels)
-        self.projected_response = _sum_density_matrix_channels(self.projected_response_channels)
         self.projected_sigma = self.chi_IFE[None, None, None, ...]
         self.projected_sigma_channels = {
             name: response[None, None, None, ...] for name, response in self.chi_IFE_channels.items()
@@ -3612,7 +3624,9 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         The spin part is the exchange electronic torque -i[mu_S,H_XC(t)].
 
         ``fullCovariantDerivative=True`` replaces the interband-only dipole
-        commutators by iD_k and retains II, EI, IE and EE separately. Explicit
+        commutators by divided-difference iD_k and retains II, EI, IE and EE
+        separately. degen groups channel-reporting blocks, not the total DM.
+        The orbital electric-field vertex still uses the masked dipole. Explicit
         first-order torque vertices contracted with rho1_I and rho1_E are
         assigned to II and EE, respectively.
 
@@ -3620,8 +3634,9 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         --------
         - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
+        highOrderVelocity = bool(kwarg.pop("highOrderVelocity", False) or fullCovariantDerivative)
         super().__init__(velocityProjectionList=velocityProjectionList,
-                         highOrderDipole=fullCovariantDerivative,
+                         highOrderVelocity=highOrderVelocity,
                          spinTorqueProjectionList=torqueProjectionList,
                          orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
@@ -3675,11 +3690,16 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         self.projected_response_channels = {
             name: np.zeros(projected_response_shape, dtype=complex) for name in self.channel_names
         }
+        self.projected_chi_IFT = np.zeros(response_shape, dtype=complex)
+        self.projected_response = np.zeros(projected_response_shape, dtype=complex)
 
         kernel = LengthGaugeSecondOrderDMKernel(
             self, self.fullCovariantDerivative, finiteTemperatureOccupations
         )
         self.density_matrix_kernel = kernel
+        self.channel_descriptions = dict(kernel.channel_descriptions)
+        self.channel_descriptions["II"] += ", including torqueE*rho1_I"
+        self.channel_descriptions["EE"] += ", including torqueE*rho1_E"
         for ifermi, fermi in enumerate(self.fermiList):
             fermi_state = kernel.fermi_state(ifermi, fermi)
             for iomega, Omega in enumerate(self.omegaList):
@@ -3689,13 +3709,14 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
                     for b in range(3):
                         block = frequency_state.block(a, b)
                         for iproj_T, T_K in enumerate(proj_T_K):
+                            total_k = _contract_second_order_observable(block.total_second_order, T_K)
                             response_k = {
                                 name: np.zeros(self.kgrid + (3,), dtype=complex)
                                 for name in self.channel_names
                             }
                             for name in kernel.active_rho2_channels:
                                 response_k[name] = _contract_second_order_observable(block.rho2[name], T_K)
-                            response_k["EE"] += (
+                            contact_e = (
                                 _contract_second_order_observable(
                                     block.rho1_minus["E"], proj_torqueE_K[iproj_T, ..., :, b, :, :]
                                 )
@@ -3703,8 +3724,10 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
                                     block.rho1_plus["E"], proj_torqueE_K[iproj_T, ..., :, a, :, :]
                                 )
                             )
+                            response_k["EE"] += contact_e
+                            total_k += contact_e
                             if self.fullCovariantDerivative:
-                                response_k["II"] += (
+                                contact_i = (
                                     _contract_second_order_observable(
                                         block.rho1_minus["I"], proj_torqueE_K[iproj_T, ..., :, b, :, :]
                                     )
@@ -3712,7 +3735,12 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
                                         block.rho1_plus["I"], proj_torqueE_K[iproj_T, ..., :, a, :, :]
                                     )
                                 )
+                                response_k["II"] += contact_i
+                                total_k += contact_i
                             irecord_fermi = responseFermiRecord.get(ifermi)
+                            self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, :] = total_k.mean(axis=(0, 1, 2))
+                            if irecord_fermi is not None and irecord_omega is not None:
+                                self.projected_response[0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, :] = total_k
                             for name in self.channel_names:
                                 self.projected_chi_IFT_channels[name][
                                     0, 0, iproj_T, ifermi, iomega, a, b, :
@@ -3724,12 +3752,10 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
                                         0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, :
                                     ] = response_k[name]
 
-        self.projected_chi_IFT = _sum_density_matrix_channels(self.projected_chi_IFT_channels)
-        self.projected_response = _sum_density_matrix_channels(self.projected_response_channels)
         self.chi_IFT_channels = {
             name: response[0, 0, 0] for name, response in self.projected_chi_IFT_channels.items()
         }
-        self.chi_IFT = _sum_density_matrix_channels(self.chi_IFT_channels)
+        self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
         self.projected_sigma = self.projected_chi_IFT
         self.projected_sigma_channels = self.projected_chi_IFT_channels
         for name in self.channel_names:
