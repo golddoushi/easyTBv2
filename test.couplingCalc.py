@@ -14,9 +14,11 @@ import couplingCalc as cc
 from auxiliary import obtainProjectionsPlain, obtainProjections
 
 # 1. define the basic structure information
-mainDir='./mcalc/1D-chain-3orb/'
+mainDir='./mcalc/CrI3/soc/nscf_mz/'
 pR.readPOS(mainDir+'POSCAR')
 projections={
+    "Cr":(2,),
+    "I":(1,),
     "B":(0,),
     "N":(0,),
     "H":(0,),
@@ -48,13 +50,13 @@ hr.symmerizeHamAndOverlap(atomicOrbInfoList=atomicOrbInfoList,atomicMagMomList=a
 # 4. assign the orbitals of spin-up tunnels to atoms (no need to change)
 wann_list=obtainProjectionsPlain(mainDir+'POSCAR',projections)
 # 5. set the iatom of magnetic atoms to source_list, set ini_S for ALL atoms
-cc.classifyBonds(mainDir, source_list=[2,], 
+cc.classifyBonds(mainDir, source_list=[0,1,], 
            wann_list=wann_list, 
-           ini_S=[0]*2+[1]*1,
+           ini_S=[1]*2+[0]*6,
            includeAllBonds=False)
 # 5. set overlap, set supercell size, set fermi level, set erange, etc.
-E0=0.0
+E0=-2.0
 fermiAxis=[E0]#np.linspace(E0-0.1,E0+0.1,11)
 cc.calcJFull_GaussianQuadrature(hr,mainDir,nthreads=8,overlap=True,
-    sc=[28,1,1],fermiAxis=fermiAxis,
+    sc=[78,78,1],fermiAxis=fermiAxis,
     eta=0.0001,erange=(-100,100),lowOrder=60,highOrder=80,Jcvg=-1e-4)

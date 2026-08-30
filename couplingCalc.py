@@ -700,7 +700,7 @@ def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False
     #    bondType[0].exchangeEnergyMatrix=Jmat
     #    bondType[0].broadCastExchange(type='Full')
     fileio.writeJmat(mainDir, bondList, sc)
-    #writeMCSolverIsingFile(mainDir)
+    writeMCSolverIsingFile(mainDir)
 
 def calcAnisotropicJ(mainDir,fermi=0,eta=0.0001,emptySpace=5, ini_S=[], MAE=0.1):
     '''
