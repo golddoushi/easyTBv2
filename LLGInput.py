@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from time import perf_counter
 import numpy as np
 from LLG import IFTDevice, PulseTimeStepSchedule, SOTDevice, Field, TangentTorqueMap
 from LLG import TangentTorqueTopology, analyze_tangent_torque_topology
@@ -246,9 +247,17 @@ def _output_torque_phase_portrait(mainDir, torque_map, topology: TangentTorqueTo
     figure.savefig(f"{mainDir}/torqueTopology.png", dpi=600)
     plt.close(figure)
     print(
-        f"Torque phase portrait: {len(topology.fixed_points)} fixed points, "
+        f"Torque phase portrait: {len(topology.fixed_points)} fixed points from "
+        f"{topology.refinement_candidate_count} refinement candidates, "
         f"Poincare index sum={topology.poincare_index_sum}, "
         f"basin coverage={100.0*topology.basin_converged_fraction:.2f}%"
+    )
+    timing = topology.stage_times_seconds
+    print(
+        "Topology timing: "
+        f"sampling={timing['sampling']:.3f} s, fixed points={timing['fixed_points']:.3f} s, "
+        f"separatrices={timing['separatrices']:.3f} s, "
+        f"basins={timing['basins']:.3f} s, total={timing['total']:.3f} s"
     )
     if topology.poincare_index_sum != 2:
         print("WARNING: isolated fixed points on a sphere should have total Poincare index 2; "
@@ -526,7 +535,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
         use_DFT_mae=False,
         extra_uniaxial_mae=0.3E-3,               # in eV
-        extra_uniaxial_mae_direction=(0, 0, 1), 
+        extra_uniaxial_mae_direction=(0.1, 0, 1), 
         alpha=1e-3,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
@@ -540,7 +549,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     if show_torque_map:
         plot_tangent_torque_map(
             mainDir=mainDir, device=device, drive_amplitude=peak_field, torque_mode='total',
-            map_time=center_times[0], trajectory=None, analyze_phase_portrait=False,
+            map_time=center_times[0], trajectory=None, analyze_phase_portrait=True, compute_basins=False, 
         )
         plot_raw_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
     plt.show()
@@ -554,10 +563,10 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
     device = SOTDevice(
         H_K=np.array([0, 0, 1]),
-        H_ext=np.array([-1.0, 0.0, 0.0]),
+        H_ext=np.array([-0.0, 0.0, 0.0]),
         H_FL=0.10,
         H_DL=0.30,
-        sigma=np.array([0, 1, 0]),
+        sigma=np.array([0, 1, -0.3]),
         current_pulse=pulse,
         alpha=0.1,
         theta0=5*np.pi/180,
@@ -568,7 +577,7 @@ def run_sot_example(mainDir="./",show_torque_map=True):
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title="Current density")
     if show_torque_map: 
         plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=trajectory, 
-                                analyze_phase_portrait=True)
+                                analyze_phase_portrait=True, )
     plt.show()
 
 if __name__ == "__main__":

@@ -551,7 +551,19 @@ Optional phase-portrait analysis uses the same selected constant-drive field,
 identifies stable/unstable/saddle fixed points, estimates attraction basins, traces stable
 and unstable separatrices, and checks the Poincare-index sum on the sphere.
 Use these precise dynamical-systems objects if describing a torque-map
-"topology" in a paper.
+"topology" in a paper. Built-in SOT and fitted IFT/MAE fields are evaluated in
+vectorized direction batches during basin integration. Every result records
+`stage_times_seconds` for map sampling, fixed-point refinement, separatrix
+tracing, basins, and the total analysis. Pass `topology_options={"workers": N}`
+to `plot_tangent_torque_map` to use `N` threads for independent fixed-point
+refinements. Threading can be slower for Python-bound fitted fields, so compare
+the reported timings before increasing it. The search uses all grid-local
+minima, the two poles, and `candidate_padding=8` additional low-magnitude
+seeds; `maximum_candidates` is only a safety cap. Basin integration is already
+batched. `compute_basins=False` is the largest speed-up when only fixed points
+and separatrices are needed. `candidate_padding`, `maximum_flow_steps`, and the
+map's `theta_count`/`phi_count` control the main accuracy/cost tradeoffs and
+should be converged for publication calculations.
 
 The current dynamics is deterministic.  Thermal fluctuations may motivate an
 initial tilt, but a stochastic thermal field/noise integrator has not yet been

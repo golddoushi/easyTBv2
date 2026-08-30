@@ -260,6 +260,23 @@ class SingleMomentLLG:
         force = -self.gamma * np.cross(direction, effective_field) + torque
         return (force + self.alpha * np.cross(direction, force)) / (1.0 + self.alpha**2)
 
+    def derivative_from_terms_many(self, directions, effective_fields, torques) -> np.ndarray:
+        """Vectorized form of :meth:`derivative_from_terms` for topology flows."""
+        directions = np.asarray(directions, dtype=float)
+        effective_fields = np.asarray(effective_fields, dtype=float)
+        torques = np.asarray(torques, dtype=float)
+        if directions.ndim < 2 or directions.shape[-1] != 3:
+            raise ValueError("directions must have shape (..., 3).")
+        if effective_fields.shape != directions.shape or torques.shape != directions.shape:
+            raise ValueError("effective_fields and torques must match directions.")
+        norms = np.linalg.norm(directions, axis=-1)
+        if np.any(~np.isfinite(norms)) or np.any(norms == 0.0):
+            raise ValueError("directions must be finite and nonzero.")
+        direction = directions/norms[..., None]
+        tangent_torque = torques-np.sum(direction*torques, axis=-1)[..., None]*direction
+        force = -self.gamma*np.cross(direction, effective_fields)+tangent_torque
+        return (force+self.alpha*np.cross(direction, force))/(1.0+self.alpha**2)
+
     def derivative(self, time: float, m: Sequence[float]) -> np.ndarray:
         """
         Evaluate the explicit Gilbert equation at ``(time, m)``.

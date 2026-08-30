@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
 import numpy as np
 from scipy.optimize import least_squares
 
@@ -22,6 +24,8 @@ class _TorqueFieldDevice:
 
     def drive_torque_many(self, directions, drive_amplitude):
         directions = np.asarray(directions, dtype=float)
+        if self.torque_mode == "total" and hasattr(self.device, "total_torque_many"):
+            return self.device.total_torque_many(directions, drive_amplitude, self.time)
         if self.torque_mode == "drive" and hasattr(self.device, "drive_torque_many"):
             return self.device.drive_torque_many(directions, drive_amplitude)
         return np.asarray([self.drive_torque(m, drive_amplitude) for m in directions], dtype=float)
@@ -71,6 +75,8 @@ class TangentTorqueTopology:
     field_scale: float
     poincare_index_sum: int
     basin_converged_fraction: float
+    refinement_candidate_count: int
+    stage_times_seconds: dict[str, float]
 
 
 def _unit_directions(directions) -> np.ndarray:
@@ -135,10 +141,11 @@ def _exponential_map(direction, tangent) -> np.ndarray:
     return np.cos(length)*direction+np.sin(length)*tangent/length
 
 
-def _candidate_directions(torque_map: TangentTorqueMap, maximum_candidates=64) -> np.ndarray:
+def _candidate_directions(torque_map: TangentTorqueMap, maximum_candidates=64,
+                          candidate_padding=8, candidate_separation=None) -> np.ndarray:
     magnitude = np.asarray(torque_map.magnitude)
     flat_direction = np.asarray(torque_map.direction).reshape(-1, 3)
-    candidates = []
+    local_candidates = []
     if magnitude.ndim == 2:
         local_minimum = np.ones_like(magnitude, dtype=bool)
         ntheta = magnitude.shape[0]
@@ -152,12 +159,37 @@ def _candidate_directions(torque_map: TangentTorqueMap, maximum_candidates=64) -
                 elif theta_shift > 0:
                     neighbor = np.vstack((neighbor[1:], np.full((1, magnitude.shape[1]), np.inf)))
                 local_minimum &= magnitude <= neighbor
-        candidates.extend(np.flatnonzero(local_minimum))
-    smallest = np.argsort(magnitude.reshape(-1))[:maximum_candidates]
-    candidates.extend(smallest.tolist())
-    candidates = list(dict.fromkeys(candidates))
-    candidates = np.asarray(sorted(candidates, key=lambda index: magnitude.reshape(-1)[index])[:maximum_candidates])
-    return flat_direction[candidates]
+        local_candidates.extend(np.flatnonzero(local_minimum))
+    smallest = np.argsort(magnitude.reshape(-1))[:candidate_padding]
+    candidates = list(dict.fromkeys(local_candidates+smallest.tolist()))
+    candidates.sort(key=lambda index: magnitude.reshape(-1)[index])
+
+    if candidate_separation is None:
+        if magnitude.ndim == 2:
+            theta_spacing = np.pi/magnitude.shape[0]
+            phi_spacing = 2.0*np.pi/magnitude.shape[1]
+            candidate_separation = 0.5*min(theta_spacing, phi_spacing)
+        else:
+            candidate_separation = 0.0
+    selected = []
+    for index in candidates:
+        direction = flat_direction[index]
+        if any(np.arccos(np.clip(np.dot(direction, previous), -1.0, 1.0)) < candidate_separation
+               for previous in selected):
+            continue
+        selected.append(direction)
+        if len(selected) >= maximum_candidates:
+            break
+
+    for pole in (np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])):
+        if any(np.arccos(np.clip(np.dot(pole, previous), -1.0, 1.0)) < candidate_separation
+               for previous in selected):
+            continue
+        if len(selected) >= maximum_candidates:
+            selected[-1] = pole
+        else:
+            selected.append(pole)
+    return np.asarray(selected)
 
 
 def _linearize(device, direction, drive_amplitude, step) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -188,31 +220,70 @@ def _classify_fixed_point(jacobian, eigenvalues) -> tuple[str, int]:
 
 
 def _refine_fixed_points(device, torque_map, drive_amplitude, zero_tolerance, merge_angle,
-                         jacobian_step, maximum_candidates):
+                         jacobian_step, maximum_candidates, candidate_padding,
+                         candidate_separation, workers):
     field_scale = float(np.max(torque_map.magnitude))
     if not np.isfinite(field_scale) or field_scale == 0.0:
         raise RuntimeError("The tangent field vanishes everywhere; isolated fixed-point topology is undefined.")
 
-    directions = []
-    residuals = []
-    for initial in _candidate_directions(torque_map, maximum_candidates=maximum_candidates):
-        def residual(vector):
-            norm = np.linalg.norm(vector)
-            if norm == 0.0:
-                return np.array([0.0, 0.0, 0.0, -1.0])
-            direction = vector/norm
-            torque = _drive_torque_many(device, direction[None, :], drive_amplitude)[0]
-            return np.concatenate((torque/field_scale, [norm-1.0]))
+    def refine_candidate(initial):
+        def residual_many(vectors):
+            vectors = np.atleast_2d(np.asarray(vectors, dtype=float))
+            norms = np.linalg.norm(vectors, axis=1)
+            nonzero = norms > 0.0
+            directions = np.zeros_like(vectors)
+            directions[nonzero] = vectors[nonzero]/norms[nonzero, None]
+            directions[~nonzero, 2] = 1.0
+            values = np.empty((len(vectors), 4), dtype=float)
+            values[:, :3] = _drive_torque_many(device, directions, drive_amplitude)/field_scale
+            values[:, 3] = norms-1.0
+            values[~nonzero, :3] = 0.0
+            return values
 
-        solution = least_squares(residual, initial, xtol=1.0e-12, ftol=1.0e-12, gtol=1.0e-12, max_nfev=600)
+        def residual(vector):
+            return residual_many(vector)[0]
+
+        def jacobian(vector):
+            step = 1.0e-6*max(1.0, np.linalg.norm(vector))
+            offsets = step*np.eye(3)
+            values = residual_many(np.vstack((vector+offsets, vector-offsets)))
+            return ((values[:3]-values[3:])/(2.0*step)).T
+
+        solution = least_squares(
+            residual, initial, jac=jacobian, xtol=1.0e-12, ftol=1.0e-12,
+            gtol=1.0e-12, max_nfev=600,
+        )
+        if np.linalg.norm(solution.x) == 0.0:
+            return None
         direction = solution.x/np.linalg.norm(solution.x)
         torque_residual = float(np.linalg.norm(_drive_torque_many(device, direction[None, :], drive_amplitude)[0]))
         if torque_residual > zero_tolerance*field_scale:
-            continue
-        if any(np.arccos(np.clip(np.dot(direction, previous), -1.0, 1.0)) < merge_angle for previous in directions):
-            continue
-        directions.append(direction)
-        residuals.append(torque_residual)
+            return None
+        return direction, torque_residual
+
+    candidates = _candidate_directions(
+        torque_map, maximum_candidates, candidate_padding, candidate_separation
+    )
+    if workers == 1:
+        refined = map(refine_candidate, candidates)
+    else:
+        executor = ThreadPoolExecutor(max_workers=workers)
+        refined = executor.map(refine_candidate, candidates)
+
+    directions = []
+    residuals = []
+    try:
+        for result in refined:
+            if result is None:
+                continue
+            direction, torque_residual = result
+            if any(np.arccos(np.clip(np.dot(direction, previous), -1.0, 1.0)) < merge_angle for previous in directions):
+                continue
+            directions.append(direction)
+            residuals.append(torque_residual)
+    finally:
+        if workers != 1:
+            executor.shutdown()
 
     order = sorted(range(len(directions)), key=lambda index: (
         np.arccos(np.clip(directions[index][2], -1.0, 1.0)),
@@ -240,7 +311,7 @@ def _refine_fixed_points(device, torque_map, drive_amplitude, zero_tolerance, me
             classification=classification,
             poincare_index=poincare_index,
         ))
-    return tuple(fixed_points), field_scale
+    return tuple(fixed_points), field_scale, len(candidates)
 
 
 def _advance_normalized_flow(device, directions, drive_amplitude, step, flow_sign=1.0) -> np.ndarray:
@@ -340,6 +411,9 @@ def analyze_tangent_torque_topology(
     maximum_flow_steps: int = 800,
     basin_radius: float = 4.0e-2,
     maximum_candidates: int = 256,
+    candidate_padding: int = 8,
+    candidate_separation: float | None = None,
+    workers: int = 1,
     torque_mode: str = "total",
     time: float = 0.0,
 ) -> TangentTorqueTopology:
@@ -351,23 +425,50 @@ def analyze_tangent_torque_topology(
     ``drive_amplitude``. ``torque_mode='drive'`` analyzes only the source.
     Basins are numerical estimates; unassigned points can indicate a long
     transient, a non-fixed attractor, or insufficient integration length.
+    All grid-local minima seed fixed-point refinement. ``candidate_padding``
+    adds a small number of globally low-magnitude fallback seeds; this avoids
+    sending hundreds of neighboring points to the same expensive nonlinear
+    solve. ``workers`` optionally uses threads for the independent refinements,
+    although Python-bound fitted fields may not benefit. Basin trajectories
+    are already evaluated as one vectorized batch.
     """
     maximum_candidates = int(maximum_candidates)
     if maximum_candidates < 1:
         raise ValueError("maximum_candidates must be positive.")
+    candidate_padding = int(candidate_padding)
+    if candidate_padding < 0:
+        raise ValueError("candidate_padding must be nonnegative.")
+    if candidate_separation is not None:
+        candidate_separation = float(candidate_separation)
+        if not np.isfinite(candidate_separation) or candidate_separation < 0.0:
+            raise ValueError("candidate_separation must be finite and nonnegative.")
+    workers = int(workers)
+    if workers < 1:
+        raise ValueError("workers must be positive.")
+    
+    total_start = perf_counter()
     field_device = _TorqueFieldDevice(device, torque_mode, time)
+
+    sampling_time = 0 # record time costs at each stage
+    stage_start = perf_counter()
     if torque_map is None:
         torque_map = sample_tangent_torque_map(
             device, drive_amplitude=drive_amplitude, torque_mode=torque_mode, time=time
         )
-    fixed_points, field_scale = _refine_fixed_points(
+        sampling_time = perf_counter()-stage_start
+    stage_start = perf_counter()
+    fixed_points, field_scale, refinement_candidate_count = _refine_fixed_points(
         field_device, torque_map, drive_amplitude, zero_tolerance, merge_angle,
-        jacobian_step, maximum_candidates,
+        jacobian_step, maximum_candidates, candidate_padding, candidate_separation, workers,
     )
+    fixed_point_time = perf_counter()-stage_start
+    stage_start = perf_counter()
     separatrices = _trace_separatrices(
         field_device, fixed_points, drive_amplitude, field_scale, zero_tolerance,
         separatrix_offset, flow_step, maximum_flow_steps,
     )
+    separatrix_time = perf_counter()-stage_start
+    stage_start = perf_counter()
     if compute_basins:
         basin_labels, converged_fraction = _estimate_basins(
             field_device, torque_map.direction, fixed_points, drive_amplitude,
@@ -376,6 +477,14 @@ def analyze_tangent_torque_topology(
     else:
         basin_labels = np.full(torque_map.theta.shape, -1, dtype=int)
         converged_fraction = 0.0
+    basin_time = perf_counter()-stage_start
+    stage_times = {
+        "sampling": sampling_time,
+        "fixed_points": fixed_point_time,
+        "separatrices": separatrix_time,
+        "basins": basin_time,
+        "total": sampling_time+perf_counter()-total_start,
+    }
     return TangentTorqueTopology(
         fixed_points=fixed_points,
         separatrices=separatrices,
@@ -383,4 +492,6 @@ def analyze_tangent_torque_topology(
         field_scale=field_scale,
         poincare_index_sum=sum(fixed.poincare_index for fixed in fixed_points),
         basin_converged_fraction=converged_fraction,
+        refinement_candidate_count=refinement_candidate_count,
+        stage_times_seconds=stage_times,
     )

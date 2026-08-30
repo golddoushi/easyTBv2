@@ -10,6 +10,15 @@ from auxiliary import BOHR_MAGNETON_EV_PER_TESLA, HBAR_EV_FS, ELECTRON_GAMMA_RAD
 def _initial_direction(theta: float, phi: float) -> np.ndarray:
     return np.array([np.sin(theta) * np.cos(phi),np.sin(theta) * np.sin(phi),np.cos(theta)])
 
+def _unit_directions(directions) -> np.ndarray:
+    vectors = np.asarray(directions, dtype=float)
+    if vectors.ndim < 2 or vectors.shape[-1] != 3:
+        raise ValueError("directions must have shape (..., 3).")
+    norms = np.linalg.norm(vectors, axis=-1)
+    if np.any(~np.isfinite(norms)) or np.any(norms == 0.0):
+        raise ValueError("directions must be finite and nonzero.")
+    return vectors/norms[..., None]
+
 def _as_field(value) -> Field:
     if isinstance(value, Field):
         return value
@@ -94,6 +103,17 @@ def _device_torque(device, direction, drive_amplitude, torque_mode, time):
         return device.drive_torque(direction, drive_amplitude)
     raise ValueError("torque_mode must be 'total' or 'drive'.")
 
+def _device_torque_many(device, directions, drive_amplitude, torque_mode, time):
+    method_name = "total_torque_many" if torque_mode == "total" else "drive_torque_many"
+    if hasattr(device, method_name):
+        method = getattr(device, method_name)
+        if torque_mode == "total":
+            return method(directions, drive_amplitude, time)
+        return method(directions, drive_amplitude)
+    return np.asarray([
+        _device_torque(device, m, drive_amplitude, torque_mode, time) for m in directions
+    ], dtype=float)
+
 def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61,
                               drive_amplitude: float = 1.0, torque_mode: str = "total",
                               time: float = 0.0) -> TangentTorqueMap:
@@ -154,9 +174,9 @@ def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61
     )
 
     flat_direction = direction.reshape(-1, 3)
-    flat_torque = np.asarray([
-        _device_torque(device, m, drive_amplitude, torque_mode, time) for m in flat_direction
-    ], dtype=float)
+    flat_torque = np.asarray(
+        _device_torque_many(device, flat_direction, drive_amplitude, torque_mode, time), dtype=float
+    )
     if flat_torque.shape != flat_direction.shape:
         raise ValueError("The selected device torque must return a Cartesian vector.")
     cartesian = flat_torque.reshape(direction.shape)
@@ -189,9 +209,9 @@ def sample_tangent_torque_at_directions(device, directions, drive_amplitude: flo
     direction = direction/direction_norm[..., None]
 
     flat_direction = direction.reshape(-1, 3)
-    flat_torque = np.asarray([
-        _device_torque(device, m, drive_amplitude, torque_mode, time) for m in flat_direction
-    ], dtype=float)
+    flat_torque = np.asarray(
+        _device_torque_many(device, flat_direction, drive_amplitude, torque_mode, time), dtype=float
+    )
     if flat_torque.shape != flat_direction.shape:
         raise ValueError("The selected device torque must return a Cartesian vector.")
     cartesian = flat_torque.reshape(direction.shape)
@@ -316,12 +336,15 @@ class SOTDevice:
         self.H_FL = float(H_FL)
         self.H_DL = float(H_DL)
         self.current_pulse = current_pulse
+        self.external_field = H_ext.copy()
 
         def sot(m, time):
             return self.drive_torque(m, self.current_pulse(time))
 
         torque = Torque(sot)
         H_K_norm = np.linalg.norm(H_K)
+        self.anisotropy_field_strength = float(H_K_norm)
+        self.anisotropy_axis = np.zeros(3) if H_K_norm == 0.0 else H_K/H_K_norm
         if H_K_norm == 0.0:
             field = Field.constant(H_ext)
         else:
@@ -363,6 +386,17 @@ class SOTDevice:
         direction /= np.linalg.norm(direction)
         return self.dynamic.derivative_from_terms(
             direction, self.field(direction, time), self.drive_torque(direction, drive_amplitude)
+        )
+
+    def total_torque_many(self, directions, drive_amplitude=1.0, time=0.0) -> np.ndarray:
+        """Vectorized complete constant-drive LLG field."""
+        direction = _unit_directions(directions)
+        field = np.broadcast_to(self.external_field, direction.shape).copy()
+        if self.anisotropy_field_strength != 0.0:
+            projection = direction@self.anisotropy_axis
+            field += self.anisotropy_field_strength*projection[..., None]*self.anisotropy_axis
+        return self.dynamic.derivative_from_terms_many(
+            direction, field, self.drive_torque_many(direction, drive_amplitude)
         )
 
     def run(self, t_total=1.0, time_step=0.01):
@@ -521,12 +555,17 @@ class IFTDevice:
             (),
         )
 
+        self.external_field = np.asarray(external_field, dtype=float)
+        if self.external_field.shape != (3,) or not np.all(np.isfinite(self.external_field)):
+            raise ValueError("external_field must contain three finite values.")
+        self.additional_field = None
         anisotropy = Field(self._anisotropy_field)
-        field = Field.constant(external_field) + anisotropy
+        field = Field.constant(self.external_field) + anisotropy
         if additional_field is not None:
-            field = field + _as_field(additional_field)
+            self.additional_field = _as_field(additional_field)
+            field = field + self.additional_field
 
-        self.additional_torque = Torque()
+        self.additional_torque = None
         torque = Torque(self._optical_torque)
         if additional_torque is not None:
             self.additional_torque = _as_torque(additional_torque)
@@ -587,6 +626,12 @@ class IFTDevice:
         gradient = self.energy_expansion.surface_gradient(direction[None, :])[0]
         return -np.real(gradient) / (self.moment_magnitude_muB * BOHR_MAGNETON_EV_PER_TESLA)
 
+    def dft_anisotropy_field_many(self, directions) -> np.ndarray:
+        """Vectorized DFT anisotropy field in tesla."""
+        direction = _unit_directions(directions)
+        gradient = self.energy_expansion.surface_gradient(direction)
+        return -np.real(gradient)/(self.moment_magnitude_muB*BOHR_MAGNETON_EV_PER_TESLA)
+
     def extra_uniaxial_energy(self, m) -> float:
         """Return the added uniaxial MAE in eV per cell, with zero at the easy axis."""
         direction = np.asarray(m, dtype=float)
@@ -611,11 +656,24 @@ class IFTDevice:
         projection = np.dot(direction, self.extra_uniaxial_mae_direction)
         return self.extra_uniaxial_field_tesla * projection * self.extra_uniaxial_mae_direction
 
+    def extra_uniaxial_anisotropy_field_many(self, directions) -> np.ndarray:
+        """Vectorized manually supplied uniaxial field in tesla."""
+        direction = _unit_directions(directions)
+        projection = direction@self.extra_uniaxial_mae_direction
+        return self.extra_uniaxial_field_tesla*projection[..., None]*self.extra_uniaxial_mae_direction
+
     def anisotropy_field(self, m) -> np.ndarray:
         """Return the active DFT plus manually supplied anisotropy field in tesla."""
         field = self.extra_uniaxial_anisotropy_field(m)
         if self.use_DFT_mae:
             field = field + self.dft_anisotropy_field(m)
+        return field
+
+    def anisotropy_field_many(self, directions) -> np.ndarray:
+        """Vectorized active DFT plus manually supplied anisotropy field."""
+        field = self.extra_uniaxial_anisotropy_field_many(directions)
+        if self.use_DFT_mae:
+            field = field+self.dft_anisotropy_field_many(directions)
         return field
 
     def _anisotropy_field(self, m, time) -> np.ndarray:
@@ -661,10 +719,26 @@ class IFTDevice:
         """Return the complete constant-drive LLG vector field in 1/fs."""
         direction = np.asarray(m, dtype=float)
         direction /= np.linalg.norm(direction)
-        nonfield_torque = self.drive_torque(direction, drive_amplitude) + self.additional_torque(direction, time)
+        nonfield_torque = self.drive_torque(direction, drive_amplitude)
+        if self.additional_torque is not None:
+            nonfield_torque += self.additional_torque(direction, time)
         return self.dynamic.derivative_from_terms(
             direction, self.field(direction, time), nonfield_torque
         )
+
+    def total_torque_many(self, directions, drive_amplitude=1.0, time=0.0) -> np.ndarray:
+        """Vectorized complete constant-drive LLG field."""
+        direction = _unit_directions(directions)
+        original_shape = direction.shape
+        flat_direction = direction.reshape(-1, 3)
+        field = self.anisotropy_field_many(flat_direction)+self.external_field
+        torque = self.drive_torque_many(flat_direction, drive_amplitude)
+        if self.additional_field is not None:
+            field += np.asarray([self.additional_field(m, time) for m in flat_direction], dtype=float)
+        if self.additional_torque is not None:
+            torque += np.asarray([self.additional_torque(m, time) for m in flat_direction], dtype=float)
+        result = self.dynamic.derivative_from_terms_many(flat_direction, field, torque)
+        return result.reshape(original_shape)
     
     def _optical_torque(self, m, time) -> np.ndarray:
         return self.optical_torque(m, time)
