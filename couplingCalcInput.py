@@ -13,7 +13,7 @@ from task import BZGridTask, solveEnergy
 def run():
     # 1. define model basic infomation
     mainDir="./mcalc/CrI3/"
-    model = System_tb(
+    model = System_w90(
             mainDir=mainDir,
             #hamR="BN_afm_soc",
             cutoff=-0.002,
@@ -33,7 +33,7 @@ def run():
     )
     ncores=8 # parallel workers for solving both band energies and exchange couplings
 
-    '''
+    #'''
     # 2a. Symmetrize the direction-independent collinear and orbital-SOI
     #     ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
@@ -98,8 +98,8 @@ def run():
                         ex["exchangeEnergy"][ifermi]*1000,ex["Jani"][ifermi,0,0]*1000,ex["Jani"][ifermi,1,1]*1000,
                         ex["Jani"][ifermi,0,1]*1000,*ex["DMI"][ifermi,:]*1000,))
 
-    writeMCSolverInputFile(mainDir, exCoup, repetition=16, pbc=pbc, offdiag=False, 
-                           singleIonAnisotropy=(0.0, 0.0, 0.0),   # anisotropy energy per atom in eV
+    writeMCSolverInputFile(mainDir, exCoup, repetition=16, pbc=pbc, offdiag=True,
+                           MAE=(0.0, 0.0, 0.0),   # DFT (E_x, E_y, E_z) per cell in eV
                            temperature=(100, 500, 16), field=(0, 0.1, 1),
                            sweeps=(40000, 80000, 0), modelType="Heisenberg",
                            algorithm="Metropolis", ncores=ncores, spin=1.0,

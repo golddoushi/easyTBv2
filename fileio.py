@@ -345,7 +345,7 @@ def writeJmatV2(mainDir, exch, supercellSize):
                     Dx, Dy, Dz))
 
 def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=False,
-                           singleIonAnisotropy=(0.0, 0.0, 0.0),
+                           MAE=(0.0, 0.0, 0.0),
                            temperature=(100, 500, 16), field=(0, 0.1, 1),
                            sweeps=(40000, 80000, 0), modelType="Ising",
                            algorithm="Metropolis", ncores=4, spin=1.0,
@@ -355,13 +355,16 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
     """
     Write an MCSOLVER input file from a new-framework ExchangeCoupling object.
 
-    Energies in ``exch`` and ``singleIonAnisotropy`` are assumed to be in eV and
-    are converted to Kelvin. The single-ion anisotropy argument is ordered as
-    ``(Dx, Dy, Dz)`` and can be either a length-3 sequence or a dict keyed by
-    atom id.
+    ``MAE=(E_x, E_y, E_z)`` gives the DFT total energies in eV per model cell
+    for the reference magnetic structure rotated uniformly along the three
+    Cartesian axes. Only energy differences matter.
 
-    offdiag = True, then only output a nearly isotropic Heisenberg spin model, in 
-    which all the anisotropy are expressed with single-ion anisotropy
+    With ``offdiag=True``, the full exchange tensors are written and their
+    uniform-axis anisotropy is subtracted from ``MAE``. The residual is shared
+    equally among the magnetic ions as single-ion anisotropy. With
+    ``offdiag=False``, isotropic exchange is written, so the complete ``MAE``
+    is represented by single-ion anisotropy. MCSOLVER coefficients are finally
+    converted from eV to Kelvin and divided by the corresponding spin norms.
     """
     EV_TO_KELVIN = 11604.518121550082
 
@@ -383,14 +386,6 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
             return value
         return value[atom_id]
 
-    def vector_for_atom(value, atom_id, default):
-        if isinstance(value, dict):
-            return value.get(atom_id, default)
-        value = np.asarray(value, dtype=float)
-        if value.shape == (3,):
-            return value
-        return value[atom_id]
-
     def spin_for_atom(atom_id):
         val = scalar_for_atom(spin, atom_id, 1.0)
         return float(val)
@@ -404,10 +399,6 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
             if val.shape == (3,):
                 return float(val[2])
         return float(val)
-
-    def anisotropy_for_atom(atom_id):
-        val = vector_for_atom(singleIonAnisotropy, atom_id, (0.0, 0.0, 0.0))
-        return np.asarray(val, dtype=float).reshape(3)
 
     def exchange_tensor(ifermi, iroute):
         J = exch.exchangeEnergy[ifermi, iroute]
@@ -450,6 +441,29 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
         if int(route["source_atom"]) in atom_to_mc_index and int(route["target_atom"]) in atom_to_mc_index
     ]
 
+    mae_relative = np.asarray(MAE, dtype=float)
+    if mae_relative.shape != (3,):
+        raise ValueError(f"MAE should be a length-3 sequence (E_x, E_y, E_z), got shape {mae_relative.shape}")
+    if not np.all(np.isfinite(mae_relative)):
+        raise ValueError(f"MAE should contain finite energies, got {mae_relative}")
+    mae_relative = mae_relative - np.min(mae_relative)
+
+    exchange_axis_energy = np.zeros(3, dtype=float)
+    if offdiag:
+        for iroute, route in written_routes:
+            source_atom = int(route["source_atom"])
+            target_atom = int(route["target_atom"])
+            source_sign = np.sign(spin_state_for_atom(source_atom)) or 1.0
+            target_sign = np.sign(spin_state_for_atom(target_atom)) or 1.0
+            exchange_axis_energy += source_sign * target_sign * np.diag(
+                exchange_tensor(int(fermiIndex), iroute)
+            )
+
+    exchange_mae = exchange_axis_energy - np.min(exchange_axis_energy)
+    residual_mae = mae_relative - exchange_mae
+    residual_mae -= np.min(residual_mae)
+    single_ion_energy_per_atom = residual_mae / len(magneticAtoms)
+
     with open(outpath, 'w') as f:
         f.write("This is mcsolver's save file, version: 3.0\n")
         f.write('Lattice:\n')
@@ -468,7 +482,7 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
             if spin_state == 0:
                 spin_state = spin_abs
             pos = model.posinfo['pos ions (frac.)'][atom_id]
-            Dx, Dy, Dz = anisotropy_for_atom(atom_id) * EV_TO_KELVIN / spin_abs**2
+            Dx, Dy, Dz = single_ion_energy_per_atom * EV_TO_KELVIN / spin_abs**2
             f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dx: %.9f Dy: %.9f Dz: %.9f\n'%(
                 iorb, atom_type, spin_state, pos[0], pos[1], pos[2], Dx, Dy, Dz
             ))
