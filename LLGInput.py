@@ -9,24 +9,28 @@ from scipy.constants import speed_of_light, epsilon_0
 
 def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive_amplitude=1.0,
                             trajectory=None, analyze_phase_portrait=False, compute_basins=True,
-                            topology_options=None):
+                            topology_options=None, torque_mode="total", map_time=0.0):
     """
-    Plot the unit-drive source torque over magnetic orientation space.
+    Plot a constant-drive tangent vector field over magnetic orientation space.
 
     Arrow components are expressed in the local orthonormal tangent basis,
     with ``T_phi`` horizontal and ``T_theta`` vertical.  Color gives the
-    Cartesian tangent-torque magnitude. With ``analyze_phase_portrait=True``,
-    the function also analyzes the autonomous ``device.drive_torque`` field.
-    That phase portrait excludes fields, anisotropy, precession, damping, and
-    the pulse envelope in the complete LLG equation.
+    theta component. By default, the arrows are the complete explicit LLG
+    derivative at ``map_time``: drive, anisotropy, applied/additional fields,
+    background torque, precession, and Gilbert mixing are included. The pulse
+    envelope is replaced by the constant ``drive_amplitude``. Set
+    ``torque_mode='drive'`` to recover the source-only map.
     """
-    source_torque_map = sample_tangent_torque_map(
+    torque_mode = str(torque_mode).lower()
+    dynamics_torque_map = sample_tangent_torque_map(
         device,
         theta_count=theta_count,
         phi_count=phi_count,
         drive_amplitude=drive_amplitude,
+        torque_mode=torque_mode,
+        time=map_time,
     )
-    torque_map = source_torque_map
+    torque_map = dynamics_torque_map
     moment_magnitude = getattr(device, "moment_magnitude_muB", None)
     if moment_magnitude is not None:
         moment_magnitude = float(moment_magnitude)
@@ -38,10 +42,15 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
             theta_component=moment_magnitude*torque_map.theta_component,
             phi_component=moment_magnitude*torque_map.phi_component,
         )
-        colorbar_label = r"IFT efficiency of $\tau_{\theta}$ ($\mu_B$/fs)/(V/$\AA$)$^2$"
+        if torque_mode == "total":
+            colorbar_label = r"Total $\tau_{\theta}$ ($\mu_B$/fs)"
+        else:
+            colorbar_label = r"Drive $\tau_{\theta}$ ($\mu_B$/fs)/(V/$\AA$)$^2$"
     else:
-        colorbar_label = r"Drive contribution to $\dot{\theta}$ (fs$^{-1}$)"
+        prefix = "Total" if torque_mode == "total" else "Drive"
+        colorbar_label = rf"{prefix} contribution to $\dot{{\theta}}$ (fs$^{{-1}}$)"
     with open(f"{mainDir}/torqueDistr.txt","w") as fout:
+        fout.write(f"# torque_mode={torque_mode} drive_amplitude={drive_amplitude} map_time={map_time}\n")
         fout.write("             Phi           Theta         tau_phi       tau_theta\n")
         for itheta in range(theta_count):
             for iphi in range(phi_count):
@@ -90,11 +99,15 @@ def plot_tangent_torque_map(mainDir, device, theta_count=31, phi_count=61, drive
     plt.close()
     if analyze_phase_portrait:
         options = {} if topology_options is None else dict(topology_options)
+        options.pop("torque_mode", None)
+        options.pop("time", None)
         topology = analyze_tangent_torque_topology(
-            device, torque_map=source_torque_map, drive_amplitude=drive_amplitude,
-            compute_basins=compute_basins, **options,
+            device, torque_map=dynamics_torque_map, drive_amplitude=drive_amplitude,
+            compute_basins=compute_basins, torque_mode=torque_mode, time=map_time, **options,
         )
-        _output_torque_phase_portrait(mainDir, torque_map, topology)
+        _output_torque_phase_portrait(
+            mainDir, torque_map, topology, torque_mode, drive_amplitude, map_time
+        )
     return torque_map
 
 
@@ -111,11 +124,13 @@ def _plot_periodic_curve(axis, phi, theta, **plot_options):
         if len(segment) > 1:
             axis.plot(phi[segment], theta[segment], **plot_options)
 
-
-def _output_torque_phase_portrait(mainDir, torque_map, topology: TangentTorqueTopology):
+def _output_torque_phase_portrait(mainDir, torque_map, topology: TangentTorqueTopology,
+                                  torque_mode="total", drive_amplitude=1.0, map_time=0.0):
     """Write and plot the fixed points, manifolds, and estimated basins."""
     with open(f"{mainDir}/torqueFixedPoints.txt", "w") as fout:
-        fout.write("# Autonomous unit-drive optical-torque field; not the complete LLG flow.\n")
+        fout.write(
+            f"# Constant-drive {torque_mode} field; amplitude={drive_amplitude}, time={map_time}.\n"
+        )
         fout.write("# id theta phi mx my mz residual index eig1_real eig1_imag eig2_real eig2_imag classification\n")
         for index, fixed in enumerate(topology.fixed_points):
             eig1, eig2 = fixed.eigenvalues
@@ -224,7 +239,7 @@ def _output_torque_phase_portrait(mainDir, torque_map, topology: TangentTorqueTo
     axis.set_xlabel(r"$\phi$")
     axis.set_ylabel(r"$\theta$")
     axis.set_title(
-        "Unit-drive optical-torque phase portrait\n"
+        f"Constant-drive {torque_mode} phase portrait\n"
         f"$\\Sigma$ index={topology.poincare_index_sum}, basin coverage={100.0*topology.basin_converged_fraction:.1f}%"
     )
     figure.tight_layout()
@@ -264,7 +279,7 @@ def plot_raw_tangent_torque_map(mainDir, device, drive_amplitude=1.0, trajectory
         phi_component=moment_magnitude*torque_map.phi_component,
     )
     fitted_map = sample_tangent_torque_at_directions(
-        device, torque_map.direction, drive_amplitude=drive_amplitude
+        device, torque_map.direction, drive_amplitude=drive_amplitude, torque_mode="drive"
     )
     fitted_map = TangentTorqueMap(
         theta=fitted_map.theta,
@@ -509,9 +524,9 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         torque_projection=0,
         light_pulse=pulse,
         external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
-        #use_DFT_mae=False,
-        #extra_uniaxial_mae=0.125E-3,               # in eV
-        #extra_uniaxial_mae_direction=(0, 0, 1), 
+        use_DFT_mae=False,
+        extra_uniaxial_mae=0.3E-3,               # in eV
+        extra_uniaxial_mae_direction=(0, 0, 1), 
         alpha=1e-3,
         theta0=5*np.pi/180,
         phi0=0*np.pi/180,
@@ -523,20 +538,23 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
     if show_torque_map:
-        plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None, analyze_phase_portrait=False)
+        plot_tangent_torque_map(
+            mainDir=mainDir, device=device, drive_amplitude=peak_field, torque_mode='total',
+            map_time=center_times[0], trajectory=None, analyze_phase_portrait=False,
+        )
         plot_raw_tangent_torque_map(mainDir=mainDir, device=device, trajectory=None)
     plt.show()
 
 def run_sot_example(mainDir="./",show_torque_map=True):
     pulse=step_pulse(
-        t_pulse_on= 200_000.0,
+        t_pulse_on= 000_000.0,
         t_pulse_off=250_000.0,
     )
     t_total = 800_000.0
 
     device = SOTDevice(
         H_K=np.array([0, 0, 1]),
-        H_ext=np.array([-0.3, 0.0, 0.0]),
+        H_ext=np.array([-1.0, 0.0, 0.0]),
         H_FL=0.10,
         H_DL=0.30,
         sigma=np.array([0, 1, 0]),
@@ -548,9 +566,11 @@ def run_sot_example(mainDir="./",show_torque_map=True):
     time_axis, trajectory = device.run(t_total=t_total, time_step=5000)
 
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title="Current density")
-    if show_torque_map: plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=trajectory)
+    if show_torque_map: 
+        plot_tangent_torque_map(mainDir=mainDir, device=device, trajectory=trajectory, 
+                                analyze_phase_portrait=True)
     plt.show()
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/Fe3GaTe2",omega0=0.85,polarization="y",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/Fe3GaTe2",omega0=1.35,polarization="xy-",show_torque_map=True)

@@ -1,5 +1,5 @@
 import numpy as np
-from system import System_tb
+from system import System_tb, System_w90
 from calculator import ExchangeCoupling
 from fileio import writeJmatV2, writeMCSolverInputFile
 from auxiliary import showElapsedTime

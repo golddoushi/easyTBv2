@@ -24,7 +24,7 @@ from SphericalHarmonics import (
     project_tangential,
     transform_ift_tensor,
 )
-from auxiliary import fermiDiracOccupations
+from auxiliary import fermiDiracOccupations, solve_chemical_potential
 from auxiliary import getWholeSymmetryOperator, SYMPREC
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
@@ -89,7 +89,7 @@ def build_ift_checkpoint_signature(main_dir,solver_name,occupation_mode,kBT,eta,
         source_hash.update(normalized_source.encode("utf-8"))
     for function in (
             solve_energy_orientation, solve_ift_orientation, collect_bz_energies,
-            collect_bz_response, solve_chemical_potential, fixed_number_electronic_state):
+            collect_bz_response, fixed_number_electronic_state):
         source_hash.update(function.__name__.encode("utf-8"))
         normalized_source = inspect.getsource(function).replace("\r\n", "\n").replace("\r", "\n")
         source_hash.update(normalized_source.encode("utf-8"))
@@ -256,30 +256,6 @@ def fixed_electron_band_energy(energies, occupied_state_count, number_kpoints):
     lowest_unoccupied = partitioned[occupied_state_count]
     discrete_fermi = 0.5 * (highest_occupied + lowest_unoccupied)
     return np.sum(occupied) / number_kpoints, discrete_fermi, highest_occupied, lowest_unoccupied
-
-def solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints, kBT, tol=1.0e-12):
-    """Find the chemical potential giving a fixed Fermi-Dirac electron count."""
-    energies = np.asarray(energies, dtype=float)
-    number_bands = energies.size / number_kpoints
-    if not 0.0 < target_electrons_per_cell < number_bands:
-        raise ValueError("target_electrons_per_cell must lie strictly between zero and the number of bands.")
-    if kBT <= 0.0:
-        raise ValueError("A positive kBT is required for Fermi-Dirac filling.")
-
-    margin = max(40.0 * kBT, 1.0)
-    lower = float(np.min(energies) - margin)
-    upper = float(np.max(energies) + margin)
-    for _ in range(200): # Bisector searching for the chemical potential that gives correct filling
-        chemical_potential = 0.5 * (lower + upper)
-        occupations = fermiDiracOccupations(energies, [chemical_potential], kBT)[0]
-        electron_count = np.sum(occupations) / number_kpoints
-        if abs(electron_count - target_electrons_per_cell) < tol:
-            return chemical_potential
-        if electron_count < target_electrons_per_cell:
-            lower = chemical_potential
-        else:
-            upper = chemical_potential
-    raise RuntimeError("The fixed-number chemical-potential search did not converge.")
 
 def fixed_number_electronic_state(energies, target_electrons_per_cell, number_kpoints, occupation_mode, kBT):
     """

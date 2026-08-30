@@ -245,6 +245,21 @@ class SingleMomentLLG:
         self.time: np.ndarray | None = None
         self.trajectory: np.ndarray | None = None
 
+    def derivative_from_terms(self, m: Sequence[float], effective_field, torque) -> np.ndarray:
+        """Evaluate the explicit Gilbert equation from already selected terms.
+
+        This supports constant-drive phase portraits: the field is the one
+        used by the trajectory, while a chosen drive amplitude replaces the
+        time-dependent pulse envelope.
+        """
+        direction = _unit_vector(m, "magnetic moment")
+        effective_field = _vector3(effective_field, "effective field")
+        torque = _vector3(torque, "torque")
+        torque -= direction * np.dot(direction, torque)
+
+        force = -self.gamma * np.cross(direction, effective_field) + torque
+        return (force + self.alpha * np.cross(direction, force)) / (1.0 + self.alpha**2)
+
     def derivative(self, time: float, m: Sequence[float]) -> np.ndarray:
         """
         Evaluate the explicit Gilbert equation at ``(time, m)``.
@@ -253,14 +268,9 @@ class SingleMomentLLG:
         class describes orientational dynamics at fixed moment magnitude.
         """
         direction = _unit_vector(m, "magnetic moment")
-        effective_field = _vector3(
-            self.field(direction, time), "effective field"
+        return self.derivative_from_terms(
+            direction, self.field(direction, time), self.torque(direction, time)
         )
-        torque = _vector3(self.torque(direction, time), "torque")
-        torque -= direction * np.dot(direction, torque)
-
-        force =  -self.gamma * np.cross(direction, effective_field) + torque
-        return (force + self.alpha * np.cross(direction, force)) / (1.0 + self.alpha**2)
 
     def _rk4_step(self, time: float, m: np.ndarray, step: float) -> np.ndarray:
         k1 = self.derivative(time, m)

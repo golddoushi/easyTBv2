@@ -763,3 +763,27 @@ def fermiDiracOccupations(energies, fermiList, kBT):
     exp_positive = np.exp(scaled_energy[~positive])
     occupations[~positive] = 1.0 / (1.0 + exp_positive)
     return occupations
+
+def solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints, kBT, tol=1.0e-12):
+    """Find the chemical potential giving a fixed Fermi-Dirac electron count."""
+    energies = np.asarray(energies, dtype=float)
+    number_bands = energies.size / number_kpoints
+    if not 0.0 < target_electrons_per_cell < number_bands:
+        raise ValueError("target_electrons_per_cell must lie strictly between zero and the number of bands.")
+    if kBT <= 0.0:
+        raise ValueError("A positive kBT is required for Fermi-Dirac filling.")
+
+    margin = max(40.0 * kBT, 1.0)
+    lower = float(np.min(energies) - margin)
+    upper = float(np.max(energies) + margin)
+    for _ in range(200): # Bisector searching for the chemical potential that gives correct filling
+        chemical_potential = 0.5 * (lower + upper)
+        occupations = fermiDiracOccupations(energies, [chemical_potential], kBT)[0]
+        electron_count = np.sum(occupations) / number_kpoints
+        if abs(electron_count - target_electrons_per_cell) < tol:
+            return chemical_potential
+        if electron_count < target_electrons_per_cell:
+            lower = chemical_potential
+        else:
+            upper = chemical_potential
+    raise RuntimeError("The fixed-number chemical-potential search did not converge.")

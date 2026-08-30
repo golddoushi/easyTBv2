@@ -539,8 +539,16 @@ It supports:
   uniaxial energy `K[1-(m dot u)^2]`.
 
 `LLGInput.py` can plot regular and raw tangent torque maps, raw-vs-VSH errors,
-and magnetic trajectories.  Optional phase-portrait analysis identifies
-stable/unstable/saddle fixed points, estimates attraction basins, traces stable
+and magnetic trajectories. `plot_tangent_torque_map` now defaults to
+`torque_mode="total"`: at every orientation it freezes `drive_amplitude`, adds
+the active DFT/manual anisotropy, external/additional fields and background
+torques, and evaluates the same explicit Gilbert derivative used by the RK4
+trajectory. `map_time` selects the time at which any non-drive time-dependent
+terms are sampled. Use `torque_mode="drive"` for the historical source-only
+map; the raw electronic torque map remains source-only by definition.
+
+Optional phase-portrait analysis uses the same selected constant-drive field,
+identifies stable/unstable/saddle fixed points, estimates attraction basins, traces stable
 and unstable separatrices, and checks the Poincare-index sum on the sphere.
 Use these precise dynamical-systems objects if describing a torque-map
 "topology" in a paper.

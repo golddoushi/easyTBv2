@@ -8,7 +8,7 @@ from .Grid import SpinGalvanicConductance, SpinGalvanicConductance_diag, Orbital
 from .Grid import SpinTorque, SpintorqueGalvanicConductance
 from .Grid import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 
-from .Grid import Chern_FHS, Z2_FHS
+from .Grid import ExchangeCoupling, Chern_FHS, Z2_FHS
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath

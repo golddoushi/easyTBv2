@@ -65,7 +65,7 @@ def _polarization_vector(polarization) -> np.ndarray:
 
 @dataclass(frozen=True)
 class TangentTorqueMap:
-    """Drive-torque vector field sampled on the magnetic orientation sphere."""
+    """Tangent vector field sampled on the magnetic orientation sphere."""
 
     theta: np.ndarray
     phi: np.ndarray
@@ -83,14 +83,29 @@ class TangentTorqueMap:
         """Return ``(T_theta, T_phi)`` on the last axis."""
         return np.stack((self.theta_component, self.phi_component), axis=-1)
 
-def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61, drive_amplitude: float = 1.0,) -> TangentTorqueMap:
+def _device_torque(device, direction, drive_amplitude, torque_mode, time):
+    if torque_mode == "total":
+        if not hasattr(device, "total_torque"):
+            raise TypeError("device must provide total_torque(m, drive_amplitude, time).")
+        return device.total_torque(direction, drive_amplitude, time)
+    if torque_mode == "drive":
+        if not hasattr(device, "drive_torque"):
+            raise TypeError("device must provide drive_torque(m, drive_amplitude).")
+        return device.drive_torque(direction, drive_amplitude)
+    raise ValueError("torque_mode must be 'total' or 'drive'.")
+
+def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61,
+                              drive_amplitude: float = 1.0, torque_mode: str = "total",
+                              time: float = 0.0) -> TangentTorqueMap:
     """
-    Sample the drive-induced tangent torque over magnetic orientations.
+    Sample a constant-drive tangent vector field over magnetic orientations.
 
     ``drive_amplitude=1`` means a unit current-pulse multiplier for
     :class:`SOTDevice` and a unit electric-field amplitude in V/angstrom for
-    :class:`IFTDevice`.  Static fields, anisotropy, and their LLG precession
-    are intentionally excluded.
+    :class:`IFTDevice`. ``torque_mode='total'`` evaluates the complete explicit
+    LLG derivative, including anisotropy, applied/additional fields,
+    non-driven additional torque, and Gilbert mixing. ``torque_mode='drive'``
+    retains the source-only map used by older versions.
 
     The theta samples are cell-centered in ``(0, pi)``.  The plot can still
     span ``0 <= theta <= pi``, but avoiding the exact poles removes the
@@ -104,8 +119,9 @@ def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61
         raise ValueError("phi_count must be at least 2.")
     if not np.isfinite(drive_amplitude):
         raise ValueError("drive_amplitude must be finite.")
-    if not hasattr(device, "drive_torque"):
-        raise TypeError("device must provide drive_torque(m, drive_amplitude).")
+    if not np.isfinite(time):
+        raise ValueError("time must be finite.")
+    torque_mode = str(torque_mode).lower()
 
     theta_axis = (np.arange(theta_count, dtype=float) + 0.5) * np.pi / theta_count
     phi_axis = np.linspace(0.0, 2.0 * np.pi, phi_count, endpoint=False)
@@ -138,15 +154,11 @@ def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61
     )
 
     flat_direction = direction.reshape(-1, 3)
-    flat_torque = np.asarray(
-        [
-            device.drive_torque(m, drive_amplitude)
-            for m in flat_direction
-        ],
-        dtype=float,
-    )
+    flat_torque = np.asarray([
+        _device_torque(device, m, drive_amplitude, torque_mode, time) for m in flat_direction
+    ], dtype=float)
     if flat_torque.shape != flat_direction.shape:
-        raise ValueError("device.drive_torque must return a Cartesian vector.")
+        raise ValueError("The selected device torque must return a Cartesian vector.")
     cartesian = flat_torque.reshape(direction.shape)
     radial = np.sum(cartesian * direction, axis=-1)
     cartesian = cartesian - radial[..., None] * direction
@@ -160,12 +172,14 @@ def sample_tangent_torque_map(device, theta_count: int = 31, phi_count: int = 61
         phi_component=np.sum(cartesian * phi_basis, axis=-1),
     )
 
-def sample_tangent_torque_at_directions(device, directions, drive_amplitude: float = 1.0) -> TangentTorqueMap:
-    """Evaluate the fitted drive torque at specified magnetic directions."""
+def sample_tangent_torque_at_directions(device, directions, drive_amplitude: float = 1.0,
+                                        torque_mode: str = "total", time: float = 0.0) -> TangentTorqueMap:
+    """Evaluate the selected tangent vector field at specified directions."""
     if not np.isfinite(drive_amplitude):
         raise ValueError("drive_amplitude must be finite.")
-    if not hasattr(device, "drive_torque"):
-        raise TypeError("device must provide drive_torque(m, drive_amplitude).")
+    if not np.isfinite(time):
+        raise ValueError("time must be finite.")
+    torque_mode = str(torque_mode).lower()
     direction = np.asarray(directions, dtype=float)
     if direction.ndim < 2 or direction.shape[-1] != 3:
         raise ValueError("directions must have shape (..., 3).")
@@ -175,9 +189,11 @@ def sample_tangent_torque_at_directions(device, directions, drive_amplitude: flo
     direction = direction/direction_norm[..., None]
 
     flat_direction = direction.reshape(-1, 3)
-    flat_torque = np.asarray([device.drive_torque(m, drive_amplitude) for m in flat_direction], dtype=float)
+    flat_torque = np.asarray([
+        _device_torque(device, m, drive_amplitude, torque_mode, time) for m in flat_direction
+    ], dtype=float)
     if flat_torque.shape != flat_direction.shape:
-        raise ValueError("device.drive_torque must return a Cartesian vector.")
+        raise ValueError("The selected device torque must return a Cartesian vector.")
     cartesian = flat_torque.reshape(direction.shape)
     cartesian -= np.sum(cartesian*direction, axis=-1)[..., None]*direction
 
@@ -320,6 +336,7 @@ class SOTDevice:
             gamma=gamma,
             alpha=alpha,
         )
+        self.field = field
         self.m = _initial_direction(theta0, phi0)
         self.time = 0.0
 
@@ -339,6 +356,14 @@ class SOTDevice:
         damping_like = -self.gamma*self.H_DL*np.cross(directions, np.cross(directions, self.sigma))
         field_like = -self.gamma*self.H_FL*np.cross(directions, self.sigma)
         return float(drive_amplitude)*(damping_like+field_like)
+
+    def total_torque(self, m, drive_amplitude=1.0, time=0.0) -> np.ndarray:
+        """Return the complete constant-drive LLG vector field in 1/fs."""
+        direction = np.asarray(m, dtype=float)
+        direction /= np.linalg.norm(direction)
+        return self.dynamic.derivative_from_terms(
+            direction, self.field(direction, time), self.drive_torque(direction, drive_amplitude)
+        )
 
     def run(self, t_total=1.0, time_step=0.01):
         time_axis, trajectory = self.dynamic.integrate(
@@ -501,9 +526,11 @@ class IFTDevice:
         if additional_field is not None:
             field = field + _as_field(additional_field)
 
+        self.additional_torque = Torque()
         torque = Torque(self._optical_torque)
         if additional_torque is not None:
-            torque = torque + _as_torque(additional_torque)
+            self.additional_torque = _as_torque(additional_torque)
+            torque = torque + self.additional_torque
 
         self.field = field
         self.torque = torque
@@ -629,6 +656,15 @@ class IFTDevice:
         """Vectorized form of :meth:`drive_torque` for phase-portrait analysis."""
         amplitude = complex(drive_amplitude)
         return -self.ift_response_many(directions)*abs(amplitude)**2/(HBAR_EV_FS*self.moment_magnitude_muB)
+
+    def total_torque(self, m, drive_amplitude=1.0, time=0.0) -> np.ndarray:
+        """Return the complete constant-drive LLG vector field in 1/fs."""
+        direction = np.asarray(m, dtype=float)
+        direction /= np.linalg.norm(direction)
+        nonfield_torque = self.drive_torque(direction, drive_amplitude) + self.additional_torque(direction, time)
+        return self.dynamic.derivative_from_terms(
+            direction, self.field(direction, time), nonfield_torque
+        )
     
     def _optical_torque(self, m, time) -> np.ndarray:
         return self.optical_torque(m, time)
