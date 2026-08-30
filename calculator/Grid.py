@@ -4618,6 +4618,10 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
         '''
         Compute exchange couplings from retarded lattice Green's functions.
 
+        ``exchangeEnergy``, ``Jani``, ``DMI``, and the values copied into the
+        route dictionaries are fully normalized magnetic-force energies in eV.
+        Output code must not apply an additional factor of one half.
+
         Parameters
         ----------
         exchangeRoutes : list[dict] | list[list[dict]]
@@ -4786,12 +4790,15 @@ class ExchangeCoupling(RetardedLatticeGreenFunc):
                         C_xy += self._contractSpinRotation(p_source, 0, p_target, 1, G_forward, G_backward) * weight
                         C_yx += self._contractSpinRotation(p_source, 1, p_target, 0, G_forward, G_backward) * weight
 
-                    self.exchangeEnergy[ifermi, iroute] = self.symmetricExchangeSign * J.imag/2
-                    self.Jani[ifermi, iroute] = self.symmetricExchangeSign * np.array([[J_a_xx, J_a_xy], [J_a_xy, J_a_yy]]).imag/2
-                    self.rotationCurvature[ifermi, iroute, 0, 1] = self.symmetricExchangeSign * C_xy.imag/2
-                    self.rotationCurvature[ifermi, iroute, 1, 0] = self.symmetricExchangeSign * C_yx.imag/2
+                    # The accumulated contractions carry a historical factor
+                    # of two.  The magnetic-force theorem contributes 1/pi.
+                    exchange_prefactor = 1.0/(2*np.pi)
+                    self.exchangeEnergy[ifermi, iroute] = self.symmetricExchangeSign * J.imag * exchange_prefactor
+                    self.Jani[ifermi, iroute] = self.symmetricExchangeSign * np.array([[J_a_xx, J_a_xy], [J_a_xy, J_a_yy]]).imag * exchange_prefactor
+                    self.rotationCurvature[ifermi, iroute, 0, 1] = self.symmetricExchangeSign * C_xy.imag * exchange_prefactor
+                    self.rotationCurvature[ifermi, iroute, 1, 0] = self.symmetricExchangeSign * C_yx.imag * exchange_prefactor
                     DMI[2] = 0.5 * (C_yx - C_xy)
-                    self.DMI[ifermi, iroute] = self.dmiSign * DMI.imag/2
+                    self.DMI[ifermi, iroute] = self.dmiSign * DMI.imag * exchange_prefactor
                     J_new[iroute] = np.diag([self.exchangeEnergy[ifermi, iroute]]*3)
 
                 dJ_max = float(np.max(np.abs(J_new - J_old)))

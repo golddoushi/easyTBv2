@@ -137,5 +137,5 @@ FERMI=-2.1     # set Fermi level
 DFERMI=2.0    # scanning energy region around Fermi energy
 NFERMI=20   # sampling points in scanning energy region
 
-EV2K=11588.75
+EV2K=11604.518121550082
 

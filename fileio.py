@@ -322,7 +322,7 @@ def writeJmat(mainDir, bondList, supercellSize):
 def writeJmatV2(mainDir, exch, supercellSize):
     global version
     with open(mainDir+'J.txt','w') as fJ:
-        fJ.write(f'Anisotropic exchange energy J*S^2, calculated by Greens function. version: {version}\n')
+        fJ.write(f'Anisotropic exchange energy J*S^2 in eV, calculated by Greens function. version: {version}\n')
         fJ.write('evaluated on %dx%dx%d k grid\n'%(*supercellSize,))
         fJ.write('#Fermi          NN   dis.  is  it  Rx  Ry  Rz           Jxx           Jxy           Jxz           Jyx           Jyy           Jyz           Jzx           Jzy           Jzz             J          Ja_x          Ja_y         Ja_yx            Dx            Dy            Dz\n')
 
@@ -363,7 +363,7 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
     offdiag = True, then only output a nearly isotropic Heisenberg spin model, in 
     which all the anisotropy are expressed with single-ion anisotropy
     """
-    EV2K = 11588.75
+    EV_TO_KELVIN = 11604.518121550082
 
     def as_axis_tuple(value, name):
         if np.isscalar(value):
@@ -468,7 +468,7 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
             if spin_state == 0:
                 spin_state = spin_abs
             pos = model.posinfo['pos ions (frac.)'][atom_id]
-            Dx, Dy, Dz = anisotropy_for_atom(atom_id) * EV2K / spin_abs**2
+            Dx, Dy, Dz = anisotropy_for_atom(atom_id) * EV_TO_KELVIN / spin_abs**2
             f.write('orb %d : type %d spin %.2f pos [%.9f %.9f %.9f] Dx: %.9f Dy: %.9f Dz: %.9f\n'%(
                 iorb, atom_type, spin_state, pos[0], pos[1], pos[2], Dx, Dy, Dz
             ))
@@ -482,7 +482,7 @@ def writeMCSolverInputFile(mainDir, exch, repetition=16, pbc=(0,1), offdiag=Fals
             target_atom = int(route["target_atom"])
             s1 = abs(spin_for_atom(source_atom))
             s2 = abs(spin_for_atom(target_atom))
-            factor = EV2K / abs(s1 * s2)
+            factor = EV_TO_KELVIN / abs(s1 * s2)
             Jmat = exchange_tensor(ifermi, iroute) * factor
             if offdiag:
                 f.write('bond %d: Jx %.9f Jy %.9f Jz %.9f Jxy %.9f Jxz %.9f Jyz %.9f Jyx %.9f Jzx %.9f Jzy %.9f orb %d to orb %d over [%d %d %d]\n'%(

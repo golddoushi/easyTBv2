@@ -232,7 +232,7 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
         #print(rG_w_lat[-1,overLat_id_dic[(-2,0,0)]])
         #exit()
         # calc. charge density and spin density
-        diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
+        diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/np.pi
         rho_of_each_orb=sum(diag_list)
         print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
         print("Mag.mom of source atoms: %.6f"%(
@@ -269,11 +269,11 @@ def calcIsotropicJ_GaussianQuadrature(mainDir,sc=[10,10,1],
                 contr=np.diag(center1@rG_w_p@center2@rG_w_n)
                 #J+=(contr_double-contr_single1-contr_single2)*dz[iw]*weights[iw]
                 J+=2*contr*dz[iw]*weights[iw]
-            bond.exchangeEnergy=sum(J).imag/4
-            dmi=sum(J).real/4
+            bond.exchangeEnergy=sum(J).imag/(4*np.pi)
+            dmi=sum(J).real/(4*np.pi)
             #bond.broadCastExchange(type='Ising')
-            print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J/2=%.6f"%(
-                ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy/2*1000))
+            print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J=%.6f"%(
+                ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy*1000))
             J_list_new[ibondType]=bond.exchangeEnergy
             #exit()
         
@@ -414,7 +414,7 @@ def calcIsotropicJ_GaussianQuadrature_V2(mainDir,sc=[10,10,1],
         #print(rG_w_lat[-1,overLat_id_dic[(-2,0,0)]])
         #exit()
         # calc. charge density and spin density
-        diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
+        diag_list=np.array([np.diag(rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/np.pi
         rho_of_each_orb=sum(diag_list)
         print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
         print("Mag.mom of source atoms: %.6f"%(
@@ -436,9 +436,9 @@ def calcIsotropicJ_GaussianQuadrature_V2(mainDir,sc=[10,10,1],
                     rG_w_n=rG_w_lat[iw][i_overlat_n][orbID][:,orbID]
                     contr=np.diag(center1@rG_w_p@center2@rG_w_n)
                     J+=2*contr*dz[iw]*weights[iw]
-                bond.exchangeEnergy=sum(J).imag/4
-                print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J/2=%.6f"%(
-                    ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy/2*1000))
+                bond.exchangeEnergy=sum(J).imag/(4*np.pi)
+                print("bondType%d orb%d-orb%d [%d %d %d] len: %.4f J=%.6f"%(
+                    ibondType,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,bond.exchangeEnergy*1000))
             J_list_new[ibondType]=bond.exchangeEnergy
             #exit()
         
@@ -583,7 +583,7 @@ def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False
                     nthreads=nthreads)
         
             # calc. charge density and spin density
-            diag_list=np.array([np.diag(np.linalg.inv(hr.homeOverlap[relevantOrbID_list,:][:,relevantOrbID_list])@rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/2
+            diag_list=np.array([np.diag(np.linalg.inv(hr.homeOverlap[relevantOrbID_list,:][:,relevantOrbID_list])@rG_w_lat[iw][overLat_id_dic[(0,0,0)]])*dz[iw]*weights[iw] for iw in range(npoints)]).imag/np.pi
             rho_of_each_orb=sum(diag_list)
             print("Charges of source atoms: %.6f"%sum(rho_of_each_orb))
             print("Mag.mom of source atoms: %.6f"%(
@@ -646,32 +646,32 @@ def calcJFull_GaussianQuadrature(hr:reader.Hr,mainDir,sc=[10,10,1],overlap=False
                     
                         #DMI[2]+=2j*(a0z-az0)*dz[iw]*weights[iw]
 
-                    bond.exchangeEnergy[ifermi]=J.imag/2
-                    bond.Jani[ifermi]=np.array([[J_a_xx,J_a_xy],[J_a_xy,J_a_yy]]).imag/2
-                    bond.DMI[ifermi]=DMI[:2].imag/2
+                    bond.exchangeEnergy[ifermi]=J.imag/(2*np.pi)
+                    bond.Jani[ifermi]=np.array([[J_a_xx,J_a_xy],[J_a_xy,J_a_yy]]).imag/(2*np.pi)
+                    bond.DMI[ifermi]=DMI[:2].imag/(2*np.pi)
                 
                     print("bondType%d ifermi%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f"%(
                         ibondType,ifermi,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
-                        J.imag/4*1000,J_a_xx.imag/4*1000,
-                        J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
+                        bond.exchangeEnergy[ifermi]*1000,bond.Jani[ifermi,0,0]*1000,
+                        bond.Jani[ifermi,1,1]*1000,bond.Jani[ifermi,0,1]*1000,bond.DMI[ifermi,0]*1000,bond.DMI[ifermi,1]*1000))
                     fout.write("bondType%d ifermi%d orb%d-orb%d[%2d%2d%2d] len: %.2f J=%.4f Jax=%.4f Jay=%.4f Jaxy=%.4f Dx=%.4f Dy=%.4f\n"%(
                         ibondType,ifermi,bond.sourceOrb.id,bond.targetOrb.id,*bond.overLat,bond.bondLen,
-                        J.imag/4*1000,J_a_xx.imag/4*1000,
-                        J_a_yy.imag/4*1000,J_a_xy.imag/4*1000,DMI[0].imag/4*1000,DMI[1].imag/4*1000))
+                        bond.exchangeEnergy[ifermi]*1000,bond.Jani[ifermi,0,0]*1000,
+                        bond.Jani[ifermi,1,1]*1000,bond.Jani[ifermi,0,1]*1000,bond.DMI[ifermi,0]*1000,bond.DMI[ifermi,1]*1000))
                     fout.write("J (meV) decomposed to orbital-paris\n")
                     for iorb_source in range(p_source.shape[0]):
                         for iorb_target in range(p_target.shape[0]):
-                            fout.write(f"{J_orbDecomp.imag[iorb_source,iorb_target]/4*1000:10.3f}")
+                            fout.write(f"{J_orbDecomp.imag[iorb_source,iorb_target]/(2*np.pi)*1000:10.3f}")
                         fout.write("\n")
                     fout.write("Dx (meV) decomposed to orbital-paris\n")
                     for iorb_source in range(p_source.shape[0]):
                         for iorb_target in range(p_target.shape[0]):
-                            fout.write(f"{DMI_orbDecomp.imag[0,iorb_source,iorb_target]/4*1000:10.3f}")
+                            fout.write(f"{DMI_orbDecomp.imag[0,iorb_source,iorb_target]/(2*np.pi)*1000:10.3f}")
                         fout.write("\n")
                     fout.write("Dy (meV) decomposed to orbital-paris\n")
                     for iorb_source in range(p_source.shape[0]):
                         for iorb_target in range(p_target.shape[0]):
-                            fout.write(f"{DMI_orbDecomp.imag[1,iorb_source,iorb_target]/4*1000:10.3f}")
+                            fout.write(f"{DMI_orbDecomp.imag[1,iorb_source,iorb_target]/(2*np.pi)*1000:10.3f}")
                         fout.write("\n")
                 bond.exchangeEnergyMatrix=np.diag(np.array([bond.exchangeEnergy,bond.exchangeEnergy,bond.exchangeEnergy]))
                 J_list_new[ibondType,:,:]=bond.exchangeEnergyMatrix

@@ -498,16 +498,22 @@ def pseudoRotation(rotate,lat,axial):
 
 def semiCirle(p1:float,p2:float,pathPoints:np.ndarray):
     '''
-    Generate semi-cirle path on upper half complex plane
-    p1, p2: the two points on real-axis
-    pathPoints: the positions on path, should be in range -1~1
+    Generate a semicircle path on the upper half complex plane.
+
+    The supplied points are coordinates ``x`` in ``[-1, 1]`` and are mapped
+    to ``theta = pi * (x + 1) / 2``.  The returned differential is therefore
+    ``dz/dx``, including the ``pi/2`` Jacobian required by quadrature rules on
+    ``x``.  The path runs from the right endpoint to the left endpoint.
     '''
     p_right=max([p1,p2])
     p_left=min([p1,p2])
     r=(p_right-p_left)/2
     o=(p_right+p_left)/2
     thetaPath=(pathPoints+1)/2*np.pi
-    return r*np.exp(1j*thetaPath)+o, r*1j*np.exp(1j*thetaPath)
+    return (
+        r*np.exp(1j*thetaPath)+o,
+        r*1j*np.exp(1j*thetaPath)*(np.pi/2),
+    )
 
 def obtainProjections(filePathOfPOSCAR:str,projections=[],ispin=1):
     '''

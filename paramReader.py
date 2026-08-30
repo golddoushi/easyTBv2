@@ -175,7 +175,7 @@ def readGlobalConst():
     MAXMCSTEP=128
     SPINFOLD=1
 
-    EV2K=11588.75
+    EV2K=11604.518121550082
 
     FERMI=0
     DFERMI=2
