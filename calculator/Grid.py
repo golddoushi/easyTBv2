@@ -1605,8 +1605,8 @@ class AnormalousHallConductance(BerryCurv):
                         for ibeta in range(3):
                             projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]*f)
         
-        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        self.projected_sigma=projected_sigma*elementary_charge**2 / (hbar * angstrom * abs(self.model.Vcell) * np.prod(self.kgrid))
+        #self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Anormalous Hall conductance finished")
 
 class VelocityVelocityCorrelation_diag(Velocity_diag):
@@ -1650,8 +1650,8 @@ class AnormalousHallConductance_diag(VelocityVelocityCorrelation_diag):
                         for ibeta in range(3):
                             projected_sigma[ivelocity_alpha,ivelocity_beta,ifermi,ialpha,ibeta]=np.sum(self.projected_BerryCurv_diag[ivelocity_alpha,ivelocity_beta,...,ialpha,ibeta,:]*weight)
         
-        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        self.projected_sigma=projected_sigma*elementary_charge**2 / (hbar * angstrom * abs(self.model.Vcell) * np.prod(self.kgrid))
+        #self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Intra-band spin Galvanic conductance finished")
 
 class AnormalousHallConductance_LG_DM(Velocity):
@@ -1661,7 +1661,9 @@ class AnormalousHallConductance_LG_DM(Velocity):
         '''
         Calculate the dc charge-current response from the common first-order
         length-gauge density-matrix kernel. ``fullCovariantDerivative=True``
-        includes both intraband (I) and interband (E) channels.
+        includes both intraband (I) and interband (E) channels. Note the CRTA
+        Boltzmann conductivity is the I channel only. 
+        The full ``sigma`` additionally contains the broadened E channel.
         '''
         super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
         self.Iodd = False
@@ -1678,8 +1680,8 @@ class AnormalousHallConductance_LG_DM(Velocity):
         self.density_matrix_kernel = kernel
 
         # Unit conversion
-        #scale=1/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        scale = 2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))
+        scale=elementary_charge**2 / (hbar * angstrom * abs(self.model.Vcell) * np.prod(self.kgrid))
+        #scale = 2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))
 
         self.projected_sigma_channels = {
             name: response * scale for name, response in projected_channels.items()

@@ -32,7 +32,7 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2@NbSe2/"
+    mainDir="./mcalc/Fe/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -74,7 +74,7 @@ def run():
         ispin=2,
         spinSeparated=True,
     )
-    #'''
+    '''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
@@ -219,13 +219,13 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(33,33,1)
+    BZGrid=(60,60,60)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="IFT" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveIFTorque_LG_DM,
+    ObservableType="AHC" # "IFE" or "IFT"; must match the selected response calculator
+    calc=BZGridTask(model, solveAHC_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -259,7 +259,7 @@ def run():
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
-        if 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
+        if False and 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
             if responseFunction is None:
                 local_response = result_q['projected response']
                 responseFunction = np.zeros(local_response.shape[:3] + tuple(BZGrid) + local_response.shape[6:],
@@ -311,7 +311,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    '''
+    #'''
     # output projected 2-rank conductance
     projected_sigma/=len(calc.results)
     with open("%s/secondOrderTensor.txt"%mainDir,"w") as fout:
@@ -333,7 +333,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    #'''
+    '''
     # output projected 3-ranked, frequency-dependent complex conductance
     projected_sigma_average = projected_sigma/len(calc.results)
     for iproj1 in range(projected_sigma_average.shape[0]):

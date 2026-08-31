@@ -186,6 +186,35 @@ in `mcalc/FeCl2` were refreshed at server time 2026-08-27 15:51.
 
 ## Remote Safety And Practical Notes
 
+### VASP 6.6.0 Build And Run
+
+The VASP 6.6.0 source tree is ``~/soft/vasp.6.6.0``. Before compiling or
+running it, initialize Intel oneAPI in the remote shell:
+
+```bash
+. /opt/intel/oneapi/setvars.sh
+```
+
+Compile the standard executable from the VASP root with:
+
+```bash
+cd ~/soft/vasp.6.6.0
+make std
+```
+
+The analogous ``make gam`` and ``make ncl`` targets build the gamma-only and
+noncollinear executables. A typical lightweight parallel run is:
+
+```bash
+mpirun -np 48 vasp_std
+```
+
+The machine has 96 physical cores, use all of them for large tasks. For small 
+model, using too many cores perhaps slow down the computations.
+The oneAPI initialization supplies the compiler, MPI runtime and required
+library paths. Keep source-code experiments in a clearly named backup or
+scratch tree and do not overwrite an active production executable silently.
+
 - `rg` was not available on the server; use `grep`/`find` as needed.
 - Do not use plain non-interactive `python3`; see the interpreter section.
 - Treat active remote calculations as user work. Check the exact PID before
