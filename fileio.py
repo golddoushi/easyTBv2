@@ -2,7 +2,7 @@ import os
 import auxiliary as aux
 import paramReader as param
 import numpy as np
-import fortio, scipy.io
+import fortio, scipy.io, h5py
 import warnings
 
 global version
@@ -1263,74 +1263,43 @@ class W90SOI:
             header=fin.readline().split()
             assert len(header)==4, f"invalid header in {filename}: {header}"
             self.nbands,self.nkpts,self.ncomponents,self.nspins=map(int,header)
-            assert self.ncomponents==3, (
-                f"{filename} must contain three Cartesian components, "
-                f"found {self.ncomponents}"
-            )
-            assert self.nspins==2, (
-                f"{filename} must contain two spin channels, found {self.nspins}"
-            )
+            assert self.ncomponents==3, f"{filename} must contain three Cartesian components, found {self.ncomponents}"
+            assert self.nspins==2, f"{filename} must contain two spin channels, found {self.nspins}"
 
             self.kpt_list=np.empty((self.nkpts,3),dtype=float)
-            self.data=np.empty((
-                self.nkpts,self.ncomponents,self.nspins,self.nspins,
-                self.nbands,self.nbands,
-            ),dtype=complex)
+            self.data=np.empty((self.nkpts,self.ncomponents,self.nspins,self.nspins,self.nbands,self.nbands),dtype=complex)
 
             for ikpt in range(self.nkpts):
                 for icomponent in range(self.ncomponents):
                     for ispin_bra in range(self.nspins):
                         for ispin_ket in range(self.nspins):
                             block_header=fin.readline().split()
-                            assert len(block_header)==7, (
-                                f"invalid block header in {filename}: {block_header}"
-                            )
+                            assert len(block_header)==7, f"invalid block header in {filename}: {block_header}"
                             block_index=tuple(map(int,block_header[:4]))
-                            expected=(
-                                ikpt+1,icomponent+1,ispin_bra+1,ispin_ket+1,
-                            )
-                            assert block_index==expected, (
-                                f"unexpected block order in {filename}: "
-                                f"{block_index}, expected {expected}"
-                            )
+                            expected=(ikpt+1,icomponent+1,ispin_bra+1,ispin_ket+1)
+                            assert block_index==expected, f"unexpected block order in {filename}: {block_index}, expected {expected}"
                             kpt=np.array(block_header[4:],dtype=float)
                             if icomponent==0 and ispin_bra==0 and ispin_ket==0:
                                 self.kpt_list[ikpt]=kpt
                             else:
-                                assert np.allclose(
-                                    kpt,self.kpt_list[ikpt],atol=1e-12,rtol=0,
-                                ), f"inconsistent k point in block {block_index}"
+                                assert np.allclose(kpt,self.kpt_list[ikpt],atol=1e-12,rtol=0), f"inconsistent k point in block {block_index}"
 
-                            matrix=self.data[
-                                ikpt,icomponent,ispin_bra,ispin_ket
-                            ]
+                            matrix=self.data[ikpt,icomponent,ispin_bra,ispin_ket]
                             for _ in range(self.nbands*self.nbands):
                                 fields=fin.readline().split()
-                                assert len(fields)==4, (
-                                    f"invalid matrix entry in {filename}: {fields}"
-                                )
+                                assert len(fields)==4, f"invalid matrix entry in {filename}: {fields}"
                                 ibra,iket=int(fields[0])-1,int(fields[1])-1
-                                assert (
-                                    0<=ibra<self.nbands and
-                                    0<=iket<self.nbands
-                                ), f"band index outside the header range in {filename}"
-                                matrix[ibra,iket]=(
-                                    float(fields[2])+1j*float(fields[3])
-                                )
+                                assert (0<=ibra<self.nbands and 0<=iket<self.nbands), f"band index outside the header range in {filename}"
+                                matrix[ibra,iket]=(float(fields[2])+1j*float(fields[3]))
 
             assert not any(line.strip() for line in fin), (
                 f"unexpected trailing data in {filename}"
             )
 
         hermitian_partner=self.data.conj().transpose(0,1,3,2,5,4)
-        self.hermiticity_error=float(
-            np.max(np.abs(self.data-hermitian_partner))
-        )
-        print(
-            f"SOI file {filename} has been read: "
-            f"{self.nbands} bands, {self.nkpts} k points; "
-            f"Hermiticity error {self.hermiticity_error:.3e} eV"
-        )
+        self.hermiticity_error=np.max(np.abs(self.data-hermitian_partner))
+        print(f"SOI file {filename} has been read: {self.nbands} bands, {self.nkpts} k points; "
+              f"Hermiticity error {self.hermiticity_error:.3e} eV")
 
 class W90MMN:
     
@@ -1506,6 +1475,241 @@ class W90CHK:
         self.wannier_spreads:np.ndarray = readfloat().reshape((self.num_wann))
         del u_matrix, m_matrix
         print(f"self.v_matrix:{self.v_matrix.shape}")
+
+class ElectronSelfEnergy:
+    """Read VASP electron-phonon self energies from ``vaspout.h5``.
+
+    VASP stores the selected ``(spin, k, band)`` states through one-based
+    sparse record indices. This reader restores dense irreducible-k arrays.
+    ``System_w90.includeElectronSelfEnergy`` normally infers the full-to-IBZ
+    map from the corresponding full-grid Wannier90 ``.eig`` spectra and the
+    VASP symmetry weights. An explicit map extracted from ``vaspelph.h5`` may
+    still be supplied for electronically ambiguous cases.
+
+    The relaxation energy used by the density-matrix SERTA implementation is
+
+        Gamma_nk = -2 Im Sigma_Fan^R(nk, epsilon_nk) = hbar / tau_nk.
+
+    Parameters
+    ----------
+    filePath : str
+        VASP ``vaspout.h5`` containing ``self_energy_<calculator>``.
+    calculator : int
+        One-based self-energy accumulator index.
+    kpointMap : str, optional
+        ``.npz`` containing ``full_kpoints``, ``irreducible_kpoints`` and
+        zero-based ``full_to_irreducible``.  A VASP ``vaspelph.h5`` is also
+        accepted. Normally unnecessary when matching Wannier90 ``.eig`` files
+        are available.
+    """
+
+    def __init__(self, filePath, calculator=1, kpointMap=None):
+        self.filePath=os.path.abspath(os.path.normpath(filePath))
+        groupName=f"results/electron_phonon/electrons/self_energy_{int(calculator)}"
+        with h5py.File(self.filePath,"r") as h5:
+            if groupName not in h5:
+                raise KeyError(f"cannot find {groupName} in {self.filePath}")
+            group=h5[groupName]
+            self.band_start=int(group["band_start"][()])
+            self.band_stop=int(group["band_stop"][()])
+            self.nbands=int(group["nbands"][()])
+            self.nbands_sum=int(np.atleast_1d(group["nbands_sum"][()])[0])
+            self.temperatures=np.asarray(group["temps"][()],dtype=float)
+            self.efermi=np.asarray(group["efermi"][()],dtype=float)
+            self.scattering_approximation=group["scattering_approximation"][()].decode().strip()
+            record_index=np.asarray(group["bks_idx"][()],dtype=int)-1
+            record_energy=np.asarray(group["energies"][()],dtype=float)
+            record_fan=np.asarray(group["selfen_fan"][()],dtype=float)
+            record_dw=np.asarray(group["selfen_dw"][()],dtype=float)
+
+            electronGroup=h5["results/electron_phonon/electrons/eigenvalues"]
+            self.irreducible_kpoints=np.asarray(electronGroup["kpoint_coords"][()],dtype=float)
+            self.dft_eigenvalues=np.asarray(electronGroup["eigenvalues"][()],dtype=float)
+            self.kpoint_symmetry_weights=np.asarray(electronGroup["kpoints_symmetry_weight"][()],dtype=float)
+            kpointInput=h5["input/kpoints_elph"] if "input/kpoints_elph" in h5 else h5["input/kpoints"]
+            self.mp_grid=np.array([kpointInput["nkpx"][()],kpointInput["nkpy"][()],
+                                   kpointInput["nkpz"][()]],dtype=int)
+
+        if record_fan.shape[-1] != 2:
+            raise ValueError(f"expected real/imaginary self-energy pairs, found {record_fan.shape}")
+        if record_index.shape[:2] != self.dft_eigenvalues.shape[:2]:
+            raise ValueError("self-energy sparse indices and electron eigenvalues use different spin/k grids")
+        expected_bands=self.band_stop-self.band_start+1
+        if record_index.shape[-1] != expected_bands:
+            raise ValueError(f"expected {expected_bands} selected bands, found {record_index.shape[-1]}")
+
+        valid=record_index >= 0
+        if np.any(record_index[valid] >= len(record_fan)):
+            raise ValueError("self-energy sparse record index exceeds the stored record count")
+        denseShape=record_index.shape+record_fan.shape[1:-1]
+        self.fan=np.full(denseShape,np.nan+1j*np.nan,dtype=complex)
+        self.energies=np.full(record_index.shape+record_energy.shape[1:],np.nan,dtype=float)
+        self.debye_waller=np.full(record_index.shape+record_dw.shape[1:],np.nan,dtype=float)
+        self.fan[valid]=record_fan[record_index[valid],...,0]+1j*record_fan[record_index[valid],...,1]
+        self.energies[valid]=record_energy[record_index[valid]]
+        self.debye_waller[valid]=record_dw[record_index[valid]]
+
+        if np.any(~valid):
+            missing=int(np.count_nonzero(~valid))
+            warnings.warn(f"VASP self-energy file omits {missing} selected spin-k-band states",RuntimeWarning)
+
+        self.full_kpoints=None
+        self.full_to_irreducible=None
+        if kpointMap is not None:
+            self.loadKpointMap(kpointMap)
+
+        print(f"electron self energy read from {self.filePath}: {record_index.shape[0]} spins, "
+              f"{record_index.shape[1]} irreducible k points, bands {self.band_start}-{self.band_stop}, "
+              f"temperatures {self.temperatures}")
+
+    def loadKpointMap(self, filePath):
+        """Load the full-to-irreducible electron-phonon k-point map."""
+        filePath=os.path.abspath(os.path.normpath(filePath))
+        if filePath.lower().endswith(".npz"):
+            with np.load(filePath) as data:
+                full=np.asarray(data["full_kpoints"],dtype=float)
+                irreducible=np.asarray(data["irreducible_kpoints"],dtype=float)
+                mapping=np.asarray(data["full_to_irreducible"],dtype=int)
+        else:
+            with h5py.File(filePath,"r") as h5:
+                full=np.asarray(h5["kpoints/vkpt_kp"][()],dtype=float)
+                irreducible=np.asarray(h5["kpoints/vkpt_k"][()],dtype=float)
+                mapping=np.asarray(h5["kpoints/indx_fbz2ibz"][()],dtype=int)-1
+        if mapping.shape != (len(full),) or mapping.min() < 0 or mapping.max() >= len(irreducible):
+            raise ValueError("invalid full-to-irreducible k-point map")
+        delta=irreducible-self.irreducible_kpoints
+        delta-=np.rint(delta)
+        if irreducible.shape != self.irreducible_kpoints.shape or np.max(np.abs(delta)) > 1e-7:
+            raise ValueError("k-point map and self-energy file have different irreducible k-point lists")
+        self.full_kpoints=full
+        self.full_to_irreducible=mapping
+        self.kpointMapPath=filePath
+        return self
+
+    def inferKpointMap(self, fullKpoints, fullDFTEigenvalues, mp_grid=None,
+                       energyTolerance=0.25, ambiguityTolerance=1e-6, batchSize=256):
+        """Infer the full-to-IBZ map from DFT-band spectral fingerprints.
+
+        This avoids requiring ``vaspelph.h5`` when the same full-grid DFT
+        eigenvalues are available from Wannier90 ``.eig`` files. Every full
+        k point is assigned to the IBZ spectrum with the smallest spin/band
+        RMS difference. VASP's stored symmetry weights, exact IBZ
+        representatives, and best/second-best separation validate the map.
+        Ambiguous mappings must use an explicit map instead.
+        """
+        fullKpoints=np.asarray(fullKpoints,dtype=float)
+        fullDFTEigenvalues=np.asarray(fullDFTEigenvalues,dtype=float)
+        if fullDFTEigenvalues.ndim == 2:
+            fullDFTEigenvalues=fullDFTEigenvalues[None,...]
+        expected=(self.dft_eigenvalues.shape[0],len(fullKpoints),self.dft_eigenvalues.shape[-1])
+        if fullDFTEigenvalues.shape != expected:
+            raise ValueError(f"full-grid DFT eigenvalues must have shape {expected}; "
+                             f"found {fullDFTEigenvalues.shape}")
+        mp_grid=self.mp_grid if mp_grid is None else np.asarray(mp_grid,dtype=int)
+        if tuple(mp_grid) != tuple(self.mp_grid):
+            raise ValueError(f"self-energy mesh {tuple(self.mp_grid)} and target mesh {tuple(mp_grid)} differ")
+        if len(fullKpoints) != int(np.prod(mp_grid)):
+            raise ValueError("spectral map inference requires the complete regular Monkhorst-Pack grid")
+        keys=[self._gridKey(kpoint,mp_grid) for kpoint in fullKpoints]
+        if len(set(keys)) != len(keys):
+            raise ValueError("full k-point list does not contain each Monkhorst-Pack point exactly once")
+
+        mapping=np.empty(len(fullKpoints),dtype=int)
+        bestScores=np.empty(len(fullKpoints),dtype=float)
+        margins=np.empty(len(fullKpoints),dtype=float)
+        for start in range(0,len(fullKpoints),int(batchSize)):
+            stop=min(start+int(batchSize),len(fullKpoints))
+            difference=(fullDFTEigenvalues[:,start:stop,None,:]
+                        -self.dft_eigenvalues[:,None,:,:])
+            scores=np.sqrt(np.mean(difference**2,axis=(0,3)))
+            order=np.argpartition(scores,1,axis=1)[:,:2]
+            firstScores=np.take_along_axis(scores,order,axis=1)
+            swap=firstScores[:,1]<firstScores[:,0]
+            order[swap]=order[swap,::-1]
+            firstScores[swap]=firstScores[swap,::-1]
+            mapping[start:stop]=order[:,0]
+            bestScores[start:stop]=firstScores[:,0]
+            margins[start:stop]=firstScores[:,1]-firstScores[:,0]
+
+        if np.max(bestScores)>float(energyTolerance):
+            raise ValueError(f"cannot infer a reliable k-point map: maximum matched spectral RMS error "
+                             f"{np.max(bestScores):.3e} eV exceeds {energyTolerance:.3e} eV")
+        if np.min(margins)<float(ambiguityTolerance):
+            raise ValueError(f"spectral k-point map is ambiguous: minimum best/second-best separation "
+                             f"{np.min(margins):.3e} eV; provide an explicit vaspelph map")
+
+        expectedCounts=np.rint(self.kpoint_symmetry_weights*len(fullKpoints)).astype(int)
+        if np.max(np.abs(self.kpoint_symmetry_weights*len(fullKpoints)-expectedCounts))>1e-6:
+            raise ValueError("VASP IBZ weights are inconsistent with the full k-grid size")
+        counts=np.bincount(mapping,minlength=len(self.irreducible_kpoints))
+        if not np.array_equal(counts,expectedCounts):
+            raise ValueError("spectral map multiplicities disagree with VASP's IBZ symmetry weights; "
+                             "provide an explicit vaspelph map")
+
+        for iibz,kpoint in enumerate(self.irreducible_kpoints):
+            delta=fullKpoints-kpoint
+            delta-=np.rint(delta)
+            distances=np.max(np.abs(delta),axis=1)
+            if np.min(distances)>1e-7 or mapping[np.argmin(distances)]!=iibz:
+                raise ValueError("spectral map does not preserve VASP's explicit IBZ representatives")
+
+        self.full_kpoints=fullKpoints
+        self.full_to_irreducible=mapping
+        self.kpointMapPath=None
+        self.kpointMapInference={
+            "maximum_spectral_rms_error":float(np.max(bestScores)),
+            "minimum_assignment_margin":float(np.min(margins)),
+        }
+        print(f"full-to-IBZ map inferred from DFT spectra: maximum RMS error "
+              f"{np.max(bestScores):.3e} eV, minimum assignment margin {np.min(margins):.3e} eV")
+        return self
+
+    def temperatureIndex(self, temperature):
+        index=int(np.argmin(np.abs(self.temperatures-float(temperature))))
+        if abs(self.temperatures[index]-float(temperature)) > 1e-7:
+            raise ValueError(f"temperature {temperature} K is unavailable; stored values are {self.temperatures}")
+        return index
+
+    def selfEnergy(self, temperature, frequencyIndex=0):
+        """Return on-shell Fan plus Debye-Waller self energy on the IBZ."""
+        itemp=self.temperatureIndex(temperature)
+        if not 0 <= int(frequencyIndex) < self.fan.shape[-2]:
+            raise IndexError("self-energy frequency index is out of range")
+        fan=self.fan[...,int(frequencyIndex),itemp]
+        dw=self.debye_waller[...,itemp]
+        return fan+dw
+
+    def linewidth(self, temperature, frequencyIndex=0):
+        """Return ``Gamma=-2 Im Sigma_Fan`` in eV on the irreducible grid."""
+        return -2.0*self.selfEnergy(temperature,frequencyIndex).imag
+
+    @staticmethod
+    def _gridKey(kpoint, mp_grid):
+        return tuple(np.mod(np.rint(np.asarray(kpoint)*np.asarray(mp_grid)).astype(int),mp_grid))
+
+    def expandToKpoints(self, values, kpoints, mp_grid):
+        """Expand IBZ values and reorder them to an arbitrary full MP-grid list."""
+        if self.full_kpoints is None:
+            raise ValueError("a full k-point map is required to expand irreducible self energies")
+        values=np.asarray(values)
+        if values.shape[:2] != (len(self.dft_eigenvalues),len(self.irreducible_kpoints)):
+            raise ValueError("values must start with (spin, irreducible-k) axes")
+        expanded=values[:,self.full_to_irreducible]
+        lookup={self._gridKey(kpoint,mp_grid): index for index,kpoint in enumerate(self.full_kpoints)}
+        try:
+            order=np.array([lookup[self._gridKey(kpoint,mp_grid)] for kpoint in kpoints],dtype=int)
+        except KeyError as exc:
+            raise ValueError(f"target k point {exc.args[0]} is absent from the VASP full grid") from exc
+        if len(np.unique(order)) != len(order):
+            raise ValueError("target k-point list contains duplicate Monkhorst-Pack points")
+        return expanded[:,order]
+
+    def linewidthOnKpoints(self, kpoints, mp_grid, temperature, frequencyIndex=0):
+        return self.expandToKpoints(self.linewidth(temperature,frequencyIndex),kpoints,mp_grid)
+
+    def selfEnergyOnKpoints(self, kpoints, mp_grid, temperature, frequencyIndex=0):
+        return self.expandToKpoints(self.selfEnergy(temperature,frequencyIndex),kpoints,mp_grid)
+
 
 class DOSCAR:
     def __init__(self,filePath='DOSCAR'):

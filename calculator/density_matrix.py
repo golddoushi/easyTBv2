@@ -23,6 +23,103 @@ AC_CHANNEL_DESCRIPTIONS = {
     "EE": "second-order interband from first-order interband",
 }
 
+class CollisionOperator:
+    """Collision model used by density-matrix kernels.
+
+    ``crta`` uses one relaxation energy ``eta=hbar/tau``.  ``serta`` reads the
+    Wannier-interpolated electron-phonon linewidth attached to ``System_w90``.
+    A bound collision object is created separately for each calculator k grid,
+    which keeps this specification safe to share between BZ worker processes.
+    """
+
+    def __init__(self, mode="crta", eta=None, linewidthFloor=1e-12):
+        mode=str(mode).lower()
+        if mode not in ("crta","serta"):
+            raise NotImplementedError("By now, only 'crta', 'serta' have been built")
+        self.mode=mode
+        self.eta=None if eta is None else float(eta)
+        self.linewidthFloor=float(linewidthFloor)
+        assert self.linewidthFloor >= 0, f"{linewidthFloor=} must be non-negative instead"
+
+    def bind(self, owner):
+        return BoundCollisionOperator(self,owner)
+
+    @classmethod
+    def fromOwner(cls, owner):
+        specification=getattr(owner,"collisionOperator",None)
+        if specification is None:
+            specification=cls("crta",eta=owner.eta)
+        elif isinstance(specification,str):
+            specification=cls(specification)
+        elif not isinstance(specification,cls):
+            raise TypeError("collisionOperator must be None, a mode string, or CollisionOperator")
+        return specification.bind(owner)
+
+
+class BoundCollisionOperator:
+    """Collision linewidths represented on one calculator's eigenstate grid."""
+
+    def __init__(self, specification, owner):
+        self.specification=specification
+        self.owner=owner
+        self.mode=specification.mode
+        self.constant_eta=None
+        if self.mode == "crta":
+            eta=owner.eta if specification.eta is None else specification.eta
+            if eta < 0: raise ValueError(f"CRTA {eta=} must be non-negative instead")
+            self.constant_eta=float(eta)
+            self.population_linewidth=np.full(owner.energies.shape,self.constant_eta,dtype=float)
+        elif self.mode == "serta":
+            self.population_linewidth=self._sertaLinewidth()
+        else:
+            raise NotImplementedError("By now, only 'crta', 'serta' have been built")
+        self.coherence_linewidth=0.5*(self.population_linewidth[..., :, None]
+                                      + self.population_linewidth[..., None, :])
+
+    def _sertaLinewidth(self):
+        model=self.owner.model
+        linewidth_sqrt_R=getattr(model,"electronLinewidthSqrt_R",None)
+        if linewidth_sqrt_R is None:
+            linewidth_sqrt_R=getattr(model,"electron_linewidth_sqrt_R",None)
+        if linewidth_sqrt_R is None:
+            raise ValueError("SERTA requires model.includeElectronSelfEnergy(...) before constructing the calculator")
+        if model.overlap:
+            raise NotImplementedError("SERTA linewidth interpolation is currently implemented for orthogonal Wannier models")
+
+        linewidth_sqrt_R=np.asarray(linewidth_sqrt_R)
+        if self.owner.phase:
+            linewidth_sqrt_R=linewidth_sqrt_R*self.owner.phaseshift[:,None,None]
+        linewidth_grid=np.zeros(self.owner.kgrid+(model.norbs,model.norbs),dtype=complex)
+        for iR,Rvec in enumerate(model.iRvec):
+            # Wigner-Seitz boundary vectors can share the same FFT-grid index.
+            # Their 1/Ndegen contributions must be accumulated, not overwritten.
+            linewidth_grid[tuple(Rvec)]+=linewidth_sqrt_R[iR]
+        linewidth_sqrt_W=np.fft.ifftn(linewidth_grid,axes=(0,1,2))*np.prod(self.owner.kgrid)
+        linewidth_W=linewidth_sqrt_W@linewidth_sqrt_W.conj().swapaxes(-2,-1)
+        vectors=self.owner.vectors
+        linewidth_H=vectors.conj().swapaxes(-2,-1)@linewidth_W@vectors
+        linewidth=np.diagonal(linewidth_H,axis1=-2,axis2=-1).real
+        return np.maximum(linewidth,0.0)
+
+    @property
+    def population_inverse(self):
+        inverse=np.zeros_like(self.population_linewidth)
+        np.divide(1.0,self.population_linewidth,out=inverse,
+                  where=self.population_linewidth > self.specification.linewidthFloor)
+        return inverse
+
+    def resolvent(self, delta_energy, frequency=0.0):
+        denominator=np.asarray(delta_energy)-frequency-1j*self.coherence_linewidth
+        result=np.zeros_like(denominator,dtype=complex)
+        np.divide(1.0,denominator,out=result,
+                  where=np.abs(denominator) > self.specification.linewidthFloor)
+        return result
+
+    def requireConstant(self, context):
+        if self.constant_eta is None:
+            raise NotImplementedError(f"{context} does not yet support a state-dependent SERTA collision source")
+        return self.constant_eta
+
 def commutator(left, right):
     return left @ right - right @ left
 
@@ -137,7 +234,7 @@ class LengthGaugeDCFirstOrderFermiState:
         rho_i = np.zeros_like(rho_e)
         if kernel.full_covariant_derivative:
             velocity_diag = np.diagonal(velocity_direction, axis1=-2, axis2=-1).real
-            population = -self.fp * velocity_diag / self.owner.eta
+            population = -self.fp * velocity_diag * kernel.collision.population_inverse
             rho_i[..., kernel.indices, kernel.indices] = population
         return FirstOrderDensityMatrixBlock(
             rho0=self.rho0,
@@ -169,12 +266,14 @@ class LengthGaugeDCFirstOrderDMKernel:
         self.off_diag = 1.0 - self.diag
         self.indices = np.arange(self.nbands)
         self.deltaE_inverse_pure = owner.deltaEInverse_pure
-        self.g0_mn = owner.deltaEInverse
+        self.collision = CollisionOperator.fromOwner(owner)
+        self.g0_mn = self.collision.resolvent(owner.deltaE)
 
         if self.full_covariant_derivative and owner.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
-        if self.full_covariant_derivative and abs(owner.eta) < 1e-15:
-            raise ValueError("fullCovariantDerivative requires finite eta for the dc intraband density matrix")
+        if self.full_covariant_derivative and not np.any(
+                self.collision.population_linewidth > self.collision.specification.linewidthFloor):
+            raise ValueError("fullCovariantDerivative requires finite population relaxation")
 
     def fermi_state(self, ifermi, fermi):
         f, fp = self.occupations(ifermi, fermi)
@@ -225,11 +324,13 @@ class _SecondOrderDMKernel:
         self.off_diag = 1.0 - self.diag
         self.indices = np.arange(self.nbands)
         self.deltaE_mn = owner.deltaE
-        self.g0_mn = 1.0 / (self.deltaE_mn - 1j * owner.eta)
+        self.collision = CollisionOperator.fromOwner(owner)
+        self.eta = self.collision.requireConstant("second-order density-matrix kernels")
+        self.g0_mn = self.collision.resolvent(self.deltaE_mn)
 
         if self.full_covariant_derivative and owner.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
-        if self.full_covariant_derivative and abs(owner.eta) < 1e-15:
+        if self.full_covariant_derivative and abs(self.eta) < 1e-15:
             raise ValueError("fullCovariantDerivative requires finite eta for the dc density matrix")
 
         self.state_class : _SecondOrderDMFermiState
@@ -269,8 +370,9 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
             r_direction = self.owner.r_K[..., direction, :, :]
             for sign in (-1, 1):
                 frequency = sign * omega
-                denominator = self.kernel.deltaE_mn - frequency - 1j * self.owner.eta
-                self.factor[sign] = fermi_state.f_nm / denominator
+                self.factor[sign] = fermi_state.f_nm * self.kernel.collision.resolvent(
+                    self.kernel.deltaE_mn,frequency
+                )
                 self.rho1_e[(direction, sign)] = r_direction * self.factor[sign] * self.kernel.off_diag
 
     def block(self, a, b):
@@ -354,7 +456,7 @@ class DividedDifferenceLGFrequencyState(_SecondOrderDMFrequencyState):
         self.rho1_i = {}
         self.rho1_e = {}
         for sign in (-1, 1):
-            self.resolvent[sign] = 1.0 / (self.kernel.deltaE_mn - sign * omega - 1j * self.owner.eta)
+            self.resolvent[sign] = self.kernel.collision.resolvent(self.kernel.deltaE_mn,sign*omega)
             for a in range(3):
                 rho = 1j * self.resolvent[sign] * fermi_state.df[..., a, :, :]
                 self.rho1[(a, sign)] = rho
@@ -436,20 +538,20 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
             source_e = self.owner.velocity_K[..., direction, :, :] * fermi_state.f_nm
             if self.kernel.full_covariant_derivative:
                 source_e += (
-                    self.owner.eta * self.owner.r_K[..., direction, :, :]
+                    self.kernel.eta * self.owner.r_K[..., direction, :, :]
                     * fermi_state.f_nm * self.kernel.off_diag
                 )
             for sign in (-1, 1):
                 frequency = sign * omega
                 self.rho1_e[(direction, sign)] = (
                     source_e
-                    / (self.kernel.deltaE_mn - frequency - 1j * self.owner.eta)
+                    * self.kernel.collision.resolvent(self.kernel.deltaE_mn,frequency)
                     * self.kernel.off_diag
                 )
                 if self.kernel.full_covariant_derivative:
                     population = (
-                        1j * self.owner.eta * fermi_state.dfdk[..., direction, :]
-                        / (-frequency - 1j * self.owner.eta)
+                        1j * self.kernel.eta * fermi_state.dfdk[..., direction, :]
+                        / (-frequency - 1j * self.kernel.eta)
                     )
                     self.rho1_i[(direction, sign)] = diagonal_matrix(population)
 
@@ -511,7 +613,7 @@ class VelocityGaugeFermiState(_SecondOrderDMFermiState):
         )
         result = {}
         for name in AC_CHANNEL_NAMES:
-            source = 0.5j * self.owner.eta * (c2_ab[name] + c2_ba[name])
+            source = 0.5j * kernel.eta * (c2_ab[name] + c2_ba[name])
             sector = kernel.diag if name in ("II", "IE") else kernel.off_diag
             result[name] = kernel.g0_mn * source * sector
         return result

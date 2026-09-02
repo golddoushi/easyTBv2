@@ -8,7 +8,7 @@ from system import System
 from auxiliary import obtainProjections, obtainProjectionsPlain, showElapsedTime, iterate3dpm, fourier_q_to_R, reindexOrbitalsQE2VASP
 from auxiliary import SYMPREC
 from fileio import readHrDat, readPOSCAR, readRDat
-from fileio import W90CHK, W90MMN, W90EIG, W90SOI
+from fileio import ElectronSelfEnergy, W90CHK, W90MMN, W90EIG, W90SOI
 
 class System_w90(System):
 
@@ -25,7 +25,7 @@ class System_w90(System):
         - The basis in L=1 shell are in order p_z, p_x, p_y; 
           L=2 are d_{z^2}, d_{xz}, d_{yz}, d_{x^2-y^2}, d_{xy}; 
           L=3 are f_{z^3}, f_{xz^2}, f_{yz^2}, f_{z(x^2-y^2)}, f_{xyz}, f_{x(x^2-3y^2)}, f_{y(3x^2-y^2)}.
-        
+
         Parameters:
         -----------
         - mainDir : str  
@@ -97,11 +97,13 @@ class System_w90(System):
             chk_dn=W90CHK(seedname=dn_seed)
             self._validateSeparatedCheckpoints(chk_up,chk_dn)
             self._w90_spin_chks=(chk_up,chk_dn)
+            self._w90_chks=self._w90_spin_chks
             chk=chk_up
             showElapsedTime(extraInfo="spin-separated chk files read")
 
             ham_k_DFT_up=W90EIG(seedname=up_seed)
             ham_k_DFT_dn=W90EIG(seedname=dn_seed)
+            self._w90_dft_eigenvalues=(ham_k_DFT_up.data,ham_k_DFT_dn.data)
             assert ham_k_DFT_up.nkpts==chk_up.num_kpts
             assert ham_k_DFT_dn.nkpts==chk_dn.num_kpts
             assert ham_k_DFT_up.nbands==chk_up.num_bands
@@ -119,8 +121,10 @@ class System_w90(System):
             chk=W90CHK(seedname=single_seed)
             self._w90_spin_chks=None
             self._w90_spin_slices=None
+            self._w90_chks=(chk,)
             showElapsedTime(extraInfo="chk read")
             ham_k_DFT=W90EIG(seedname=single_seed)
+            self._w90_dft_eigenvalues=(ham_k_DFT.data,)
             showElapsedTime(extraInfo=f"H_k_DFT: {ham_k_DFT.data.min():.6f} ~ {ham_k_DFT.data.max():.6f} eigs. read")
             Ham_k_W=np.array([self.toWannierGauge(H_k,ik,ik,chk) for ik,H_k in enumerate(ham_k_DFT.data)])
             chk_center=chk.wannier_centers
@@ -133,6 +137,11 @@ class System_w90(System):
         self.reciLattice=np.linalg.inv(self.lattice)*np.pi*2
         self.iRvec, self.iRvecIndex, self.Ndegen = self.wigner_seitz(chk.mp_grid)
         self.nRvec=len(self.iRvec)
+        self.electronSelfEnergy_R=None
+        self.electronLinewidth_R=None
+        self.electronLinewidthSqrt_R=None
+        self.electronSelfEnergySource=None
+        self.electronSelfEnergyTemperature=None
 
         kpt_mp_grid = [tuple(k) for k in np.array(np.round(chk.kpt_list*np.array(chk.mp_grid)[None,:]), dtype=int)%chk.mp_grid]
 
@@ -269,6 +278,121 @@ class System_w90(System):
         center_distance=np.linalg.norm(center_frac@chk_up.real_lattice, axis=1)
         print(f"paired up/down Wannier-center distance: mean {center_distance.mean():.3e} angstrom, max {center_distance.max():.3e} angstrom")
 
+    def includeElectronSelfEnergy(self, selfEnergy, temperature=300.0, kpointMap=None, frequencyIndex=0,
+                                  eigenvalueTolerance=5e-3):
+        """Project a VASP on-shell electron self energy into the Wannier basis.
+
+        The diagonal DFT-gauge self energy is transformed with the same
+        checkpoint matrices used for ``ham_R`` and Fourier transformed to the
+        same Wigner-Seitz real-space grid.  ``electronLinewidth_R`` stores
+        ``Gamma=-2 Im Sigma_Fan`` in eV for use by the SERTA collision operator.
+        """
+        if isinstance(selfEnergy,(str,os.PathLike)):
+            selfEnergy=ElectronSelfEnergy(selfEnergy,kpointMap=kpointMap)
+        elif not isinstance(selfEnergy,ElectronSelfEnergy):
+            raise TypeError("selfEnergy must be an ElectronSelfEnergy object or a vaspout.h5 path")
+        elif kpointMap is not None:
+            selfEnergy.loadKpointMap(kpointMap)
+
+        nspin_expected=len(self._w90_chks)
+        if selfEnergy.dft_eigenvalues.shape[0] != nspin_expected:
+            raise ValueError(f"self energy has {selfEnergy.dft_eigenvalues.shape[0]} spin channels, "
+                             f"but this Wannier model expects {nspin_expected}")
+        for chk in self._w90_chks:
+            if selfEnergy.band_start != 1 or selfEnergy.band_stop != chk.num_bands:
+                raise ValueError("the first SERTA implementation requires self energies for every DFT band "
+                                 f"in each checkpoint (1-{chk.num_bands}); found "
+                                 f"{selfEnergy.band_start}-{selfEnergy.band_stop}")
+
+        kpoints=self._w90_chks[0].kpt_list
+        if selfEnergy.full_kpoints is None:
+            selfEnergy.inferKpointMap(kpoints,np.stack(self._w90_dft_eigenvalues),self.mp_grid)
+        linewidth_dft=selfEnergy.linewidthOnKpoints(kpoints,self.mp_grid,temperature,frequencyIndex)
+        sigma_dft=selfEnergy.selfEnergyOnKpoints(kpoints,self.mp_grid,temperature,frequencyIndex)
+        dft_eigenvalues=selfEnergy.expandToKpoints(selfEnergy.dft_eigenvalues,kpoints,self.mp_grid)
+        for ispin,(chk,reference,values) in enumerate(zip(
+                self._w90_chks,self._w90_dft_eigenvalues,dft_eigenvalues)):
+            raw_error=float(np.max(np.abs(values-reference)))
+            projected_error=max(float(np.max(np.abs(self.toWannierGauge(
+                values[ik]-reference[ik],ik,ik,chk
+            )))) for ik in range(chk.num_kpts))
+            print(f"spin {ispin} self-energy eigenvalue mismatch: raw {raw_error:.3e} eV, "
+                  f"Wannier-subspace {projected_error:.3e} eV")
+            if raw_error > eigenvalueTolerance:
+                warnings.warn(
+                    f"spin {ispin} raw self-energy and Wannier .eig energies differ by {raw_error:.3e} eV. "
+                    "They should agree for identical frozen-potential VASP runs; the smaller projected error "
+                    "only shows how much of this mismatch enters the selected Wannier subspace.",
+                    RuntimeWarning,
+                )
+            if projected_error > eigenvalueTolerance:
+                raise ValueError(f"spin {ispin} self-energy and Wannier DFT Hamiltonians differ by "
+                                 f"{projected_error:.3e} eV after projection; the files do not describe the same "
+                                 "electronic calculation")
+
+        sigma_blocks=[]
+        linewidth_blocks=[]
+        for ispin,chk in enumerate(self._w90_chks):
+            sigma_blocks.append(np.array([
+                self.toWannierGauge(values,ik,ik,chk) for ik,values in enumerate(sigma_dft[ispin])
+            ]))
+            linewidth_blocks.append(np.array([
+                self.toWannierGauge(values,ik,ik,chk) for ik,values in enumerate(linewidth_dft[ispin])
+            ]))
+
+        if self.spinSeparated:
+            nk=len(kpoints)
+            sigma_k=np.zeros((nk,self.norbs,self.norbs),dtype=complex)
+            linewidth_k=np.zeros_like(sigma_k)
+            for block,linewidth,orbital_slice in zip(sigma_blocks,linewidth_blocks,self._w90_spin_slices):
+                sigma_k[:,orbital_slice,orbital_slice]=block
+                linewidth_k[:,orbital_slice,orbital_slice]=linewidth
+        else:
+            sigma_k=sigma_blocks[0]
+            linewidth_k=linewidth_blocks[0]
+            if self.format in ("QE","VASP6"):
+                sigma_k=reindexOrbitalsQE2VASP(sigma_k,axis=-1)
+                sigma_k=reindexOrbitalsQE2VASP(sigma_k,axis=-2)
+                linewidth_k=reindexOrbitalsQE2VASP(linewidth_k,axis=-1)
+                linewidth_k=reindexOrbitalsQE2VASP(linewidth_k,axis=-2)
+
+        linewidth_k=0.5*(linewidth_k+linewidth_k.conj().swapaxes(-2,-1))
+        linewidth_eigenvalues,linewidth_eigenvectors=np.linalg.eigh(linewidth_k)
+        min_linewidth=float(linewidth_eigenvalues.min())
+        if min_linewidth < -1e-8:
+            warnings.warn(f"Wannier-projected linewidth has negative eigenvalue {min_linewidth:.3e} eV",RuntimeWarning)
+        linewidth_eigenvalues=np.maximum(linewidth_eigenvalues,0.0)
+        linewidth_sqrt_k=(linewidth_eigenvectors*np.sqrt(linewidth_eigenvalues)[...,None,:]) @ linewidth_eigenvectors.conj().swapaxes(-2,-1)
+        self.electronSelfEnergy_R=self._fourier_q_to_R(sigma_k)
+        self.electronLinewidth_R=self._fourier_q_to_R(linewidth_k)
+        self.electronLinewidthSqrt_R=self._fourier_q_to_R(linewidth_sqrt_k)
+        boundary_mask=np.any(2*np.abs(np.asarray(self.iRvec))>=np.asarray(self.mp_grid),axis=1)
+        def boundaryWeight(quantity_R):
+            norm_squared=np.sum(np.abs(quantity_R.reshape(self.nRvec,-1))**2,axis=1)
+            total=float(np.sum(norm_squared))
+            return float(np.sum(norm_squared[boundary_mask])/total) if total>0 else 0.
+        self.electronSelfEnergyBoundaryWeight=boundaryWeight(self.electronSelfEnergy_R)
+        self.electronLinewidthBoundaryWeight=boundaryWeight(self.electronLinewidth_R)
+        self.electronLinewidthSqrtBoundaryWeight=boundaryWeight(self.electronLinewidthSqrt_R)
+        if self.electronLinewidthSqrtBoundaryWeight>1e-3:
+            warnings.warn(
+                "SERTA linewidth interpolation is poorly localized: "
+                f"{self.electronLinewidthSqrtBoundaryWeight:.3%} of the squared norm of sqrt(Gamma)_R lies "
+                "on the Wigner-Seitz boundary. Use a denser source self-energy grid before relying on "
+                "interpolated lifetimes.",
+                RuntimeWarning,
+            )
+        self.electron_self_energy_R=self.electronSelfEnergy_R
+        self.electron_linewidth_R=self.electronLinewidth_R
+        self.electron_linewidth_sqrt_R=self.electronLinewidthSqrt_R
+        self.electronSelfEnergySource=selfEnergy
+        self.electronSelfEnergyTemperature=float(temperature)
+        print(f"electron self energy transformed to Wannier R space at {temperature:g} K; "
+              f"linewidth range {linewidth_dft.min():.6e} ~ {linewidth_dft.max():.6e} eV; "
+              f"boundary weights Sigma/Gamma/sqrt(Gamma) = {self.electronSelfEnergyBoundaryWeight:.3%}/"
+              f"{self.electronLinewidthBoundaryWeight:.3%}/{self.electronLinewidthSqrtBoundaryWeight:.3%}")
+        return self.electronLinewidth_R
+
     def _berryConnectionWannier(self,seedname:str,chk:W90CHK,trans_inv:bool):
         M_k_DFT=W90MMN(seedname=seedname, kpt_list=chk.kpt_list, reci_lat=chk.recip_lattice)
         assert M_k_DFT.nbands==chk.num_bands
@@ -323,38 +447,22 @@ class System_w90(System):
         This method does not alter ``ham_R``. The resulting tensor is stored
         in ``soi_R_W`` with indexing ``[iR, j, orbital_bra, orbital_ket]``.
         '''
-        assert self.spinSeparated, (
-            "wannier90.soi must be combined with the separated collinear "
-            "up/down Wannier checkpoints"
-        )
+        assert self.spinSeparated, ("wannier90.soi must be combined with the separated collinear "
+                                    "up/down Wannier checkpoints")
         filename=self._resolveSOIFile(soi)
-        if (
-            not force and self.soi_R_W is not None
-            and self._soi_filename==filename
-        ):
+        if not force and self.soi_R_W is not None and self._soi_filename==filename:
             return self.soi_R_W
         assert os.path.exists(filename), f"cannot find SOI file {filename}"
 
         soi_data=W90SOI(filename)
-        assert soi_data.hermiticity_error<1e-8, (
-            f"Bloch-gauge SOI matrices are not Hermitian: "
-            f"{soi_data.hermiticity_error:.3e} eV"
-        )
+        assert soi_data.hermiticity_error<1e-8, f"Bloch-gauge SOI matrices are not Hermitian: {soi_data.hermiticity_error:.3e} eV"
         chk_up,chk_dn=self._w90_spin_chks
         for chk_spin in (chk_up,chk_dn):
-            assert soi_data.nbands==chk_spin.num_bands, (
-                f"{filename} has {soi_data.nbands} bands but the checkpoint "
-                f"has {chk_spin.num_bands}"
-            )
-            assert soi_data.nkpts==chk_spin.num_kpts, (
-                f"{filename} has {soi_data.nkpts} kpoints but the checkpoint "
-                f"has {chk_spin.num_kpts}"
-            )
+            assert soi_data.nbands==chk_spin.num_bands, f"{filename} has {soi_data.nbands} bands but the checkpoint has {chk_spin.num_bands}"
+            assert soi_data.nkpts==chk_spin.num_kpts, f"{filename} has {soi_data.nkpts} kpoints but the checkpoint has {chk_spin.num_kpts}"
             dk=soi_data.kpt_list-chk_spin.kpt_list
             dk-=np.rint(dk)
-            assert np.max(np.abs(dk))<1e-10, (
-                f"k-point order in {filename} differs from the checkpoints"
-            )
+            assert np.max(np.abs(dk))<1e-10, f"k-point order in {filename} differs from the checkpoints"
 
         soi_k_W=np.zeros((soi_data.nkpts,3,self.norbs,self.norbs),dtype=complex)
         spin_chks=(chk_up,chk_dn)
@@ -365,27 +473,19 @@ class System_w90(System):
                     ket_slice=self._w90_spin_slices[ispin_ket]
                     soi_k_W[ikpt,:,bra_slice,ket_slice]=self.toWannierGaugeCross(
                         soi_data.data[ikpt,:,ispin_bra,ispin_ket],
-                        ikpt,ikpt,
-                        spin_chks[ispin_bra],
-                        spin_chks[ispin_ket],
+                        ikpt, ikpt, spin_chks[ispin_bra], spin_chks[ispin_ket],
                     )
 
         hermiticity_error=float(np.max(np.abs(
             soi_k_W-soi_k_W.conj().swapaxes(-1,-2)
         )))
-        assert hermiticity_error<1e-8, (
-            f"Wannier-gauge Cartesian SOI matrices are not Hermitian: "
-            f"{hermiticity_error:.3e} eV"
-        )
+        assert hermiticity_error<1e-8, f"Wannier-gauge Cartesian SOI matrices are not Hermitian: {hermiticity_error:.3e} eV"
+
         self.soi_R_W=self._fourier_q_to_R(soi_k_W)
         soi_norm_squared=np.sum(np.abs(self.soi_R_W.reshape(self.nRvec,-1))**2,axis=1)
         boundary_mask=np.any(2*np.abs(np.asarray(self.iRvec))>=np.asarray(self.mp_grid),axis=1)
         total_soi_norm_squared=np.sum(soi_norm_squared)
-        self.soi_boundary_weight=(
-            float(np.sum(soi_norm_squared[boundary_mask])/
-                  total_soi_norm_squared)
-            if total_soi_norm_squared>0 else 0.
-        )
+        self.soi_boundary_weight=(float(np.sum(soi_norm_squared[boundary_mask]) / total_soi_norm_squared) if total_soi_norm_squared>0 else 0.)
         if self.soi_boundary_weight>1e-3:
             warnings.warn(
                 "SOI interpolation is poorly localized: "

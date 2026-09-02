@@ -32,9 +32,7 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
     result exactly while avoiding repeated ``(..., band, band)`` allocations.
     """
     owner.calcDeltaEInverse()
-    kernel = LengthGaugeDCFirstOrderDMKernel(
-        owner, fullCovariantDerivative, finiteTemperatureOccupations
-    )
+    kernel = LengthGaugeDCFirstOrderDMKernel(owner, fullCovariantDerivative, finiteTemperatureOccupations)
     owner.density_matrix_kernel = kernel
     responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(owner.fermiList))
     owner.responseFermiIndexList = tuple(responseFermiIndexList)
@@ -44,12 +42,8 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
                        + tuple(observable_component_shape))
     response_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
                       + (len(responseFermiIndexList), 3) + tuple(observable_component_shape))
-    projected_channels = {
-        name: np.zeros(projected_shape, dtype=float) for name in kernel.channel_names
-    }
-    response_channels = {
-        name: np.zeros(response_shape, dtype=float) for name in kernel.channel_names
-    }
+    projected_channels = {name: np.zeros(projected_shape, dtype=float) for name in kernel.channel_names}
+    response_channels = {name: np.zeros(response_shape, dtype=float) for name in kernel.channel_names}
 
     nbands = owner.energies.shape[-1]
     weight_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
@@ -76,10 +70,8 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
                                     + observable_components + (slice(None),))
                     weights_e[weight_index] = band_weight_e
                     if weights_i is not None:
-                        observable_diag = np.diagonal(
-                            observable_vertex[vertex_index], axis1=-2, axis2=-1
-                        )
-                        weights_i[weight_index] = (-drive_diag * observable_diag / owner.eta).real
+                        observable_diag = np.diagonal(observable_vertex[vertex_index], axis1=-2, axis2=-1)
+                        weights_i[weight_index] = (-drive_diag * observable_diag * kernel.collision.population_inverse).real
 
     fermi_shape = ((1, 1) + owner.kgrid + (1,)*(1 + len(observable_component_shape)) + (nbands,))
     k_axes = tuple(range(2, 2 + len(owner.kgrid)))
@@ -146,6 +138,7 @@ class Calculator():
             "model":None,
             "kgrid":(1,1,1),
             "eta":0.0,
+            "collisionOperator":None,
             "kBT":0.026,
             "smr_type":"Lorentzian",
             "degen":1e-6,
@@ -167,6 +160,7 @@ class Calculator():
         self.kgrid:tuple=defaultSettings["kgrid"]
         assert type(self.kgrid)==tuple, f"expect tuple type of kgrid but {type(self.kgrid)=}"
         self.eta=defaultSettings["eta"]
+        self.collisionOperator=defaultSettings["collisionOperator"]
         self.kBT=defaultSettings["kBT"]
         self.smr_type=defaultSettings["smr_type"]
         self.degen=defaultSettings["degen"]

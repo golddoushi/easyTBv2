@@ -325,6 +325,76 @@ where possible.  BPVE/IFE/IFT batch observable directions and skip inactive
 channels.  Keep this separation: copying the kernel algebra back into each
 final calculator makes both correctness and parallel performance worse.
 
+### Electron-Phonon SERTA
+
+`fileio.ElectronSelfEnergy` reads VASP electron-phonon self energies from the
+`self_energy_<calculator>` group in `vaspout.h5`. VASP stores selected
+`(spin,k,band)` entries through sparse one-based indices; the reader restores
+the dense irreducible-k arrays and defines the on-shell relaxation energy as
+
+```text
+Gamma_nk = -2 Im Sigma^R_nk(epsilon_nk) = hbar / tau_nk.
+```
+
+The first implementation requires self energies for every DFT band entering
+the Wannier disentanglement (`band_start=1`, `band_stop=num_bands`). A full EPI
+matrix is not required to recover VASP's full-to-IBZ map. By default,
+`System_w90.includeElectronSelfEnergy` matches the full-grid Wannier90 `.eig`
+spectra to the IBZ spectra in `vaspout.h5`, then validates the map against
+VASP's stored symmetry weights and explicit IBZ representatives. Ambiguous
+spectra are rejected. In that case, pass `vaspelph.h5` directly or extract its
+`vkpt_k`, `vkpt_kp`, and `indx_fbz2ibz` datasets to a compact `.npz` with the
+keys `irreducible_kpoints`, `full_kpoints`, and zero-based
+`full_to_irreducible`.
+
+`System_w90.includeElectronSelfEnergy` applies the same checkpoint matrices
+used for the Hamiltonian, reports both the raw DFT-band and projected
+Wannier-subspace eigenvalue mismatches, and Fourier transforms the result to
+the Wannier real-space grid. A projected mismatch above
+`eigenvalueTolerance` is rejected; a raw mismatch is warned because agreement
+after projection does not make two inconsistent source calculations identical.
+The positive-semidefinite square root of the projected linewidth is
+interpolated; reconstructing `Gamma=L L^dagger` on the target grid prevents
+unphysical negative relaxation rates from Fourier ringing.
+
+The loader also reports squared-norm Wigner-Seitz boundary weights for
+`Sigma_R`, `Gamma_R`, and `sqrt(Gamma)_R`. The last is the most direct
+localization diagnostic for the implemented collision interpolation and emits
+a warning above `0.1%`.
+
+```python
+from calculator import CollisionOperator
+from fileio import ElectronSelfEnergy
+
+self_energy = ElectronSelfEnergy(
+    "mcalc/Fe/vaspout.h5",
+)
+model.includeElectronSelfEnergy(self_energy, temperature=300.0)
+
+calculation_args["collision operator"] = CollisionOperator("serta")
+calculation_args["full covariant derivative"] = True
+```
+
+`CollisionOperator("crta", eta=...)` reproduces the constant-relaxation
+model. `CollisionOperator("serta")` supplies band- and k-dependent population
+linewidths and the coherence rate `(Gamma_mk+Gamma_nk)/2` to the reusable
+first-order d.c. kernel. It therefore changes both the `I` and `E` channels,
+although VASP's reported SERTA conductivity is an intraband quantity and
+should be compared with this code's `I` channel.
+
+State-dependent SERTA is currently restricted to first-order d.c. A
+second-order optical collision integral contains field-dependent scattering
+sources and vertex corrections; simply replacing every scalar `eta` by
+`Gamma_nk` is not a controlled approximation. The second-order kernels reject
+SERTA explicitly and continue to support CRTA through the same collision API.
+
+The interpolated on-shell self energy is not as local as a Hamiltonian. Converge
+the source self-energy grid, target BZ grid, temperature, and Fermi level. VASP
+uses tetrahedron construction of a transport distribution followed by energy
+quadrature, whereas the current DM calculator directly samples the thermally
+broadened Fermi surface. Agreement at an identical finite k grid is therefore
+not expected to be exact even when conventions and units agree.
+
 ## Response Calculators
 
 ### Hall Responses
@@ -638,6 +708,12 @@ At the time of this handoff, focused regression work has established:
   vertices does not.
 - Optimized BPVE VG reproduces its previous DM result, and LG observable
   batching preserves component traces.
+- For bcc Fe at 300 K, the first on-shell SERTA implementation gives diagonal
+  `I`-channel conductivities of `2.55e7`, `2.12e7`, and `2.00e7 S/m` on
+  `30^3`, `60^3`, and `90^3` target grids. A linear-in-inverse-grid estimate
+  is about `1.70-1.75e7 S/m`, compared with VASP's `1.6808e7 S/m`. Treat this
+  as encouraging convergence evidence, not a substitute for a denser source
+  self-energy grid and an explicit target-grid convergence study.
 
 These checks are guardrails, not proof for every material.  Repeat convergence
 and symmetry tests whenever the basis, degeneracy threshold, temperature,
@@ -664,6 +740,10 @@ broadening, or exchange provenance changes.
    reported and converged, not hidden by interpolation.
 9. The API retains historical spelling such as `AnormalousHallConductance`.
    Rename only with a compatibility plan.
+10. The present SERTA path interpolates diagonal on-shell VASP self energies;
+    it does not yet evaluate scattering rates from the full EPI matrix on an
+    arbitrary target grid, include a scattering-in term, or solve the iterative
+    Boltzmann equation.
 
 ## Rules for Future Development
 
