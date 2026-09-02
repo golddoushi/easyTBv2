@@ -306,14 +306,6 @@ class System_w90(System):
                 AA_k_W[ikpt]+=contribution
         return AA_k_W
 
-    def toWannierGaugeCross(self,mat:np.ndarray,ik1:int,ik2:int,chk_bra:W90CHK,chk_ket:W90CHK):
-        '''
-        Transform a matrix whose bra and ket use different Wannier gauges.
-        '''
-        assert mat.shape[-2:]==(chk_bra.num_bands,chk_ket.num_bands,)
-        mat=mat[..., chk_bra.win_min[ik1]:chk_bra.win_max[ik1], chk_ket.win_min[ik2]:chk_ket.win_max[ik2]]
-        return  chk_bra.v_matrix[ik1].conj() @ mat @ chk_ket.v_matrix[ik2].T
-
     def _resolveSOIFile(self,soi):
         if soi is None:
             soi=self.hamR+'.soi'
@@ -622,20 +614,23 @@ class System_w90(System):
     
     def toWannierGauge(self, mat:np.ndarray, ik1:int, ik2:int, chk:W90CHK):
         '''
-        Transform mat on DFT gauge into Wannier gauge\n
-        mat should be an array in form of ..., NB, NB\n
+        Transform a matrix on DFT gauge into Wannier gauge. 
+        mat should be an array in form of ..., NB, NB. 
         The last two axis is to peform gauge trans.
         '''
-        # 
-        if len(mat.shape) == 1:
-            mat = np.diag(mat)
-        assert mat.shape[-2:] == (chk.num_bands, ) * 2
+        if len(mat.shape) == 1: mat = np.diag(mat)
+        assert mat.shape[-2:] == (chk.num_bands, chk.num_bands, )
         mat = mat[...,chk.win_min[ik1]:chk.win_max[ik1], chk.win_min[ik2]:chk.win_max[ik2]]
-        v1 = chk.v_matrix[ik1].conj()
-        v2 = chk.v_matrix[ik2].T
-        
-        return v1@mat@v2
-    
+        return chk.v_matrix[ik1].conj() @ mat @ chk.v_matrix[ik2].T
+
+    def toWannierGaugeCross(self,mat:np.ndarray, ik1:int, ik2:int, chk_bra:W90CHK, chk_ket:W90CHK):
+        '''
+        Transform a matrix whose bra and ket use different Wannier gauges.
+        '''
+        assert mat.shape[-2:]==(chk_bra.num_bands,chk_ket.num_bands,)
+        mat=mat[..., chk_bra.win_min[ik1]:chk_bra.win_max[ik1], chk_ket.win_min[ik2]:chk_ket.win_max[ik2]]
+        return  chk_bra.v_matrix[ik1].conj() @ mat @ chk_ket.v_matrix[ik2].T
+
     def getSpinMatrice(self):
         super().getSpinMatrice()
         return
