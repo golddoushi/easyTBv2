@@ -213,6 +213,7 @@ class System_w90(System):
         # 12. read in the centers of each basis
         print("set wcc to align the chk")
         self.rList=chk_center.T
+        self.iorb2iatomMap=np.full(self.norbs,-1,dtype=int)
         self.ispin=ispin
         
         self.posinfo=readPOSCAR('%s/%s'%(mainDir,poscar))
@@ -232,6 +233,7 @@ class System_w90(System):
                 wcc=self.rList[:,iorb]
                 print(f"orb{iorb:3d} {wcc[0]:6.3f} {wcc[1]:6.3f} {wcc[2]:6.3f} atom{iatom:3d} {atom_cart[0]:6.3f} {atom_cart[1]:6.3f} {atom_cart[2]:6.3f}")
                 self.rList[:,iorb]=atom_cart
+                self.iorb2iatomMap[iorb]=iatom
         
         self.atomicOrbInfoList=obtainProjections('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
         '''

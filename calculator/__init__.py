@@ -10,6 +10,7 @@ from .Grid import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC
 
 from .Grid import ExchangeCoupling, Chern_FHS, Z2_FHS
 from .density_matrix import CollisionOperator
+from .model_self_energy import ModelElectronSelfEnergy
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath

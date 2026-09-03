@@ -55,6 +55,7 @@ class System_tb(System):
         
         '''
         super().__init__()
+        self.mainDir=mainDir
         # atomic orbital basis are normalized but nonothorgonal
         self.overlap=False
         if spinSeparated is None:
@@ -73,12 +74,15 @@ class System_tb(System):
         self.norbs=self.ham_R.shape[-1]
         # read in the centers of each basis
         self.rList=np.zeros((3,self.norbs))
+        self.iorb2iatomMap=np.full(self.norbs,-1,dtype=int)
         self.ispin=ispin
         self.posinfo=readPOSCAR('%s/%s'%(mainDir,poscar))
         orb_list=obtainProjectionsPlain('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
         assert self.norbs == sum([len(atom) for atom in orb_list]), f'{self.norbs=}, {sum([len(atom) for atom in orb_list])=}'
-        for atom_coor, atom_shell in zip(self.posinfo['pos ions (cart.)'],orb_list):
-            for iorb in atom_shell: self.rList[:,iorb]=atom_coor
+        for iatom, (atom_coor, atom_shell) in enumerate(zip(self.posinfo['pos ions (cart.)'],orb_list)):
+            for iorb in atom_shell:
+                self.rList[:,iorb]=atom_coor
+                self.iorb2iatomMap[iorb]=iatom
         # r_mn of tight-binding model is diagonal
         self.AA_R_W=np.zeros((self.nRvec,3,self.norbs,self.norbs),dtype=complex)
         for iRvec, Rvec in enumerate(self.iRvec):

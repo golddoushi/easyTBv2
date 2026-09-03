@@ -79,58 +79,124 @@ def _applyHrCutoff(hrDat, cutoff=-1, overlap=False):
     print(f"cutoff={cutoff} keeps {np.count_nonzero(keep)}/{nRvec} real-space Hamiltonian blocks")
     return hrDat
 
-def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP",cutoff=-1):
+def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP",cutoff=-1,
+              expectedNorbs=None,requireUnitDegeneracies=False,requireReal=False,
+              requireReciprocal=False,requireComplete=False,allowedRvecs=None):
+    """Read one hr-format file, including its Wigner-Seitz degeneracies.
+
+    ``ham_R`` retains the historical raw file entries; degeneracy factors are
+    returned as ``Ndegen`` and are not applied implicitly. The optional checks
+    are useful for model coupling files while preserving the old Hamiltonian
+    reader defaults. ``requireComplete`` requires exactly one matrix entry for
+    every (R, source, target) tuple. ``allowedRvecs`` optionally restricts the
+    translations to a supplied real-space grid.
+    """
     aux.showElapsedTime(True)
     with open(filepath,'r') as fin:
         headline=fin.readline()
         print('reading file %s, title line:%s'%(filepath,headline))
-        norb=int(fin.readline())
-        if format=="QE": assert norb%2==0, "format is set to QE, means we are doing soc case, but norb is odd"
+        try:
+            norb=int(fin.readline())
+            totWaveVectors=int(fin.readline())
+        except ValueError as error:
+            raise ValueError(f"Invalid orbital/R-count header in {filepath}") from error
+        if norb <= 0 or totWaveVectors <= 0:
+            raise ValueError(f"Orbital and R-vector counts must be positive in {filepath}")
+        if format=="QE" and norb%2:
+            raise ValueError("format='QE' requires an even spinor orbital count")
+        if expectedNorbs is not None and norb != int(expectedNorbs):
+            raise ValueError(f"{filepath} contains {norb} orbitals; expected {int(expectedNorbs)}")
 
-        totWaveVectors=int(fin.readline())
-        iline=3
-        recordedWaveVectors=0
-        while(True):
-            waveVectorPack=fin.readline().split()
-            recordedWaveVectors+=len(waveVectorPack)
-            iline+=1
-            if recordedWaveVectors>=totWaveVectors:break
-            
-    data=np.loadtxt(filepath,skiprows=iline)
+        degeneracies=[]
+        while len(degeneracies) < totWaveVectors:
+            line=fin.readline()
+            if not line:
+                raise ValueError(f"Incomplete Wigner-Seitz degeneracy header in {filepath}")
+            try:
+                degeneracies.extend(int(value) for value in line.split())
+            except ValueError as error:
+                raise ValueError(f"Invalid Wigner-Seitz degeneracy in {filepath}") from error
+        if len(degeneracies) != totWaveVectors:
+            raise ValueError(f"Expected {totWaveVectors} Wigner-Seitz degeneracies in {filepath}, got {len(degeneracies)}")
+        Ndegen=np.asarray(degeneracies,dtype=int)
+        if np.any(Ndegen <= 0):
+            raise ValueError(f"Wigner-Seitz degeneracies must be positive in {filepath}")
+        if requireUnitDegeneracies and np.any(Ndegen != 1):
+            raise ValueError(f"{filepath} requires one unit degeneracy per R block")
+        try:
+            data=np.loadtxt(fin)
+        except ValueError as error:
+            raise ValueError(f"Invalid matrix data in {filepath}: {error}") from error
     aux.showElapsedTime(extraInfo="%s loaded"%filepath)
-    
-    nlines, ncols= data.shape
+
+    data=np.atleast_2d(data)
+    if data.size == 0 or data.shape[1] == 0 or not np.all(np.isfinite(data)):
+        raise ValueError(f"Matrix data in {filepath} must be nonempty and finite")
+    nlines, ncols=data.shape
     if overlap:
-        assert ncols == 14, f"For LCAO case, we need 14 cols. for R(3) iorb(2) t(2) overlap(1) p(3) r(3), but {ncols=} found"
+        if ncols != 14:
+            raise ValueError(f"For LCAO case, expected 14 columns, but found {ncols} in {filepath}")
     else:
-        assert ncols == 7, f"For w90 case, we need 7 cols. for R(3) iorb(2) t(2), but {ncols=} found"
+        if ncols != 7:
+            raise ValueError(f"For hr case, expected 7 columns, but found {ncols} in {filepath}")
+
+    integer_columns=data[:,:5]
+    if not np.all(integer_columns == np.rint(integer_columns)):
+        raise ValueError(f"R vectors and orbital indices must be integers in {filepath}")
 
     iRvecList = []
     iRvecIndex={}
     nR=0
-    for Rvec in np.int16(data[:,:3]):
+    for Rvec in np.asarray(data[:,:3],dtype=int):
         n=tuple(Rvec)
-        if n not in iRvecList:
+        if n not in iRvecIndex:
             iRvecList.append(n)
             iRvecIndex[n]=nR
             nR+=1
-    iRvec=np.array(iRvecList)
+    if nR != totWaveVectors:
+        raise ValueError(f"Header declares {totWaveVectors} R blocks, but matrix data contains {nR} in {filepath}")
+    iRvec=np.asarray(iRvecList,dtype=int)
+    if allowedRvecs is not None:
+        allowed={tuple(np.asarray(Rvec,dtype=int)) for Rvec in allowedRvecs}
+        for Rvec in iRvec:
+            if tuple(Rvec) not in allowed:
+                raise ValueError(f"Coupling R={tuple(Rvec)} is absent from the Hamiltonian iRvec grid")
 
-    sourceList, targetList = np.int16(data[:,3:5].T)-1
-    norbs=sourceList.max()+1
-    #t_R = data[:,5] + 1j* data[:,6]
-    #ham_R=t_R.reshape((nR,norbs,norbs))
-    ham_R=np.zeros((nR,norbs,norbs),dtype=complex)
-    for Rvec, (isource, itarget), t in zip(np.int16(data[:,:3]),np.int16(data[:,3:5])-1,data[:,5] + 1j* data[:,6]):
-        ham_R[iRvecIndex[tuple(Rvec)],isource,itarget]=t
+    sourceList, targetList=np.asarray(data[:,3:5].T,dtype=int)-1
+    if (sourceList.min() < 0 or targetList.min() < 0
+            or sourceList.max() >= norb or targetList.max() >= norb):
+        raise ValueError(f"Orbital indices in {filepath} must lie between 1 and {norb}")
+    records=[(iRvecIndex[tuple(R)], int(i), int(j))
+             for R, i, j in zip(np.asarray(data[:,:3],dtype=int),sourceList,targetList)]
+    if requireComplete:
+        unique_records=set(records)
+        expected_records=nR*norb*norb
+        if len(records) != expected_records or len(unique_records) != expected_records:
+            raise ValueError(f"{filepath} must contain exactly one entry for every R/orbital pair")
+    values=data[:,5]+1j*data[:,6]
+    if requireReal and np.max(np.abs(values.imag)) > 1e-12:
+        raise ValueError(f"Matrix entries in {filepath} must be real")
+    ham_R=np.zeros((nR,norb,norb),dtype=complex)
+    for (iR,isource,itarget), t in zip(records,values):
+        ham_R[iR,isource,itarget]=t
+    if requireReciprocal:
+        for iR,Rvec in enumerate(iRvec):
+            reverse=iRvecIndex.get(tuple(-Rvec))
+            partner=np.zeros_like(ham_R[iR]) if reverse is None else ham_R[reverse].conj().T
+            if not np.allclose(ham_R[iR],partner,atol=1e-12,rtol=1e-10):
+                raise ValueError(f"Matrix data in {filepath} lacks reciprocal bonds at R={tuple(Rvec)}")
     if ignoreImagPart: ham_R=ham_R.real
     if overlap:
         o, px, py, pz, rx, ry, rz = data[:,7], data[:,8], data[:,9], data[:,10], data[:,11], data[:,12], data[:,13]
-        overlap_R, px_R, py_R, pz_R, rx_R, ry_R, rz_R = o.reshape((nR,norbs,norbs)), px.reshape((nR,norbs,norbs)), py.reshape((nR,norbs,norbs)), pz.reshape((nR,norbs,norbs)), rx.reshape((nR,norbs,norbs)), ry.reshape((nR,norbs,norbs)), rz.reshape((nR,norbs,norbs))
+        matrices=[np.zeros((nR,norb,norb),dtype=float) for _ in range(7)]
+        for record,entries in zip(records,zip(o,px,py,pz,rx,ry,rz)):
+            for matrix,value in zip(matrices,entries):
+                matrix[record]=value
+        overlap_R,px_R,py_R,pz_R,rx_R,ry_R,rz_R=matrices
     
     mp_grid=_mpGridFromIRvec(iRvec)
     
-    aux.showElapsedTime(extraInfo='\nreal-space grid: %dx%dx%d, ham_R read'%(*ham_R.shape[:3],))
+    aux.showElapsedTime(extraInfo='\nreal-space grid: %d(nR)x%d(norbs)x%d(norbs), ham_R read'%(*ham_R.shape[:3],))
     if overlap:
         return _applyHrCutoff({
         "ham_R":ham_R,
@@ -138,19 +204,34 @@ def readHrDat(filepath,ignoreImagPart=False,overlap=False,format="VASP",cutoff=-
         "overlap_R":overlap_R,
         "momentum_R":np.array([px_R,py_R,pz_R]).transpose((1,0,2,3)), # set 1st index to be the Rvec
         "position_R":np.array([rx_R,ry_R,rz_R]).transpose((1,0,2,3)), # set 1st index to be the Rvec
+        "title":headline.rstrip("\r\n"),
+        "norbs":norb,
+        "Ndegen":Ndegen,
         "iRvec":iRvec,
         "iRvecIndex":iRvecIndex,
         "mp_grid":mp_grid,
     }, cutoff=cutoff, overlap=True)
     return _applyHrCutoff({
         "ham_R":ham_R,
+        "title":headline.rstrip("\r\n"),
+        "norbs":norb,
+        "Ndegen":Ndegen,
         "iRvec":iRvec,
         "iRvecIndex":iRvecIndex,
         "mp_grid":mp_grid,
     }, cutoff=cutoff, overlap=False)
 
-def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated, cutoff=-1):
-    '''Capable to read double hr.dat files for the colinear magnetic models'''
+def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated, cutoff=-1,
+                  expectedNorbs=None,requireUnitDegeneracies=False,requireReal=False,
+                  requireReciprocal=False,requireComplete=False,allowedRvecs=None):
+    """Read one hr file or combine separated collinear spin files.
+
+    The result includes the title, declared orbital count, and ``Ndegen`` in
+    the returned R-block order. Hamiltonian values remain unweighted for
+    backward compatibility. Optional validation is performed during this same
+    read, so specialized consumers do not need to parse the file header again.
+    See ``readHrDat`` for the validation keyword meanings.
+    """
     single_path = '%s/%s_hr.dat'%(mainDir, hamR)
     up_path = '%s/%s.up_hr.dat'%(mainDir, hamR)
     dn_path = '%s/%s.dn_hr.dat'%(mainDir, hamR)
@@ -163,22 +244,40 @@ def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated, c
         )
 
     if not spinSeparated:
-        return readHrDat(single_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format, cutoff=cutoff)
+        return readHrDat(single_path,ignoreImagPart=ignoreImagPart,overlap=False,format=format,cutoff=cutoff,
+                         expectedNorbs=expectedNorbs,requireUnitDegeneracies=requireUnitDegeneracies,
+                         requireReal=requireReal,requireReciprocal=requireReciprocal,
+                         requireComplete=requireComplete,allowedRvecs=allowedRvecs)
 
-    assert ispin == 2, "separated spin-channel Hamiltonians require ispin=2"
-    assert os.path.exists(up_path), f"cannot find spin-up Hamiltonian file {up_path}"
-    assert os.path.exists(dn_path), f"cannot find spin-down Hamiltonian file {dn_path}"
+    if ispin != 2:
+        raise ValueError("separated spin-channel Hamiltonians require ispin=2")
+    if not os.path.exists(up_path):
+        raise FileNotFoundError(f"cannot find spin-up Hamiltonian file {up_path}")
+    if not os.path.exists(dn_path):
+        raise FileNotFoundError(f"cannot find spin-down Hamiltonian file {dn_path}")
 
-    hr_up = readHrDat(up_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format)
-    hr_dn = readHrDat(dn_path, ignoreImagPart=ignoreImagPart, overlap=False, format=format)
+    expected_spin_norbs=None
+    if expectedNorbs is not None:
+        if int(expectedNorbs)%2:
+            raise ValueError("A separated-spin expectedNorbs value must be even")
+        expected_spin_norbs=int(expectedNorbs)//2
+    read_options=dict(ignoreImagPart=ignoreImagPart,overlap=False,format=format,
+                      expectedNorbs=expected_spin_norbs,
+                      requireUnitDegeneracies=requireUnitDegeneracies,
+                      requireReal=requireReal,requireReciprocal=requireReciprocal,
+                      requireComplete=requireComplete,allowedRvecs=allowedRvecs)
+    hr_up=readHrDat(up_path,**read_options)
+    hr_dn=readHrDat(dn_path,**read_options)
 
-    assert hr_up['ham_R'].shape == hr_dn['ham_R'].shape, (
-        f"spin-up and spin-down Hamiltonians have different shapes: "
-        f"{hr_up['ham_R'].shape} vs {hr_dn['ham_R'].shape}"
-    )
-    assert set(map(tuple, hr_up['iRvec'])) == set(map(tuple, hr_dn['iRvec'])), (
-        "spin-up and spin-down Hamiltonians do not contain the same R vectors"
-    )
+    if hr_up['ham_R'].shape != hr_dn['ham_R'].shape:
+        raise ValueError("spin-up and spin-down Hamiltonians have different shapes: "
+                         f"{hr_up['ham_R'].shape} vs {hr_dn['ham_R'].shape}")
+    if set(map(tuple,hr_up['iRvec'])) != set(map(tuple,hr_dn['iRvec'])):
+        raise ValueError("spin-up and spin-down Hamiltonians do not contain the same R vectors")
+    for Rvec,Ndegen in zip(hr_up['iRvec'],hr_up['Ndegen']):
+        iR_dn=hr_dn['iRvecIndex'][tuple(Rvec)]
+        if Ndegen != hr_dn['Ndegen'][iR_dn]:
+            raise ValueError(f"spin channels have different degeneracies at R={tuple(Rvec)}")
 
     nRvec = len(hr_up['iRvec'])
     norb_spin = hr_up['ham_R'].shape[-1]
@@ -190,6 +289,9 @@ def readFullHrDat(mainDir, hamR, ignoreImagPart, format, ispin, spinSeparated, c
 
     return _applyHrCutoff({
         "ham_R": ham_R,
+        "title": (hr_up['title'],hr_dn['title']),
+        "norbs": 2*norb_spin,
+        "Ndegen": hr_up['Ndegen'],
         "iRvec": hr_up['iRvec'],
         "iRvecIndex": hr_up['iRvecIndex'],
         "mp_grid": hr_up['mp_grid'],

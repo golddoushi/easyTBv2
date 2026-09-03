@@ -61,12 +61,15 @@ class System_omx(System):
         self.norbs=self.energy_R.shape[-1]
         # read in the centers of each basis
         self.rList=np.zeros((3,self.norbs))
+        self.iorb2iatomMap=np.full(self.norbs,-1,dtype=int)
         self.ispin=ispin
         self.posinfo=readPOSCAR('%s/%s'%(mainDir,poscar))
         orb_list=obtainProjectionsPlain('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
         assert self.norbs == sum([len(atom) for atom in orb_list]), f'{self.norbs=}, {sum([len(atom) for atom in orb_list])=}'
-        for atom_coor, atom_shell in zip(self.posinfo['pos ions (cart.)'],orb_list):
-            for iorb in atom_shell: self.rList[:,iorb]=atom_coor
+        for iatom, (atom_coor, atom_shell) in enumerate(zip(self.posinfo['pos ions (cart.)'],orb_list)):
+            for iorb in atom_shell:
+                self.rList[:,iorb]=atom_coor
+                self.iorb2iatomMap[iorb]=iatom
         
         # For now, set r_mn to be diagonal, for approximation
         #self.AA_R_W=np.zeros((self.nRvec,3,self.norbs,self.norbs),dtype=complex)

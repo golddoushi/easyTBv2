@@ -1,0 +1,267 @@
+"""Lowest-order retarded Fan-Migdal and Debye-Waller self-energies for model EPC.
+
+Conventions follow https://vasp.at/wiki/Electron-phonon_interactions_theory:
+phonon energies are hbar*Omega in eV, and retarded denominators have +i*eta.
+The static comparison is Fan(adiabatic) + DW, not DW alone. No rigid-ion
+reconstruction of the second derivative is assumed for a tight-binding model.
+"""
+
+import numpy as np
+from scipy.constants import Boltzmann, electron_volt
+from scipy.special import expit
+
+from .Grid import Energy
+from .Path import EnergyOnPath
+
+
+def uniform_qmesh(grid):
+    """Full Gamma-centered mesh in fractional reciprocal coordinates."""
+    values = np.asarray(grid)
+    if (values.shape != (3,) or not np.all(np.isfinite(values))
+            or np.any(values < 1) or not np.all(values == values.astype(int))):
+        raise ValueError("qgrid must contain three positive integers")
+    grid = values.astype(int)
+    return np.indices(tuple(grid)).reshape(3, -1).T / grid
+
+
+def _points(value, name):
+    points = np.atleast_2d(np.asarray(value, dtype=float))
+    if points.ndim != 2 or points.shape[1] != 3 or not len(points) or not np.all(np.isfinite(points)):
+        raise ValueError(f"{name} must have shape (npoints,3), with finite fractional coordinates")
+    return points
+
+
+class ModelElectronSelfEnergy:
+    """One-shot model self-energy, evaluated immediately on the supplied grids.
+
+    Parameters
+    ----------
+    model : System
+        An equilibrium model with modelEPC and modelPhonons attached.
+    kpoints : array (nk,3), or one 3-vector
+        Fractional reciprocal coordinates of the external electronic states.
+    qgrid : tuple, optional
+        Full mesh, default (8,8,1). Mutually exclusive with qpoints.
+        Electronic states are computed by Energy once per distinct shifted
+        mesh, then reused for all equivalent k and k+q points.
+    qpoints, qweights : arrays, optional
+        Explicit phonon quadrature; weights must be nonnegative and are
+        normalized to sum to one. Uniform weights are used if omitted.
+        For explicit quadrature, EnergyOnPath solves the unique electronic
+        points together. The underlying solvers are in energy_calculators.
+    temperature : float
+        Common electron/phonon temperature in kelvin, including exactly zero.
+    fermi : float
+        Chemical potential in eV. It sets intermediate-state Fermi factors.
+    eta : float
+        Positive retarded denominator regulator in eV, not a fitted lifetime.
+    adiabatic : bool
+        False retains +/- phonon energies and Pauli factors. True neglects
+        phonon energies only in denominators; Bose factors and zero-point
+        displacement normalization are retained. Use True for frozen snapshots.
+    energyList : 1D array, optional
+        Common real evaluation energies in eV. None evaluates each band's
+        on-shell energy. Full matrices are stored even for on-shell evaluation,
+        so a degenerate subspace can be treated at a common energy explicitly.
+
+    Outputs
+    -------
+    fan_migdal_matrix : complex (nk,ne,nb,nb)
+        Full band-space retarded Fan matrix at each evaluation energy.
+    debye_waller_matrix : complex Hermitian (nk,nb,nb)
+        Frequency-independent thermal average of the quadratic Hamiltonian.
+    fan_migdal, total : complex (nk,nb) or (nk,ne,nb)
+        Diagonal self-energies; the first shape applies to on-shell evaluation.
+    debye_waller : real (nk,nb)
+        Diagonal DW energy shift, identically zero for strictly linear SSH.
+
+    On-shell energy shifts use Z=1 and neglect off-diagonal mixing. They are
+    reliable for isolated nondegenerate bands at weak coupling. For degenerate
+    manifolds use total_matrix at a common energy and diagonalize the block.
+    Static Im(Sigma) depends on eta and is not a quantum EPC transport rate.
+    """
+
+    def __init__(self, model, kpoints, qgrid=None, qpoints=None, qweights=None,
+                 temperature=0.0, fermi=0.0, eta=1e-3, adiabatic=False, energyList=None):
+        if model.modelEPC is None or model.modelPhonons is None:
+            raise ValueError("Attach model EPC and model phonons before computing self-energy")
+        model.modelEPC.validate(model)
+        if len(model.modelPhonons.masses) != model.modelEPC.natoms:
+            raise ValueError("Phonon and EPC atom counts differ")
+        self.kpoints = _points(kpoints, "kpoints")
+        if qpoints is not None and qgrid is not None:
+            raise ValueError("Specify qgrid or qpoints, not both")
+        self.qpoints = (uniform_qmesh((8, 8, 1) if qgrid is None else qgrid)
+                        if qpoints is None else _points(qpoints, "qpoints"))
+        self.qgrid = (tuple(int(n) for n in ((8, 8, 1) if qgrid is None else qgrid))
+                      if qpoints is None else None)
+        weights = np.ones(len(self.qpoints)) if qweights is None else np.asarray(qweights, dtype=float)
+        if (weights.shape != (len(self.qpoints),) or not np.all(np.isfinite(weights))
+                or np.any(weights < 0) or weights.sum() <= 0):
+            raise ValueError("qweights must be finite, nonnegative, and have positive sum")
+        self.qweights = weights / weights.sum()
+        self.temperature, self.fermi, self.eta = float(temperature), float(fermi), float(eta)
+        if not np.isfinite(self.temperature) or self.temperature < 0:
+            raise ValueError("temperature must be finite and nonnegative, in kelvin")
+        if not np.isfinite(self.fermi) or not np.isfinite(self.eta) or self.eta <= 0:
+            raise ValueError("fermi must be finite and eta strictly positive, in eV")
+        self.adiabatic = bool(adiabatic)
+        self.on_shell = energyList is None
+        self.model = model
+        self._prepare_electronic_states()
+        if self.on_shell:
+            self.evaluation_energies = self.energies.copy()
+        else:
+            energyList = np.asarray(energyList, dtype=float)
+            if energyList.ndim != 1 or not len(energyList) or not np.all(np.isfinite(energyList)):
+                raise ValueError("energyList must be a nonempty finite 1D array in eV")
+            self.evaluation_energies = np.broadcast_to(energyList, (len(self.kpoints), len(energyList))).copy()
+        nk, ne = self.evaluation_energies.shape
+        nb = model.norbs
+        self.fan_migdal_matrix = np.zeros((nk, ne, nb, nb), dtype=complex)
+        self.debye_waller_matrix = np.zeros((nk, nb, nb), dtype=complex)
+        kBT = Boltzmann * self.temperature / electron_volt
+        epc, phonons = model.modelEPC, model.modelPhonons
+        has_quadratic = np.any(epc.beta_R != 0)
+
+        for ik, k in enumerate(self.kpoints):
+            vk = self.vectors[ik]
+            states = self.energy_calculators[self._calculator_index[ik]]
+            energies = states.energies.reshape(-1, nb)
+            vectors = states.vectors.reshape(-1, nb, nb)
+            for iq, (q, weight) in enumerate(zip(self.qpoints, self.qweights)):
+                if weight == 0:
+                    continue
+                index = self._intermediate_indices[ik, iq]
+                intermediate, vkq = energies[index], vectors[index]
+                phonon_energies, _ = phonons.modes(q)
+                if self.temperature == 0:
+                    bose = np.zeros_like(phonon_energies)
+                    occupation = np.where(intermediate < self.fermi, 1.0,
+                                          np.where(intermediate > self.fermi, 0.0, 0.5))
+                else:
+                    # exp(-x)/(-expm1(-x)) avoids overflow for cold/high-energy modes.
+                    x = phonon_energies / kBT
+                    bose = np.exp(-x) / (-np.expm1(-x))
+                    occupation = expit((self.fermi-intermediate) / kBT)
+                g = model.getModelEPC(k, q, vectors_k=vk, vectors_kq=vkq)
+                denominator = (self.evaluation_energies[ik, :, None, None]
+                               - intermediate[None, None, :] + 1j*self.eta)
+                if self.adiabatic:
+                    propagator = (2*bose[None, :, None]+1) / denominator
+                else:
+                    propagator = ((bose[:, None]+1-occupation[None, :])[None]
+                                  / (denominator-phonon_energies[None, :, None])
+                                  + (bose[:, None]+occupation[None, :])[None]
+                                  / (denominator+phonon_energies[None, :, None]))
+                # g[nu,m,n] maps external n to intermediate m; retain complex
+                # products for off-diagonal self-energies, not just |g|^2.
+                self.fan_migdal_matrix[ik] += weight*np.einsum(
+                    "vmi,avm,vmj->aij", g.conj(), propagator, g, optimize=True)
+                if has_quadratic:
+                    for population, u in zip(bose, phonons.modeDisplacements(q)):
+                        hessian = epc.secondDisplacementVertex(model, k, q, u)
+                        self.debye_waller_matrix[ik] += 0.5*weight*(2*population+1)*(vk.conj().T @ hessian @ vk)
+
+    def _prepare_electronic_states(self):
+        """Index established calculator results; no separate eigensolver.
+
+        Cell-periodic eigenstates are periodic under reciprocal lattice shifts.
+        On a uniform q mesh, external k points differing by a mesh vector share
+        one Energy FFT. Explicit q quadratures use a single batched path solve.
+        """
+        nk, nq, nb = len(self.kpoints), len(self.qpoints), self.model.norbs
+        if self.qgrid is not None:
+            grid = np.array(self.qgrid)
+            # Rounding is only used to identify equivalent mesh offsets. The
+            # FFT phase is evaluated at the original representative k point.
+            offsets = np.round(np.mod(self.kpoints*grid, 1), 12) % 1
+            _, representatives, self._calculator_index = np.unique(
+                offsets, axis=0, return_index=True, return_inverse=True)
+            solvers = []
+            self._external_indices = np.empty(nk, dtype=int)
+            self._intermediate_indices = np.empty((nk, nq), dtype=int)
+            qindices = np.rint(self.qpoints*grid).astype(int)
+            for group, representative in enumerate(representatives):
+                shift = self.kpoints[representative]
+                solvers.append(Energy(
+                    model=self.model, kgrid=self.qgrid,
+                    phaseshift=np.exp(2j*np.pi*(self.model.iRvec @ shift))))
+                members = np.flatnonzero(self._calculator_index == group)
+                indices = np.rint((self.kpoints[members]-shift)*grid).astype(int) % grid
+                self._external_indices[members] = np.ravel_multi_index(indices.T, self.qgrid)
+                intermediate = (indices[:, None, :] + qindices[None, :, :]) % grid
+                self._intermediate_indices[members] = np.ravel_multi_index(
+                    intermediate.reshape(-1, 3).T, self.qgrid).reshape(len(members), nq)
+            self.energy_calculators = tuple(solvers)
+        else:
+            points = np.concatenate((self.kpoints,
+                                     (self.kpoints[:, None, :] + self.qpoints).reshape(-1, 3)))
+            reduced = np.mod(points, 1)
+            _, representatives, inverse = np.unique(
+                np.round(reduced, 12) % 1, axis=0, return_index=True, return_inverse=True)
+            self.energy_calculators = (EnergyOnPath(
+                model=self.model, kpath=reduced[representatives], syncModelVerbose=False),)
+            self._calculator_index = np.zeros(nk, dtype=int)
+            self._external_indices = inverse[:nk]
+            self._intermediate_indices = inverse[nk:].reshape(nk, nq)
+        self.energies = np.array([
+            self.energy_calculators[group].energies.reshape(-1, nb)[index]
+            for group, index in zip(self._calculator_index, self._external_indices)])
+        self.vectors = np.array([
+            self.energy_calculators[group].vectors.reshape(-1, nb, nb)[index]
+            for group, index in zip(self._calculator_index, self._external_indices)])
+
+    @property
+    def fan_migdal(self):
+        diagonal = np.diagonal(self.fan_migdal_matrix, axis1=-2, axis2=-1)
+        return np.diagonal(diagonal, axis1=1, axis2=2) if self.on_shell else diagonal
+
+    @property
+    def debye_waller(self):
+        return np.diagonal(self.debye_waller_matrix, axis1=-2, axis2=-1).real
+
+    @property
+    def total_matrix(self):
+        return self.fan_migdal_matrix + self.debye_waller_matrix[:, None]
+
+    @property
+    def total(self):
+        dw = self.debye_waller if self.on_shell else self.debye_waller[:, None]
+        return self.fan_migdal + dw
+
+    @property
+    def energy_shifts(self):
+        """Real diagonal shift in eV, using the specified evaluation energies."""
+        return self.total.real
+
+    @property
+    def linewidths(self):
+        """Retarded linewidth -2 Im(Sigma), in eV (hbar/tau when applicable)."""
+        return -2*self.total.imag
+
+    @property
+    def renormalized_energies(self):
+        if not self.on_shell:
+            raise ValueError("Renormalized band energies require on-shell evaluation (energyList=None)")
+        return self.energies + self.energy_shifts
+
+    def bandGap(self, occupiedBands):
+        """Band-edge shifts on the supplied k set, not an unsampled BZ search.
+
+        occupiedBands is the number of occupied bands per primitive cell.
+        Results are scalar eV; momentum/band indices refer to kpoints.
+        """
+        nb = self.energies.shape[1]
+        if not isinstance(occupiedBands, (int, np.integer)) or not 0 < occupiedBands < nb:
+            raise ValueError("occupiedBands must be between one and nbands-1")
+        renormalized = self.renormalized_energies
+        vbm = float(np.max(self.energies[:, :occupiedBands]))
+        cbm = float(np.min(self.energies[:, occupiedBands:]))
+        new_vbm = float(np.max(renormalized[:, :occupiedBands]))
+        new_cbm = float(np.min(renormalized[:, occupiedBands:]))
+        if cbm <= vbm:
+            raise ValueError("The sampled bare bands do not define an insulating gap")
+        return dict(bare_gap=cbm-vbm, renormalized_gap=new_cbm-new_vbm,
+                    gap_shift=(new_cbm-new_vbm)-(cbm-vbm),
+                    bare_vbm=vbm, bare_cbm=cbm, vbm_shift=new_vbm-vbm, cbm_shift=new_cbm-cbm)
