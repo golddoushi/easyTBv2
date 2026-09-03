@@ -2825,8 +2825,6 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         if self.fullCovariantDerivative and self.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
-        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
-            raise ValueError("fullCovariantDerivative requires finite eta for the dc density matrix")
 
         nbasis = self.energies.shape[-1]
         M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
@@ -2895,12 +2893,14 @@ class InverseFaradayEffect_VG_DM(Dipole, Spin, Orbital):
         Compute IFE in the velocity gauge with a frequency-domain density matrix.
         unit: \muB / (V/\angst.)^2
 
-        ``fullCovariantDerivative=True`` adds the gauge-covariant relaxation
-        vertices ``eta C_a f`` and ``i eta {C_a,C_b}f/2``, where ``C_a=iD_a``.
-        These vertices supply the intraband population response missing from
-        the clean commutator ``[v_a,f]``. II, EI, IE and EE density-matrix
-        channels are retained separately. The magnetic-moment operator is
-        assumed to have no explicit vector-potential dependence.
+        ``fullCovariantDerivative=True`` adds the collision-covariant
+        equilibrium-restoring vertices built from ``C_a=iD_a``. They reduce to
+        ``eta C_a f`` and ``i eta {C_a,C_b}f/2`` in CRTA and use the frozen
+        secular collision superoperator in SERTA. These vertices supply the
+        intraband population response missing from the clean commutator
+        ``[v_a,f]``. II, EI, IE and EE density-matrix channels are retained
+        separately. The magnetic-moment operator is assumed to have no
+        explicit vector-potential dependence.
 
         Indexing
         --------
@@ -2911,8 +2911,6 @@ class InverseFaradayEffect_VG_DM(Dipole, Spin, Orbital):
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         if self.fullCovariantDerivative and self.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
-        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
-            raise ValueError("fullCovariantDerivative requires finite eta for gauge-covariant relaxation")
 
         nbasis = self.energies.shape[-1]
         M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
@@ -3638,8 +3636,6 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         if self.fullCovariantDerivative and self.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
-        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
-            raise ValueError("fullCovariantDerivative requires finite eta for the dc density matrix")
 
         nbasis = self.energies.shape[-1]
         # Slot 0 is the full torque; following slots are projected torque operators.
@@ -3769,9 +3765,10 @@ class InverseFaradayTorque_VG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         Compute light-induced d.c. torque in the velocity gauge with a frequency-domain density matrix.
         unit: \muB eV / (V/\angst.)^2; divide by \hbar in eV fs for \muB/fs / (V/\angst.)^2.
 
-        ``fullCovariantDerivative=True`` adds the gauge-covariant relaxation
-        vertices and preserves II, EI, IE and EE. T1*rho1_I and T2*rho0 are
-        assigned to II; T1*rho1_E is assigned to EE.
+        ``fullCovariantDerivative=True`` adds the collision-covariant
+        equilibrium-restoring vertices and preserves II, EI, IE and EE. CRTA
+        and frozen secular SERTA collision operators are supported. T1*rho1_I
+        and T2*rho0 are assigned to II; T1*rho1_E is assigned to EE.
         '''
         super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          highOrderDipole=fullCovariantDerivative, exchangeVelocity=exchangeVelocity,
@@ -3780,8 +3777,6 @@ class InverseFaradayTorque_VG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         if self.fullCovariantDerivative and self.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
-        if self.fullCovariantDerivative and abs(self.eta) < 1e-15:
-            raise ValueError("fullCovariantDerivative requires finite eta for gauge-covariant relaxation")
 
         nbasis = self.energies.shape[-1]
         nproj = len(torqueProjectionList) + 1

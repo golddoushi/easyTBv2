@@ -26,10 +26,12 @@ AC_CHANNEL_DESCRIPTIONS = {
 class CollisionOperator:
     """Collision model used by density-matrix kernels.
 
-    ``crta`` uses one relaxation energy ``eta=hbar/tau``.  ``serta`` reads the
-    Wannier-interpolated electron-phonon linewidth attached to ``System_w90``.
-    A bound collision object is created separately for each calculator k grid,
-    which keeps this specification safe to share between BZ worker processes.
+    ``crta`` uses one relaxation energy ``eta=hbar/tau``. ``serta`` reads the
+    Wannier-interpolated electron-phonon linewidth attached to ``System_w90``
+    and supports both first- and second-order kernels in the frozen secular
+    relaxation-time approximation. A bound collision object is created for
+    each calculator k grid, keeping the specification safe to share between
+    BZ worker processes.
     """
 
     def __init__(self, mode="crta", eta=None, linewidthFloor=1e-12):
@@ -57,7 +59,16 @@ class CollisionOperator:
 
 
 class BoundCollisionOperator:
-    """Collision linewidths represented on one calculator's eigenstate grid."""
+    """Collision linewidths represented on one calculator's eigenstate grid.
+
+    The SERTA implementation is the frozen, secular covariant RTA
+
+        G_k[X]_mn = (Gamma_mk + Gamma_nk) X_mn / 2.
+
+    The equilibrium linewidths are interpolated once and are not varied by
+    the external field. Scattering-in and vertex corrections are therefore
+    outside this approximation.
+    """
 
     def __init__(self, specification, owner):
         self.specification=specification
@@ -92,7 +103,7 @@ class BoundCollisionOperator:
         linewidth_grid=np.zeros(self.owner.kgrid+(model.norbs,model.norbs),dtype=complex)
         for iR,Rvec in enumerate(model.iRvec):
             # Wigner-Seitz boundary vectors can share the same FFT-grid index.
-            # Their 1/Ndegen contributions must be accumulated, not overwritten.
+            # Their 1/Ndegen contributions must be accumulated, not overwritten, so use += here rather than =
             linewidth_grid[tuple(Rvec)]+=linewidth_sqrt_R[iR]
         linewidth_sqrt_W=np.fft.ifftn(linewidth_grid,axes=(0,1,2))*np.prod(self.owner.kgrid)
         linewidth_W=linewidth_sqrt_W@linewidth_sqrt_W.conj().swapaxes(-2,-1)
@@ -107,6 +118,18 @@ class BoundCollisionOperator:
         np.divide(1.0,self.population_linewidth,out=inverse,
                   where=self.population_linewidth > self.specification.linewidthFloor)
         return inverse
+
+    def population_resolvent(self, frequency=0.0):
+        """Return the diagonal-population resolvent 1/(-Omega-i Gamma_n)."""
+        denominator=-frequency-1j*self.population_linewidth
+        result=np.zeros_like(denominator,dtype=complex)
+        np.divide(1.0,denominator,out=result,
+                  where=np.abs(denominator) > self.specification.linewidthFloor)
+        return result
+
+    def apply(self, matrix):
+        """Apply the secular damping superoperator to a band-space matrix."""
+        return self.coherence_linewidth*np.asarray(matrix)
 
     def resolvent(self, delta_energy, frequency=0.0):
         denominator=np.asarray(delta_energy)-frequency-1j*self.coherence_linewidth
@@ -325,13 +348,13 @@ class _SecondOrderDMKernel:
         self.indices = np.arange(self.nbands)
         self.deltaE_mn = owner.deltaE
         self.collision = CollisionOperator.fromOwner(owner)
-        self.eta = self.collision.requireConstant("second-order density-matrix kernels")
         self.g0_mn = self.collision.resolvent(self.deltaE_mn)
 
         if self.full_covariant_derivative and owner.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
-        if self.full_covariant_derivative and abs(self.eta) < 1e-15:
-            raise ValueError("fullCovariantDerivative requires finite eta for the dc density matrix")
+        if self.full_covariant_derivative and not np.any(
+                self.collision.population_linewidth > self.collision.specification.linewidthFloor):
+            raise ValueError("fullCovariantDerivative requires finite population relaxation")
 
         self.state_class : _SecondOrderDMFermiState
 
@@ -444,7 +467,7 @@ class DividedDifferenceLGFermiState(_SecondOrderDMFermiState):
         return DividedDifferenceLGFrequencyState(self, omega)
 
 class DividedDifferenceLGFrequencyState(_SecondOrderDMFrequencyState):
-    """Differentiate (ad_H - s*Omega - i*eta) rho1 = i D f(H)."""
+    """Differentiate the Liouville equation with frozen equilibrium linewidths."""
 
     def __init__(self, fermi_state, omega):
         self.fermi_state = fermi_state
@@ -537,9 +560,8 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
         for direction in range(3):
             source_e = self.owner.velocity_K[..., direction, :, :] * fermi_state.f_nm
             if self.kernel.full_covariant_derivative:
-                source_e += (
-                    self.kernel.eta * self.owner.r_K[..., direction, :, :]
-                    * fermi_state.f_nm * self.kernel.off_diag
+                source_e += self.kernel.collision.apply(
+                    self.owner.r_K[..., direction, :, :] * fermi_state.f_nm * self.kernel.off_diag
                 )
             for sign in (-1, 1):
                 frequency = sign * omega
@@ -549,10 +571,9 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
                     * self.kernel.off_diag
                 )
                 if self.kernel.full_covariant_derivative:
-                    population = (
-                        1j * self.kernel.eta * fermi_state.dfdk[..., direction, :]
-                        / (-frequency - 1j * self.kernel.eta)
-                    )
+                    population = (1j * self.kernel.collision.population_linewidth
+                                  * fermi_state.dfdk[..., direction, :]
+                                  * self.kernel.collision.population_resolvent(frequency))
                     self.rho1_i[(direction, sign)] = diagonal_matrix(population)
 
     def block(self, a, b):
@@ -613,7 +634,7 @@ class VelocityGaugeFermiState(_SecondOrderDMFermiState):
         )
         result = {}
         for name in AC_CHANNEL_NAMES:
-            source = 0.5j * kernel.eta * (c2_ab[name] + c2_ba[name])
+            source = 0.5j * kernel.collision.apply(c2_ab[name] + c2_ba[name])
             sector = kernel.diag if name in ("II", "IE") else kernel.off_diag
             result[name] = kernel.g0_mn * source * sector
         return result

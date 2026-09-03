@@ -25,7 +25,7 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 #| Tasks free from interface |
 #+---------------------------+
-from calculator import Chern_FHS, Z2_FHS
+from calculator import Chern_FHS, Z2_FHS, CollisionOperator
 from auxiliary import showElapsedTime, getCBM, getVBM
 from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeffs, outputIFTcoeffs,
                     output4thData, outputBZDistributionData, outputIFEResponseOnBZ, outputIFTResponseOnBZ)
@@ -84,6 +84,9 @@ def run():
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
     #'''
+
+    # include el-ph self energy
+    model.includeElectronSelfEnergy(f"{mainDir}/vaspout.h5",temperature=300.,)
 
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually
     # NOTE: this is only for independent vasp_ncl + wannier90 scheme, DO NOT apply for vasp_std + V_soi scheme
@@ -244,11 +247,12 @@ def run():
                           "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
 
                           "finite temperature occupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
+                          "collision operator": CollisionOperator(mode="serta", eta=0.06582), # collision model, currently only for DM based calculators
                           "degen":1e-1,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
-                    ncores=16)
+                    ncores=8)
     #exit()
     #_,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
