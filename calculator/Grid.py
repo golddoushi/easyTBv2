@@ -243,8 +243,9 @@ class Energy(Calculator):
         self.E_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         self.O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         for iR, Rvec in enumerate(self.model.iRvec):
-            self.E_R_intepolated[tuple(Rvec)]=E_R_AO[iR]
-            self.O_R_intepolated[tuple(Rvec)]=O_R_AO[iR]
+            index = tuple(np.asarray(Rvec) % self.kgrid)
+            self.E_R_intepolated[index] += E_R_AO[iR]
+            self.O_R_intepolated[index] += O_R_AO[iR]
         self.E_K_AO=np.fft.ifftn(self.E_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         self.O_K_AO=np.fft.ifftn(self.O_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT energy_R to energy_K and O_R to O_K on {self.kgrid=} finished")
@@ -269,6 +270,10 @@ class Energy(Calculator):
         Solve the eig.-eqs. 
 
         H \dot U = U \dot \Gamma
+
+        ham_R stores signed Hamiltonian matrix elements. The inverse FFT evaluates 
+        H(k)=sum_R ham_R(R)*exp(+2*pi*i*k.R); no extra hopping minus sign is applied. 
+        A model writing H_ij=-t_ij must store -t_ij in the hamR file.
         '''
         if not self.phase:
             HH_R_W=self.model.ham_R
@@ -278,7 +283,9 @@ class Energy(Calculator):
             HH_R_W=self.model.ham_R*self.phaseshift[:,None,None]
         self.ham_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         for iR, Rvec in enumerate(self.model.iRvec):
-            self.ham_R_intepolated[tuple(Rvec)]=HH_R_W[iR]
+            # Distinct R blocks can alias on a small/shifted mesh. Their
+            # (already phase-shifted) contributions must all enter the sum.
+            self.ham_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += HH_R_W[iR]
         self.ham_K=np.fft.ifftn(self.ham_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT ham_R to ham_K on {self.kgrid=} finished")
         self.energies, self.vectors = np.linalg.eigh(self.ham_K)
