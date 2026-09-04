@@ -14,6 +14,9 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
                              DC_CHANNEL_DESCRIPTIONS as DC_DM_CHANNEL_DESCRIPTIONS,
                              DC_CHANNEL_NAMES as DC_DM_CHANNEL_NAMES,
                              LengthGaugeDCFirstOrderDMKernel,
+                             LengthGaugeFirstOrderDMKernel,
+                             VelocityGaugeFirstOrderDMKernel,
+                             CollisionOperator, diagonal_matrix,
                              LengthGaugeSecondOrderDMKernel,
                              VelocityGaugeSecondOrderDMKernel)
 
@@ -56,7 +59,7 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
         for ialpha in range(3):
             drive_a = drive_vertex[..., ialpha, :, :]
             coherence_prefactor = (
-                1j * kernel.deltaE_inverse_pure * kernel.g0_mn
+                -1j * kernel.deltaE_inverse_pure * kernel.g0_mn
                 * drive_a * kernel.off_diag
             )
             drive_diag = np.diagonal(drive_a, axis1=-2, axis2=-1).real
@@ -878,8 +881,9 @@ class Velocity(Energy):
             RH_R_W=RH_R_W*self.phaseshift[:,None,None,None]
             AA_R_W=AA_R_W*self.phaseshift[:,None,None,None]
         for iR, Rvec in enumerate(self.model.iRvec):
-            self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
-            AA_R_W_intepolated[tuple(Rvec)]=AA_R_W[iR]
+            index = tuple(np.asarray(Rvec) % self.kgrid)
+            self.RHam_R_intepolated[index]+=RH_R_W[iR]
+            AA_R_W_intepolated[index]+=AA_R_W[iR]
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
         if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
         vectors=self.vectors[:,:,:,None,:,:]
@@ -891,6 +895,10 @@ class Velocity(Energy):
         # v_a = H^(1)_a - i[r_a, H^(0)]
         AA_K_W        =  np.fft.ifftn(AA_R_W_intepolated,axes=(0,1,2,))*np.prod(self.kgrid) # Berry connection in Bloch gauge
         AA_K_H = vectors.conj().swapaxes(-2,-1) @ AA_K_W @ vectors # Berry connection in Hamiltonian gauge
+        # The position/Berry-connection operator is Hermitian. Small violations
+        # from the finite Wannier interpolation are strongly amplified by its
+        # k derivatives and would otherwise make the contact vertices acausal.
+        AA_K_H = (AA_K_H + AA_K_H.conj().swapaxes(-2,-1)) / 2
         AA_K_H_dot_H = AA_K_H * self.energies[...,None,None,:]            # gauge correction term, the commutator [AA_K, Ham.]
         self.velocity_K = velocity_bare_K - 1j*(AA_K_H_dot_H - AA_K_H_dot_H.conj().swapaxes(-2,-1)) # gauge-covariant velocity
 
@@ -975,8 +983,9 @@ class Velocity(Energy):
                 RRRH_R_W = RRRH_R_W * self.phaseshift[:, None, None, None, None, None]
                 
             for iR, Rvec in enumerate(self.model.iRvec):
-                RRH_R_intepolated[ tuple(Rvec)] = RRH_R_W[iR]
-                RRRH_R_intepolated[tuple(Rvec)] = RRRH_R_W[iR]
+                index = tuple(np.asarray(Rvec) % self.kgrid)
+                RRH_R_intepolated[index] += RRH_R_W[iR]
+                RRRH_R_intepolated[index] += RRRH_R_W[iR]
                 
             # w_K = d^2H/dk^2
             RRHam_K  = -1 * np.fft.ifftn(RRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
@@ -1001,11 +1010,14 @@ class Velocity(Energy):
             r1_R_intepolated = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
             for iR, Rvec in enumerate(self.model.iRvec):
                 R_cart = Rvec @ self.model.lattice
-                r1_R_intepolated[tuple(Rvec)] = 1j * R_cart[:, None, None, None] * AA_R_W[iR][None, :, :, :]
+                r1_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += 1j * R_cart[:, None, None, None] * AA_R_W[iR][None, :, :, :]
 
             r1_K_AO = np.fft.ifftn(r1_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
             vectors1 = self.vectors[..., None, None, :, :]
             connectionDerivative1 = vectors1.conj().swapaxes(-2, -1) @ r1_K_AO @ vectors1
+            connectionDerivative1 = (
+                connectionDerivative1 + connectionDerivative1.conj().swapaxes(-2,-1)
+            ) / 2
             del r1_R_intepolated, r1_K_AO, vectors1
 
             # Construct the larger second-derivative tensor only after the
@@ -1013,12 +1025,15 @@ class Velocity(Energy):
             r2_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
             for iR, Rvec in enumerate(self.model.iRvec):
                 R_cart = Rvec @ self.model.lattice
-                r2_R_intepolated[tuple(Rvec)] = (
+                r2_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += (
                     -R_cart[:, None, None, None, None] * R_cart[None, :, None, None, None] * AA_R_W[iR][None, None, :, :, :]
                 )
             r2_K_AO = np.fft.ifftn(r2_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
             vectors2 = self.vectors[..., None, None, None, :, :]
             connectionDerivative2 = vectors2.conj().swapaxes(-2, -1) @ r2_K_AO @ vectors2
+            connectionDerivative2 = (
+                connectionDerivative2 + connectionDerivative2.conj().swapaxes(-2,-1)
+            ) / 2
             del r2_R_intepolated, r2_K_AO, vectors2
 
             # Store the bare spatial moments and H in the eigenbasis.
@@ -1039,6 +1054,12 @@ class Velocity(Energy):
                     self.w_K[..., a, b, :, :] = (partialV[..., a, b, :, :] 
                         - 1j * comm(AA_K_H[..., b, :, :], self.velocity_K[..., a, :, :])
                     )
+
+            # w_ab multiplies the commuting product A_a A_b and is the
+            # Hessian/contact-current vertex. Enforce its exact Hermiticity
+            # and Cartesian symmetry after the covariant construction.
+            self.w_K = (self.w_K + self.w_K.conj().swapaxes(-2,-1)) / 2
+            self.w_K = (self.w_K + self.w_K.swapaxes(-4,-3)) / 2
 
             if exchangeVelocity:
                 exchange0=self.exchange_K
@@ -1699,6 +1720,227 @@ class AnormalousHallConductance_LG_DM(Velocity):
             setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
             setattr(self, f"sigma_{name}", self.sigma_channels[name])
         if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix AHE finished")
+
+class _LinearConductivityDM(Velocity):
+    """Common storage/contraction for linear optical and dc conductivity."""
+
+    gauge = "LG"
+    dc = False
+
+    def __init__(self, currentProjectionList=None, responseFermiIndexList=None,
+                 responseOmegaIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, **kwarg):
+        projections = [] if currentProjectionList is None else currentProjectionList
+        if self.gauge == "VG" and projections:
+            raise NotImplementedError("VG currently supports total current; projected contact vertices are not implemented")
+        if self.gauge == "VG" and (kwarg['model'].overlap or kwarg.get('skip_low', False)):
+            raise NotImplementedError("VG conductivity requires the complete orthogonal model basis")
+        kwarg.pop('highOrderVelocity', None)
+        if self.dc:
+            kwarg['omegaList'] = np.array([0.0])
+        super().__init__(velocityProjectionList=projections, highOrderVelocity=self.gauge == "VG", **kwarg)
+        self.Iodd, self.Todd = False, True
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.calcDeltaEInverse()
+        kernel_class = VelocityGaugeFirstOrderDMKernel if self.gauge == "VG" else LengthGaugeFirstOrderDMKernel
+        kernel = kernel_class(self, fullCovariantDerivative, finiteTemperatureOccupations)
+        self.density_matrix_kernel = kernel
+        self.channel_names = ("I", "E", "C") if self.gauge == "VG" else ("I", "E")
+        self.channel_descriptions = dict(I="first-order diagonal population", E="first-order interband coherence")
+        if self.gauge == "VG":
+            self.channel_descriptions['C'] = "equilibrium contact/pole residue (vanishes on a converged periodic BZ)"
+        self.responseFermiIndexList = tuple(_normalize_response_index_list(responseFermiIndexList, len(self.fermiList)))
+        self.responseOmegaIndexList = tuple(_normalize_response_index_list(responseOmegaIndexList, len(self.omegaList)))
+        f_records = {v:i for i,v in enumerate(self.responseFermiIndexList)}
+        w_records = {v:i for i,v in enumerate(self.responseOmegaIndexList)}
+        vertices = [self.velocity_K] + self.projected_velocity_K_list
+        shape = (len(vertices), len(vertices), len(self.fermiList), len(self.omegaList), 3, 3)
+        record_shape = (len(vertices), len(vertices)) + self.kgrid + (
+            len(f_records), len(w_records), 3, 3)
+        sigma = {name: np.zeros(shape, complex) for name in self.channel_names}
+        response = {name: np.zeros(record_shape, complex) for name in self.channel_names}
+        scale = elementary_charge**2 / (hbar*angstrom*abs(self.model.Vcell))
+        self.conductivity_units = "S/m"
+        self.fourier_convention = "exp(-i*Omega*t), Omega in eV, t in hbar/eV"
+        # SI conductivity times eV; divide by Omega and multiply by i for C.
+        self.sum_rule_residual = np.zeros((len(self.fermiList), 3, 3), complex)
+        for ifermi, fermi in enumerate(self.fermiList):
+            state = kernel.fermi_state(ifermi, fermi)
+            residue = []
+            if self.gauge == "VG":
+                for a in range(3):
+                    value = _contract_second_order_observable(state.derivative(a), self.velocity_K)
+                    value += np.einsum('...n,...bnn->...b', state.f, self.w_K[..., :, a, :, :])
+                    residue.append(value)
+                    self.sum_rule_residual[ifermi, a] = value.mean(axis=(0,1,2))*scale
+            for iw, omega in enumerate(self.omegaList):
+                frequency = state.at_frequency(omega)
+                for ip, drive in enumerate(vertices):
+                    for a in range(3):
+                        block = frequency.block(a, drive)
+                        for jp, observable in enumerate(vertices):
+                            values = {name: _contract_second_order_observable(rho, observable)
+                                      for name, rho in block.rho1.items()}
+                            if self.gauge == "VG":
+                                values['C'] = 1j*residue[a]/omega if omega != 0 else np.zeros_like(residue[a])
+                            for name, value in values.items():
+                                sigma[name][ip,jp,ifermi,iw,a] = value.mean(axis=(0,1,2))*scale
+                                if ifermi in f_records and iw in w_records:
+                                    response[name][ip,jp,:,:,:,f_records[ifermi],w_records[iw],a,:] = value
+        if self.dc:
+            sigma = {name: value[:,:,:,0].real for name,value in sigma.items()}
+            # The dc record has no frequency dimension, like the LG dc class.
+            response = {name: np.take(value, 0, axis=6).real for name,value in response.items()}
+        self.projected_sigma_channels = sigma
+        self.projected_response_channels = response
+        self.projected_sigma = _sum_density_matrix_channels(sigma)
+        self.projected_response = _sum_density_matrix_channels(response)
+        self.sigma_channels = {name: value[0,0] for name,value in sigma.items()}
+        self.sigma = self.projected_sigma[0,0]
+        setattr(self, 'sigma_'+self.gauge+'_DM', self.sigma)
+        for name in self.channel_names:
+            setattr(self, 'sigma_'+name, self.sigma_channels[name])
+            setattr(self, 'projected_sigma_'+name, sigma[name])
+            setattr(self, 'projected_response_'+name, response[name])
+
+
+class AnormalousHallConductance_VG_DM(_LinearConductivityDM):
+    """Full dc conductivity in S/m; sigma[fermi, drive, current].
+
+    Uses the analytic zero-frequency limit of the first-order VG kernel,
+    removing the equilibrium pure-gauge pole by the periodic BZ sum rule.
+    sum_rule_residual diagnoses that sum rule before subtraction. Requires
+    finite kBT and population relaxation; supports CRTA and frozen SERTA.
+    """
+    gauge = "VG"
+    dc = True
+
+    def __init__(self, **kwarg):
+        kwarg['responseOmegaIndexList'] = [0]
+        super().__init__(**kwarg)
+
+
+class Opticalconductivity_LG_DM(_LinearConductivityDM):
+    """Linear optical conductivity.
+
+    sigma[fermi, omega, drive, current] is complex, in S/m, for exp(-i*Omega*t).
+    omegaList contains photon energies in eV, including zero. I is Drude and
+    E interband; fullCovariantDerivative=True includes both (default).
+    projected_sigma has two leading current-projection axes. Optional
+    projected_response records unscaled k-resolved integrands.
+    """
+
+
+class Opticalconductivity_VG_DM(_LinearConductivityDM):
+    """Linear optical conductivity with covariant VG relaxation and contact current.
+
+    Same output axes/units as Opticalconductivity_LG_DM. C is the unsuppressed
+    i/Omega equilibrium residue on a finite k mesh. At exactly zero frequency
+    the analytic periodic-BZ limit is used. Only total current is supported.
+    """
+    gauge = "VG"
+
+
+class Opticalconductivity_TDSE(Velocity):
+    """Independent real-time VG benchmark with collision relaxation.
+
+    Propagate the occupied-state ensemble using unitary TDSE steps for
+    H(A)=H0+A*v+A**2*w/2 and relaxation toward f(H(A)). CRTA uses the exact
+    frozen-H step; SERTA uses symmetric collision/unitary splitting with
+    equilibrium-band linewidths. With relaxation this is ensemble density
+    propagation, not a single isolated pure-state TDSE.
+
+    E(t)=E0*cos(Omega*t), A(t)=-E0*sin(Omega*t)/Omega. E0 is PEAK field in
+    V/Angstrom, Omega is eV, time hbar/eV. Opposite drives remove even powers;
+    2*mean(j_odd*exp(i*Omega*t))/E0 gives sigma[fermi,omega,drive,current]
+    in S/m. Converge E0, n_steps_per_cycle, and transient_lifetimes. Requires
+    strictly positive frequencies and linewidths for a periodic steady state.
+    """
+
+    def __init__(self, E0=1e-4, n_steps_per_cycle=128, n_cycles_measure=2,
+                 transient_lifetimes=12., max_phase_step=0.3, recordCurrent=False,
+                 currentProjectionList=None, fullCovariantDerivative=True,
+                 finiteTemperatureOccupations=True, **kwarg):
+        if currentProjectionList:
+            raise NotImplementedError("TDSE currently supports total current only")
+        if not fullCovariantDerivative or not finiteTemperatureOccupations:
+            raise ValueError("TDSE benchmark requires full covariant finite-temperature equilibrium")
+        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+            raise NotImplementedError("TDSE requires the complete orthogonal model basis")
+        if not np.isfinite(E0) or E0 <= 0 or not np.isfinite(transient_lifetimes) or transient_lifetimes <= 0:
+            raise ValueError("E0 and transient_lifetimes must be finite and positive")
+        if (int(n_steps_per_cycle) != n_steps_per_cycle or n_steps_per_cycle < 8
+                or int(n_cycles_measure) != n_cycles_measure or n_cycles_measure < 1
+                or not np.isfinite(max_phase_step) or max_phase_step <= 0):
+            raise ValueError("Use at least 8 steps/cycle, integer positive measurement cycles, and positive max_phase_step")
+        kwarg.pop('highOrderVelocity', None)
+        super().__init__(highOrderVelocity=True, **kwarg)
+        if self.kBT <= 0:
+            raise ValueError("TDSE benchmark requires kBT > 0")
+        if np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
+            raise ValueError("TDSE requires positive photon energies; use a DM calculator for dc")
+        self.Iodd, self.Todd = False, True
+        self.collision = CollisionOperator.fromOwner(self)
+        gamma = self.collision.coherence_linewidth
+        if np.min(gamma) <= self.collision.specification.linewidthFloor:
+            raise ValueError("Steady-state TDSE requires strictly positive relaxation linewidths")
+        self.sigma = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3), complex)
+        self.sigma_TDSE = self.sigma
+        self.projected_sigma = self.sigma[None,None]
+        self.conductivity_units = 'S/m'
+        self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
+        self.E0 = E0
+        self.time_traces = {}
+        self.integration_info = []
+        h0 = diagonal_matrix(self.energies)
+        scale = elementary_charge**2 / (hbar*angstrom*abs(self.model.Vcell))
+        # ± fields share a batched evolution. No response kernel enters it.
+        signs = np.array([1.,-1.]).reshape((2,)+(1,)*h0.ndim)
+        for iw, omega in enumerate(self.omegaList):
+            period = 2*np.pi/omega
+            span = np.max(np.ptp(self.energies, axis=-1))
+            steps = max(int(n_steps_per_cycle), int(np.ceil(period*max(span,float(np.max(gamma)))/max_phase_step)))
+            dt = period/steps
+            ntrans = int(np.ceil(transient_lifetimes/(np.min(gamma)*period)))*steps
+            nmeasure = int(n_cycles_measure)*steps
+            self.integration_info.append(dict(steps_per_cycle=steps, dt=dt,
+                                              transient_steps=ntrans, measurement_steps=nmeasure))
+            half_decay = np.exp(-gamma*dt/2)
+            for ifermi, fermi in enumerate(self.fermiList):
+                rho0 = diagonal_matrix(self.fdOccupation(fermi))
+                for a in range(3):
+                    va, waa = self.velocity_K[...,a,:,:], self.w_K[...,a,a,:,:]
+                    rho = np.broadcast_to(rho0, (2,)+rho0.shape).copy()
+                    times, currents = [], []
+
+                    def field_operators(time):
+                        A = -E0/omega*np.sin(omega*time)*signs
+                        H = h0 + A*va + .5*A*A*waa
+                        return A, H
+
+                    for step in range(ntrans+nmeasure):
+                        _, Hmid = field_operators((step+.5)*dt)
+                        eig, vec = np.linalg.eigh(Hmid)
+                        U = (vec*np.exp(-1j*eig*dt)[...,None,:]) @ vec.conj().swapaxes(-1,-2)
+                        f = fermiDiracOccupations(eig, np.array([fermi]), self.kBT)[0]
+                        equilibrium = (vec*f[...,None,:]) @ vec.conj().swapaxes(-1,-2)
+                        rho = equilibrium + half_decay*(rho-equilibrium)
+                        rho = U @ rho @ U.conj().swapaxes(-1,-2)
+                        rho = equilibrium + half_decay*(rho-equilibrium)
+                        if step >= ntrans:
+                            time = (step+1)*dt
+                            A, _ = field_operators(time)
+                            current_vertex = self.velocity_K + A[...,None,:,:]*self.w_K[..., :,a,:,:]
+                            current = -_contract_second_order_observable(rho, current_vertex).real
+                            odd = .5*(current[0]-current[1]).mean(axis=(0,1,2))
+                            times.append(time)
+                            currents.append(odd*scale/E0)
+                    times, currents = np.asarray(times), np.asarray(currents)
+                    self.sigma[ifermi,iw,a] = 2*np.mean(currents*np.exp(1j*omega*times[:,None]), axis=0)
+                    if recordCurrent:
+                        self.time_traces[ifermi,iw,a] = dict(time=times, normalized_current=currents,
+                                                            electric_field=E0*np.cos(omega*times))
+
 
 class BerryConnectionPolarizability(Velocity):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:

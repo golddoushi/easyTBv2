@@ -104,7 +104,7 @@ class BoundCollisionOperator:
         for iR,Rvec in enumerate(model.iRvec):
             # Wigner-Seitz boundary vectors can share the same FFT-grid index.
             # Their 1/Ndegen contributions must be accumulated, not overwritten, so use += here rather than =
-            linewidth_grid[tuple(Rvec)]+=linewidth_sqrt_R[iR]
+            linewidth_grid[tuple(np.asarray(Rvec) % self.owner.kgrid)]+=linewidth_sqrt_R[iR]
         linewidth_sqrt_W=np.fft.ifftn(linewidth_grid,axes=(0,1,2))*np.prod(self.owner.kgrid)
         linewidth_W=linewidth_sqrt_W@linewidth_sqrt_W.conj().swapaxes(-2,-1)
         vectors=self.owner.vectors
@@ -251,7 +251,7 @@ class LengthGaugeDCFirstOrderFermiState:
         velocity = self.owner.velocity_K if drive_velocity is None else drive_velocity
         velocity_direction = velocity[..., direction, :, :]
         rho_e = (
-            1j * self.f_nm * kernel.deltaE_inverse_pure * kernel.g0_mn
+            -1j * self.f_nm * kernel.deltaE_inverse_pure * kernel.g0_mn
             * velocity_direction * kernel.off_diag
         )
         rho_i = np.zeros_like(rho_e)
@@ -272,9 +272,12 @@ class LengthGaugeDCFirstOrderDMKernel:
     which requires finite temperature and finite relaxation energy. 
     In the conventions of the calculator module,
 
-        rho_E[m,n] = i (f_n-f_m) v_a[m,n]
+        rho_E[m,n] = -i (f_n-f_m) v_a[m,n]
                      / (DeltaE_mn (DeltaE_mn-i eta)),
         rho_I[n,n] = -(df_n/dE) v_a[n,n] / eta.
+
+    These blocks include the electron-current minus sign: they are minus the
+    physical density response for H(k+A), E=-dA/dt, and contract with +v.
     """
 
     channel_names = DC_CHANNEL_NAMES
@@ -314,6 +317,111 @@ class LengthGaugeDCFirstOrderDMKernel:
             f = np.int8(self.owner.energies < fermi)
         fp = self.owner.fdEnergyDerivatives(f)[0] if self.full_covariant_derivative else None
         return f, fp
+
+class LengthGaugeFirstOrderDMKernel:
+    """Linear conductivity, with exp(-i*Omega*t) and Omega in energy units.
+
+    The returned matrices include the charge-current minus sign and contract
+    with +v, as in the dc kernel. Full mode uses the Frechet derivative of
+    f(H), including its finite degenerate limit, with no inverse-gap cutoff.
+    I/E label diagonal/off-diagonal matrices (only their sum is invariant
+    under rotations inside an exactly degenerate subspace).
+    """
+
+    channel_names = DC_CHANNEL_NAMES
+    channel_descriptions = DC_CHANNEL_DESCRIPTIONS
+
+    def __init__(self, owner, full_covariant_derivative=True, finite_temperature_occupations=True):
+        self.owner = owner
+        self.full_covariant_derivative = bool(full_covariant_derivative)
+        self.finite_temperature_occupations = bool(finite_temperature_occupations)
+        self.collision = CollisionOperator.fromOwner(owner)
+        self.diag = np.eye(owner.energies.shape[-1], dtype=bool)
+        if self.full_covariant_derivative and owner.kBT <= 0:
+            raise ValueError("fullCovariantDerivative requires kBT > 0")
+
+    def fermi_state(self, ifermi, fermi):
+        return FirstOrderFermiState(self, fermi)
+
+class FirstOrderFermiState:
+    def __init__(self, kernel, fermi):
+        self.kernel = kernel
+        owner = kernel.owner
+        self.f = (owner.fdOccupation(fermi) if kernel.full_covariant_derivative
+                  or kernel.finite_temperature_occupations else (owner.energies < fermi).astype(float))
+        self.rho0 = diagonal_matrix(self.f)
+        if kernel.full_covariant_derivative:
+            e = owner.energies
+            self.divided_difference = fermi_divided_difference(
+                e[..., :, None], e[..., None, :], fermi, owner.kBT)
+        else:
+            self.divided_difference = (self.f[..., :, None]-self.f[..., None, :]) * owner.deltaEInverse_pure
+
+    def derivative(self, direction, drive_velocity=None):
+        velocity = self.kernel.owner.velocity_K if drive_velocity is None else drive_velocity
+        return self.divided_difference * velocity[..., direction, :, :]
+
+    def at_frequency(self, omega):
+        return FirstOrderFrequencyState(self, omega)
+
+class FirstOrderFrequencyState:
+    def __init__(self, state, omega):
+        self.state = state
+        self.kernel = state.kernel
+        self.omega = float(omega)
+        if not np.isfinite(self.omega):
+            raise ValueError("Photon energies must be finite")
+        collision = self.kernel.collision
+        if self.omega == 0 and self.kernel.full_covariant_derivative and np.any(
+                collision.population_linewidth <= collision.specification.linewidthFloor):
+            raise ValueError("dc conductivity requires finite population relaxation")
+        self.resolvent = collision.resolvent(self.kernel.owner.deltaE, self.omega)
+
+    def block(self, direction, drive_velocity=None):
+        rho = 1j * self.state.derivative(direction, drive_velocity) * self.resolvent
+        return FirstOrderDensityMatrixBlock(self.state.rho0,
+                                            {"I": rho*self.kernel.diag, "E": rho*~self.kernel.diag})
+
+class VelocityGaugeFirstOrderDMKernel(LengthGaugeFirstOrderDMKernel):
+    """H(A)=H0+A*v, j(A)=-(v+A*w), rho_eq(A)=f(H(A)).
+
+    In physical density conventions, the coefficient of A is
+      R(Omega) = -([v,f]+i*G[D f])/(Delta-Omega-i*Gamma).
+    Conductivity is i/Omega * (Tr[R v] + Tr[f w]). The equilibrium
+    pole has residue Tr[(D f)v+f w], a BZ total derivative. At zero
+    frequency the pole is removed analytically using the periodic BZ sum
+    rule. The finite part is i*R'(0). At nonzero frequency the calculator
+    retains the residue so mesh/basis errors remain visible.
+    """
+
+    def __init__(self, owner, full_covariant_derivative=True, finite_temperature_occupations=True):
+        if not full_covariant_derivative:
+            raise ValueError("VG conductivity requires fullCovariantDerivative=True for covariant relaxation")
+        super().__init__(owner, full_covariant_derivative, finite_temperature_occupations)
+
+    def fermi_state(self, ifermi, fermi):
+        return VelocityGaugeFirstOrderFermiState(self, fermi)
+
+
+class VelocityGaugeFirstOrderFermiState(FirstOrderFermiState):
+    def at_frequency(self, omega):
+        return VelocityGaugeFirstOrderFrequencyState(self, omega)
+
+
+class VelocityGaugeFirstOrderFrequencyState(FirstOrderFrequencyState):
+    def vector_potential_density(self, direction):
+        """Physical delta-rho/A, before current contraction and E conversion."""
+        df = self.state.derivative(direction)
+        source = -commutator(self.kernel.owner.velocity_K[..., direction, :, :], self.state.rho0)
+        source -= 1j*self.kernel.collision.apply(df)
+        return source*self.resolvent
+
+    def block(self, direction, drive_velocity=None):
+        # (R(Omega)-R(0))/Omega = Df/(Delta-Omega-i*Gamma).
+        # Evaluate this identity before subtraction, retaining precision at dc.
+        # The omitted R(0)=Df pole is restored with f*w by the calculator.
+        return super().block(direction, drive_velocity)
+
 
 class _SecondOrderDMFrequencyState:
     '''Abstract of the 2nd order density matrix at specific real frequency'''

@@ -20,6 +20,7 @@ from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, Or
 from calculator import SpinTorque, SpintorqueGalvanicConductance
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
+from calculator import AnormalousHallConductance_VG_DM, Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE
 
 _bz_worker_state = None
 _bz_worker_thread_limit = None
@@ -425,10 +426,8 @@ def solveAHC_LG_DM(param):
                                 fermiList=param['fermi'],
                                 currentProjectionList    =param['projected shells for applying current'],
                                 responseFermiIndexList=param.get('record fermi ids', None),
-                                finiteTemperatureOccupations=param.get(
-                                    'finiteTemperatureOccupations', param.get('finite temperature occupations', False)),
-                                fullCovariantDerivative=param.get(
-                                    'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                fullCovariantDerivative=param.get('full covariant derivative', False),
                                 verbose=param.get('verbose', 0),
                                    )
     return {"energies":calc.energies,
@@ -439,6 +438,56 @@ def solveAHC_LG_DM(param):
             "response fermi ids":calc.responseFermiIndexList,
             "iq":param["iq"]}
 
+def _solveLinearConductivity(param, calculatorClass):
+    """BZGridTask adapter preserving complex optical tensors and record axes."""
+    options = dict(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'],
+                   eta=param.get('eta', .06582), kBT=param.get('kBT', .026),
+                   collisionOperator=param.get('collision operator'),
+                   degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
+                   fermiList=param['fermi'], omegaList=param.get('omega', np.array([0.])),
+                   currentProjectionList=param.get('projected shells for applying current', []),
+                   fullCovariantDerivative=param.get('full covariant derivative', True),
+                   finiteTemperatureOccupations=param.get('finite temperature occupations', True),
+                   verbose=param.get('verbose', 0))
+    if calculatorClass is Opticalconductivity_TDSE:
+        for key in ('E0', 'n_steps_per_cycle', 'n_cycles_measure', 'transient_lifetimes', 'max_phase_step', 'recordCurrent'):
+            if key in param:
+                options[key] = param[key]
+    else:
+        options.update(responseFermiIndexList=param.get('record fermi ids'),
+                       responseOmegaIndexList=param.get('record frequency ids'))
+    calc = calculatorClass(**options)
+    result = {'energies': calc.energies, 'projected sigma': calc.projected_sigma,
+              'sigma': calc.sigma, 'iq': param['iq']}
+    for key, attr in (('projected response', 'projected_response'),
+                      ('projected sigma channels', 'projected_sigma_channels'),
+                      ('projected response channels', 'projected_response_channels'),
+                      ('sigma channels', 'sigma_channels'),
+                      ('response fermi ids', 'responseFermiIndexList'),
+                      ('response frequency ids', 'responseOmegaIndexList'),
+                      ('sum rule residual', 'sum_rule_residual'),
+                      ('time traces', 'time_traces'), ('integration info', 'integration_info')):
+        if hasattr(calc, attr):
+            result[key] = getattr(calc, attr)
+    return result
+
+
+def solveAHC_VG_DM(param):
+    return _solveLinearConductivity(param, AnormalousHallConductance_VG_DM)
+
+
+def solveOpticalconductivity_LG_DM(param):
+    return _solveLinearConductivity(param, Opticalconductivity_LG_DM)
+
+
+def solveOpticalconductivity_VG_DM(param):
+    return _solveLinearConductivity(param, Opticalconductivity_VG_DM)
+
+
+def solveOpticalconductivity_TDSE(param):
+    return _solveLinearConductivity(param, Opticalconductivity_TDSE)
+
+
 def solveSHC_LG_DM(param):
     calc=SpinHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
                               eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
@@ -448,10 +497,8 @@ def solveSHC_LG_DM(param):
                               currentProjectionList=param['projected shells for applying current'],
                               spincurrentProjectionList=param['projected shells for detecting spincurrent'],
                               responseFermiIndexList=param.get('record fermi ids', None),
-                              finiteTemperatureOccupations=param.get(
-                                  'finiteTemperatureOccupations', param.get('finite temperature occupations', False)),
-                              fullCovariantDerivative=param.get(
-                                  'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                              finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                              fullCovariantDerivative=param.get('full covariant derivative', False),
                               verbose=param.get('verbose', 0),)
     return {"energies":calc.energies,
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
@@ -507,8 +554,7 @@ def solveBPVE_VG_DM(param):
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    finiteTemperatureOccupations=param.get('finite temperature occupations', False),
-                                   fullCovariantDerivative=param.get(
-                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                   fullCovariantDerivative=param.get('full covariant derivative', False),
                                    currentProjectionList=param['projected shells for applying current'], verbose=param['verbose'],
                                    )
     return {"energies":calc.energies,
@@ -550,8 +596,7 @@ def solveBPVE_LG_DM(param):
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
                                    finiteTemperatureOccupations=param.get('finite temperature occupations', False),
-                                   fullCovariantDerivative=param.get(
-                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                   fullCovariantDerivative=param.get('full covariant derivative', False),
                                    currentProjectionList=param['projected shells for applying current'],verbose=param["verbose"],
                                    )
     return {"energies":calc.energies,
@@ -595,8 +640,7 @@ def solveIFE_VG_DM(param):
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
-                                   fullCovariantDerivative=param.get(
-                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                   fullCovariantDerivative=param.get('full covariant derivative', False),
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
@@ -625,8 +669,7 @@ def solveIFE_LG_DM(param):
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
-                                   fullCovariantDerivative=param.get(
-                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                   fullCovariantDerivative=param.get('full covariant derivative', False),
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),verbose=param["verbose"],
                                    )
@@ -643,8 +686,7 @@ def solveIFE_TDSE(param):
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
-                                   fullCovariantDerivative=param.get(
-                                       'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                   fullCovariantDerivative=param.get('full covariant derivative', False),
                                    include_offdiag=param.get('include offdiag', True),
                                    E0=param.get('E0', 0.001),
                                    n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
@@ -674,9 +716,8 @@ def solveIFTorque_TDSE(param):
                                      degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
-                                     fullCovariantDerivative=param.get(
-                                         'fullCovariantDerivative', param.get('full covariant derivative', False)),
-                                     exchangeVelocity=param.get('exchangeVelocity', param.get('exchange velocity', True)),
+                                     fullCovariantDerivative=param.get('full covariant derivative', False),
+                                     exchangeVelocity=param.get('exchange velocity', True),
                                      include_offdiag=param.get('include offdiag', True),
                                      E0=param.get('E0', 0.001),
                                      n_steps_per_cycle=param.get('n steps per cycle', 100),verbose=param["verbose"],
@@ -698,9 +739,8 @@ def solveIFTorque_VG_DM(param):
                                      responseOmegaIndexList=param.get('record frequency ids', []),
                                      responseFermiIndexList=param.get('record fermi ids', None),
                                      finiteTemperatureOccupations=param.get('finite temperature occupations', False),
-                                     fullCovariantDerivative=param.get(
-                                         'fullCovariantDerivative', param.get('full covariant derivative', False)),
-                                     exchangeVelocity=param.get('exchangeVelocity', param.get('exchange velocity', True)),
+                                     fullCovariantDerivative=param.get('full covariant derivative', False),
+                                     exchangeVelocity=param.get('exchange velocity', True),
                                      kBT=param.get('kBT', 0.026),verbose=param["verbose"],
                                     )
     return {"projected response": calc.projected_response,"energies":calc.energies,
@@ -722,8 +762,7 @@ def solveIFTorque_LG_DM(param):
                                      responseOmegaIndexList=param.get('record frequency ids', []),
                                      responseFermiIndexList=param.get('record fermi ids', None),
                                      finiteTemperatureOccupations=param.get('finite temperature occupations', False),
-                                     fullCovariantDerivative=param.get(
-                                         'fullCovariantDerivative', param.get('full covariant derivative', False)),
+                                     fullCovariantDerivative=param.get('full covariant derivative', False),
                                      kBT=param.get('kBT', 0.026),verbose=param["verbose"],
                                     )
     return {"projected response": calc.projected_response,"energies":calc.energies,
