@@ -34,12 +34,12 @@ class CollisionSpecification:
     collision object is created for each calculator k grid.
     """
 
-    def __init__(self, mode="crta", eta=None, linewidthFloor=1e-12, linewidthSource=None):
+    def __init__(self, mode="crta", constantLinewidth=0.026, linewidthFloor=1e-12, linewidthSource=None):
         mode=str(mode).lower()
         if mode not in ("crta","serta"):
             raise NotImplementedError("By now, only 'crta', 'serta' have been built")
         self.mode=mode
-        self.eta=None if eta is None else float(eta)
+        self.constantLinewidth= float(constantLinewidth)
         self.linewidthFloor=float(linewidthFloor)
         self.linewidthSource=linewidthSource
         assert self.linewidthFloor >= 0, f"{linewidthFloor=} must be non-negative instead"
@@ -53,7 +53,7 @@ class CollisionSpecification:
     def fromOwner(cls, owner):
         specification=getattr(owner,"collisionSpecification",None)
         if specification is None:
-            specification=cls("crta",eta=owner.eta)
+            specification=cls("crta")
         elif isinstance(specification,str):
             specification=cls(specification)
         elif not isinstance(specification,cls):
@@ -81,9 +81,7 @@ class CollisionOperator:
         self.mode=specification.mode
         self.constant_eta=None
         if self.mode == "crta":
-            eta=owner.eta if specification.eta is None else specification.eta
-            if eta < 0: raise ValueError(f"CRTA {eta=} must be non-negative instead")
-            self.constant_eta=float(eta)
+            self.constant_eta = specification.constantLinewidth
             self.population_linewidth=np.full(owner.energies.shape,self.constant_eta,dtype=float)
         elif self.mode == "serta":
             self.population_linewidth=self._sertaLinewidth()

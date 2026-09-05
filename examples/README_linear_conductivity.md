@@ -158,7 +158,7 @@ a sampled linewidth source:
 from calculator import CollisionSpecification, ModelEPCLinewidth
 
 source = ModelEPCLinewidth(qgrid=(12,12,1), temperature=300,
-                           fermi=-0.7, eta=0.02, adiabatic=False)
+                           fermi=-0.7, delta=0.02, adiabatic=False)
 collision = CollisionSpecification("serta", linewidthSource=source)
 sigma = Opticalconductivity_LG_DM(collisionSpecification=collision, **options).sigma
 ```

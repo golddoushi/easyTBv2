@@ -52,7 +52,7 @@ class ModelElectronSelfEnergy:
         Common electron/phonon temperature in kelvin, including exactly zero.
     fermi : float
         Chemical potential in eV. It sets intermediate-state Fermi factors.
-    eta : float
+    delta : float
         Positive retarded denominator regulator in eV, not a fitted lifetime.
     adiabatic : bool
         False retains +/- phonon energies and Pauli factors. True neglects
@@ -77,11 +77,11 @@ class ModelElectronSelfEnergy:
     On-shell energy shifts use Z=1 and neglect off-diagonal mixing. They are
     reliable for isolated nondegenerate bands at weak coupling. For degenerate
     manifolds use total_matrix at a common energy and diagonalize the block.
-    Static Im(Sigma) depends on eta and is not a quantum EPC transport rate.
+    Static Im(Sigma) depends on delta and is not a quantum EPC transport rate.
     """
 
     def __init__(self, model, kpoints, qgrid=None, qpoints=None, qweights=None,
-                 temperature=0.0, fermi=0.0, eta=1e-3, adiabatic=False, energyList=None):
+                 temperature=0.0, fermi=0.0, delta=1e-3, adiabatic=False, energyList=None):
         if model.modelEPC is None or model.modelPhonons is None:
             raise ValueError("Attach model EPC and model phonons before computing self-energy")
         model.modelEPC.validate(model)
@@ -99,11 +99,7 @@ class ModelElectronSelfEnergy:
                 or np.any(weights < 0) or weights.sum() <= 0):
             raise ValueError("qweights must be finite, nonnegative, and have positive sum")
         self.qweights = weights / weights.sum()
-        self.temperature, self.fermi, self.eta = float(temperature), float(fermi), float(eta)
-        if not np.isfinite(self.temperature) or self.temperature < 0:
-            raise ValueError("temperature must be finite and nonnegative, in kelvin")
-        if not np.isfinite(self.fermi) or not np.isfinite(self.eta) or self.eta <= 0:
-            raise ValueError("fermi must be finite and eta strictly positive, in eV")
+        self.temperature, self.fermi, self.delta = float(temperature), float(fermi), float(delta)
         self.adiabatic = bool(adiabatic)
         self.on_shell = energyList is None
         self.model = model
@@ -145,7 +141,7 @@ class ModelElectronSelfEnergy:
                     occupation = expit((self.fermi-intermediate) / kBT)
                 g = model.getModelEPC(k, q, vectors_k=vk, vectors_kq=vkq)
                 denominator = (self.evaluation_energies[ik, :, None, None]
-                               - intermediate[None, None, :] + 1j*self.eta)
+                               - intermediate[None, None, :] + 1j*self.delta)
                 if self.adiabatic:
                     propagator = (2*bose[None, :, None]+1) / denominator
                 else:
@@ -280,12 +276,12 @@ class ModelEPCLinewidth:
     corrections to optical matrix elements.
     """
 
-    def __init__(self, qgrid=None, temperature=300., fermi=0., eta=.02,
+    def __init__(self, qgrid=None, temperature=300., fermi=0., delta=.02,
                  adiabatic=False):
         self.qgrid=tuple(qgrid) if qgrid is not None else None
         self.temperature=float(temperature)
         self.fermi=float(fermi)
-        self.eta=float(eta)
+        self.delta=float(delta)
         self.adiabatic=bool(adiabatic)
         self.last_self_energy=None
         self._cache_signature=None
@@ -304,7 +300,7 @@ class ModelEPCLinewidth:
         kpoints=np.mod(uniform_qmesh(grid)+owner.kOffset,1.)
         result=ModelElectronSelfEnergy(owner.model,kpoints,qgrid=qgrid,
                                        temperature=self.temperature,fermi=self.fermi,
-                                       eta=self.eta,adiabatic=self.adiabatic)
+                                       delta=self.delta,adiabatic=self.adiabatic)
         reference=result.energies.reshape(energies.shape)
         if not np.allclose(reference,energies,atol=2e-10,rtol=1e-10):
             raise ValueError("Model EPC linewidth states do not match the conductivity eigensystem")

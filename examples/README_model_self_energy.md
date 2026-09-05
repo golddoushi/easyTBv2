@@ -116,7 +116,7 @@ model = build_model("tmp/my_model")
 kpoints = uniform_qmesh((12, 12, 1))
 se = ModelElectronSelfEnergy(
     model, kpoints, qgrid=(12, 12, 1),
-    temperature=300, fermi=0.0, eta=0.005, adiabatic=False)
+    temperature=300, fermi=0.0, delta=0.005, adiabatic=False)
 
 fan = se.fan_migdal                # complex (nk,nb), evaluated on shell
 dw = se.debye_waller               # real (nk,nb)

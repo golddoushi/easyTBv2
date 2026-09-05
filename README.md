@@ -375,12 +375,13 @@ calculation_args["collisionSpecification"] = CollisionSpecification("serta")
 calculation_args["full covariant derivative"] = True
 ```
 
-`CollisionSpecification("crta", eta=...)` reproduces the constant-relaxation
-model. `CollisionSpecification("serta")` supplies band- and k-dependent population
-linewidths and the coherence rate `(Gamma_mk+Gamma_nk)/2` to the reusable
-first-order d.c. kernel. It therefore changes both the `I` and `E` channels,
-although VASP's reported SERTA conductivity is an intraband quantity and
-should be compared with this code's `I` channel.
+`CollisionSpecification("crta", constantLinewidth=...)` reproduces the 
+constant-relaxation model. `CollisionSpecification("serta")` supplies band- 
+and k-dependent population linewidths and the coherence rate 
+`(Gamma_mk+Gamma_nk)/2` to the reusable first-order d.c. kernel. It therefore 
+changes both the `I` and `E` channels, although VASP's reported SERTA 
+conductivity is an intraband quantity and should be compared with this code's 
+`I` channel.
 
 State-dependent SERTA is currently restricted to first-order d.c. A
 second-order optical collision integral contains field-dependent scattering

@@ -77,7 +77,7 @@ def main():
     serta_sources = {}
     for name in requested:
         source = ModelEPCLinewidth(qgrid=args.serta_qgrid,temperature=args.temperature,
-                                   fermi=args.fermi,eta=args.epc_delta,adiabatic=name=='static')
+                                   fermi=args.fermi,delta=args.epc_delta,adiabatic=name=='static')
         collision = CollisionSpecification('serta',linewidthSource=source)
         serta_options = dict(options,collisionSpecification=collision)
         slg = Opticalconductivity_LG_DM(**serta_options)
@@ -99,7 +99,7 @@ def main():
         gamma_floor = None
         if args.tdse_collision != 'crta':
             source = ModelEPCLinewidth(qgrid=args.serta_qgrid,temperature=args.temperature,
-                                       fermi=args.fermi,eta=args.epc_delta,
+                                       fermi=args.fermi,delta=args.epc_delta,
                                        adiabatic=args.tdse_collision=='static')
             owner = Opticalconductivity_LG_DM(**small)
             gamma_floor = np.maximum(source.populationLinewidth(owner),args.tdse_min_linewidth)

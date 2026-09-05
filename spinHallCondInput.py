@@ -247,7 +247,7 @@ def run():
                           "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
 
                           "finiteTemperatureOccupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
-                          "collisionSpecification": CollisionSpecification(mode="serta", eta=0.06582), # collision model, currently only for DM based calculators
+                          "collisionSpecification": CollisionSpecification(mode="serta", constantLinewidth=0.06582), # collision model, currently only for DM based calculators
                           "degen":1e-1,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,

@@ -81,7 +81,7 @@ def main():
         sc.make_supercell(np.diag(grid))
     ks = uniform_qmesh(grid)
     se = ModelElectronSelfEnergy(model, ks, qgrid=grid, temperature=args.temperature,
-                                 adiabatic=True, eta=1e-7)
+                                 adiabatic=True, delta=1e-7)
     vb = np.unravel_index(np.argmax(se.energies[:, :2]), (len(ks), 2))
     cb0 = np.unravel_index(np.argmin(se.energies[:, 2:]), (len(ks), 2))
     cb = cb0[0], cb0[1]+2
