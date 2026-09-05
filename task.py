@@ -35,7 +35,6 @@ def _initialize_bz_worker(model, task_func, common_args, worker_threads):
 def _run_bz_task(job, model, task_func, common_args):
     params = dict(job, model=model)
     params.update(common_args)
-    params.setdefault("kOffset", job["q"])
     params["verbose"] = job["verbose"]
     return task_func(params)
 
@@ -72,9 +71,9 @@ class BZGridTask:
                  BZGrid:np.ndarray|tuple|list,
                  BZSymm=False,
                  mode="run",
-                 ncores=1,
+                 ncores:int=1,
                  parallelBackend="process",
-                 workerThreads=1,
+                 workerThreads:int=1,
                  processStartMethod=None) -> None:
         '''
         Conduct tasks that calculate quantity on the regular grids of Brillouin zone, using mixed FFT algorithm
@@ -88,11 +87,14 @@ class BZGridTask:
         - args : dict
             extra args passing to the task Func
         - BZGrid : np.ndarray(3) | tuple(3) | list(3), int
-            size of BZ sampling
+            size of BZ sampling.
+            Every generated task passes its own ``q / BZGrid`` as ``kOffset`` to
+            the task function; this is the sole representation of the FFT-mesh
+            offset.
         - mode : "run" | "show"
             "run" to run the tasks directly, ortherwise, only show the grid info.
         - ncores : int
-            maximum number of phase-grid workers (capped by the number of tasks)
+            maximum number of FFT-submesh workers (capped by the number of tasks)
         - parallelBackend : "process" | "thread"
             processes avoid the Python GIL; threads retain the shared-memory legacy backend
         - workerThreads : int
@@ -102,10 +104,6 @@ class BZGridTask:
             Spawn requires an importable taskFunc and a guarded __main__ entry point.
             Fork shares model arrays copy-on-write; tasks must treat the model as read-only.
         '''
-        if int(ncores) != ncores or ncores < 1:
-            raise ValueError("ncores must be a positive integer")
-        if int(workerThreads) != workerThreads or workerThreads < 1:
-            raise ValueError("workerThreads must be a positive integer")
         if parallelBackend not in ("process", "thread"):
             raise ValueError("parallelBackend must be 'process' or 'thread'")
         if processStartMethod is not None and processStartMethod not in mp.get_all_start_methods():
@@ -130,7 +128,7 @@ class BZGridTask:
         print(f"Real-space grid: {model.mp_grid}")
         print(f"Intepolation BZ grid: {BZGrid}")
         print(f"FFT grid: {FastGrid}")
-        print(f"Phase grid: {self.QGrid}")
+        print(f"Offset grid: {self.QGrid}")
         showElapsedTime()
 
         if mode!="run": 
@@ -145,9 +143,8 @@ class BZGridTask:
                     qlen=self.distGamma(model,q/BZGrid)
                     newTask={
                     'iq':q,
-                    'q':q/BZGrid,
+                    'kOffset':q/BZGrid,
                     'qlen':qlen,
-                    'phase':np.array([np.exp(2j*np.pi*((q/BZGrid) @ Rvec)) for Rvec in model.iRvec]),
                     'FFT grid':tuple(FastGrid),
                     'verbose':False, # quiet by default
                     }
@@ -156,7 +153,7 @@ class BZGridTask:
                         continue
                     for itask, oldTask in enumerate(tasks):
                         if abs(oldTask['qlen'] - qlen) < SYMPREC:
-                            if self.equiv(model,oldTask['q'],newTask['q']):
+                            if self.equiv(model,oldTask['kOffset'],newTask['kOffset']):
                                 break
                             else:
                                 tasks.insert(itask,newTask)
@@ -206,7 +203,7 @@ class BZGridTask:
                 next_index, completed, last_report = 0, 0, 0
                 report_every = max(1, len(tasks)//10)
                 try:
-                    # Bound queued work and retain phase order for reproducible reductions.
+                    # Bound queued work and retain task order for reproducible reductions.
                     while next_index < len(tasks) or pending:
                         while next_index < len(tasks) and len(pending) < 2*self.nworkers:
                             pending[submit(tasks[next_index])] = next_index
@@ -343,18 +340,18 @@ class BZLineTask:
         showElapsedTime(extraInfo="1D K-Path integration finished")
 
 def solveEnergy(param):
-    calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc=Energy(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                 skip_low=param.get('skip low',False),
                 #verbose=param['verbose']
                 )
     return {"energies":calc.energies,"iq":param["iq"]}
 
 def solvePDOS(param):
-    calc=PDOS(energyAxis=param['fermi'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.026,model=param['model'],)
+    calc=PDOS(energyAxis=param['fermi'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.026,model=param['model'],)
     return {"energies":calc.energies,"PDOS":calc.pdos,"iq":param["iq"]}
 
 def solveAHC(param):
-    calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=False,
                                    currentProjectionList    =param['projected shells for applying current'],
                                    fermiList=param['fermi'],finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),kBT=param.get('kBT', 0.026),
                                    verbose=param["verbose"],
@@ -365,7 +362,7 @@ def solveAHC(param):
             "iq":param["iq"]}
 
 def solveAHC_diag(param):
-    calc=AnormalousHallConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=AnormalousHallConductance_diag(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],
                                    currentProjectionList    =param['projected shells for applying current'],
                                    )
@@ -375,7 +372,7 @@ def solveAHC_diag(param):
             "iq":param["iq"]}
 
 def solveSHC(param):
-    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
+    calc=SpinHallConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              currentProjectionList    =param['projected shells for applying current'],
                              spincurrentProjectionList=param['projected shells for detecting spincurrent'],
@@ -387,7 +384,7 @@ def solveSHC(param):
             "iq":param["iq"]}
 
 def solveSHC_diag(param):
-    calc=SpinHallConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
+    calc=SpinHallConductance_diag(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              currentProjectionList    =param['projected shells for applying current'],
                              spincurrentProjectionList=param['projected shells for detecting spincurrent'],
@@ -399,7 +396,7 @@ def solveSHC_diag(param):
             "iq":param["iq"]}
 
 def solveOHC(param):
-    calc=OrbitalHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
+    calc=OrbitalHallConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              currentProjectionList    =param['projected shells for applying current'],
                              orbitalcurrentProjectionList=param['projected shells for detecting spincurrent'],
@@ -410,7 +407,7 @@ def solveOHC(param):
             "sigma":calc.sigma,"iq":param["iq"]}
 
 def solveStGC(param):
-    calc=SpintorqueGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
+    calc=SpintorqueGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              spinTorqueProjectionList=param['projected shells for detecting spin accumulation'],
                              currentProjectionList  =param['projected shells for applying current'],
@@ -420,7 +417,7 @@ def solveStGC(param):
             "iq":param["iq"]}
 
 def solveAHC_LG_DM(param):
-    calc=AnormalousHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc=AnormalousHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                 eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
                                 collisionSpecification=param.get('collisionSpecification',None),
                                 degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
@@ -441,8 +438,7 @@ def solveAHC_LG_DM(param):
 
 def _solveLinearConductivity(param, calculatorClass):
     """BZGridTask adapter preserving complex optical tensors and record axes."""
-    options = dict(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'],
-                   kOffset=param.get('kOffset',param.get('q')),
+    options = dict(model=param['model'], kgrid=param['FFT grid'], kOffset=param['kOffset'],
                    eta=param.get('eta', .06582), kBT=param.get('kBT', .026),
                    collisionSpecification=param.get('collisionSpecification'),
                    degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
@@ -491,7 +487,7 @@ def solveOpticalconductivity_TDSE(param):
 
 
 def solveSHC_LG_DM(param):
-    calc=SpinHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc=SpinHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                               eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
                               collisionSpecification=param.get('collisionSpecification',None),
                               degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
@@ -511,7 +507,7 @@ def solveSHC_LG_DM(param):
             "iq":param["iq"]}
 
 def _solve2ndAHC(param, calculatorClass):
-    calc = calculatorClass(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'], fermiList=param['fermi'], verbose=param.get('verbose', 0),
+    calc = calculatorClass(model=param['model'], kgrid=param['FFT grid'], kOffset=param['kOffset'], fermiList=param['fermi'], verbose=param.get('verbose', 0),
             eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026), degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),)
     result = {"energies": calc.energies,
               "BCP": calc.G_K, "response": calc.response,
@@ -527,7 +523,7 @@ def solve2ndAHC_BCP_FermiSurf(param):
     return _solve2ndAHC(param, SecondOrderAHC_BCP_FermiSurf)
 
 def solveINPHE_BCP(param):
-    calc = IntrinsicNPHE_BCP(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'], fermiList=param['fermi'],
+    calc = IntrinsicNPHE_BCP(model=param['model'], kgrid=param['FFT grid'], kOffset=param['kOffset'], fermiList=param['fermi'],
             eta=param.get('eta', 0.0), kBT=param.get('kBT', 0.026), degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
             mag_type=param.get('mag type', 'total'), gS=param.get('gS', 2.0), verbose=param.get('verbose', 0))
     return{"energies": calc.energies,
@@ -537,7 +533,7 @@ def solveINPHE_BCP(param):
     }
 
 def solveBPVE_VG(param):
-    calc=BulkPhotovoltaicEffect_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_VG(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],
@@ -548,7 +544,7 @@ def solveBPVE_VG(param):
             "iq":param["iq"]}
 
 def solveBPVE_VG_DM(param):
-    calc=BulkPhotovoltaicEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc=BulkPhotovoltaicEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
                                    collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
@@ -568,7 +564,7 @@ def solveBPVE_VG_DM(param):
             "iq":param["iq"]}
 
 def solveBPVE_LG_Shift(param):
-    calc=BulkPhotovoltaicEffect_LG_Shift(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_LG_Shift(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
@@ -579,7 +575,7 @@ def solveBPVE_LG_Shift(param):
             "iq":param["iq"]}
 
 def solveBPVE_LG_Inject(param):
-    calc=BulkPhotovoltaicEffect_LG_Injection(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
+    calc=BulkPhotovoltaicEffect_LG_Injection(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param['record frequency ids'],
                                    currentProjectionList    =param['projected shells for applying current'],verbose=param["verbose"],
@@ -590,7 +586,7 @@ def solveBPVE_LG_Inject(param):
             "iq":param["iq"]}
 
 def solveBPVE_LG_DM(param):
-    calc=BulkPhotovoltaicEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc=BulkPhotovoltaicEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
                                    collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
@@ -610,7 +606,7 @@ def solveBPVE_LG_DM(param):
             "iq":param["iq"]}
 
 def solveBPVE_TDSE(param):
-    calc = BulkPhotovoltaicEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = BulkPhotovoltaicEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,skip_low=False,
                                     fermiList=param['fermi'],omegaList=param['omega'],
                                     include_offdiag=param.get('include offdiag', True),verbose=param["verbose"],
                                     )
@@ -618,14 +614,14 @@ def solveBPVE_TDSE(param):
             "iq": param["iq"]}
 
 def solveBPVE_TDSE_LG(param):
-    calc = BulkPhotovoltaicEffect_TDSE_LG_Naive(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = BulkPhotovoltaicEffect_TDSE_LG_Naive(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],verbose=param["verbose"],
                                    )
     return {"projected sigma": calc.projected_sigma, "sigma": calc.sigma_TDSE, 
             "iq": param["iq"]}
 
 def solveIFE_VG(param):
-    calc = InverseFaradayEffect_VG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = InverseFaradayEffect_VG(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
@@ -636,7 +632,7 @@ def solveIFE_VG(param):
             "iq": param["iq"]}
 
 def solveIFE_VG_DM(param):
-    calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
                                    collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
@@ -654,7 +650,7 @@ def solveIFE_VG_DM(param):
             "iq": param["iq"]}
 
 def solveIFE_LG(param):
-    calc = InverseFaradayEffect_LG(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = InverseFaradayEffect_LG(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
@@ -665,7 +661,7 @@ def solveIFE_LG(param):
             "iq": param["iq"]}
 
 def solveIFE_LG_DM(param):
-    calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
                                    collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
@@ -683,7 +679,7 @@ def solveIFE_LG_DM(param):
             "iq": param["iq"]}
 
 def solveIFE_TDSE(param):
-    calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
+    calc = InverseFaradayEffect_TDSE(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
@@ -699,7 +695,7 @@ def solveIFE_TDSE(param):
             "iq": param["iq"]}
 
 def solveIFE_BlochAcceleration_TDSE(param):
-    calc = InverseFaradayEffect_BlochAcceleration_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,skip_low=False,
+    calc = InverseFaradayEffect_BlochAcceleration_TDSE(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
                                    include_offdiag=param.get('include offdiag', True),
@@ -712,7 +708,7 @@ def solveIFE_BlochAcceleration_TDSE(param):
 def solveIFTorque_TDSE(param):
     torqueProjectionList = param.get('projected shells for detecting torque',
                                      param.get('projected shells for detecting spin accumulation', []))
-    calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
+    calc = InverseFaradayTorque_TDSE(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
                                      kBT=param.get('kBT', 0.026),
                                      degen=param.get('degen', 1e-6),
@@ -732,7 +728,7 @@ def solveIFTorque_TDSE(param):
 def solveIFTorque_VG_DM(param):
     torqueProjectionList = param.get('projected shells for detecting torque',
                                      param.get('projected shells for detecting spin accumulation', []))
-    calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
+    calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
                                      collisionSpecification=param.get('collisionSpecification',None),
                                      degen=param.get('degen', 1e-6),
@@ -755,7 +751,7 @@ def solveIFTorque_VG_DM(param):
 def solveIFTorque_LG_DM(param):
     torqueProjectionList = param.get('projected shells for detecting torque',
                                      param.get('projected shells for detecting spin accumulation', []))
-    calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
+    calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
                                      collisionSpecification=param.get('collisionSpecification',None),
                                      degen=param.get('degen', 1e-6),
@@ -775,7 +771,7 @@ def solveIFTorque_LG_DM(param):
             "iq": param["iq"]}
 
 def solveSGC(param):
-    calc=SpinGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
+    calc=SpinGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              spinProjectionList=param['projected shells for detecting spin accumulation'],
                              currentProjectionList=param['projected shells for applying current'],
@@ -786,7 +782,7 @@ def solveSGC(param):
             "iq":param["iq"]}
 
 def solveSGC_diag(param):
-    calc=SpinGalvanicConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
+    calc=SpinGalvanicConductance_diag(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              spinProjectionList=param['projected shells for detecting spin accumulation'],
                              currentProjectionList=param['projected shells for applying current'],
@@ -797,7 +793,7 @@ def solveSGC_diag(param):
             "iq":param["iq"]}
 
 def solveOGC(param):
-    calc=OrbitalGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=True,
+    calc=OrbitalGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              orbitalProjectionList=param['projected shells for detecting spin accumulation'],
                              currentProjectionList=param['projected shells for applying current'],
@@ -808,7 +804,7 @@ def solveOGC(param):
             "iq":param["iq"]}
 
 def solveOGC_diag(param):
-    calc=OrbitalGalvanicConductance_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
+    calc=OrbitalGalvanicConductance_diag(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],kBT=0.026,eta=0.06582,degen=1e-6,skip_low=True,
                              fermiList=param['fermi'],
                              orbitalProjectionList=param['projected shells for detecting spin accumulation'],
                              currentProjectionList=param['projected shells for applying current'],
@@ -819,30 +815,30 @@ def solveOGC_diag(param):
             "iq":param["iq"]}
 
 def solveVelocity(param):
-    calc=Velocity(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
+    calc=Velocity(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_K,"iq":param["iq"]}
 
 def solveVelocity_diag(param):
-    calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=True)
+    calc=Velocity_diag(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=True)
     return {"energies":calc.energies,"velocities":calc.velocity_diag_K,"iq":param["iq"]}
 
 def solveMagneticMoment(param):
     spin_eig, orbital_LC_eig, orbital_IC_eig=None, None, None
     skip_low=param.get('skip low',False)
     if param['spin proj'] and param['orbital proj']:
-        calc=SpinOrbital(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
+        calc=SpinOrbital(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=skip_low,verbose=param['verbose'])
         spin_eig       = np.diagonal(calc.spin_K,axis1=-2,axis2=-1)
         orbital_LC_eig = np.diagonal(calc.orbital_K,axis1=-2,axis2=-1)
         if hasattr(calc,"orbital_IC_K"): orbital_IC_eig = calc.orbital_IC_K
     elif param['spin proj']:
-        calc=Spin(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
+        calc=Spin(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=skip_low,verbose=param['verbose'])
         spin_eig       = np.diagonal(calc.spin_K,axis1=-2,axis2=-1)
     elif param['orbital proj']:
-        calc=OrbitalModern_Full(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
+        calc=OrbitalModern_Full(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=skip_low,verbose=param['verbose'])
         orbital_LC_eig = np.diagonal(calc.orbital_K,axis1=-2,axis2=-1)
         if hasattr(calc,"orbital_IC_K"): orbital_IC_eig = calc.orbital_IC_K
     else:
-        calc=Energy(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=skip_low,verbose=param['verbose'])
+        calc=Energy(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=skip_low,verbose=param['verbose'])
 
     # The diagonal of an atom projector in the eigenbasis is the weight of
     # that atom in each Bloch state.  Contract only the selected rows instead

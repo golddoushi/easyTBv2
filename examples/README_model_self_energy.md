@@ -139,7 +139,7 @@ the quadrature and EPC transformations justify symmetry reduction.
 
 Electronic states use the existing calculator pipeline. With `qgrid`, the
 code constructs `Grid.Energy` once per distinct shifted mesh, using its
-`phaseshift` FFT support. All external k points differing by a q-mesh vector
+`kOffset` FFT-mesh support. All external k points differing by a q-mesh vector
 reuse that calculator's states at both k and k+q. Thus the example with a
 12x12 k mesh and matching q mesh needs one batched eigensolve of 144 states.
 The `Energy` FFT sums R blocks that map to the same index on small grids,

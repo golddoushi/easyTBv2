@@ -184,8 +184,7 @@ class ModelElectronSelfEnergy:
             for group, representative in enumerate(representatives):
                 shift = self.kpoints[representative]
                 solvers.append(Energy(
-                    model=self.model, kgrid=self.qgrid,
-                    phaseshift=np.exp(2j*np.pi*(self.model.iRvec @ shift))))
+                    model=self.model, kgrid=self.qgrid, kOffset=shift))
                 members = np.flatnonzero(self._calculator_index == group)
                 indices = np.rint((self.kpoints[members]-shift)*grid).astype(int) % grid
                 self._external_indices[members] = np.ravel_multi_index(indices.T, self.qgrid)
@@ -274,8 +273,8 @@ class ModelEPCLinewidth:
     case ``eta`` represents the numerical delta-function broadening and the
     result must be converged jointly with the q mesh.
 
-    The calculator k points, including a declared ``kOffset``, are evaluated
-    in one ``ModelElectronSelfEnergy`` call. Results are cached and reused by
+    The calculator's ``kOffset`` mesh is evaluated in one
+    ``ModelElectronSelfEnergy`` call. Results are cached and reused by
     LG, VG, and TDSE calculators having identical energies. The source supplies
     linewidths only: it does not add Re(Sigma), Debye-Waller shifts, or vertex
     corrections to optical matrix elements.
@@ -294,8 +293,6 @@ class ModelEPCLinewidth:
         self._cache_linewidth=None
 
     def populationLinewidth(self, owner):
-        if owner.kOffset is None:
-            raise ValueError("Model EPC SERTA on a shifted FFT mesh requires the calculator kOffset")
         energies=np.asarray(owner.energies)
         signature=(id(owner.model),tuple(owner.kgrid),tuple(np.asarray(owner.kOffset)))
         if (self._cache_signature==signature and self._cache_energies is not None

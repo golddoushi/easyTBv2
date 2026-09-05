@@ -130,8 +130,9 @@ class Calculator():
             The threthold two states are treated to be degenerated
         - skip_low : bool
             To skip lowest and seperated eigen-states IN ALL CASES
-        - phaseshift : np.ndarray(self.model.nRvec, dtype=complex)
-            Extra phase for the Bloch states, used for hybrid FFT algorithm. Default: 1, no extra phase shift
+        - kOffset : array-like, shape (3,)
+            Fractional reciprocal-space offset of the uniform FFT mesh. The
+            Energy stage derives its real-space phase factors from this value.
         - fermiList : np.ndarray(dtype=float)
             Fermi levels to scan
         - omegaList : np.ndarray(dtype=float)
@@ -147,8 +148,7 @@ class Calculator():
             "degen":1e-6,
             "skip_low":False,
 
-            "phaseshift":1,
-            "kOffset":None,
+            "kOffset":(0.,0.,0.),
 
             "fermiList":np.array([0,]),
 
@@ -170,19 +170,10 @@ class Calculator():
         self.degen=defaultSettings["degen"]
         self.skip_low=defaultSettings["skip_low"]
 
-        self.phaseshift=defaultSettings["phaseshift"]
-        self.phase=False
-        if type(self.phaseshift)==np.ndarray: self.phase=True
         offset=defaultSettings["kOffset"]
-        if offset is None:
-            self.kOffset=np.zeros(3) if not self.phase else None
-        else:
-            self.kOffset=np.asarray(offset,dtype=float)
-            if self.kOffset.shape != (3,) or not np.all(np.isfinite(self.kOffset)):
-                raise ValueError("kOffset must contain three finite fractional coordinates")
-            if self.phase and not np.allclose(
-                    self.phaseshift,np.exp(2j*np.pi*(self.model.iRvec@self.kOffset)),atol=1e-10,rtol=0):
-                raise ValueError("kOffset is inconsistent with phaseshift")
+        self.kOffset=np.zeros(3) if offset is None else np.asarray(offset,dtype=float)
+        if self.kOffset.shape != (3,) or not np.all(np.isfinite(self.kOffset)):
+            raise ValueError("kOffset must contain three finite fractional coordinates")
         self.fermiList=defaultSettings["fermiList"]
         self.omegaList=defaultSettings["omegaList"]
         self.greenFuncOmegaBatch=max(1, int(defaultSettings["greenFuncOmegaBatch"]))
@@ -209,6 +200,7 @@ class Energy(Calculator):
         self.vectors[ik1, ik2, ik3, ieig, jeig] gives eigen-vecs. in ao basis.
         '''
         super().__init__(**kwarg)
+        self.phaseFactorR=np.exp(2j*np.pi*(self.model.iRvec @ self.kOffset))
         self.ibmin=0             # ignore low-lying bands
         if self.verbose==2: showElapsedTime(offset=True)
         
@@ -245,14 +237,8 @@ class Energy(Calculator):
                 print(f"Only support ispin=1|2 {self.model.ispin=}")
                 raise ValueError()
 
-        if not self.phase:
-            E_R_AO=self.model.energy_R
-            O_R_AO=self.model.overlap_R
-        else:
-            assert len(self.phaseshift)==self.model.nRvec, f'{len(self.phaseshift)=} {self.model.nRvec=}'
-            
-            E_R_AO=self.model.energy_R*self.phaseshift[:,None,None]
-            O_R_AO=self.model.overlap_R*self.phaseshift[:,None,None]
+        E_R_AO=self.model.energy_R*self.phaseFactorR[:,None,None]
+        O_R_AO=self.model.overlap_R*self.phaseFactorR[:,None,None]
         
         self.E_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         self.O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
@@ -289,12 +275,7 @@ class Energy(Calculator):
         H(k)=sum_R ham_R(R)*exp(+2*pi*i*k.R); no extra hopping minus sign is applied. 
         A model writing H_ij=-t_ij must store -t_ij in the hamR file.
         '''
-        if not self.phase:
-            HH_R_W=self.model.ham_R
-        else:
-            assert len(self.phaseshift)==self.model.nRvec, f'{len(self.phaseshift)=} {self.model.nRvec=}'
-            
-            HH_R_W=self.model.ham_R*self.phaseshift[:,None,None]
+        HH_R_W=self.model.ham_R*self.phaseFactorR[:,None,None]
         self.ham_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         for iR, Rvec in enumerate(self.model.iRvec):
             # Distinct R blocks can alias on a small/shifted mesh. Their
@@ -623,10 +604,7 @@ class SpinExchangeTorque(Spin):
         assert self.model.exchange_R is not None, "SpinExchangeTorque requires model.exchange_R; call model.getExchangeR first"
         assert self.model.exchange_R.shape==self.model.ham_R.shape, f"exchange_R shape {self.model.exchange_R.shape} differs from ham_R shape {self.model.ham_R.shape}"
 
-        exchange_R=self.model.exchange_R
-        if self.phase:
-            assert len(self.phaseshift)==self.model.nRvec, f"{len(self.phaseshift)=} {self.model.nRvec=}"
-            exchange_R=exchange_R*self.phaseshift[:,None,None]
+        exchange_R=self.model.exchange_R*self.phaseFactorR[:,None,None]
         self.exchange_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         for iR,Rvec in enumerate(self.model.iRvec):
             self.exchange_R_intepolated[tuple(Rvec)]=exchange_R[iR]
@@ -884,13 +862,10 @@ class Velocity(Energy):
         highOrderVelocity=bool(highOrderVelocity or exchangeVelocity)
         super().__init__(**kwarg)
         
-        RH_R_W=self.model.RHam_R
+        RH_R_W=self.model.RHam_R*self.phaseFactorR[:,None,None,None]
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        AA_R_W=self.model.AA_R_W # Berry connection in local gauge
+        AA_R_W=self.model.AA_R_W*self.phaseFactorR[:,None,None,None] # Berry connection in local gauge
         AA_R_W_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        if self.phase:
-            RH_R_W=RH_R_W*self.phaseshift[:,None,None,None]
-            AA_R_W=AA_R_W*self.phaseshift[:,None,None,None]
         for iR, Rvec in enumerate(self.model.iRvec):
             index = tuple(np.asarray(Rvec) % self.kgrid)
             self.RHam_R_intepolated[index]+=RH_R_W[iR]
@@ -918,13 +893,9 @@ class Velocity(Energy):
             assert self.model.RExchange_R is not None, "RExchange_R is required; call model.getRExchange_R first"
             assert self.model.RRExchange_R is not None, "RRExchange_R is required; call model.getRRExchange_R first"
 
-            exchange_R_W=self.model.exchange_R
-            RExchange_R_W=self.model.RExchange_R
-            RRExchange_R_W=self.model.RRExchange_R
-            if self.phase:
-                exchange_R_W=exchange_R_W*self.phaseshift[:,None,None]
-                RExchange_R_W=RExchange_R_W*self.phaseshift[:,None,None,None]
-                RRExchange_R_W=RRExchange_R_W*self.phaseshift[:,None,None,None,None]
+            exchange_R_W=self.model.exchange_R*self.phaseFactorR[:,None,None]
+            RExchange_R_W=self.model.RExchange_R*self.phaseFactorR[:,None,None,None]
+            RRExchange_R_W=self.model.RRExchange_R*self.phaseFactorR[:,None,None,None,None]
 
             exchange_R_interpolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
             RExchange_R_interpolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
@@ -962,8 +933,7 @@ class Velocity(Energy):
         if self.model.overlap:
             RO_R_W=self.model.RO_R
             self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-            if self.phase:
-                RO_R_W=RO_R_W*self.phaseshift[:,None,None,None]
+            RO_R_W=RO_R_W*self.phaseFactorR[:,None,None,None]
             for iR, Rvec in enumerate(self.model.iRvec):
                 self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
@@ -989,9 +959,8 @@ class Velocity(Energy):
             RRH_R_intepolated  = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
             RRRH_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
         
-            if self.phase:
-                RRH_R_W  = RRH_R_W  * self.phaseshift[:, None, None, None, None]
-                RRRH_R_W = RRRH_R_W * self.phaseshift[:, None, None, None, None, None]
+            RRH_R_W  = RRH_R_W  * self.phaseFactorR[:, None, None, None, None]
+            RRRH_R_W = RRRH_R_W * self.phaseFactorR[:, None, None, None, None, None]
                 
             for iR, Rvec in enumerate(self.model.iRvec):
                 index = tuple(np.asarray(Rvec) % self.kgrid)
@@ -1310,10 +1279,8 @@ class Velocity_diag(FermiScan):
         '''
         super().__init__(**kwarg)
         
-        RH_R_W=self.model.RHam_R
+        RH_R_W=self.model.RHam_R*self.phaseFactorR[:,None,None,None]
         self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        if self.phase:
-            RH_R_W=RH_R_W*self.phaseshift[:,None,None,None]
         for iR, Rvec in enumerate(self.model.iRvec):
             self.RHam_R_intepolated[tuple(Rvec)]=RH_R_W[iR]
         self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
@@ -1328,8 +1295,7 @@ class Velocity_diag(FermiScan):
         if self.model.overlap:
             RO_R_W=self.model.RO_R
             self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-            if self.phase:
-                RO_R_W=RO_R_W*self.phaseshift[:,None,None,None]
+            RO_R_W=RO_R_W*self.phaseFactorR[:,None,None,None]
             for iR, Rvec in enumerate(self.model.iRvec):
                 self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
             self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
@@ -3562,11 +3528,7 @@ class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
 
         self._R_cart = self.model.iRvec @ self.model.lattice
         self._r_cart = self.model.rList
-        if not self.phase:
-            self._ham_R_phase = self.model.ham_R
-        else:
-            assert len(self.phaseshift) == self.model.nRvec, f'{len(self.phaseshift)=} {self.model.nRvec=}'
-            self._ham_R_phase = self.model.ham_R * self.phaseshift[:, None, None]
+        self._ham_R_phase = self.model.ham_R * self.phaseFactorR[:, None, None]
 
         self.chi_TDSE = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3, 3), dtype=float)
         self.chi_TDSE_symmetric = np.zeros_like(self.chi_TDSE, dtype=float)

@@ -111,9 +111,7 @@ class CollisionOperator:
         if model.overlap:
             raise NotImplementedError("SERTA linewidth interpolation is currently implemented for orthogonal Wannier models")
 
-        linewidth_sqrt_R=np.asarray(linewidth_sqrt_R)
-        if self.owner.phase:
-            linewidth_sqrt_R=linewidth_sqrt_R*self.owner.phaseshift[:,None,None]
+        linewidth_sqrt_R=np.asarray(linewidth_sqrt_R)*self.owner.phaseFactorR[:,None,None]
         linewidth_grid=np.zeros(self.owner.kgrid+(model.norbs,model.norbs),dtype=complex)
         for iR,Rvec in enumerate(model.iRvec):
             # Wigner-Seitz boundary vectors can share the same FFT-grid index.
