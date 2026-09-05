@@ -174,7 +174,7 @@ def solve_ift_orientation(job):
                 "omega": job["omega_axis"],
                 "mag type": job["mag_type"],
                 "projected shells for detecting torque": job["torque_projection_specs"],
-                "finite temperature occupations": job["occupation_mode"] == "fermi-dirac",
+                "finiteTemperatureOccupations": job["occupation_mode"] == "fermi-dirac",
                 "kBT": job["kBT"], "eta": job["eta"], "degen": job["degen"],
             },
             BZGrid=job["bz_grid"], BZSymm=False, mode="run", ncores=job["bz_workers"])

@@ -35,6 +35,7 @@ def _initialize_bz_worker(model, task_func, common_args, worker_threads):
 def _run_bz_task(job, model, task_func, common_args):
     params = dict(job, model=model)
     params.update(common_args)
+    params.setdefault("kOffset", job["q"])
     params["verbose"] = job["verbose"]
     return task_func(params)
 
@@ -355,7 +356,7 @@ def solvePDOS(param):
 def solveAHC(param):
     calc=AnormalousHallConductance(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],eta=0.06582,degen=1e-6,skip_low=False,
                                    currentProjectionList    =param['projected shells for applying current'],
-                                   fermiList=param['fermi'],finiteTemperatureOccupations=param.get('finite temperature occupations', False),kBT=param.get('kBT', 0.026),
+                                   fermiList=param['fermi'],finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),kBT=param.get('kBT', 0.026),
                                    verbose=param["verbose"],
                                    )
     return {"energies":calc.energies,
@@ -421,12 +422,12 @@ def solveStGC(param):
 def solveAHC_LG_DM(param):
     calc=AnormalousHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
                                 eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                collisionOperator=param.get('collision operator',None),
+                                collisionSpecification=param.get('collisionSpecification',None),
                                 degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                                 fermiList=param['fermi'],
                                 currentProjectionList    =param['projected shells for applying current'],
                                 responseFermiIndexList=param.get('record fermi ids', None),
-                                finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
                                 fullCovariantDerivative=param.get('full covariant derivative', False),
                                 verbose=param.get('verbose', 0),
                                    )
@@ -441,13 +442,14 @@ def solveAHC_LG_DM(param):
 def _solveLinearConductivity(param, calculatorClass):
     """BZGridTask adapter preserving complex optical tensors and record axes."""
     options = dict(model=param['model'], kgrid=param['FFT grid'], phaseshift=param['phase'],
+                   kOffset=param.get('kOffset',param.get('q')),
                    eta=param.get('eta', .06582), kBT=param.get('kBT', .026),
-                   collisionOperator=param.get('collision operator'),
+                   collisionSpecification=param.get('collisionSpecification'),
                    degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                    fermiList=param['fermi'], omegaList=param.get('omega', np.array([0.])),
                    currentProjectionList=param.get('projected shells for applying current', []),
                    fullCovariantDerivative=param.get('full covariant derivative', True),
-                   finiteTemperatureOccupations=param.get('finite temperature occupations', True),
+                   finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', True),
                    verbose=param.get('verbose', 0))
     if calculatorClass is Opticalconductivity_TDSE:
         for key in ('E0', 'n_steps_per_cycle', 'n_cycles_measure', 'transient_lifetimes', 'max_phase_step', 'recordCurrent'):
@@ -491,13 +493,13 @@ def solveOpticalconductivity_TDSE(param):
 def solveSHC_LG_DM(param):
     calc=SpinHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
                               eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                              collisionOperator=param.get('collision operator',None),
+                              collisionSpecification=param.get('collisionSpecification',None),
                               degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                               fermiList=param['fermi'],
                               currentProjectionList=param['projected shells for applying current'],
                               spincurrentProjectionList=param['projected shells for detecting spincurrent'],
                               responseFermiIndexList=param.get('record fermi ids', None),
-                              finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                              finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
                               fullCovariantDerivative=param.get('full covariant derivative', False),
                               verbose=param.get('verbose', 0),)
     return {"energies":calc.energies,
@@ -548,12 +550,12 @@ def solveBPVE_VG(param):
 def solveBPVE_VG_DM(param):
     calc=BulkPhotovoltaicEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionOperator=param.get('collision operator',None),
+                                   collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
-                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                   finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
                                    fullCovariantDerivative=param.get('full covariant derivative', False),
                                    currentProjectionList=param['projected shells for applying current'], verbose=param['verbose'],
                                    )
@@ -590,12 +592,12 @@ def solveBPVE_LG_Inject(param):
 def solveBPVE_LG_DM(param):
     calc=BulkPhotovoltaicEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionOperator=param.get('collision operator',None),
+                                   collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
                                    responseFermiIndexList=param.get('record fermi ids', None),
-                                   finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                   finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
                                    fullCovariantDerivative=param.get('full covariant derivative', False),
                                    currentProjectionList=param['projected shells for applying current'],verbose=param["verbose"],
                                    )
@@ -636,7 +638,7 @@ def solveIFE_VG(param):
 def solveIFE_VG_DM(param):
     calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionOperator=param.get('collision operator',None),
+                                   collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
@@ -665,7 +667,7 @@ def solveIFE_LG(param):
 def solveIFE_LG_DM(param):
     calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionOperator=param.get('collision operator',None),
+                                   collisionSpecification=param.get('collisionSpecification',None),
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
@@ -732,13 +734,13 @@ def solveIFTorque_VG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
-                                     collisionOperator=param.get('collision operator',None),
+                                     collisionSpecification=param.get('collisionSpecification',None),
                                      degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                      responseOmegaIndexList=param.get('record frequency ids', []),
                                      responseFermiIndexList=param.get('record fermi ids', None),
-                                     finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                     finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
                                      fullCovariantDerivative=param.get('full covariant derivative', False),
                                      exchangeVelocity=param.get('exchange velocity', True),
                                      kBT=param.get('kBT', 0.026),verbose=param["verbose"],
@@ -755,13 +757,13 @@ def solveIFTorque_LG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],phaseshift=param['phase'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
-                                     collisionOperator=param.get('collision operator',None),
+                                     collisionSpecification=param.get('collisionSpecification',None),
                                      degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
                                      responseOmegaIndexList=param.get('record frequency ids', []),
                                      responseFermiIndexList=param.get('record fermi ids', None),
-                                     finiteTemperatureOccupations=param.get('finite temperature occupations', False),
+                                     finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
                                      fullCovariantDerivative=param.get('full covariant derivative', False),
                                      kBT=param.get('kBT', 0.026),verbose=param["verbose"],
                                     )

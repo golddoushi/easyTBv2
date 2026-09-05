@@ -16,7 +16,7 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
                              LengthGaugeDCFirstOrderDMKernel,
                              LengthGaugeFirstOrderDMKernel,
                              VelocityGaugeFirstOrderDMKernel,
-                             CollisionOperator, diagonal_matrix,
+                             CollisionSpecification, diagonal_matrix,
                              LengthGaugeSecondOrderDMKernel,
                              VelocityGaugeSecondOrderDMKernel)
 
@@ -141,13 +141,14 @@ class Calculator():
             "model":None,
             "kgrid":(1,1,1),
             "eta":0.0,
-            "collisionOperator":None,
+            "collisionSpecification":None,
             "kBT":0.026,
             "smr_type":"Lorentzian",
             "degen":1e-6,
             "skip_low":False,
 
             "phaseshift":1,
+            "kOffset":None,
 
             "fermiList":np.array([0,]),
 
@@ -163,7 +164,7 @@ class Calculator():
         self.kgrid:tuple=defaultSettings["kgrid"]
         assert type(self.kgrid)==tuple, f"expect tuple type of kgrid but {type(self.kgrid)=}"
         self.eta=defaultSettings["eta"]
-        self.collisionOperator=defaultSettings["collisionOperator"]
+        self.collisionSpecification=defaultSettings["collisionSpecification"]
         self.kBT=defaultSettings["kBT"]
         self.smr_type=defaultSettings["smr_type"]
         self.degen=defaultSettings["degen"]
@@ -172,6 +173,16 @@ class Calculator():
         self.phaseshift=defaultSettings["phaseshift"]
         self.phase=False
         if type(self.phaseshift)==np.ndarray: self.phase=True
+        offset=defaultSettings["kOffset"]
+        if offset is None:
+            self.kOffset=np.zeros(3) if not self.phase else None
+        else:
+            self.kOffset=np.asarray(offset,dtype=float)
+            if self.kOffset.shape != (3,) or not np.all(np.isfinite(self.kOffset)):
+                raise ValueError("kOffset must contain three finite fractional coordinates")
+            if self.phase and not np.allclose(
+                    self.phaseshift,np.exp(2j*np.pi*(self.model.iRvec@self.kOffset)),atol=1e-10,rtol=0):
+                raise ValueError("kOffset is inconsistent with phaseshift")
         self.fermiList=defaultSettings["fermiList"]
         self.omegaList=defaultSettings["omegaList"]
         self.greenFuncOmegaBatch=max(1, int(defaultSettings["greenFuncOmegaBatch"]))
@@ -1803,7 +1814,6 @@ class _LinearConductivityDM(Velocity):
             setattr(self, 'projected_sigma_'+name, sigma[name])
             setattr(self, 'projected_response_'+name, response[name])
 
-
 class AnormalousHallConductance_VG_DM(_LinearConductivityDM):
     """Full dc conductivity in S/m; sigma[fermi, drive, current].
 
@@ -1819,7 +1829,6 @@ class AnormalousHallConductance_VG_DM(_LinearConductivityDM):
         kwarg['responseOmegaIndexList'] = [0]
         super().__init__(**kwarg)
 
-
 class Opticalconductivity_LG_DM(_LinearConductivityDM):
     """Linear optical conductivity.
 
@@ -1830,7 +1839,6 @@ class Opticalconductivity_LG_DM(_LinearConductivityDM):
     projected_response records unscaled k-resolved integrands.
     """
 
-
 class Opticalconductivity_VG_DM(_LinearConductivityDM):
     """Linear optical conductivity with covariant VG relaxation and contact current.
 
@@ -1839,7 +1847,6 @@ class Opticalconductivity_VG_DM(_LinearConductivityDM):
     the analytic periodic-BZ limit is used. Only total current is supported.
     """
     gauge = "VG"
-
 
 class Opticalconductivity_TDSE(Velocity):
     """Independent real-time VG benchmark with collision relaxation.
@@ -1880,7 +1887,7 @@ class Opticalconductivity_TDSE(Velocity):
         if np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
             raise ValueError("TDSE requires positive photon energies; use a DM calculator for dc")
         self.Iodd, self.Todd = False, True
-        self.collision = CollisionOperator.fromOwner(self)
+        self.collision = CollisionSpecification.fromOwner(self)
         gamma = self.collision.coherence_linewidth
         if np.min(gamma) <= self.collision.specification.linewidthFloor:
             raise ValueError("Steady-state TDSE requires strictly positive relaxation linewidths")

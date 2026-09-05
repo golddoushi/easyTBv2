@@ -30,7 +30,6 @@ def _points(value, name):
         raise ValueError(f"{name} must have shape (npoints,3), with finite fractional coordinates")
     return points
 
-
 class ModelElectronSelfEnergy:
     """One-shot model self-energy, evaluated immediately on the supplied grids.
 
@@ -265,3 +264,59 @@ class ModelElectronSelfEnergy:
         return dict(bare_gap=cbm-vbm, renormalized_gap=new_cbm-new_vbm,
                     gap_shift=(new_cbm-new_vbm)-(cbm-vbm),
                     bare_vbm=vbm, bare_cbm=cbm, vbm_shift=new_vbm-vbm, cbm_shift=new_cbm-cbm)
+
+class ModelEPCLinewidth:
+    """On-shell toy-EPC linewidth source for ``CollisionSpecification('serta')``.
+
+    ``adiabatic=False`` is the dynamical Fan-Migdal/SERTA rate with phonon
+    absorption, emission, and Pauli factors. ``adiabatic=True`` is the elastic
+    frozen-phonon Born rate obtained from the static Fan propagator. In that
+    case ``eta`` represents the numerical delta-function broadening and the
+    result must be converged jointly with the q mesh.
+
+    The calculator k points, including a declared ``kOffset``, are evaluated
+    in one ``ModelElectronSelfEnergy`` call. Results are cached and reused by
+    LG, VG, and TDSE calculators having identical energies. The source supplies
+    linewidths only: it does not add Re(Sigma), Debye-Waller shifts, or vertex
+    corrections to optical matrix elements.
+    """
+
+    def __init__(self, qgrid=None, temperature=300., fermi=0., eta=.02,
+                 adiabatic=False):
+        self.qgrid=tuple(qgrid) if qgrid is not None else None
+        self.temperature=float(temperature)
+        self.fermi=float(fermi)
+        self.eta=float(eta)
+        self.adiabatic=bool(adiabatic)
+        self.last_self_energy=None
+        self._cache_signature=None
+        self._cache_energies=None
+        self._cache_linewidth=None
+
+    def populationLinewidth(self, owner):
+        if owner.kOffset is None:
+            raise ValueError("Model EPC SERTA on a shifted FFT mesh requires the calculator kOffset")
+        energies=np.asarray(owner.energies)
+        signature=(id(owner.model),tuple(owner.kgrid),tuple(np.asarray(owner.kOffset)))
+        if (self._cache_signature==signature and self._cache_energies is not None
+                and self._cache_energies.shape==energies.shape
+                and np.allclose(self._cache_energies,energies,atol=1e-12,rtol=1e-12)):
+            return self._cache_linewidth.copy()
+        grid=tuple(owner.kgrid)
+        qgrid=grid if self.qgrid is None else self.qgrid
+        kpoints=np.mod(uniform_qmesh(grid)+owner.kOffset,1.)
+        result=ModelElectronSelfEnergy(owner.model,kpoints,qgrid=qgrid,
+                                       temperature=self.temperature,fermi=self.fermi,
+                                       eta=self.eta,adiabatic=self.adiabatic)
+        reference=result.energies.reshape(energies.shape)
+        if not np.allclose(reference,energies,atol=2e-10,rtol=1e-10):
+            raise ValueError("Model EPC linewidth states do not match the conductivity eigensystem")
+        linewidth=result.linewidths.reshape(energies.shape)
+        if np.any(linewidth < -1e-10) or not np.all(np.isfinite(linewidth)):
+            raise ValueError("Model EPC retarded self-energy produced invalid linewidths")
+        linewidth=np.maximum(linewidth,0.)
+        self.last_self_energy=result
+        self._cache_signature=signature
+        self._cache_energies=energies.copy()
+        self._cache_linewidth=linewidth.copy()
+        return linewidth

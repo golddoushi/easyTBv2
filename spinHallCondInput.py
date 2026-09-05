@@ -25,7 +25,7 @@ from task import solveSurfaceSpectraTask, solveBandStructure
 #+---------------------------+
 #| Tasks free from interface |
 #+---------------------------+
-from calculator import Chern_FHS, Z2_FHS, CollisionOperator
+from calculator import Chern_FHS, Z2_FHS, CollisionSpecification
 from auxiliary import showElapsedTime, getCBM, getVBM
 from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeffs, outputIFTcoeffs,
                     output4thData, outputBZDistributionData, outputIFEResponseOnBZ, outputIFTResponseOnBZ)
@@ -246,8 +246,8 @@ def run():
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
                           "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
 
-                          "finite temperature occupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
-                          "collision operator": CollisionOperator(mode="serta", eta=0.06582), # collision model, currently only for DM based calculators
+                          "finiteTemperatureOccupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
+                          "collisionSpecification": CollisionSpecification(mode="serta", eta=0.06582), # collision model, currently only for DM based calculators
                           "degen":1e-1,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,

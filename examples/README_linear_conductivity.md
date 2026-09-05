@@ -40,6 +40,8 @@ Run the standalone benchmark:
 ```text
 python examples/honeycomb_conductivity.py --grid 32 --tdse-grid 4
 python examples/honeycomb_conductivity.py --grid 32 --skip-tdse --snapshots 20 --supercell 2
+python examples/honeycomb_conductivity.py --grid 24 --serta both --skip-tdse
+python examples/honeycomb_conductivity.py --grid 12 --serta static --snapshots 200 --supercell 2 --skip-tdse
 ```
 
 It writes `tmp/honeycomb_conductivity/summary.json` and `conductivity.npz`.
@@ -50,7 +52,7 @@ temperature, broadening, and time step, not universal accuracy guarantees.
 
 `task.py` also exports `solveAHC_VG_DM`, `solveOpticalconductivity_LG_DM`,
 `solveOpticalconductivity_VG_DM`, and `solveOpticalconductivity_TDSE` for
-`BZGridTask`. Use the existing `fermi`, `omega`, `collision operator`,
+`BZGridTask`. Use the existing `fermi`, `omega`, `collisionSpecification`,
 `record fermi ids`, and `record frequency ids` parameter keys. TDSE controls
 use their Python argument names. Use `BZSymm=False` and average the phase-grid
 results, preserving their complex values.
@@ -109,7 +111,7 @@ an arbitrary tiny probe frequency. Consequently dc LG/VG agreement alone is
 not an independent sum-rule convergence test. Check finite-frequency results
 and the residual as well, especially near zero frequency.
 
-The DM variants use `CollisionOperator` for CRTA or frozen secular SERTA.
+The DM variants use `CollisionSpecification` for CRTA or frozen secular SERTA.
 VG requires the full covariant response, positive electronic temperature,
 an orthogonal model, and the complete model basis (`skip_low=False`). Its
 contact vertices currently support total current only; LG also supports the
@@ -145,5 +147,78 @@ eta and reports the equilibrium supercell result plus separate real/imaginary
 sampling errors. It is a **static disorder benchmark**, not an implementation
 of inelastic EPC transport. Two snapshots are only a smoke test. Converge the
 ensemble, supercell, k mesh, and residual broadening before interpreting EPC
-changes. Turning the toy-model Fan self-energy into a transport collision
-operator, including scattering-in/vertex corrections, remains separate work.
+changes.
+
+## Toy-EPC SERTA linewidths
+
+`ModelEPCLinewidth` turns the diagonal on-shell imaginary Fan self-energy into
+a sampled linewidth source:
+
+```python
+from calculator import CollisionSpecification, ModelEPCLinewidth
+
+source = ModelEPCLinewidth(qgrid=(12,12,1), temperature=300,
+                           fermi=-0.7, eta=0.02, adiabatic=False)
+collision = CollisionSpecification("serta", linewidthSource=source)
+sigma = Opticalconductivity_LG_DM(collisionSpecification=collision, **options).sigma
+```
+
+It evaluates the calculator's k mesh and caches the result for LG, VG, and TDSE
+instances with identical eigenenergies. A shifted `BZGridTask` supplies its
+`kOffset`. `adiabatic=False` is standard dynamical SERTA: the linewidth is
+`-2 Im Sigma_Fan(epsilon_nk)` with phonon emission/absorption energies and Pauli
+factors, as in the [VASP SERTA definition](https://vasp.at/wiki/ELPH_SCATTERING_APPROX).
+`adiabatic=True` gives an elastic Born rate for static Gaussian displacements.
+We call this **static/adiabatic RTA**, since “SERTA” normally refers to the
+dynamical on-shell Fan rate. Its Lorentzian `eta` approximates the elastic
+delta function and must be converged together with the q mesh.
+
+The source supplies only Gamma. The transport Hamiltonian, energies,
+occupations, and current vertices remain bare. It does not add Re(Fan)+DW or
+optical vertex/scattering-in corrections.
+
+## Frozen supercells versus the two rates
+
+Agreement of static Fan+DW **band-energy shifts** with stochastic snapshots
+does not imply equal conductivity. That comparison concerns a one-particle
+pole shift through second order. Conductivity is also sensitive to eigenstates,
+current vertices, and how scattering redistributes momentum.
+
+A frozen calculation evaluates the full independent-electron conductivity of
+each `H[u]` and then averages. It contains real spectral changes, modified
+eigenvectors/current vertices, elastic state mixing allowed by the supercell,
+and all displacement orders in `H[u]`. Its CRTA `eta` is an additional residual
+broadening. Static/adiabatic RTA keeps only the elastic Born **out-scattering
+lifetime** in a diagonal secular collision operator. It omits scattering-in
+and vertex corrections. They therefore are not formally equal.
+
+They may approach one another for weak EPC, large supercells, and slow classical
+phonons after matching displacement covariance, k/q resolution, chemical
+potential, and broadening, if vertex corrections are negligible. Dynamical
+SERTA resolves phonon energy exchange and Pauli blocking. A static snapshot
+cannot reproduce these, except approximately when `kBT >> hbar*Omega` and the
+electronic probe cannot resolve the phonon dynamics.
+
+The example now makes meshes commensurate: an `S x S` supercell uses
+`(grid/S) x (grid/S)`, sampling the same primitive momenta. The undisplaced 2x2
+supercell then agrees with the primitive 12x12 tensor to about `5.9e-15`
+relative error. At 300 K, 200 frozen 2x2 snapshots differed from pure static
+RTA by about 38% under the report normalization. That raw comparison also
+replaces the snapshots' 0.2 eV CRTA background by the EPC rate. Adding the same
+0.2 eV background to static RTA reduces the discrepancy to about 10.8%. The
+largest componentwise sampling standard error was about 1.6% of the response,
+and the raw discrepancy reached roughly 51 standard errors. The example stores
+both comparisons. This finite benchmark rejects automatic equality while also
+showing that unmatched background broadening can dominate the apparent error.
+
+`--tdse-collision static|dynamic` makes the time-domain comparison use model
+EPC rates. Small linewidths require very long transients, so this optional path
+applies `--tdse-min-linewidth 0.02` eV by default and reports the actual minimum.
+Set it to zero for unmodified SERTA and converge the transient. DM rates are
+never floored.
+
+A diagram-by-diagram snapshot comparison requires a static-disorder collision
+kernel with scattering-in/vertex terms, or an explicit second-order expansion
+of ensemble conductivity. The present comparison diagnoses the diagonal
+lifetime approximation; it does not establish it as the exact frozen-phonon
+limit.

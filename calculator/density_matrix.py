@@ -23,43 +23,48 @@ AC_CHANNEL_DESCRIPTIONS = {
     "EE": "second-order interband from first-order interband",
 }
 
-class CollisionOperator:
-    """Collision model used by density-matrix kernels.
+class CollisionSpecification:
+    """Type of the collision model used by density-matrix kernels.
 
     ``crta`` uses one relaxation energy ``eta=hbar/tau``. ``serta`` reads the
-    Wannier-interpolated electron-phonon linewidth attached to ``System_w90``
-    and supports both first- and second-order kernels in the frozen secular
-    relaxation-time approximation. A bound collision object is created for
-    each calculator k grid, keeping the specification safe to share between
-    BZ worker processes.
+    Wannier-interpolated electron-phonon linewidth attached to ``System_w90``,
+    or accepts ``linewidthSource`` as an array/callable object. The latter is
+    used by ``ModelEPCLinewidth`` for toy models. Both first- and second-order
+    kernels use the frozen secular relaxation-time approximation. A bound
+    collision object is created for each calculator k grid.
     """
 
-    def __init__(self, mode="crta", eta=None, linewidthFloor=1e-12):
+    def __init__(self, mode="crta", eta=None, linewidthFloor=1e-12, linewidthSource=None):
         mode=str(mode).lower()
         if mode not in ("crta","serta"):
             raise NotImplementedError("By now, only 'crta', 'serta' have been built")
         self.mode=mode
         self.eta=None if eta is None else float(eta)
         self.linewidthFloor=float(linewidthFloor)
+        self.linewidthSource=linewidthSource
         assert self.linewidthFloor >= 0, f"{linewidthFloor=} must be non-negative instead"
+        if self.mode != "serta" and linewidthSource is not None:
+            raise ValueError("linewidthSource is only meaningful for SERTA")
 
     def bind(self, owner):
-        return BoundCollisionOperator(self,owner)
+        return CollisionOperator(self,owner)
 
     @classmethod
     def fromOwner(cls, owner):
-        specification=getattr(owner,"collisionOperator",None)
+        specification=getattr(owner,"collisionSpecification",None)
         if specification is None:
             specification=cls("crta",eta=owner.eta)
         elif isinstance(specification,str):
             specification=cls(specification)
         elif not isinstance(specification,cls):
-            raise TypeError("collisionOperator must be None, a mode string, or CollisionOperator")
+            raise TypeError("collisionSpecification must be None, a mode string, or CollisionSpecification")
         return specification.bind(owner)
 
 
-class BoundCollisionOperator:
-    """Collision linewidths represented on one calculator's eigenstate grid.
+class CollisionOperator:
+    """Collision Operator
+    For now, the CRTA and SERTA are implemented, which only give linewidths 
+    represented on one calculator's eigenstate grid.
 
     The SERTA implementation is the frozen, secular covariant RTA
 
@@ -89,6 +94,15 @@ class BoundCollisionOperator:
 
     def _sertaLinewidth(self):
         model=self.owner.model
+        source=self.specification.linewidthSource
+        if source is not None:
+            linewidth=(source.populationLinewidth(self.owner) if hasattr(source,"populationLinewidth")
+                       else np.asarray(source,dtype=float))
+            if linewidth.shape != self.owner.energies.shape:
+                raise ValueError(f"SERTA linewidth source has shape {linewidth.shape}, expected {self.owner.energies.shape}")
+            if not np.all(np.isfinite(linewidth)) or np.any(linewidth < -1e-10):
+                raise ValueError("SERTA linewidth source must be finite and nonnegative")
+            return np.maximum(linewidth,0.0)
         linewidth_sqrt_R=getattr(model,"electronLinewidthSqrt_R",None)
         if linewidth_sqrt_R is None:
             linewidth_sqrt_R=getattr(model,"electron_linewidth_sqrt_R",None)
@@ -292,7 +306,7 @@ class LengthGaugeDCFirstOrderDMKernel:
         self.off_diag = 1.0 - self.diag
         self.indices = np.arange(self.nbands)
         self.deltaE_inverse_pure = owner.deltaEInverse_pure
-        self.collision = CollisionOperator.fromOwner(owner)
+        self.collision = CollisionSpecification.fromOwner(owner)
         self.g0_mn = self.collision.resolvent(owner.deltaE)
 
         if self.full_covariant_derivative and owner.kBT <= 0:
@@ -335,7 +349,7 @@ class LengthGaugeFirstOrderDMKernel:
         self.owner = owner
         self.full_covariant_derivative = bool(full_covariant_derivative)
         self.finite_temperature_occupations = bool(finite_temperature_occupations)
-        self.collision = CollisionOperator.fromOwner(owner)
+        self.collision = CollisionSpecification.fromOwner(owner)
         self.diag = np.eye(owner.energies.shape[-1], dtype=bool)
         if self.full_covariant_derivative and owner.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
@@ -455,7 +469,7 @@ class _SecondOrderDMKernel:
         self.off_diag = 1.0 - self.diag
         self.indices = np.arange(self.nbands)
         self.deltaE_mn = owner.deltaE
-        self.collision = CollisionOperator.fromOwner(owner)
+        self.collision = CollisionSpecification.fromOwner(owner)
         self.g0_mn = self.collision.resolvent(self.deltaE_mn)
 
         if self.full_covariant_derivative and owner.kBT <= 0:

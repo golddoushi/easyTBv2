@@ -363,7 +363,7 @@ localization diagnostic for the implemented collision interpolation and emits
 a warning above `0.1%`.
 
 ```python
-from calculator import CollisionOperator
+from calculator import CollisionSpecification
 from fileio import ElectronSelfEnergy
 
 self_energy = ElectronSelfEnergy(
@@ -371,12 +371,12 @@ self_energy = ElectronSelfEnergy(
 )
 model.includeElectronSelfEnergy(self_energy, temperature=300.0)
 
-calculation_args["collision operator"] = CollisionOperator("serta")
+calculation_args["collisionSpecification"] = CollisionSpecification("serta")
 calculation_args["full covariant derivative"] = True
 ```
 
-`CollisionOperator("crta", eta=...)` reproduces the constant-relaxation
-model. `CollisionOperator("serta")` supplies band- and k-dependent population
+`CollisionSpecification("crta", eta=...)` reproduces the constant-relaxation
+model. `CollisionSpecification("serta")` supplies band- and k-dependent population
 linewidths and the coherence rate `(Gamma_mk+Gamma_nk)/2` to the reusable
 first-order d.c. kernel. It therefore changes both the `I` and `E` channels,
 although VASP's reported SERTA conductivity is an intraband quantity and
