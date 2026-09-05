@@ -1840,12 +1840,6 @@ class Opticalconductivity_TDSE(Velocity):
             raise ValueError("TDSE benchmark requires full covariant finite-temperature equilibrium")
         if kwarg['model'].overlap or kwarg.get('skip_low', False):
             raise NotImplementedError("TDSE requires the complete orthogonal model basis")
-        if not np.isfinite(E0) or E0 <= 0 or not np.isfinite(transient_lifetimes) or transient_lifetimes <= 0:
-            raise ValueError("E0 and transient_lifetimes must be finite and positive")
-        if (int(n_steps_per_cycle) != n_steps_per_cycle or n_steps_per_cycle < 8
-                or int(n_cycles_measure) != n_cycles_measure or n_cycles_measure < 1
-                or not np.isfinite(max_phase_step) or max_phase_step <= 0):
-            raise ValueError("Use at least 8 steps/cycle, integer positive measurement cycles, and positive max_phase_step")
         kwarg.pop('highOrderVelocity', None)
         super().__init__(highOrderVelocity=True, **kwarg)
         if self.kBT <= 0:
