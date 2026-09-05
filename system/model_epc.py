@@ -156,17 +156,38 @@ class SSHModelEPC:
         is one half of this vertex times (2*N_qnu+1), averaged over q and modes.
         It is identically zero for the default strictly linear SSH model.
         """
-        self.validate(model)
-        k, q = _wavevector(k, "k"), _wavevector(q, "q")
+        k = _wavevector(k, "k")
         u = np.asarray(displacement, dtype=complex)
         if u.shape != (self.natoms, 3) or not np.all(np.isfinite(u)):
             raise ValueError(f"displacement must have shape ({self.natoms},3) and finite entries")
-        orbital_u = u[self.orbital_atoms].T
-        difference = (np.exp(2j*np.pi*(self.iRvec @ q))[:, None, None, None]
-                      * orbital_u[None, :, None, :] - orbital_u[None, :, :, None])
-        stretch = np.sum(self.unit_bonds * difference, axis=1)
-        vertex_R = self.beta_R * np.abs(stretch)**2
-        return np.einsum("r,rij->ij", np.exp(2j*np.pi*(self.iRvec @ k)), vertex_R)
+        return self.secondDisplacementVertices(model, k[None], q, u[None])[0, 0]
+
+    def secondDisplacementVertices(self, model, kpoints, q, displacements):
+        """Batched ``H''(k;q,-q)`` for many k points and phonon modes.
+
+        The result has shape ``(nk, nmodes, norbs, norbs)``.  Geometry and
+        array consistency are checked once per batch instead of once per
+        ``(k,q,mode)`` tuple.
+        """
+        self.validate(model)
+        q = _wavevector(q, "q")
+        kpoints = np.asarray(kpoints, dtype=float)
+        if (kpoints.ndim != 2 or kpoints.shape[1] != 3
+                or not len(kpoints) or not np.all(np.isfinite(kpoints))):
+            raise ValueError("kpoints must have shape (nk,3) and finite entries")
+        u = np.asarray(displacements, dtype=complex)
+        if (u.ndim != 3 or u.shape[1:] != (self.natoms, 3)
+                or not len(u) or not np.all(np.isfinite(u))):
+            raise ValueError(f"displacements must have shape (nmodes,{self.natoms},3) and finite entries")
+        orbital_u = u[:, self.orbital_atoms, :].transpose(0, 2, 1)
+        phase_q = np.exp(2j*np.pi*(self.iRvec @ q))
+        difference = (phase_q[None, :, None, None, None]
+                      * orbital_u[:, None, :, None, :]
+                      - orbital_u[:, None, :, :, None])
+        stretch = np.sum(self.unit_bonds[None] * difference, axis=2)
+        vertex_R = self.beta_R[None] * np.abs(stretch)**2
+        phase_k = np.exp(2j*np.pi*(kpoints @ self.iRvec.T))
+        return np.einsum("kr,vrij->kvij", phase_k, vertex_R, optimize=True)
 
     def displacementVertex(self, model, k, q, displacement):
         """<k+q|delta H|k> for u_La = displacement[a] exp(2 pi i q.L).
@@ -175,17 +196,36 @@ class SSHModelEPC:
         The returned matrix is in the localized orbital basis, in eV. There is no
         1/sqrt(Ncells) factor. This vertex includes all finite-q bond phases.
         """
-        self.validate(model)
-        k, q = _wavevector(k, "k"), _wavevector(q, "q")
+        k = _wavevector(k, "k")
         u = np.asarray(displacement, dtype=complex)
         if u.shape != (self.natoms, 3) or not np.all(np.isfinite(u)):
             raise ValueError(f"displacement must have shape ({self.natoms},3) and finite entries")
-        orbital_u = u[self.orbital_atoms].T
-        phase_q = np.exp(2j*np.pi * (self.iRvec @ q))
-        difference = (phase_q[:, None, None, None] * orbital_u[None, :, None, :]
-                      - orbital_u[None, :, :, None])
-        vertex_R = self.alpha_R * np.sum(self.unit_bonds * difference, axis=1)
-        return np.einsum("r,rij->ij", np.exp(2j*np.pi * (self.iRvec @ k)), vertex_R)
+        return self.displacementVertices(model, k[None], q, u[None])[0, 0]
+
+    def displacementVertices(self, model, kpoints, q, displacements):
+        """Batched localized-orbital vertices for many k points and modes.
+
+        Returns ``vertices[k, mode, orbital_i, orbital_j]`` in eV.
+        """
+        self.validate(model)
+        q = _wavevector(q, "q")
+        kpoints = np.asarray(kpoints, dtype=float)
+        if (kpoints.ndim != 2 or kpoints.shape[1] != 3
+                or not len(kpoints) or not np.all(np.isfinite(kpoints))):
+            raise ValueError("kpoints must have shape (nk,3) and finite entries")
+        u = np.asarray(displacements, dtype=complex)
+        if (u.ndim != 3 or u.shape[1:] != (self.natoms, 3)
+                or not len(u) or not np.all(np.isfinite(u))):
+            raise ValueError(f"displacements must have shape (nmodes,{self.natoms},3) and finite entries")
+        orbital_u = u[:, self.orbital_atoms, :].transpose(0, 2, 1)
+        phase_q = np.exp(2j*np.pi*(self.iRvec @ q))
+        difference = (phase_q[None, :, None, None, None]
+                      * orbital_u[:, None, :, None, :]
+                      - orbital_u[:, None, :, :, None])
+        vertex_R = self.alpha_R[None] * np.sum(
+            self.unit_bonds[None] * difference, axis=2)
+        phase_k = np.exp(2j*np.pi*(kpoints @ self.iRvec.T))
+        return np.einsum("kr,vrij->kvij", phase_k, vertex_R, optimize=True)
 
     def matrixElements(self, model, k, q, bandBasis=True, vectors_k=None, vectors_kq=None):
         """Complex g[nu,m,n](k,q), in eV; final m at k+q, initial n at k.
@@ -197,12 +237,11 @@ class SSHModelEPC:
         phonons = getattr(model, "modelPhonons", None)
         if phonons is None or len(phonons.masses) != self.natoms:
             raise ValueError("Call setModelPhonons with one mass per atom before computing g")
-        vertices = np.array([self.displacementVertex(model, k, q, u)
-                             for u in phonons.modeDisplacements(q)])
         if not bandBasis:
             if vectors_k is not None or vectors_kq is not None:
                 raise ValueError("Eigenvectors require bandBasis=True")
-            return vertices
+            return self.displacementVertices(
+                model, k[None], q, phonons.modeDisplacements(q))[0]
         if vectors_k is None or vectors_kq is None:
             from calculator.Path import EnergyOnPath
             points = [point for point, vectors in ((k, vectors_k), (k+q, vectors_kq)) if vectors is None]
@@ -215,4 +254,25 @@ class SSHModelEPC:
         expected = (model.norbs, model.norbs)
         if vectors_k.shape != expected or vectors_kq.shape != expected:
             raise ValueError(f"Eigenvector matrices must have shape {expected}, with eigenvectors in columns")
-        return vectors_kq.conj().T @ vertices @ vectors_k
+        return self.matrixElementsBatch(
+            model, k[None], q, vectors_k[None], vectors_kq[None])[0]
+
+    def matrixElementsBatch(self, model, kpoints, q, vectors_k, vectors_kq):
+        """Band-basis ``g`` for a batch of k points at one q point.
+
+        ``vectors_k`` and ``vectors_kq`` contain eigenvectors in columns and
+        both have shape ``(nk,norbs,norbs)``.  The returned axes are
+        ``(k, mode, final_band, initial_band)``.
+        """
+        phonons = getattr(model, "modelPhonons", None)
+        if phonons is None or len(phonons.masses) != self.natoms:
+            raise ValueError("Call setModelPhonons with one mass per atom before computing g")
+        kpoints = np.asarray(kpoints, dtype=float)
+        vectors_k, vectors_kq = np.asarray(vectors_k), np.asarray(vectors_kq)
+        expected = (len(kpoints), model.norbs, model.norbs)
+        if vectors_k.shape != expected or vectors_kq.shape != expected:
+            raise ValueError(f"batched eigenvector matrices must have shape {expected}")
+        vertices = self.displacementVertices(
+            model, kpoints, q, phonons.modeDisplacements(q))
+        return (vectors_kq.conj().swapaxes(-2, -1)[:, None]
+                @ vertices @ vectors_k[:, None])

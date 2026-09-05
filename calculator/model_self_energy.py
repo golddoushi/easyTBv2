@@ -119,44 +119,55 @@ class ModelElectronSelfEnergy:
         epc, phonons = model.modelEPC, model.modelPhonons
         has_quadratic = np.any(epc.beta_R != 0)
 
-        for ik, k in enumerate(self.kpoints):
-            vk = self.vectors[ik]
-            states = self.energy_calculators[self._calculator_index[ik]]
-            energies = states.energies.reshape(-1, nb)
-            vectors = states.vectors.reshape(-1, nb, nb)
-            for iq, (q, weight) in enumerate(zip(self.qpoints, self.qweights)):
-                if weight == 0:
-                    continue
-                index = self._intermediate_indices[ik, iq]
-                intermediate, vkq = energies[index], vectors[index]
-                phonon_energies, _ = phonons.modes(q)
-                if self.temperature == 0:
-                    bose = np.zeros_like(phonon_energies)
-                    occupation = np.where(intermediate < self.fermi, 1.0,
-                                          np.where(intermediate > self.fermi, 0.0, 0.5))
+        # q is the outer loop so all electronic k points share one vectorized
+        # EPC construction and one set of medium-sized contractions.  This is
+        # much faster than dispatching tiny NumPy operations for every k/q/mode.
+        for iq, (q, weight) in enumerate(zip(self.qpoints, self.qweights)):
+            if weight == 0:
+                continue
+            intermediate = self.intermediate_energies[:, iq]
+            vectors_kq = self.intermediate_vectors[:, iq]
+            phonon_energies, _ = phonons.modes(q)
+            if self.temperature == 0:
+                bose = np.zeros_like(phonon_energies)
+                occupation = np.where(intermediate < self.fermi, 1.0,
+                                      np.where(intermediate > self.fermi, 0.0, 0.5))
+            else:
+                # exp(-x)/(-expm1(-x)) avoids overflow for cold/high-energy modes.
+                x = phonon_energies / kBT
+                bose = np.exp(-x) / (-np.expm1(-x))
+                occupation = expit((self.fermi-intermediate) / kBT)
+            g = model.getModelEPCBatch(
+                self.kpoints, q, self.vectors, vectors_kq)
+            denominator = (self.evaluation_energies[:, :, None, None]
+                           - intermediate[:, None, None, :] + 1j*self.delta)
+            if self.adiabatic:
+                propagator = (2*bose[None, None, :, None]+1) / denominator
+            else:
+                propagator = ((bose[None, None, :, None]+1
+                               - occupation[:, None, None, :])
+                              / (denominator-phonon_energies[None, None, :, None])
+                              + (bose[None, None, :, None]
+                                 + occupation[:, None, None, :])
+                              / (denominator+phonon_energies[None, None, :, None]))
+            # g[k,nu,m,n] maps external n to intermediate m; retain complex
+            # products for off-diagonal self-energies, not just |g|^2.
+            self.fan_migdal_matrix += weight*np.einsum(
+                "kvmi,kavm,kvmj->kaij", g.conj(), propagator, g, optimize=True)
+            if has_quadratic:
+                displacements = phonons.modeDisplacements(q)
+                if hasattr(epc, "secondDisplacementVertices"):
+                    hessian = epc.secondDisplacementVertices(
+                        model, self.kpoints, q, displacements)
                 else:
-                    # exp(-x)/(-expm1(-x)) avoids overflow for cold/high-energy modes.
-                    x = phonon_energies / kBT
-                    bose = np.exp(-x) / (-np.expm1(-x))
-                    occupation = expit((self.fermi-intermediate) / kBT)
-                g = model.getModelEPC(k, q, vectors_k=vk, vectors_kq=vkq)
-                denominator = (self.evaluation_energies[ik, :, None, None]
-                               - intermediate[None, None, :] + 1j*self.delta)
-                if self.adiabatic:
-                    propagator = (2*bose[None, :, None]+1) / denominator
-                else:
-                    propagator = ((bose[:, None]+1-occupation[None, :])[None]
-                                  / (denominator-phonon_energies[None, :, None])
-                                  + (bose[:, None]+occupation[None, :])[None]
-                                  / (denominator+phonon_energies[None, :, None]))
-                # g[nu,m,n] maps external n to intermediate m; retain complex
-                # products for off-diagonal self-energies, not just |g|^2.
-                self.fan_migdal_matrix[ik] += weight*np.einsum(
-                    "vmi,avm,vmj->aij", g.conj(), propagator, g, optimize=True)
-                if has_quadratic:
-                    for population, u in zip(bose, phonons.modeDisplacements(q)):
-                        hessian = epc.secondDisplacementVertex(model, k, q, u)
-                        self.debye_waller_matrix[ik] += 0.5*weight*(2*population+1)*(vk.conj().T @ hessian @ vk)
+                    hessian = np.array([
+                        [epc.secondDisplacementVertex(model, k, q, u)
+                         for u in displacements]
+                        for k in self.kpoints])
+                hessian_band = (self.vectors.conj().swapaxes(-2, -1)[:, None]
+                                @ hessian @ self.vectors[:, None])
+                self.debye_waller_matrix += 0.5*weight*np.einsum(
+                    "v,kvij->kij", 2*bose+1, hessian_band, optimize=True)
 
     def _prepare_electronic_states(self):
         """Index established calculator results; no separate eigensolver.
@@ -205,6 +216,19 @@ class ModelElectronSelfEnergy:
         self.vectors = np.array([
             self.energy_calculators[group].vectors.reshape(-1, nb, nb)[index]
             for group, index in zip(self._calculator_index, self._external_indices)])
+        # Materialize k+q states in contiguous arrays once.  Downstream Fan
+        # contractions can then batch the entire external k mesh for each q.
+        self.intermediate_energies = np.empty((nk, nq, nb), dtype=float)
+        self.intermediate_vectors = np.empty((nk, nq, nb, nb), dtype=complex)
+        for group, states in enumerate(self.energy_calculators):
+            members = np.flatnonzero(self._calculator_index == group)
+            if not len(members):
+                continue
+            energies = states.energies.reshape(-1, nb)
+            vectors = states.vectors.reshape(-1, nb, nb)
+            indices = self._intermediate_indices[members]
+            self.intermediate_energies[members] = energies[indices]
+            self.intermediate_vectors[members] = vectors[indices]
 
     @property
     def fan_migdal(self):

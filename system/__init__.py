@@ -1990,6 +1990,22 @@ class System:
             raise ValueError("Call addModelEPC before computing model EPC")
         return self.modelEPC.matrixElements(self, k, q, bandBasis, vectors_k, vectors_kq)
 
+    def getModelEPCBatch(self, kpoints, q, vectors_k, vectors_kq):
+        """Return band-basis EPC matrices for many k points at one q.
+
+        EPC models can provide ``matrixElementsBatch`` for an efficient native
+        implementation.  The scalar fallback preserves compatibility with
+        simpler model EPC implementations.
+        """
+        if self.modelEPC is None:
+            raise ValueError("Call addModelEPC before computing model EPC")
+        if hasattr(self.modelEPC, "matrixElementsBatch"):
+            return self.modelEPC.matrixElementsBatch(
+                self, kpoints, q, vectors_k, vectors_kq)
+        return np.array([
+            self.modelEPC.matrixElements(self, k, q, True, vk, vkq)
+            for k, vk, vkq in zip(kpoints, vectors_k, vectors_kq)])
+
     def sampleModelDisplacements(self, temperature, nSamples=None, seed=None, quantum=True):
         """Sample Cartesian ionic displacements in Angstrom at temperature K.
 

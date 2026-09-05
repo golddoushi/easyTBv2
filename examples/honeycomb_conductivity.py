@@ -19,7 +19,7 @@ from examples.honeycomb_four_band import build_model
 from calculator import (AnormalousHallConductance_LG_DM, AnormalousHallConductance_VG_DM,
                         Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE)
 from calculator import CollisionSpecification, ModelEPCLinewidth
-
+from auxiliary import showElapsedTime
 
 def relative_error(value, reference):
     imax=np.argsort(np.abs(reference.flatten()))[-4:]
@@ -46,7 +46,7 @@ def main():
     parser.add_argument('--temperature', type=float, default=300.)
     parser.add_argument('--serta', choices=('none','static','dynamic','both'), default='both',
                         help='Compute toy-EPC SERTA optical and dc tensors')
-    parser.add_argument('--serta-qgrid', type=int, nargs=3, default=(6,6,1))
+    parser.add_argument('--serta-qgrid', type=int, default=6)
     parser.add_argument('--epc-delta', type=float, default=.03,
                         help='Lorentzian delta broadening used to construct EPC linewidths, eV')
     parser.add_argument('--tdse-collision', choices=('crta','static','dynamic'), default='crta')
@@ -58,50 +58,63 @@ def main():
         model = build_model(output/'model')
     kBT = Boltzmann*args.temperature/electron_volt if args.kBT is None else args.kBT
     options = dict(model=model, kgrid=(args.grid,args.grid,1),kBT=kBT,
-                   CollisionSpecification=CollisionSpecification(mode="crta",constantLinewidth=args.constantLinewidth),
+                   collisionSpecification=CollisionSpecification(mode="crta",constantLinewidth=args.constantLinewidth),
                    fermiList=np.array([args.fermi]),omegaList=np.array(args.omega),fullCovariantDerivative=True)
+    showElapsedTime(extraInfo="model prepared")
     lgdc = AnormalousHallConductance_LG_DM(**options)
     vgdc = AnormalousHallConductance_VG_DM(**options)
+    showElapsedTime(extraInfo="CRTA DC conductivity finished")
     lg = Opticalconductivity_LG_DM(**options)
     vg = Opticalconductivity_VG_DM(**options)
-    #print(f"conductivity with CRTA, {args.constantLinewidth=}\n{lgdc.sigma=}\n {vgdc.sigma=}\n {lg.sigma=}\n {vg.sigma=}\n")
+    showElapsedTime(extraInfo="CRTA AC conductivity finished")
     arrays = dict(omega_eV=np.array(args.omega),fermi_eV=np.array([args.fermi]),
                   sigma_dc_LG=lgdc.sigma,sigma_dc_VG=vgdc.sigma,
                   sigma_ac_LG=lg.sigma,sigma_ac_VG=vg.sigma,
                   sum_rule_residual_S_per_m_eV=vg.sum_rule_residual)
     summary = dict(units='S/m',axes='fermi, omega (ac only), drive, current',grid=args.grid,
                    constantLinewidth_eV=args.constantLinewidth,kBT_eV=kBT,
+                   max_dc_LG_conductivity=np.max(abs(lgdc.sigma)),
                    dc_LG_VG_relative_error=relative_error(vgdc.sigma,lgdc.sigma),
-                   ac_LG_VG_relative_error=relative_error(vg.sigma,lg.sigma),
                    max_ac_LG_conductivity=np.max(abs(lg.sigma)),
-                   max_ac_VG_conductivity=np.max(abs(vg.sigma)),
+                   ac_LG_VG_relative_error=relative_error(vg.sigma,lg.sigma),
                    )
     requested = (() if args.serta == 'none' else ('static','dynamic') if args.serta == 'both' else (args.serta,))
     serta_sources = {}
     for name in requested:
-        source = ModelEPCLinewidth(qgrid=args.serta_qgrid,temperature=args.temperature,
+        source = ModelEPCLinewidth(qgrid=(args.serta_qgrid,args.serta_qgrid,1),temperature=args.temperature,
                                    fermi=args.fermi,delta=args.epc_delta,adiabatic=name=='static')
+        # ModelEPCLinewidth is lazy.  Evaluate it against the already solved
+        # electronic grid so this timing reports the actual one-time EPC cost.
+        source.populationLinewidth(lgdc)
         collision = CollisionSpecification('serta',linewidthSource=source)
         serta_options = dict(options,collisionSpecification=collision)
+        showElapsedTime(extraInfo=f"{name}-SERTA line width and collision finished")
+        slgdc = AnormalousHallConductance_LG_DM(**serta_options)
+        svgdc = AnormalousHallConductance_VG_DM(**serta_options)
+        showElapsedTime(extraInfo=f"{name}-SERTA DC conductivity finished")
         slg = Opticalconductivity_LG_DM(**serta_options)
         svg = Opticalconductivity_VG_DM(**serta_options)
-        sdc = AnormalousHallConductance_VG_DM(**serta_options)
+        showElapsedTime(extraInfo=f"{name}-SERTA AC conductivity finished")
         gamma = slg.density_matrix_kernel.collision.population_linewidth
         serta_sources[name] = source
         arrays[f'linewidth_{name}_eV'] = gamma
         arrays[f'sigma_ac_LG_SERTA_{name}'] = slg.sigma
         arrays[f'sigma_ac_VG_SERTA_{name}'] = svg.sigma
-        arrays[f'sigma_dc_VG_SERTA_{name}'] = sdc.sigma
         summary[f'serta_{name}'] = dict(linewidth_min_eV=float(gamma.min()),
                                           linewidth_max_eV=float(gamma.max()),
+                                          max_dc_LG_conductivity=np.max(abs(slgdc.sigma)),
+                                          dc_LG_VG_relative_error=relative_error(svgdc.sigma,slgdc.sigma),
+                                          dc_change_from_CRTA=relative_error(slgdc.sigma,lgdc.sigma),
+                                          max_ac_LG_conductivity=np.max(abs(slg.sigma)),
                                           ac_LG_VG_relative_error=relative_error(svg.sigma,slg.sigma),
-                                          change_from_CRTA=relative_error(slg.sigma,lg.sigma))
+                                          ac_change_from_CRTA=relative_error(slg.sigma,lg.sigma),
+                                          )
     if not args.skip_tdse:
         small = dict(options,kgrid=(args.tdse_grid,args.tdse_grid,1))
         tdse_collision = None
         gamma_floor = None
         if args.tdse_collision != 'crta':
-            source = ModelEPCLinewidth(qgrid=args.serta_qgrid,temperature=args.temperature,
+            source = ModelEPCLinewidth(qgrid=(args.serta_qgrid,args.serta_qgrid,1),temperature=args.temperature,
                                        fermi=args.fermi,delta=args.epc_delta,
                                        adiabatic=args.tdse_collision=='static')
             owner = Opticalconductivity_LG_DM(**small)
@@ -129,12 +142,16 @@ def main():
             parser.error('--grid must be divisible by --supercell for a commensurate snapshot comparison')
         snapshot_grid=(args.grid//args.supercell,args.grid//args.supercell,1)
         snapshot_options = dict(options, model=sc, kgrid=snapshot_grid)
+        showElapsedTime(extraInfo=f"Supercell model prepared")
         arrays['sigma_supercell_equilibrium'] = Opticalconductivity_LG_DM(**snapshot_options).sigma
+        showElapsedTime(extraInfo=f"Supercell AC conductivity finished")
         samples = []
         displacements = sc.sampleModelDisplacements(args.temperature,nSamples=args.snapshots,seed=2026)
+        showElapsedTime(extraInfo=f"Stochastic displacements generated")
         for u in displacements:
             snapshot_options['model'] = sc.makeDisplacedModel(u)
             samples.append(Opticalconductivity_LG_DM(**snapshot_options).sigma)
+        showElapsedTime(extraInfo=f"All random displaced supercell AC conductivity finished")
         samples = np.asarray(samples)
         arrays.update(sigma_snapshots=samples,sigma_snapshot_mean=samples.mean(axis=0),displacements_A=displacements)
         if args.snapshots > 1:
@@ -146,7 +163,9 @@ def main():
                        snapshot_model='static frozen SSH disorder plus unchanged CRTA eta',
                        supercell_equilibrium_relative_error=relative_error(
                            arrays['sigma_supercell_equilibrium'],lg.sigma),
-                       snapshot_change_from_equilibrium=relative_error(samples.mean(axis=0),arrays['sigma_supercell_equilibrium']))
+                       snapshot_change_from_equilibrium=relative_error(samples.mean(axis=0),arrays['sigma_supercell_equilibrium']),
+                       max_supercell_AC_conductivity=np.max(abs(samples.mean(axis=0))),
+                       )
         for name in requested:
             summary[f'snapshot_vs_{name}_serta_relative_difference'] = relative_error(
                 samples.mean(axis=0),arrays[f'sigma_ac_LG_SERTA_{name}'])
