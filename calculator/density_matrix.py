@@ -32,9 +32,26 @@ class CollisionSpecification:
     used by ``ModelEPCLinewidth`` for toy models. Both first- and second-order
     kernels use the frozen secular relaxation-time approximation. A bound
     collision object is created for each calculator k grid.
+
+    Parameters
+    ----------
+    mode : str
+        Collision mode. By now, only 'crta' | 'serta' have been developed.
+    constantLinewidth : float, optional
+        in eV. The constantLinewidth used for crta. Default to 0.06582, 
+        corresponding to relaxation time of ~10 fs. This is never used in the 
+        construction of serta.
+    linewidthFloor : float, optional
+        in eV. In present implementation, it behaves like some criterial,
+        for the expressions with reverse, once the denominator < this, the
+        expression is forced to be zero. In some TDSE calculators, once the
+        linewidth < this, the calculator threw errors.
+    linewidthSource
+
     """
 
-    def __init__(self, mode="crta", constantLinewidth=0.026, linewidthFloor=1e-12, linewidthSource=None):
+    def __init__(self, mode:str, 
+                 constantLinewidth:float=0.06582, linewidthFloor:float=1e-12, linewidthSource=None):
         mode=str(mode).lower()
         if mode not in ("crta","serta"):
             raise NotImplementedError("By now, only 'crta', 'serta' have been built")
@@ -42,7 +59,6 @@ class CollisionSpecification:
         self.constantLinewidth= float(constantLinewidth)
         self.linewidthFloor=float(linewidthFloor)
         self.linewidthSource=linewidthSource
-        assert self.linewidthFloor >= 0, f"{linewidthFloor=} must be non-negative instead"
         if self.mode != "serta" and linewidthSource is not None:
             raise ValueError("linewidthSource is only meaningful for SERTA")
 
@@ -65,6 +81,11 @@ class CollisionOperator:
     """Collision Operator
     For now, the CRTA and SERTA are implemented, which only give linewidths 
     represented on one calculator's eigenstate grid.
+    The central work of this kind of collision operator is to compute the 
+    linewidths, particulaly the population_linewidth, the linewidth per band
+    per k. While the coherence_linewidth is the averaged population_linewidth.
+
+    The CRTA linewidth is constant among all bands and k-points.
 
     The SERTA implementation is the frozen, secular covariant RTA
 
@@ -73,54 +94,69 @@ class CollisionOperator:
     The equilibrium linewidths are interpolated once and are not varied by
     the external field. Scattering-in and vertex corrections are therefore
     outside this approximation.
+
+    Parameters
+        ----------
+        specification : CollisionSpecification
+            specification of certain type of collision
+        owner : Calculator
+            response calculator
     """
 
-    def __init__(self, specification, owner):
-        self.specification=specification
-        self.owner=owner
-        self.mode=specification.mode
-        self.constant_eta=None
-        if self.mode == "crta":
+    def __init__(self, specification:CollisionSpecification, owner):
+        self.specification = specification
+        self.owner = owner
+        self.constant_eta = None
+        # CASE crta, return the constant linewidth directly
+        if specification.mode == "crta":
             self.constant_eta = specification.constantLinewidth
             self.population_linewidth=np.full(owner.energies.shape,self.constant_eta,dtype=float)
-        elif self.mode == "serta":
+        # CASE serta, the linewidths is to be computed further
+        elif specification.mode == "serta":
             self.population_linewidth=self._sertaLinewidth()
         else:
             raise NotImplementedError("By now, only 'crta', 'serta' have been built")
+        # For now, the interband coherence linewidth is just the average of population linewidth
+        # This is suitable for crta and covariant serta
         self.coherence_linewidth=0.5*(self.population_linewidth[..., :, None]
                                       + self.population_linewidth[..., None, :])
 
     def _sertaLinewidth(self):
-        model=self.owner.model
-        source=self.specification.linewidthSource
+        model = self.owner.model
+        source= self.specification.linewidthSource
+        # CASE1, linewidth is set externally, e.g., using model EPC-linewidth
+        #        So, it is assumed to be a quantity per band per k due to the serta-form.
+        #        Or, it provides populationLinewidth method to compute the linewdith per band per k
         if source is not None:
-            linewidth=(source.populationLinewidth(self.owner) if hasattr(source,"populationLinewidth")
-                       else np.asarray(source,dtype=float))
+            linewidth = (source.populationLinewidth(self.owner) if hasattr(source, "populationLinewidth")
+                         else np.asarray(source, dtype=float))
             if linewidth.shape != self.owner.energies.shape:
                 raise ValueError(f"SERTA linewidth source has shape {linewidth.shape}, expected {self.owner.energies.shape}")
             if not np.all(np.isfinite(linewidth)) or np.any(linewidth < -1e-10):
                 raise ValueError("SERTA linewidth source must be finite and nonnegative")
-            return np.maximum(linewidth,0.0)
-        linewidth_sqrt_R=getattr(model,"electronLinewidthSqrt_R",None)
+            return np.maximum(linewidth, 0.0)
+
+        # CASE2, linewidth is computed by VASP, then transformed to real-grid to be electron_linewidth_sqrt_R (squared linewidth)
+        #        Because the electron_linewidth_sqrt_R can be defined in coarsed grid, it is interpolated to the kgrid of the 
+        #        calculator first, then transformed to the eigen-space. The diagonal term is used to be the linewidth per band per k.
+        linewidth_sqrt_R = getattr(model,"electronLinewidthSqrt_R",None)
         if linewidth_sqrt_R is None:
-            linewidth_sqrt_R=getattr(model,"electron_linewidth_sqrt_R",None)
+            linewidth_sqrt_R = getattr(model,"electron_linewidth_sqrt_R",None)
         if linewidth_sqrt_R is None:
             raise ValueError("SERTA requires model.includeElectronSelfEnergy(...) before constructing the calculator")
         if model.overlap:
             raise NotImplementedError("SERTA linewidth interpolation is currently implemented for orthogonal Wannier models")
 
-        linewidth_sqrt_R=np.asarray(linewidth_sqrt_R)*self.owner.phaseFactorR[:,None,None]
-        linewidth_grid=np.zeros(self.owner.kgrid+(model.norbs,model.norbs),dtype=complex)
+        linewidth_sqrt_R = np.asarray(linewidth_sqrt_R) * self.owner.phaseFactorR[:,None,None]
+        linewidth_grid = np.zeros(self.owner.kgrid + (model.norbs, model.norbs), dtype=complex)
         for iR,Rvec in enumerate(model.iRvec):
-            # Wigner-Seitz boundary vectors can share the same FFT-grid index.
-            # Their 1/Ndegen contributions must be accumulated, not overwritten, so use += here rather than =
-            linewidth_grid[tuple(np.asarray(Rvec) % self.owner.kgrid)]+=linewidth_sqrt_R[iR]
-        linewidth_sqrt_W=np.fft.ifftn(linewidth_grid,axes=(0,1,2))*np.prod(self.owner.kgrid)
-        linewidth_W=linewidth_sqrt_W@linewidth_sqrt_W.conj().swapaxes(-2,-1)
-        vectors=self.owner.vectors
-        linewidth_H=vectors.conj().swapaxes(-2,-1)@linewidth_W@vectors
-        linewidth=np.diagonal(linewidth_H,axis1=-2,axis2=-1).real
-        return np.maximum(linewidth,0.0)
+            linewidth_grid[tuple(np.asarray(Rvec) % self.owner.kgrid)] += linewidth_sqrt_R[iR]
+        linewidth_sqrt_W = np.fft.ifftn(linewidth_grid, axes=(0,1,2)) * np.prod(self.owner.kgrid)
+        linewidth_W = linewidth_sqrt_W @ linewidth_sqrt_W.conj().swapaxes(-2,-1)
+        vectors = self.owner.vectors
+        linewidth_H = vectors.conj().swapaxes(-2,-1) @ linewidth_W @ vectors
+        linewidth = np.diagonal(linewidth_H, axis1=-2, axis2=-1).real
+        return np.maximum(linewidth, 0.0)
 
     @property
     def population_inverse(self):

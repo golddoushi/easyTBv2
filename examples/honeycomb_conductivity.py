@@ -22,9 +22,13 @@ from calculator import CollisionSpecification, ModelEPCLinewidth
 from auxiliary import showElapsedTime
 
 def relative_error(value, reference):
-    imax=np.argsort(np.abs(reference.flatten()))[-4:]
-    diff=np.abs(value-reference).flatten()[imax]
-    return max(diff/np.abs(reference.flatten())[imax] )
+    # for 2D system, the xx, xy, yx, yy components of sigma at specific Fermi specific photon energy
+    # can be nonzero in general cases. So, here select the largest 4 components to compute the 
+    # relative errors.
+    reference_line = np.abs(reference.flatten())
+    difference_line= np.abs(value-reference).flatten()
+    imax = np.argsort(reference_line)[-4:]
+    return tuple(difference_line[imax] / reference_line[imax])
 
 
 def main():
@@ -188,7 +192,6 @@ def main():
     (output/'summary.json').write_text(json.dumps(summary,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(summary,indent=2))
     print(f'Outputs: {output.resolve()}')
-
 
 if __name__ == '__main__':
     main()
