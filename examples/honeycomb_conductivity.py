@@ -1,7 +1,8 @@
 """Compare linear dc/ac LG, VG, and real-time conductivity on the honeycomb model.
 
 python examples/honeycomb_conductivity.py --grid 24 --tdse-grid 4
-The TDSE and its VG reference always use exactly the same mesh.
+The TDSE and its VG reference always use equivalent electronic meshes.
+For moving ions: --phonon-dynamics (default 4x4x1 supercell, Gamma sampling).
 """
 import argparse
 import contextlib
@@ -19,6 +20,7 @@ from examples.honeycomb_four_band import build_model
 from calculator import (AnormalousHallConductance_LG_DM, AnormalousHallConductance_VG_DM,
                         Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE)
 from calculator import CollisionSpecification, ModelEPCLinewidth
+from calculator import Opticalconductivity_VG_DM_Phonon
 from auxiliary import showElapsedTime
 
 def relative_error(value, reference):
@@ -34,11 +36,13 @@ def relative_error(value, reference):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', default='tmp/honeycomb_conductivity')
-    parser.add_argument('--grid', type=int, default=24)
-    parser.add_argument('--tdse-grid', type=int, default=4)
+    parser.add_argument('--grid', type=int, default=32,
+                        help="kgrid of primitive cell")
+    parser.add_argument('--tdse-grid', type=int, default=4,
+                        help="supercell size used for ion-clamped TDSE")
     parser.add_argument('--omega', type=float, nargs='+', default=[.6,1.3])
     parser.add_argument('--fermi', type=float, default=-.7)
-    parser.add_argument('--constantLinewidth', type=float, default=.2)
+    parser.add_argument('--constantLinewidth', type=float, default=.0658)
     parser.add_argument('--kBT', type=float, default=None,
                         help='Electronic kBT in eV; default is Boltzmann*temperature')
     parser.add_argument('--field', type=float, default=1e-4)
@@ -46,7 +50,22 @@ def main():
     parser.add_argument('--skip-tdse', action='store_true')
     parser.add_argument('--snapshots', type=int, default=0,
                         help='Optional frozen-displacement LG ac average; this is not an inelastic EPC collision calculation')
-    parser.add_argument('--supercell', type=int, default=2)
+    parser.add_argument('--supercell', type=int, default=4,
+                        help="supercell size for stochastic displaced model, and for the ion-dynamic TDSE")
+    parser.add_argument('--phonon-dynamics', action='store_true',
+                        help='Propagate electrons in a moving harmonic SSH supercell bath')
+    parser.add_argument('--phonon-grid', type=int, default=1,
+                        help='kgrid of the supercell model in ion-dynamic TDSE')
+    parser.add_argument('--phonon-trajectories', type=int, default=4)
+    parser.add_argument('--phonon-statistics', choices=('classical', 'wigner'), default='classical')
+    parser.add_argument('--phonon-cycles', type=float, default=1.,
+                        help='Minimum measurement duration in periods of the slowest phonon')
+    parser.add_argument('--phonon-seed', type=int, default=2026)
+    parser.add_argument('--phonon-phase-points', type=int, default=33,
+                        help='Odd Fourier phase-grid size for the matched frequency-domain Liouville solver')
+    parser.add_argument('--phonon-solver-tolerance', type=float, default=1e-9)
+    parser.add_argument('--measure-cycles', type=int, default=2)
+    parser.add_argument('--transient-lifetimes', type=float, default=12.)
     parser.add_argument('--temperature', type=float, default=300.)
     parser.add_argument('--serta', choices=('none','static','dynamic','both'), default='both',
                         help='Compute toy-EPC SERTA optical and dc tensors')
@@ -57,6 +76,12 @@ def main():
     parser.add_argument('--tdse-min-linewidth', type=float, default=.02,
                         help='Floor in eV for optional SERTA TDSE only; set 0 for unmodified rates')
     args = parser.parse_args()
+    if args.phonon_dynamics and args.skip_tdse:
+        parser.error('--phonon-dynamics and --skip-tdse are mutually exclusive')
+    if args.phonon_dynamics and args.tdse_collision != 'crta':
+        parser.error('--phonon-dynamics uses only CRTA background; explicit EPC plus SERTA would count scattering twice')
+    if args.phonon_dynamics and (args.supercell < 1 or args.phonon_grid < 1 or args.phonon_trajectories < 1):
+        parser.error('supercell, phonon-grid, and phonon-trajectories must be positive')
     output = Path(args.output)
     with contextlib.redirect_stdout(io.StringIO()):
         model = build_model(output/'model')
@@ -113,7 +138,7 @@ def main():
                                           ac_LG_VG_relative_error=relative_error(svg.sigma,slg.sigma),
                                           ac_change_from_CRTA=relative_error(slg.sigma,lg.sigma),
                                           )
-    if not args.skip_tdse:
+    if not args.skip_tdse and not args.phonon_dynamics:
         small = dict(options,kgrid=(args.tdse_grid,args.tdse_grid,1))
         tdse_collision = None
         gamma_floor = None
@@ -139,6 +164,81 @@ def main():
                        max_ac_VG_small_conductivity=np.max(abs(reference.sigma)),
                        max_ac_TD_small_conductivity=np.max(abs(td.sigma)),
                    )
+    if args.phonon_dynamics:
+        sc = copy.deepcopy(model)
+        sc.make_supercell(np.diag([args.supercell, args.supercell, 1]))
+        qgrid = (args.supercell, args.supercell, 1)
+        supercell_grid = (args.phonon_grid, args.phonon_grid, 1)
+        folded_grid = tuple(q*s for q, s in zip(qgrid, supercell_grid))
+        matched_options = dict(options, kgrid=folded_grid)
+        clean = Opticalconductivity_VG_DM(**matched_options)
+        arrays['sigma_ac_VG_phonon_clean'] = clean.sigma
+        for statistics in (args.phonon_statistics, 'quantum'):
+            source = ModelEPCLinewidth(
+                qgrid=qgrid, temperature=args.temperature, fermi=args.fermi,
+                delta=args.epc_delta, bathStatistics=statistics)
+            linewidth = source.populationLinewidth(clean)
+            reference = Opticalconductivity_VG_DM(**dict(
+                matched_options, collisionSpecification=CollisionSpecification(
+                    'serta', linewidthSource=linewidth+args.constantLinewidth)))
+            arrays[f'linewidth_phonon_{statistics}_eV'] = linewidth
+            arrays[f'sigma_ac_VG_phonon_{statistics}_RTA'] = reference.sigma
+        showElapsedTime(extraInfo='Matched phonon-mesh frequency-domain references finished')
+        frequency_dm = Opticalconductivity_VG_DM_Phonon(
+            **dict(options, model=sc, kgrid=supercell_grid),
+            phononTemperature=args.temperature, phononStatistics=args.phonon_statistics,
+            nPhononTrajectories=args.phonon_trajectories, phononSeed=args.phonon_seed,
+            phononPhasePoints=args.phonon_phase_points, solverTolerance=args.phonon_solver_tolerance)
+        showElapsedTime(extraInfo='Full harmonic VG density-matrix frequency solve finished')
+        td = Opticalconductivity_TDSE(**dict(options, model=sc, kgrid=supercell_grid),
+            phononDynamics=True, phononTemperature=args.temperature,
+            phononStatistics=args.phonon_statistics, nPhononTrajectories=args.phonon_trajectories,
+            phononSeed=args.phonon_seed, phononCycles=args.phonon_cycles,
+            E0=args.field, n_steps_per_cycle=args.steps,
+            n_cycles_measure=args.measure_cycles, transient_lifetimes=args.transient_lifetimes,
+            recordCurrent=True)
+        showElapsedTime(extraInfo='Moving-phonon supercell TDSE conductivity finished')
+        # Apply the same finite real-drive measurement to the stationary
+        # spectral current. This exposes sideband leakage separately from
+        # numerical disagreement between frequency and time solvers.
+        frequency_lockin = np.empty_like(td.sigma_samples)
+        for sample in range(args.phonon_trajectories):
+            for fi in range(len(options['fermiList'])):
+                for wi in range(len(options['omegaList'])):
+                    times = td.time_traces[sample, fi, wi, 0]['time']
+                    frequency_lockin[sample, fi, wi] = frequency_dm.lockinConductivity(times, sample, fi, wi)
+        arrays.update(sigma_ac_phonon_TDSE=td.sigma,
+            sigma_ac_phonon_VG_DM=frequency_dm.sigma,
+            sigma_ac_phonon_VG_DM_samples=frequency_dm.sigma_samples,
+            sigma_ac_phonon_VG_DM_harmonics=frequency_dm.conductivity_harmonics,
+            phonon_VG_DM_harmonic_indices=frequency_dm.phonon_harmonics,
+            sigma_ac_phonon_VG_DM_lockin=frequency_lockin.mean(axis=0),
+            sigma_ac_phonon_VG_DM_lockin_samples=frequency_lockin,
+            sigma_ac_phonon_TDSE_samples=td.sigma_samples,
+            sigma_ac_phonon_TDSE_stderr_real=td.sigma_stderr_real,
+            sigma_ac_phonon_TDSE_stderr_imag=td.sigma_stderr_imag,
+            phonon_energies_atom_cartesian_eV=td.phonon_energies,
+            phonon_initial_positions_A=td.phonon_initial_positions,
+            phonon_initial_velocities_A_per_hbar_over_eV=td.phonon_initial_velocities)
+        for (sample, fi, wi, a), trace in td.time_traces.items():
+            for key, value in trace.items():
+                arrays[f'phonon_trace_s{sample}_f{fi}_w{wi}_a{a}_{key}'] = value
+        summary['phonon_dynamics'] = dict(td.phonon_dynamics_info,
+            supercell=list(qgrid), phonon_qgrid=list(qgrid),
+            electronic_supercell_kgrid=list(supercell_grid),
+            electronic_primitive_kgrid=list(folded_grid),
+            integration_info=td.integration_info, epc_delta_eV=args.epc_delta,
+            frequency_solver=frequency_dm.phonon_dynamics_info,
+            frequency_solver_max_relative_residual=max(s['relative_residual'] for s in frequency_dm.solver_info),
+            frequency_solver_max_iterations=max(s['iterations'] for s in frequency_dm.solver_info),
+            frequency_TDSE_relative_difference=relative_error(frequency_lockin.mean(axis=0), td.sigma),
+            frequency_TDSE_carrier_relative_difference=relative_error(frequency_dm.sigma, td.sigma),
+            matched_bath_RTA_relative_difference=relative_error(td.sigma,
+                arrays[f'sigma_ac_VG_phonon_{args.phonon_statistics}_RTA']),
+            quantum_SERTA_relative_difference=relative_error(td.sigma,
+                arrays['sigma_ac_VG_phonon_quantum_RTA']),
+            clean_relative_change=relative_error(td.sigma, clean.sigma),
+            comparison='harmonic VG DM and TDSE solve the same model; linewidth RTA comparisons remain separate approximations')
     if args.snapshots:
         sc = copy.deepcopy(model)
         sc.make_supercell(np.diag([args.supercell,args.supercell,1]))

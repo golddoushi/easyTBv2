@@ -222,3 +222,204 @@ kernel with scattering-in/vertex terms, or an explicit second-order expansion
 of ensemble conductivity. The present comparison diagnoses the diagonal
 lifetime approximation; it does not establish it as the exact frozen-phonon
 limit.
+
+## Moving harmonic phonons
+
+`Opticalconductivity_TDSE(phononDynamics=True, ...)` propagates electrons in
+a prescribed harmonic SSH bath. Enable the supercell example with:
+
+```text
+python examples/honeycomb_conductivity.py --phonon-dynamics --serta none --omega 1.3 --phonon-trajectories 4
+```
+
+The default `--supercell 4` has 64 electronic states and 64 in-plane phonon
+degrees of freedom. `--phonon-grid 1` samples the supercell at Gamma. Its
+frequency-domain comparisons use primitive electronic and phonon meshes
+`(4,4,1)`. More generally, supercell S and reduced electronic grid K correspond
+to a primitive electronic grid `(S*K,S*K,1)` and phonon grid `(S,S,1)`.
+`--grid`, `--tdse-grid`, and `--serta-qgrid` control the separate legacy
+calculations; they do not override these matched moving-phonon grids.
+`--skip-tdse` and `--phonon-dynamics` are mutually exclusive.
+
+Each ion follows `u(t)=x*cos(Eph*t)+y*sin(Eph*t)`, with independent Gaussian
+quadratures x and y, so both its initial position and velocity are thermal.
+Time is in hbar/eV; velocity is in Angstrom/(hbar/eV). This integrates the
+Einstein oscillator exactly. There is no electronic backreaction, phonon
+thermostat, or quantized joint electron-phonon wavefunction. The orbital
+basis and centers stay at their equilibrium reference: SSH changes hopping
+amplitudes, including optional quadratic beta, while Rashba and exchange
+remain fixed. Velocity and contact matrices are differentiated from the
+instantaneous hopping Hamiltonian. Moving-basis/convective electronic
+current and ionic current are outside this hopping-only model.
+
+The electronic algorithm linearizes the exact midpoint TDSE step. It
+propagates the zero-field density and three field derivatives using one
+eigensolve per timestep; it uses no optical DM frequency kernel or fitted EPC
+linewidth. `--field` only rescales the saved drive trace in this linear path.
+The scalar `--constantLinewidth` is a background relaxation toward
+`f(H[u(t),A(t)])`; it must be positive. The corresponding DM comparisons add
+the same background to their EPC linewidths. Adding `--tdse-collision dynamic`
+or `static` to moving-phonon propagation is rejected to avoid double counting.
+The background also controls electronic heating and the stationary ensemble;
+reduce it only while increasing transient time and checking the result.
+
+`--phonon-statistics classical` is the default: the mode noise has equal
+positive/negative-frequency weights `C=kBT/Eph`, without zero-point motion.
+`--phonon-statistics wigner` uses `C=N_Bose+1/2`, reproducing the harmonic
+symmetrized correlation but not quantum detailed balance. The frequency-domain
+reference with matching statistics uses
+
+```text
+Sigma_nn(E) = sum_q,nu,m w_q |g_mn|^2 C_qnu *
+  [1/(E-e_m-Eph+i*delta) + 1/(E-e_m+Eph+i*delta)].
+```
+
+Both have DW factor `2*C`. Standard quantum Fan/SERTA instead has pole
+weights `N+1-f_m` and `N+f_m`; it is saved separately as a diagnostic.
+Classical/Wigner sources use the existing diagonal RTA collision machinery,
+but their bath statistics differ from quantum SERTA. The default quantum
+self-energy API remains unchanged. `--epc-delta` regulates the Born sum and
+has no literal counterpart in the finite trajectory; converge it jointly
+with mesh resolution rather than interpreting it as phonon damping.
+
+Matching k/q meshes removes one source of inconsistency, not every difference:
+trajectory conductivity retains changing spectra/vertices and repeated
+scattering, while a linewidth-only RTA omits these and scattering-in terms.
+The bath-driven steady electronic state also need not equal Fermi equilibrium.
+Equality is therefore a hypothesis to test under weak-coupling/classical and
+convergence limits, not an imposed pass criterion. A fully quantum benchmark
+would require a quantum bath method. See
+[Rizzi et al., electron-phonon thermalization](https://arxiv.org/abs/1511.03875)
+for the detailed-balance limitations of classical electron-phonon dynamics.
+
+`--phonon-cycles 1` enforces a measurement window of at least one slowest
+phonon period, rounded up to whole optical periods. `--measure-cycles 2` is
+an additional optical-period minimum. The transient uses
+`--transient-lifetimes 12`. These are starting settings, not convergence
+claims: increase duration, trajectories, supercell, and steps separately.
+At 0.02 eV a phonon period is about 207 fs, so following moving phonons takes
+many more steps than a short optical-only trace. The same sampled phonon
+histories are used for all field directions and frequencies.
+
+`conductivity.npz` stores the trajectory tensors, complex ensemble mean,
+separate real/imaginary standard errors, electronic current traces, initial
+ionic positions/velocities, and oscillator energies (sufficient to reconstruct
+the entire ionic motion). A single trajectory has undefined standard error
+and stores NaN. `summary.json` records both meshes, bath assumptions, actual
+integration lengths, matched-bath RTA discrepancy, and quantum-SERTA
+discrepancy. The seed is controlled by `--phonon-seed`.
+
+## Frequency-domain counterpart of the moving-ion TDSE
+
+`Opticalconductivity_VG_DM_Phonon` solves the same prescribed harmonic-bath
+model as `Opticalconductivity_TDSE(phononDynamics=True)`. It is now included
+automatically in the `--phonon-dynamics` example. For instance:
+
+```text
+python examples/honeycomb_conductivity.py --phonon-dynamics --serta none --omega 1.3 --phonon-trajectories 2 --steps 128 --phonon-phase-points 33
+```
+
+The previous moving-ion implementation is a classical-path approximation
+with a phenomenological electronic reservoir. It is not self-consistent
+Ehrenfest dynamics, since electronic forces never change the ionic paths,
+and it is not the ECEID algorithm of Rizzi et al. Adding a scalar damping
+rate does not restore the quantum electron-phonon correlations in ECEID.
+The code's continuum electronic equation, in hbar=1 units, is
+
+```text
+d rho/dt = -i[H(u(t),A(t)),rho] - gamma*(rho-f(H(u(t),A(t)))).
+```
+
+Thus the target of background relaxation itself changes with phonons and
+the optical field. Replacing the bath by a linewidth on the bare bands
+misses this effect as well as correlations between density, hopping, and
+current vertices. A 50% discrepancy cannot be assigned solely to omitted
+scattering-in without checking these other differences.
+
+For equal Einstein energies nu, each sampled harmonic trajectory is periodic
+in theta=nu*t, even though different ions have independent phases. Define
+H(theta), v_a(theta)=dH/dA_a, and w_ba(theta)=d2H/dA_b dA_a. The new solver
+first obtains the periodic zero-field stationary density, then the response
+R_a(theta;omega) to a complex vector potential exp(-i*omega*t):
+
+```text
+L(omega) = nu*d/dtheta + gamma - i*omega + i[H(theta), .]
+L(0) rho0(theta) = gamma*f(H(theta))
+L(omega) R_a(theta) = -i[v_a(theta),rho0(theta)]
+                    + gamma*D f(H(theta))[v_a(theta)]
+sigma_ab(omega) = i/omega * average_theta,k,samples
+                 Tr(R_a(theta)*v_b(theta) + rho0(theta)*w_ba(theta))
+                 * [usual conductivity unit/volume factor].
+```
+
+`D f(H)[v]` is the Frechet derivative with its finite degenerate-band limit.
+The current includes the instantaneous contact vertex. This is a true
+frequency-domain density-matrix solve: Fourier differentiation in phonon
+phase and matrix-free GMRES solve the coupled harmonic linear systems; there
+is no electronic time propagation, optical response kernel reuse, or fitted
+EPC rate. All matrix elements and harmonics within the chosen phase grid are
+retained, including repeated scattering, quadratic SSH modulation, and the
+periodic background density (which generally is not instantaneous f(H)).
+
+This can also be viewed as a memory collision operator. Split harmonic space
+into the central sector 0 and sidebands Q, then eliminate Q:
+
+```text
+L_eff(omega) = L_00(omega) - L_0Q(omega) L_QQ(omega)^(-1) L_Q0(omega).
+```
+
+The eliminated sector also modifies the drive and current vertices. The
+result is frequency dependent and nonsecular, unlike the current array of
+population/coherence linewidths. The new `HarmonicPhononLiouvillian` operates
+in the enlarged conditional-DM space; it is intentionally not presented as
+another scalar mode of `CollisionSpecification`. The only phenomenological
+collision retained is the same positive CRTA background used in TDSE.
+
+`sigma` and `sigma_samples` are central complex-drive coefficients.
+`conductivity_harmonics` retains the phonon sidebands. A finite-duration
+real-drive TDSE extraction also contains sideband leakage and, at coincident
+frequencies, conjugate-drive contributions. `lockinConductivity(times, ...)`
+reconstructs only the scalar spectral current and applies the exact same
+measurement times as TDSE. It performs no dynamical evolution. The example
+stores both quantities:
+
+- `sigma_ac_phonon_VG_DM`: central ensemble conductivity.
+- `sigma_ac_phonon_VG_DM_lockin`: spectral solution under the TDSE window.
+- `frequency_TDSE_relative_difference`: comparison using that same window.
+- `frequency_TDSE_carrier_relative_difference`: central coefficient versus
+  the finite TDSE extraction, which also tests measurement convergence.
+- `frequency_solver_max_relative_residual`: numerical linear-system check.
+
+The original RTA and quantum-SERTA discrepancy fields remain, now as tests
+of those approximations against an independently checked model response.
+Using identical samples in TDSE and frequency calculations cancels sampling
+noise in their implementation comparison; estimating the physical ensemble
+conductivity still requires trajectory and supercell convergence.
+
+`--phonon-phase-points` must be odd (default 33); increase it, e.g. to 49 or
+65, to resolve sharper phase dependence at lower temperature or stronger
+EPC. `--phonon-solver-tolerance` controls the linear-system residual, not
+harmonic truncation. Failed solves raise an error. The current one-phase
+implementation requires equal active Einstein energies and rejects unequal
+frequencies. Dispersive/incommensurate phonons require a multi-frequency or
+auxiliary-variable generalization. A positive background is required for a
+unique stationary solution. Quantum detailed balance and electronic force
+feedback remain outside this benchmark in both domains.
+
+On the saved 4x4x1, two-trajectory, 300 K, omega=1.3 eV, gamma=0.2 eV run,
+the 33-point frequency solve took about 7 s. Its maximum in-plane discrepancy
+from the original 128-step TDSE, under the identical measurement window, was
+0.0251%. Increasing to 49 phase points changed the central tensor by
+1.8e-11 relative. Small-system timestep tests show the remaining time-domain
+error falls quadratically with timestep. These numbers validate agreement
+between the two representations of this model; they do not validate its
+classical bath as a quantum EPC approximation.
+
+The TDSE cycle rounding now preserves exactly commensurate periods: at
+omega=1.3 eV and nu=0.02 eV, one phonon period is 65 optical cycles, not 66
+from floating-point ceil noise. With that correction the central coefficient
+and matched-window comparison both differ from TDSE by at most 0.0251% in
+the in-plane components. The full rerun took 6.8 s for the frequency solve
+and 66.5 s for TDSE; matched classical RTA and quantum SERTA still differ by
+up to 56.1% and 55.4%, respectively. The same trajectories were used in all
+time/frequency implementation checks.

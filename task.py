@@ -21,6 +21,7 @@ from calculator import SpinTorque, SpintorqueGalvanicConductance
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
 from calculator import AnormalousHallConductance_VG_DM, Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE
+from calculator import Opticalconductivity_VG_DM_Phonon
 
 _bz_worker_state = None
 _bz_worker_thread_limit = None
@@ -448,7 +449,14 @@ def _solveLinearConductivity(param, calculatorClass):
                    finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', True),
                    verbose=param.get('verbose', 0))
     if calculatorClass is Opticalconductivity_TDSE:
-        for key in ('E0', 'n_steps_per_cycle', 'n_cycles_measure', 'transient_lifetimes', 'max_phase_step', 'recordCurrent'):
+        for key in ('E0', 'n_steps_per_cycle', 'n_cycles_measure', 'transient_lifetimes', 'max_phase_step', 'recordCurrent',
+                    'phononDynamics', 'phononTemperature', 'phononStatistics',
+                    'nPhononTrajectories', 'phononSeed', 'phononCycles'):
+            if key in param:
+                options[key] = param[key]
+    elif calculatorClass is Opticalconductivity_VG_DM_Phonon:
+        for key in ('phononTemperature', 'phononStatistics', 'nPhononTrajectories',
+                    'phononSeed', 'phononPhasePoints', 'solverTolerance', 'solverMaxiter', 'solverRestart'):
             if key in param:
                 options[key] = param[key]
     else:
@@ -464,7 +472,14 @@ def _solveLinearConductivity(param, calculatorClass):
                       ('response fermi ids', 'responseFermiIndexList'),
                       ('response frequency ids', 'responseOmegaIndexList'),
                       ('sum rule residual', 'sum_rule_residual'),
-                      ('time traces', 'time_traces'), ('integration info', 'integration_info')):
+                      ('time traces', 'time_traces'), ('integration info', 'integration_info'),
+                      ('sigma samples', 'sigma_samples'), ('sigma stderr real', 'sigma_stderr_real'),
+                      ('sigma stderr imag', 'sigma_stderr_imag'), ('phonon dynamics info', 'phonon_dynamics_info'),
+                      ('phonon initial positions', 'phonon_initial_positions'),
+                      ('phonon initial velocities', 'phonon_initial_velocities'),
+                      ('phonon energies', 'phonon_energies'), ('solver info', 'solver_info'),
+                      ('conductivity harmonics', 'conductivity_harmonics'),
+                      ('phonon harmonics', 'phonon_harmonics'), ('phonon frequency', 'phonon_frequency')):
         if hasattr(calc, attr):
             result[key] = getattr(calc, attr)
     return result
@@ -484,6 +499,10 @@ def solveOpticalconductivity_VG_DM(param):
 
 def solveOpticalconductivity_TDSE(param):
     return _solveLinearConductivity(param, Opticalconductivity_TDSE)
+
+
+def solveOpticalconductivity_VG_DM_Phonon(param):
+    return _solveLinearConductivity(param, Opticalconductivity_VG_DM_Phonon)
 
 
 def solveSHC_LG_DM(param):

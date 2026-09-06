@@ -793,3 +793,12 @@ def solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints
         else:
             upper = chemical_potential
     raise RuntimeError("The fixed-number chemical-potential search did not converge.")
+
+def uniform_qmesh(grid):
+    """Full Gamma-centered mesh in fractional reciprocal coordinates."""
+    values = np.asarray(grid)
+    if (values.shape != (3,) or not np.all(np.isfinite(values))
+            or np.any(values < 1) or not np.all(values == values.astype(int))):
+        raise ValueError("qgrid must contain three positive integers")
+    grid = values.astype(int)
+    return np.indices(tuple(grid)).reshape(3, -1).T / grid

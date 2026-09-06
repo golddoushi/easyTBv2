@@ -1814,6 +1814,51 @@ class Opticalconductivity_VG_DM(_LinearConductivityDM):
     """
     gauge = "VG"
 
+class Opticalconductivity_VG_DM_Phonon(Velocity):
+    """Frequency-domain VG DM for the prescribed harmonic SSH bath.
+
+    Full conditional density matrices and phonon harmonics replace the
+    linewidth-only EPC approximation. This is the stationary counterpart of
+    Opticalconductivity_TDSE(phononDynamics=True), including its positive CRTA
+    background and instantaneous Fermi relaxation target. It is neither
+    quantum SERTA nor ECEID. Currently all active Einstein mode energies must
+    be equal. Use the same model, seed, temperature/statistics, and supercell
+    electronic mesh as TDSE. Converge phononPhasePoints (odd) and solverTolerance.
+
+    sigma is the central complex-drive response; conductivity_harmonics also
+    stores sidebands. lockinConductivity(times, sample, ifermi, iomega) applies
+    TDSE's real-drive measurement window to the stationary spectral solution,
+    separating finite-window effects from timestep/solver discrepancies.
+    """
+    def __init__(self, phononTemperature=300., phononStatistics='classical',
+                 nPhononTrajectories=4, phononSeed=2026, phononPhasePoints=33,
+                 solverTolerance=1e-9, solverMaxiter=100, solverRestart=30,
+                 currentProjectionList=None, fullCovariantDerivative=True,
+                 finiteTemperatureOccupations=True, **kwarg):
+        if currentProjectionList or kwarg['model'].overlap or kwarg.get('skip_low', False):
+            raise NotImplementedError("Phonon VG DM requires total current and a complete orthogonal basis")
+        if not fullCovariantDerivative or not finiteTemperatureOccupations:
+            raise ValueError("Phonon VG DM requires full covariant finite-temperature equilibrium")
+        kwarg.pop('highOrderVelocity', None)
+        super().__init__(highOrderVelocity=False, **kwarg)
+        if self.kBT <= 0 or np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
+            raise ValueError("Phonon VG DM requires kBT > 0 and positive finite optical frequencies")
+        self.collision = CollisionSpecification.fromOwner(self)
+        self.Iodd, self.Todd = False, True
+        self.sigma = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3), complex)
+        self.projected_sigma = self.sigma[None, None]
+        self.conductivity_units = 'S/m'
+        self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
+        from .phonon_frequency import solve_phonon_conductivity
+        solve_phonon_conductivity(self, phononTemperature, phononStatistics,
+            nPhononTrajectories, phononSeed, phononPhasePoints,
+            solverTolerance, solverMaxiter, solverRestart)
+
+    def lockinConductivity(self, times, sample=0, ifermi=0, iomega=0):
+        from .phonon_frequency import lockin_conductivity
+        return lockin_conductivity(self, times, sample, ifermi, iomega)
+
+
 class Opticalconductivity_TDSE(Velocity):
     """Independent real-time VG benchmark with collision relaxation.
 
@@ -1828,12 +1873,29 @@ class Opticalconductivity_TDSE(Velocity):
     2*mean(j_odd*exp(i*Omega*t))/E0 gives sigma[fermi,omega,drive,current]
     in S/m. Converge E0, n_steps_per_cycle, and transient_lifetimes. Requires
     strictly positive frequencies and linewidths for a periodic steady state.
+
+    phononDynamics=True instead propagates electrons in prescribed harmonic
+    SSH trajectories on the supplied (usually supercell) model. Positions
+    and velocities are sampled at phononTemperature; phononStatistics is
+    'classical' or 'wigner'. The latter gives symmetrized quantum noise, not
+    quantum detailed balance. No electronic force acts on the phonon bath.
+    This path uses the exact field derivative of each TDSE step (E0 sets
+    only recorded field units), sharing one eigensolve across all drives.
+    It requires a positive CRTA background and forbids adding SERTA on top
+    of explicit EPC. Hopping/current/contact vertices evolve in a fixed
+    equilibrium point-orbital basis. sigma_samples and separate real/imaginary
+    standard errors report the nPhononTrajectories ensemble; time_traces keys
+    are (trajectory, fermi, omega, drive). phononCycles sets a minimum number
+    of slowest-phonon periods in the measurement window, rounded up to whole
+    optical periods. Converge duration, timestep, ensemble and supercell size.
     """
 
     def __init__(self, E0=1e-4, n_steps_per_cycle=128, n_cycles_measure=2,
                  transient_lifetimes=12., max_phase_step=0.3, recordCurrent=False,
                  currentProjectionList=None, fullCovariantDerivative=True,
-                 finiteTemperatureOccupations=True, **kwarg):
+                 finiteTemperatureOccupations=True, phononDynamics=False,
+                 phononTemperature=300., phononStatistics='classical',
+                 nPhononTrajectories=4, phononSeed=2026, phononCycles=1., **kwarg):
         if currentProjectionList:
             raise NotImplementedError("TDSE currently supports total current only")
         if not fullCovariantDerivative or not finiteTemperatureOccupations:
@@ -1841,7 +1903,7 @@ class Opticalconductivity_TDSE(Velocity):
         if kwarg['model'].overlap or kwarg.get('skip_low', False):
             raise NotImplementedError("TDSE requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(highOrderVelocity=True, **kwarg)
+        super().__init__(highOrderVelocity=not phononDynamics, **kwarg)
         if self.kBT <= 0:
             raise ValueError("TDSE benchmark requires kBT > 0")
         if np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
@@ -1859,6 +1921,15 @@ class Opticalconductivity_TDSE(Velocity):
         self.E0 = E0
         self.time_traces = {}
         self.integration_info = []
+        if phononDynamics:
+            from .phonon_tdse import propagate_phonon_conductivity
+            propagate_phonon_conductivity(
+                self, n_steps_per_cycle=n_steps_per_cycle, n_cycles_measure=n_cycles_measure,
+                transient_lifetimes=transient_lifetimes, max_phase_step=max_phase_step,
+                recordCurrent=recordCurrent, temperature=phononTemperature,
+                statistics=phononStatistics, trajectories=nPhononTrajectories,
+                seed=phononSeed, phonon_cycles=phononCycles)
+            return
         h0 = diagonal_matrix(self.energies)
         scale = elementary_charge**2 / (hbar*angstrom*abs(self.model.Vcell))
         # ± fields share a batched evolution. No response kernel enters it.

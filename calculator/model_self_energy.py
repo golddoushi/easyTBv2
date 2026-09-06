@@ -12,17 +12,7 @@ from scipy.special import expit
 
 from .Grid import Energy
 from .Path import EnergyOnPath
-
-
-def uniform_qmesh(grid):
-    """Full Gamma-centered mesh in fractional reciprocal coordinates."""
-    values = np.asarray(grid)
-    if (values.shape != (3,) or not np.all(np.isfinite(values))
-            or np.any(values < 1) or not np.all(values == values.astype(int))):
-        raise ValueError("qgrid must contain three positive integers")
-    grid = values.astype(int)
-    return np.indices(tuple(grid)).reshape(3, -1).T / grid
-
+from auxiliary import uniform_qmesh
 
 def _points(value, name):
     points = np.atleast_2d(np.asarray(value, dtype=float))
@@ -62,6 +52,13 @@ class ModelElectronSelfEnergy:
         Common real evaluation energies in eV. None evaluates each band's
         on-shell energy. Full matrices are stored even for on-shell evaluation,
         so a degenerate subspace can be treated at a common energy explicitly.
+    bathStatistics : 'quantum' | 'classical' | 'wigner'
+        Quantum (default) is the usual Fan-Migdal expression with Pauli
+        factors. Classical and Wigner instead describe prescribed real
+        harmonic noise with equal emission/absorption weights C=kBT/Ephonon
+        and C=N+1/2, respectively. Their static and DW factors are 2*C.
+        These noise Born self-energies allow matched trajectory comparisons;
+        they do not implement quantum SERTA or quantum detailed balance.
 
     Outputs
     -------
@@ -81,7 +78,8 @@ class ModelElectronSelfEnergy:
     """
 
     def __init__(self, model, kpoints, qgrid=None, qpoints=None, qweights=None,
-                 temperature=0.0, fermi=0.0, delta=1e-3, adiabatic=False, energyList=None):
+                 temperature=0.0, fermi=0.0, delta=1e-3, adiabatic=False, energyList=None,
+                 bathStatistics="quantum"):
         if model.modelEPC is None or model.modelPhonons is None:
             raise ValueError("Attach model EPC and model phonons before computing self-energy")
         model.modelEPC.validate(model)
@@ -100,6 +98,9 @@ class ModelElectronSelfEnergy:
             raise ValueError("qweights must be finite, nonnegative, and have positive sum")
         self.qweights = weights / weights.sum()
         self.temperature, self.fermi, self.delta = float(temperature), float(fermi), float(delta)
+        if bathStatistics not in ("quantum", "classical", "wigner"):
+            raise NotImplementedError(f"{bathStatistics=} is not supported now. Available choice: 'quantum' | 'classical' | 'wigner'")
+        self.bathStatistics = bathStatistics
         self.adiabatic = bool(adiabatic)
         self.on_shell = energyList is None
         self.model = model
@@ -141,8 +142,15 @@ class ModelElectronSelfEnergy:
                 self.kpoints, q, self.vectors, vectors_kq)
             denominator = (self.evaluation_energies[:, :, None, None]
                            - intermediate[:, None, None, :] + 1j*self.delta)
+            # Real harmonic noise has equal positive/negative-frequency
+            # weights C. Quantum Fan instead includes the Pauli factors.
+            population = (kBT/phonon_energies if bathStatistics == "classical" else bose + .5)
             if self.adiabatic:
-                propagator = (2*bose[None, None, :, None]+1) / denominator
+                propagator = (2*population[None, None, :, None]) / denominator
+            elif bathStatistics != "quantum":
+                propagator = population[None, None, :, None]*(
+                    1/(denominator-phonon_energies[None, None, :, None])
+                    + 1/(denominator+phonon_energies[None, None, :, None]))
             else:
                 propagator = ((bose[None, None, :, None]+1
                                - occupation[:, None, None, :])
@@ -167,7 +175,7 @@ class ModelElectronSelfEnergy:
                 hessian_band = (self.vectors.conj().swapaxes(-2, -1)[:, None]
                                 @ hessian @ self.vectors[:, None])
                 self.debye_waller_matrix += 0.5*weight*np.einsum(
-                    "v,kvij->kij", 2*bose+1, hessian_band, optimize=True)
+                    "v,kvij->kij", 2*population, hessian_band, optimize=True)
 
     def _prepare_electronic_states(self):
         """Index established calculator results; no separate eigensolver.
@@ -298,15 +306,23 @@ class ModelEPCLinewidth:
     LG, VG, and TDSE calculators having identical energies. The source supplies
     linewidths only: it does not add Re(Sigma), Debye-Waller shifts, or vertex
     corrections to optical matrix elements.
+
+    bathStatistics defaults to 'quantum' (SERTA). 'classical' and 'wigner'
+    use the corresponding symmetric-noise Born linewidth of the harmonic
+    trajectories. Applying either through CollisionSpecification('serta')
+    selects the same diagonal RTA operator, not quantum bath statistics.
     """
 
     def __init__(self, qgrid=None, temperature=300., fermi=0., delta=.02,
-                 adiabatic=False):
+                 adiabatic=False, bathStatistics="quantum"):
         self.qgrid=tuple(qgrid) if qgrid is not None else None
         self.temperature=float(temperature)
         self.fermi=float(fermi)
         self.delta=float(delta)
         self.adiabatic=bool(adiabatic)
+        if bathStatistics not in ("quantum", "classical", "wigner"):
+            raise NotImplementedError(f"{bathStatistics=} is not supported by now. available choices: 'quantum' | 'classical' | 'wigner'")
+        self.bathStatistics=bathStatistics
         self.last_self_energy=None
         self._cache_signature=None
         self._cache_energies=None
@@ -314,7 +330,8 @@ class ModelEPCLinewidth:
 
     def populationLinewidth(self, owner):
         energies=np.asarray(owner.energies)
-        signature=(id(owner.model),tuple(owner.kgrid),tuple(np.asarray(owner.kOffset)))
+        signature=(id(owner.model),tuple(owner.kgrid),tuple(np.asarray(owner.kOffset)),
+                   self.qgrid,self.temperature,self.fermi,self.delta,self.adiabatic,self.bathStatistics)
         if (self._cache_signature==signature and self._cache_energies is not None
                 and self._cache_energies.shape==energies.shape
                 and np.allclose(self._cache_energies,energies,atol=1e-12,rtol=1e-12)):
@@ -324,7 +341,8 @@ class ModelEPCLinewidth:
         kpoints=np.mod(uniform_qmesh(grid)+owner.kOffset,1.)
         result=ModelElectronSelfEnergy(owner.model,kpoints,qgrid=qgrid,
                                        temperature=self.temperature,fermi=self.fermi,
-                                       delta=self.delta,adiabatic=self.adiabatic)
+                                       delta=self.delta,adiabatic=self.adiabatic,
+                                       bathStatistics=self.bathStatistics)
         reference=result.energies.reshape(energies.shape)
         if not np.allclose(reference,energies,atol=2e-10,rtol=1e-10):
             raise ValueError("Model EPC linewidth states do not match the conductivity eigensystem")

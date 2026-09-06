@@ -9,6 +9,7 @@ Only the hopping amplitude t_0 is coupled to the bond length and direction
 from dataclasses import dataclass
 import numpy as np
 from scipy.constants import atomic_mass, Boltzmann, electron_volt, hbar
+from auxiliary import uniform_qmesh
 
 def _wavevector(value, name):
     value = np.asarray(value, dtype=float)
@@ -93,6 +94,41 @@ class EinsteinPhonons:
     def supercell(self, ncells):
         return EinsteinPhonons(np.tile(self.masses, ncells),
                                np.tile(self.energies, (ncells, 1)), self.directions)
+
+    def sampleTrajectory(self, temperature, seed=None, statistics="classical"):
+        """Stationary harmonic trajectory with sampled positions AND momenta.
+
+        Time is in hbar/eV. Classical statistics obey equipartition; Wigner
+        statistics reproduce the symmetrized quantum harmonic correlator,
+        but neither gives the asymmetric quantum emission/absorption noise.
+        The bath is prescribed: no electronic force or thermostat is applied.
+        """
+        if statistics not in ("classical", "wigner"):
+            raise ValueError("trajectory statistics must be classical or wigner")
+        variance = self.meanSquareDisplacements(temperature, quantum=statistics == "wigner")
+        rng = np.random.default_rng(seed)
+        quadratures = rng.normal(size=(2,) + variance.shape)*np.sqrt(variance)
+        frequencies = np.zeros_like(variance)
+        frequencies[:, self.directions] = self.energies
+        return HarmonicTrajectory(quadratures[0], quadratures[1], frequencies)
+
+@dataclass
+class HarmonicTrajectory:
+    """u(t)=cosine*cos(energy*t)+sine*sin(energy*t), in Angstrom.
+
+    ``sine*energies`` is the initial velocity in Angstrom/(hbar/eV).
+    """
+    cosine: np.ndarray
+    sine: np.ndarray
+    energies: np.ndarray
+
+    def displacements(self, time):
+        phase = self.energies*float(time)
+        return self.cosine*np.cos(phase) + self.sine*np.sin(phase)
+
+    def velocities(self, time):
+        phase = self.energies*float(time)
+        return self.energies*(-self.cosine*np.sin(phase) + self.sine*np.cos(phase))
 
 class SSHModelEPC:
     """Scalar bond coupling with frozen equilibrium Rashba/exchange.
@@ -276,3 +312,47 @@ class SSHModelEPC:
             model, kpoints, q, phonons.modeDisplacements(q))
         return (vectors_kq.conj().swapaxes(-2, -1)[:, None]
                 @ vertices @ vectors_k[:, None])
+
+class SSHTimeOperators:
+    """H[u(t)], dH/dA and d2H/dA2 with equilibrium point-orbital centers.
+
+    The fixed orbital basis defines precisely the same SSH hopping-only EPC
+    as the primitive-cell perturbation calculation. Translating orbital
+    centers would require extra moving-basis and convective-current terms.
+    """
+    def __init__(self, owner):
+        model = owner.model
+        if not isinstance(model.modelEPC, SSHModelEPC) or not isinstance(model.modelPhonons, EinsteinPhonons):
+            raise NotImplementedError("Phonon TDSE currently requires SSHModelEPC and EinsteinPhonons")
+        epc = model.modelEPC
+        epc.validate(model)
+        expected = np.zeros_like(model.AA_R_W)
+        indices = np.arange(model.norbs)
+        expected[model.iRvecIndex[(0, 0, 0)]][:, indices, indices] = model.rList
+        if not np.allclose(model.AA_R_W, expected, atol=1e-10, rtol=0):
+            raise NotImplementedError("Phonon TDSE requires diagonal point-orbital positions")
+        active = (model.ham_R != 0) | (epc.alpha_R != 0) | (epc.beta_R != 0)
+        ir, i, j = np.nonzero(active)
+        self.i, self.j = i, j
+        self.initial_atoms, self.final_atoms = epc.orbital_atoms[i], epc.orbital_atoms[j]
+        self.h0, self.alpha, self.beta = model.ham_R[active], epc.alpha_R[active], epc.beta_R[active]
+        self.unit_bonds = epc.unit_bonds[ir, :, i, j]
+        self.bonds = (model.iRvec[ir] @ model.lattice + model.rList[:, j].T-model.rList[:, i].T)
+        kpoints = uniform_qmesh(owner.kgrid) + owner.kOffset
+        self.phase = np.exp(2j*np.pi*(kpoints @ model.iRvec[ir].T))
+        self.nk, self.nb = len(kpoints), model.norbs
+
+    def at_displacement(self, u):
+        stretch = np.sum(self.unit_bonds*(u[self.final_atoms]-u[self.initial_atoms]), axis=1)
+        hopping = self.phase*(self.h0 + self.alpha*stretch + .5*self.beta*stretch**2)[None]
+        h = np.zeros((self.nk, self.nb, self.nb), complex)
+        v = np.zeros((self.nk, 3, self.nb, self.nb), complex)
+        w = np.zeros((self.nk, 3, 3, self.nb, self.nb), complex)
+        # Different R bonds can share an orbital pair at a supercell Bloch k.
+        for k in range(self.nk):
+            np.add.at(h[k], (self.i, self.j), hopping[k])
+            for a in range(3):
+                np.add.at(v[k, a], (self.i, self.j), 1j*self.bonds[:, a]*hopping[k])
+                for b in range(3):
+                    np.add.at(w[k, b, a], (self.i, self.j), -self.bonds[:, b]*self.bonds[:, a]*hopping[k])
+        return h, v, w
