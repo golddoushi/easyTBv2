@@ -34,9 +34,9 @@ def _initialize_bz_worker(model, task_func, common_args, worker_threads):
     _bz_worker_thread_limit = threadpool_limits(limits=worker_threads)
 
 def _run_bz_task(job, model, task_func, common_args):
-    params = dict(job, model=model)
-    params.update(common_args)
-    params["verbose"] = job["verbose"]
+    params = dict(common_args)
+    params.update(job)
+    params["model"] = model
     return task_func(params)
 
 def _run_bz_worker(job):

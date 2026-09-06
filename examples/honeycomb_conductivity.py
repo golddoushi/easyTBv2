@@ -46,7 +46,7 @@ def main():
     parser.add_argument('--kBT', type=float, default=None,
                         help='Electronic kBT in eV; default is Boltzmann*temperature')
     parser.add_argument('--field', type=float, default=1e-4)
-    parser.add_argument('--steps', type=int, default=256)
+    parser.add_argument('--steps', type=int, default=128)
     parser.add_argument('--skip-tdse', action='store_true')
     parser.add_argument('--snapshots', type=int, default=0,
                         help='Optional frozen-displacement LG ac average; this is not an inelastic EPC collision calculation')
@@ -72,10 +72,17 @@ def main():
     parser.add_argument('--serta-qgrid', type=int, default=6)
     parser.add_argument('--epc-delta', type=float, default=.03,
                         help='Lorentzian delta broadening used to construct EPC linewidths, eV')
+    parser.add_argument('--epc-markov', choices=('none','quantum','classical','wigner'), default='none',
+                        help='Additional stationary Pauli collision calculation beyond SERTA')
+    parser.add_argument('--epc-qgrid', type=int, default=4,
+                        help='Markov phonon grid; must divide --grid')
+    parser.add_argument('--epc-population-solver', choices=('auto','direct','iterative'), default='auto')
     parser.add_argument('--tdse-collision', choices=('crta','static','dynamic'), default='crta')
     parser.add_argument('--tdse-min-linewidth', type=float, default=.02,
                         help='Floor in eV for optional SERTA TDSE only; set 0 for unmodified rates')
     args = parser.parse_args()
+    if args.epc_markov != 'none' and (args.epc_qgrid < 1 or args.grid % args.epc_qgrid):
+        parser.error('--epc-qgrid must be positive and divide --grid')
     if args.phonon_dynamics and args.skip_tdse:
         parser.error('--phonon-dynamics and --skip-tdse are mutually exclusive')
     if args.phonon_dynamics and args.tdse_collision != 'crta':
@@ -107,9 +114,9 @@ def main():
                    max_ac_LG_conductivity=np.max(abs(lg.sigma)),
                    ac_LG_VG_relative_error=relative_error(vg.sigma,lg.sigma),
                    )
-    requested = (() if args.serta == 'none' else ('static','dynamic') if args.serta == 'both' else (args.serta,))
+    serta_requested = (() if args.serta == 'none' else ('static','dynamic') if args.serta == 'both' else (args.serta,))
     serta_sources = {}
-    for name in requested:
+    for name in serta_requested:
         source = ModelEPCLinewidth(qgrid=(args.serta_qgrid,args.serta_qgrid,1),temperature=args.temperature,
                                    fermi=args.fermi,delta=args.epc_delta,adiabatic=name=='static')
         # ModelEPCLinewidth is lazy.  Evaluate it against the already solved
@@ -138,6 +145,27 @@ def main():
                                           ac_LG_VG_relative_error=relative_error(svg.sigma,slg.sigma),
                                           ac_change_from_CRTA=relative_error(slg.sigma,lg.sigma),
                                           )
+    markov_vg = None
+    if args.epc_markov != 'none':
+        markov_specification=CollisionSpecification('epc',qgrid=(args.epc_qgrid,args.epc_qgrid,1),
+            phononTemperature=args.temperature,bathStatistics=args.epc_markov,delta=args.epc_delta,
+            constantLinewidth=args.constantLinewidth,populationSolver=args.epc_population_solver)
+        markov_options=dict(options,collisionSpecification=markov_specification)
+        markov_dc_lg=AnormalousHallConductance_LG_DM(**markov_options)
+        markov_dc_vg=AnormalousHallConductance_VG_DM(**markov_options)
+        markov_lg=Opticalconductivity_LG_DM(**markov_options)
+        markov_vg=Opticalconductivity_VG_DM(**markov_options)
+        view=markov_vg.density_matrix_kernel.collision.forFermi(args.fermi)
+        arrays.update(sigma_dc_LG_Markov=markov_dc_lg.sigma,sigma_dc_VG_Markov=markov_dc_vg.sigma,
+            sigma_ac_LG_Markov=markov_lg.sigma,sigma_ac_VG_Markov=markov_vg.sigma,
+            markov_stationary_occupations=view.stationary_occupations,
+            markov_reservoir_occupations=view.reservoir_occupations)
+        summary['epc_markov']=dict(statistics=args.epc_markov,
+            qgrid=list(markov_specification.qgrid),stationary_state=view.stationary_info,
+            population_solver=args.epc_population_solver,transition_matrix_nnz=view.parent.transition_rates.nnz,
+            dc_LG_VG_relative_error=relative_error(markov_dc_vg.sigma,markov_dc_lg.sigma),
+            ac_LG_VG_relative_error=relative_error(markov_vg.sigma,markov_lg.sigma))
+        showElapsedTime(extraInfo='Stationary Markov EPC DC and AC conductivity finished')
     if not args.skip_tdse and not args.phonon_dynamics:
         small = dict(options,kgrid=(args.tdse_grid,args.tdse_grid,1))
         tdse_collision = None
@@ -239,6 +267,17 @@ def main():
                 arrays['sigma_ac_VG_phonon_quantum_RTA']),
             clean_relative_change=relative_error(td.sigma, clean.sigma),
             comparison='harmonic VG DM and TDSE solve the same model; linewidth RTA comparisons remain separate approximations')
+        if args.epc_markov != 'none':
+            if options['kgrid'] != folded_grid or markov_specification.qgrid != qgrid:
+                markov_vg=Opticalconductivity_VG_DM(**dict(matched_options,
+                    collisionSpecification=CollisionSpecification('epc',qgrid=qgrid,
+                        phononTemperature=args.temperature,bathStatistics=args.epc_markov,
+                        delta=args.epc_delta,constantLinewidth=args.constantLinewidth,
+                        populationSolver=args.epc_population_solver)))
+            showElapsedTime(extraInfo='Markov full collision incorporated VG DM conductivity finished')
+            arrays['sigma_ac_VG_phonon_Markov']=markov_vg.sigma
+            summary['phonon_dynamics']['markov_relative_difference']=relative_error(markov_vg.sigma,td.sigma)
+            summary['phonon_dynamics']['markov_statistics']=args.epc_markov
     if args.snapshots:
         sc = copy.deepcopy(model)
         sc.make_supercell(np.diag([args.supercell,args.supercell,1]))
@@ -270,7 +309,7 @@ def main():
                        snapshot_change_from_equilibrium=relative_error(samples.mean(axis=0),arrays['sigma_supercell_equilibrium']),
                        max_supercell_AC_conductivity=np.max(abs(samples.mean(axis=0))),
                        )
-        for name in requested:
+        for name in serta_requested:
             summary[f'snapshot_vs_{name}_serta_relative_difference'] = relative_error(
                 samples.mean(axis=0),arrays[f'sigma_ac_LG_SERTA_{name}'])
             combined_collision=CollisionSpecification(

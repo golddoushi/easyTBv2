@@ -48,6 +48,32 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
     projected_channels = {name: np.zeros(projected_shape, dtype=float) for name in kernel.channel_names}
     response_channels = {name: np.zeros(response_shape, dtype=float) for name in kernel.channel_names}
 
+    # A mesh-global EPC collision couples populations at different k points,
+    # so the band-resolved Fermi-weight reduction below is no longer valid.
+    # Contract each Fermi-level density matrix directly instead.
+    if kernel.collision.mesh_coupled:
+        k_slices = (slice(None),) * len(owner.kgrid)
+        k_axes = tuple(range(len(owner.kgrid)))
+        for ifermi, fermi in enumerate(owner.fermiList):
+            state = kernel.fermi_state(ifermi, fermi)
+            irecord = responseFermiRecord.get(ifermi)
+            for idrive, drive_vertex in enumerate(drive_vertices):
+                for ialpha in range(3):
+                    block = state.block(ialpha, drive_vertex)
+                    for iobservable, observable_vertex in enumerate(observable_vertices):
+                        for observable_components in np.ndindex(*observable_component_shape):
+                            vertex_index = k_slices + observable_components + (slice(None), slice(None))
+                            observable_nm = observable_vertex[vertex_index].swapaxes(-1, -2)
+                            for name, rho in block.rho1.items():
+                                value = np.sum(rho*observable_nm, axis=(-2, -1)).real
+                                projected_channels[name][(idrive, iobservable, ifermi, ialpha)
+                                                         + observable_components] = np.sum(value, axis=k_axes)
+                                if irecord is not None:
+                                    response_index = ((idrive, iobservable) + k_slices
+                                                      + (irecord, ialpha) + observable_components)
+                                    response_channels[name][response_index] = value
+        return kernel, projected_channels, response_channels
+
     nbands = owner.energies.shape[-1]
     weight_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
                     + (3,) + tuple(observable_component_shape) + (nbands,))
@@ -1909,6 +1935,15 @@ class Opticalconductivity_TDSE(Velocity):
         if np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
             raise ValueError("TDSE requires positive photon energies; use a DM calculator for dc")
         self.Iodd, self.Todd = False, True
+        specification = self.collisionSpecification
+        mode = (specification.mode if isinstance(specification, CollisionSpecification)
+                else "crta" if specification is None else str(specification).lower())
+        if mode in ("full", "epc_markov"):
+            mode = "epc"
+        if phononDynamics and mode != "crta":
+            raise ValueError("Explicit phonon trajectories require CRTA background only; an EPC/SERTA collision would double count scattering")
+        if not phononDynamics and mode == "epc":
+            raise NotImplementedError("Opticalconductivity_TDSE does not propagate the mesh-global EPC collision operator")
         self.collision = CollisionSpecification.fromOwner(self)
         gamma = self.collision.coherence_linewidth
         if np.min(gamma) <= self.collision.specification.linewidthFloor:

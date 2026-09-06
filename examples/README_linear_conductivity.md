@@ -311,6 +311,9 @@ discrepancy. The seed is controlled by `--phonon-seed`.
 
 ## Frequency-domain counterpart of the moving-ion TDSE
 
+For the stationary Pauli collision approximation beyond SERTA, including
+`--epc-markov`, see [the Markov EPC documentation](README_epc_markov.md).
+
 `Opticalconductivity_VG_DM_Phonon` solves the same prescribed harmonic-bath
 model as `Opticalconductivity_TDSE(phononDynamics=True)`. It is now included
 automatically in the `--phonon-dynamics` example. For instance:
