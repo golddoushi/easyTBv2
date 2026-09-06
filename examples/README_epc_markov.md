@@ -1,16 +1,16 @@
-# Stationary Markov EPC collision
+# Fixed-number Markov EPC collision
 
 `CollisionSpecification('epc', ...)` binds `CollisionOperator_full` to the
-calculator's existing Energy eigensystem. It is a secular Pauli approximation
-with population scattering-in, not a full non-Markov optical collision kernel.
-The name `full` remains an alias for compatibility.
+calculator's existing Energy eigensystem. It is a fixed-number secular Pauli
+approximation with population scattering-in, not a full non-Markov optical
+collision kernel. The name `full` remains an alias for compatibility.
 
 ```python
 collision = CollisionSpecification(
     'epc', qgrid=(4, 4, 1), bathStatistics='quantum',
     phononTemperature=300., delta=.03, constantLinewidth=.2,
     populationSolver='auto', solverTolerance=1e-10,
-    stationaryTolerance=1e-12,
+    stationaryTolerance=1e-12, enforceDetailedBalance=True,
 )
 calc = Opticalconductivity_VG_DM(
     model=model, kgrid=(16, 16, 1), kBT=.025852,
@@ -21,7 +21,8 @@ state = calc.density_matrix_kernel.collision.forFermi(-.7)
 print(state.stationary_info)
 ```
 
-The complete orthogonal model basis is required. Each q-grid dimension must
+The electronic `kBT` must match `phononTemperature` when detailed balance is
+enabled. The complete orthogonal model basis is required. Each q-grid dimension must
 divide the corresponding electronic k-grid dimension. Use the complete
 coupled k mesh in one calculator; independent shifted-grid task partitions do
 not reproduce a collision connecting states across those partitions. Projected
@@ -42,41 +43,53 @@ python examples/honeycomb_conductivity.py --grid 4 --phonon-dynamics --serta non
 
 The latter stores `sigma_ac_VG_phonon_Markov` on the same folded electronic
 and phonon meshes as TDSE. `markov_relative_difference` uses the TDSE component
-as denominator. Equal meshes do not make the two physical approximations equal.
+as denominator. Add `--epc-raw-rates` to inspect the unbalanced Lorentzian
+rates. Equal meshes do not make the two physical approximations equal.
 
 ## Stationary state and nonlinear equation
 
 Write R[i,j] for a transition from state j to state i, with rates in eV and
-time in hbar/eV. The implemented equation is
+time in hbar/eV. Finite Lorentzian tails do not obey thermal detailed balance
+exactly. By default each unordered pair retains its raw total activity
+`S_ij=Rraw[i,j]+Rraw[j,i]`, while its two directions are replaced by
+
+```text
+R[i,j] = S_ij * expit(-(energy[i]-energy[j])/kBT)
+R[j,i] = S_ij - R[i,j]
+```
+
+Consequently `R[i,j]/R[j,i]=exp(-(energy[i]-energy[j])/kBT)` and every Fermi
+distribution at that temperature is an exact stationary state. The nonlinear
+fixed-number equation is
 
 ```text
 C_ep[p] = (1-p)*(R p) - p*(R.T (1-p))
-dp/dt = C_ep[p] - gamma*(p-f_reservoir)
+dp/dt = C_ep[p] - gamma*(p-f_mu[p])
 ```
 
-`forFermi(mu)` specifies the reservoir chemical potential. A bounded Newton
-solve finds p0 in [0,1] satisfying this equation; no constant collision residual
-is discarded and no transition rates are adjusted. The damping used in response
-is G = gamma I - D C_ep[p0]. The EPC part conserves total particle number; the
-background reservoir fixes its stationary value to sum(f_reservoir).
+Here `f_mu[p]` is the Fermi distribution whose total occupation equals
+`sum(p)`. Both the EPC and BGK terms therefore conserve particle number. The
+response solver projects sources onto the trace-free tangent space and uses a
+bordered sparse system to impose `sum(delta_p)=0`. With balanced rates,
+`forFermi(mu)` uses the requested Fermi state directly. With
+`enforceDetailedBalance=False`, a bounded, fixed-number Newton solve finds the
+stationary state of the raw rates.
 
-The quantum broadened rates need not obey exact detailed balance at finite
-`delta`, even at equal electronic/phonon temperatures. A nonzero
-`reservoir_residual_eV` or `max_population_shift` exposes this limitation.
-Solving for p0 makes the response consistent with the specified rates; it
-does not turn Lorentzian-broadened rates into exact equilibrium quantum kinetics.
-Classical/Wigner symmetric rates instead tend to equalize connected occupations
-without the reservoir. Their nonthermal stationary state is expected.
+For quantum phonons, pair balancing repairs the thermodynamics lost through
+finite energy broadening. Applying it to classical or Wigner rate activities
+produces a thermally balanced surrogate. The spectrum of an undamped real
+classical trajectory is symmetric and does not itself satisfy finite-temperature
+quantum detailed balance; use raw rates when that distinction is under study.
 
 For a general density matrix, the diagonal follows the Pauli equation while
 the off-diagonal collision is
 
 ```text
 C[rho]_ij = -(ell_i(p)+ell_j(p))*rho_ij/2,  i != j
-ell(p) = gamma + R p + R.T (1-p).
+ell(p) = gamma + R p + R.T (1-p)
 ```
 
-`collision_integral(rho)` evaluates this closed nonlinear model. `apply(x)`
+`collision_integral(rho)` evaluates this closed fixed-number model. `apply(x)`
 returns -D C[rho0] x. `second_variation(x,y)` returns the symmetric bilinear
 D^2 C[rho0][x,y], with no conjugation and no factor 1/2. It includes population
 Pauli terms and population/coherence cross terms. The ordered (-omega,+omega)
@@ -158,12 +171,26 @@ the rectified second-order response. An isolated intracell dimer additionally
 checks first- and second-order optical density matrices against direct nonlinear
 DM propagation and checks LG/VG agreement without k-interpolation error.
 
-On the saved 4x4x1, two-trajectory moving-phonon benchmark (300 K, photon
-energy 1.3 eV, background .2 eV, delta .03 eV), the corrected classical Markov
-calculation differs from TDSE by at most 36.60% across the four in-plane
-components, versus 44.34% before the fix. Quantum rates give 36.71% and
-represent a different bath. The harmonic frequency solver remains at 0.0251%.
-These are comparisons to that finite sample, not ensemble convergence claims.
+For the 4x4x1, two-trajectory command at 300 K, photon energy 0.3 eV,
+background 0.0685 eV and delta 0.03 eV, harmonic frequency DM and TDSE agree
+within 3.1e-5 relative componentwise. The pair-balanced classical Markov result
+differs by 61-228% componentwise and 84% in the global Frobenius norm. Raw
+fixed-number rates differ by 65-230% and 90% globally. Pair balancing changes
+the raw transition matrix by 40% in this coarse example. It fixes equilibrium
+thermodynamics but cannot restore the coherent sidebands and memory discarded
+by the Markov reduction. These are comparisons to a two-trajectory finite
+sample, not ensemble-convergence claims.
+
+Repeating the same benchmark with a stationary damped trajectory at
+`phononDamping=0.005 eV` and an eight-period correlation window changed the
+global Markov-versus-TDSE error only from 84.33% to 83.08%. The matched-window
+Fourier-versus-TDSE error was 1.63% globally (selected components 0.26-4.98%)
+at 33 phase points. Thus damping removes the infinite-correlation idealization
+and gives a controlled route toward a Markov limit, but it does not by itself
+repair the present weak-coupling collision approximation. The phonon damping,
+finite Fourier window, phase resolution, supercell, and trajectory ensemble
+must all be converged; `epc_delta` remains a separate broadening unless a
+specific microscopic identification is justified.
 
 With k=64x64x1, q=4x4x1, background .026 eV, delta .01 eV and photon energy
 1.5 eV, the example's four quantum Markov DC/AC calculations together took

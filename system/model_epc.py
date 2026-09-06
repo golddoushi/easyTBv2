@@ -112,6 +112,50 @@ class EinsteinPhonons:
         frequencies[:, self.directions] = self.energies
         return HarmonicTrajectory(quadratures[0], quadratures[1], frequencies)
 
+    def sampleDampedTrajectory(self, temperature, damping, period, phase_points,
+                                seed=None, statistics="classical"):
+        """Sample a stationary periodic approximation to a damped Langevin bath.
+
+        ``damping`` is the amplitude-decay rate in eV for
+        u''+2*damping*u'+omega**2*u=noise.  The Fourier coefficients sample the
+        corresponding classical displacement spectrum and are normalized to
+        the requested classical or Wigner equal-time variance.  The Wigner
+        option remains symmetrized noise, not a quantum detailed-balance bath.
+        """
+        if statistics not in ("classical", "wigner"):
+            raise ValueError("trajectory statistics must be classical or wigner")
+        damping, period = float(damping), float(period)
+        if not np.isfinite(damping) or damping <= 0:
+            raise ValueError("damping must be positive and finite, in eV")
+        if not np.isfinite(period) or period <= 0:
+            raise ValueError("period must be positive and finite, in hbar/eV")
+        if (not isinstance(phase_points, (int, np.integer)) or phase_points < 5
+                or phase_points % 2 == 0):
+            raise ValueError("phase_points must be an odd integer >= 5")
+
+        base_energy = 2*np.pi/period
+        harmonics = np.arange((phase_points-1)//2+1, dtype=float)
+        sampled_energies = harmonics[:, None, None]*base_energy
+        mode_energies = self.energies[None]
+        denominator = ((mode_energies**2-sampled_energies**2)**2
+                       +(2*damping*sampled_energies)**2)
+        weights = 1/denominator
+        weights[1:] *= 2
+        weights /= np.sum(weights, axis=0, keepdims=True)
+
+        variance = self.meanSquareDisplacements(temperature, quantum=statistics == "wigner")
+        rng = np.random.default_rng(seed)
+        shape = (len(harmonics), len(self.masses), 3)
+        cosine, sine = np.zeros(shape), np.zeros(shape)
+        active_variance = variance[:, self.directions]
+        coefficient_scale = np.sqrt(weights*active_variance[None])
+        cosine[:, :, self.directions] = rng.normal(size=weights.shape)*coefficient_scale
+        sine[1:, :, self.directions] = rng.normal(size=weights[1:].shape)*coefficient_scale[1:]
+        mode_energy_grid = np.zeros_like(variance)
+        mode_energy_grid[:, self.directions] = self.energies
+        return DampedPeriodicTrajectory(cosine, sine, base_energy, mode_energy_grid,
+                                        damping, period, weights)
+
 @dataclass
 class HarmonicTrajectory:
     """u(t)=cosine*cos(energy*t)+sine*sin(energy*t), in Angstrom.
@@ -129,6 +173,30 @@ class HarmonicTrajectory:
     def velocities(self, time):
         phase = self.energies*float(time)
         return self.energies*(-self.cosine*np.sin(phase) + self.sine*np.cos(phase))
+
+
+@dataclass
+class DampedPeriodicTrajectory:
+    """Stationary Gaussian damped-oscillator path represented by a Fourier series."""
+    cosine: np.ndarray
+    sine: np.ndarray
+    base_energy: float
+    energies: np.ndarray
+    damping: float
+    period: float
+    spectrum_weights: np.ndarray
+
+    def displacements(self, time):
+        harmonics = np.arange(len(self.cosine))*self.base_energy
+        phase = harmonics*float(time)
+        return np.einsum('n,nac->ac', np.cos(phase), self.cosine)+np.einsum(
+            'n,nac->ac', np.sin(phase), self.sine)
+
+    def velocities(self, time):
+        harmonics = np.arange(len(self.cosine))*self.base_energy
+        phase = harmonics*float(time)
+        return np.einsum('n,nac->ac', -harmonics*np.sin(phase), self.cosine)+np.einsum(
+            'n,nac->ac', harmonics*np.cos(phase), self.sine)
 
 class SSHModelEPC:
     """Scalar bond coupling with frozen equilibrium Rashba/exchange.

@@ -10,7 +10,7 @@ from collections import OrderedDict
 from types import SimpleNamespace
 import numpy as np
 from scipy.constants import Boltzmann, electron_volt
-from scipy.sparse import csc_matrix, diags, eye
+from scipy.sparse import bmat, csc_matrix, diags, eye
 from scipy.sparse.linalg import LinearOperator, gmres, splu
 from scipy.special import expit
 
@@ -45,8 +45,10 @@ class CollisionSpecification:
         Collision mode: ``'crta'``, ``'serta'``, or ``'epc'``.  ``'full'``
         and ``'epc_markov'`` are accepted aliases for ``'epc'``.
     constantLinewidth : float, optional
-        In eV.  The CRTA linewidth.  For ``epc`` it is an additional positive
-        background damping, which keeps the finite mesh dc operator invertible.
+        In eV.  The CRTA linewidth. For ``epc`` it is a number-conserving BGK
+        background on the fixed-particle-number manifold and a coherence
+        linewidth. It may be zero when the EPC graph itself relaxes every
+        trace-free population mode.
     linewidthFloor : float, optional
         in eV. In present implementation, it behaves like some criterial,
         for the expressions with reverse, once the denominator < this, the
@@ -65,14 +67,20 @@ class CollisionSpecification:
     bathStatistics : ``'quantum'`` | ``'classical'`` | ``'wigner'``
         Phonon population used by ``epc``.  The latter two reproduce the real
         harmonic-noise conventions used by the explicit phonon benchmarks.
+    enforceDetailedBalance : bool
+        Pair-balance the broadened transition rates at ``phononTemperature``.
+        This makes the finite-temperature Fermi distribution an exact
+        stationary state even at finite ``delta``. With classical or Wigner
+        activities this is a thermally balanced surrogate, not the spectrum
+        of an undamped classical trajectory.
     populationSolver : ``'auto'`` | ``'direct'`` | ``'iterative'``
         EPC population solves use cached sparse LU for <=512 states in auto
         mode, and diagonally preconditioned GMRES for larger systems.
     solverTolerance, stationaryTolerance : float
         Relative linear-solve tolerance and absolute steady-state residual
-        tolerance in eV, respectively. The EPC steady state includes the
-        CRTA reservoir and need not be a Fermi distribution. Response clients
-        require fullCovariantDerivative=True and a converged electronic mesh.
+        tolerance in eV, respectively. EPC population solves are constrained
+        to fixed particle number. Response clients require
+        fullCovariantDerivative=True and a converged electronic mesh.
 
     """
 
@@ -80,7 +88,8 @@ class CollisionSpecification:
                  constantLinewidth:float=0.06582, linewidthFloor:float=1e-12,
                  linewidthSource=None, qgrid=None, phononTemperature=300.,
                  delta=.03, bathStatistics="quantum", populationSolver="auto",
-                 solverTolerance=1e-10, stationaryTolerance=1e-12):
+                 solverTolerance=1e-10, stationaryTolerance=1e-12,
+                 enforceDetailedBalance=True):
         mode=str(mode).lower()
         if mode in ("full", "epc_markov"):
             mode="epc"
@@ -97,6 +106,7 @@ class CollisionSpecification:
         self.populationSolver=str(populationSolver).lower()
         self.solverTolerance=float(solverTolerance)
         self.stationaryTolerance=float(stationaryTolerance)
+        self.enforceDetailedBalance=bool(enforceDetailedBalance)
         if (not np.isfinite(self.constantLinewidth) or self.constantLinewidth < 0
                 or not np.isfinite(self.linewidthFloor) or self.linewidthFloor < 0):
             raise ValueError("constantLinewidth and linewidthFloor must be finite and nonnegative")
@@ -266,15 +276,15 @@ class CollisionOperator_linewidth(CollisionOperator):
 
 
 class CollisionOperator_full(CollisionOperator):
-    """Mesh-global Markov EPC collision with scattering-in and Pauli blocking.
+    """Fixed-number Markov EPC collision with scattering-in and Pauli blocking.
 
     The q-resolved golden-rule transition matrix is built once from the
     calculator eigensystem, ``System.modelEPC``, and ``System.modelPhonons``.
-    For each reservoir Fermi level, :meth:`forFermi` solves the Pauli steady
-    state including the CRTA reservoir, then linearizes there. Coherences use
-    secular half-sum damping; its population dependence enters D^2 C. This is a
-    population-complete Markov collision, not an exact non-Markov phonon
-    memory kernel.
+    Finite-width rates are pair-balanced by default so the Fermi state obeys
+    detailed balance exactly. Population response solves remain in the
+    trace-free tangent space. Coherences use secular half-sum damping; its
+    population dependence enters D^2 C. This is a population-complete Markov
+    collision, not an exact non-Markov phonon memory kernel.
     """
 
     mesh_coupled=True
@@ -298,8 +308,13 @@ class CollisionOperator_full(CollisionOperator):
         self.qgrid=qgrid.astype(int)
         if np.any(self.kgrid % self.qgrid):
             raise ValueError("each EPC qgrid dimension must divide the calculator kgrid")
-        if specification.constantLinewidth <= specification.linewidthFloor:
-            raise ValueError("mesh-global EPC collision requires a positive CRTA background linewidth")
+        bath_kBT=Boltzmann*specification.phononTemperature/electron_volt
+        if specification.enforceDetailedBalance:
+            if bath_kBT <= 0:
+                raise ValueError("detailed-balance EPC rates require a positive phonon temperature")
+            if not np.isclose(owner.kBT,bath_kBT,rtol=2e-6,atol=1e-10):
+                raise ValueError("detailed-balance EPC rates require electronic kBT to match phononTemperature")
+        self.bath_kBT=bath_kBT
         self.qgrid=tuple(self.qgrid)
         self.nk=int(np.prod(self.kgrid))
         self.nbands=owner.energies.shape[-1]
@@ -331,6 +346,7 @@ class CollisionOperator_full(CollisionOperator):
     def _transition_rates(self):
         """Return R[final,initial] in eV for all mesh-closed EPC processes."""
         owner, model=self.owner, self.owner.model
+        self.rate_balance_relative_change=0.
         if not np.any(model.modelEPC.alpha_R):
             return csc_matrix((self.size,self.size),dtype=float)
         grid=self.kgrid
@@ -380,6 +396,18 @@ class CollisionOperator_full(CollisionOperator):
                            np.arange(self.size+1,dtype=index_dtype)*per_column),shape=(self.size,self.size))
         result.eliminate_zeros()
         result.sort_indices()
+        if self.specification.enforceDetailedBalance:
+            raw_norm=np.linalg.norm(result.data)
+            activity=(result+result.T).tocoo()
+            energies=energies.reshape(-1)
+            thermal_fraction=expit(-(energies[activity.row]-energies[activity.col])/self.bath_kBT)
+            balanced=csc_matrix((activity.data*thermal_fraction,(activity.row,activity.col)),shape=activity.shape)
+            balanced.eliminate_zeros()
+            balanced.sort_indices()
+            difference=balanced-result
+            self.rate_balance_relative_change=(np.linalg.norm(difference.data)/raw_norm
+                                               if raw_norm else 0.)
+            result=balanced
         return result
 
     def population_collision(self, occupations):
@@ -412,11 +440,14 @@ class CollisionOperator_full(CollisionOperator):
 
 
 class _CollisionOperatorFullFermi(CollisionOperator):
-    """Stationary-state linearization of the Pauli equation plus reservoir.
+    """Fixed-number stationary state and tangent-space Pauli linearization.
 
-    In hbar/eV time units, dp/dt=C_ep[p]-gamma*(p-f_reservoir).
-    The supplied Fermi level specifies the reservoir, not the resulting p.
-    No subtraction of C_ep[f] or adjustment of the Golden-rule rates occurs.
+    The optional constant linewidth is a number-conserving BGK background,
+    ``-gamma*(p-f_mu[p])``, where ``mu[p]`` gives the same total population as
+    ``p``. Population response vectors are solved with an explicit zero-trace
+    constraint. Pair-balanced rates make the requested Fermi state stationary
+    without the BGK term; raw-rate diagnostics may still use a constrained
+    nonlinear stationary solve.
     """
 
     mesh_coupled=True
@@ -430,66 +461,136 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         kBT=parent.owner.kBT
         if kBT <= 0:
             raise ValueError("mesh-global EPC collision requires kBT > 0 for Pauli linearization")
-        self.reservoir_occupations=expit((fermi-energies)/kBT).reshape(self.owner.energies.shape)
+        self._energies=energies
+        self.equilibrium_occupations=expit((fermi-energies)/kBT).reshape(self.owner.energies.shape)
+        # Compatibility alias. This is a closed-system reference, not a reservoir.
+        self.reservoir_occupations=self.equilibrium_occupations
+        sensitivity=(self.equilibrium_occupations*(1-self.equilibrium_occupations)/kBT).reshape(-1)
+        if sensitivity.sum() <= np.finfo(float).tiny:
+            raise ValueError("fixed-number EPC response requires thermally active occupations")
+        self.number_mode=sensitivity/sensitivity.sum()
+        curvature=(self.equilibrium_occupations*(1-self.equilibrium_occupations)
+                   *(1-2*self.equilibrium_occupations)/kBT**2).reshape(-1)
+        self.number_mode_second=(curvature*sensitivity.sum()-sensitivity*curvature.sum())/sensitivity.sum()**3
+        self.target_particle_number=float(self.equilibrium_occupations.sum())
         self._factors=OrderedDict()
+        self.max_projected_source=0.
         self.stationary_occupations,self.stationary_info=self._stationary_state()
         self.population_damping=self._damping(self.stationary_occupations)
         linewidth=np.asarray(self.population_damping.diagonal()).real.reshape(parent.owner.energies.shape)
         self.population_linewidth=np.maximum(linewidth,0.)
-        self.coherence_linewidth=.5*(self.population_linewidth[..., :, None]+self.population_linewidth[..., None, :])
+        p=self.stationary_occupations.reshape(-1)
+        outgoing=(self.specification.constantLinewidth+self.parent.transition_rates@p
+                  +self.parent.reverse_rates@(1-p)).reshape(self.owner.energies.shape)
+        self.coherence_linewidth=.5*(outgoing[..., :, None]+outgoing[..., None, :])
         self.constant_eta=None
 
     def _damping(self, populations):
         return (-self.parent.population_jacobian(populations)
                 +self.specification.constantLinewidth*eye(self.parent.size,format="csc"))
 
-    def _linear_solve(self, operator, source, cache_key=None):
-        source=np.asarray(source)
-        if not np.any(source):
-            return np.zeros_like(source,dtype=np.result_type(source,operator.dtype))
+    def _fermi_for_number(self, particle_number):
+        value=np.asarray(particle_number)
+        if abs(value.imag) > 1e-11*max(1.,abs(value.real)):
+            raise ValueError("a physical population must have a real particle number")
+        target=float(value.real)
+        if target < -1e-10 or target > self.parent.size+1e-10:
+            raise ValueError("particle number lies outside the Pauli interval")
+        if abs(target-self.target_particle_number) <= 1e-12*max(1.,self.parent.size):
+            return self.equilibrium_occupations
+        if target <= 0:
+            return np.zeros_like(self.equilibrium_occupations)
+        if target >= self.parent.size:
+            return np.ones_like(self.equilibrium_occupations)
+        kBT=self.owner.kBT
+        low=self._energies.min()-64*kBT
+        high=self._energies.max()+64*kBT
+        for _ in range(80):
+            chemical_potential=.5*(low+high)
+            occupations=expit((chemical_potential-self._energies)/kBT)
+            if occupations.sum() < target:
+                low=chemical_potential
+            else:
+                high=chemical_potential
+        return occupations.reshape(self.owner.energies.shape)
+
+    def _linear_solve(self, operator, source, cache_key=None, constrained=True):
+        source=np.asarray(source).reshape(-1)
+        dtype=np.result_type(source,operator.dtype,complex)
+        if constrained:
+            removed=source.sum()
+            self.max_projected_source=max(self.max_projected_source,float(abs(removed)))
+            source=source-self.number_mode*removed
+            n=self.parent.size
+            matrix=bmat([[operator.astype(complex),csc_matrix(self.number_mode[:,None])],
+                         [csc_matrix(np.full((1,n),1/n)),csc_matrix((1,1))]],format="csc")
+            rhs=np.concatenate((source.astype(complex),[0.]))
+            factor_key=None if cache_key is None else ("fixed-number",cache_key)
+        else:
+            matrix=operator.astype(complex).tocsc()
+            rhs=source.astype(complex)
+            factor_key=cache_key
+        if not np.any(rhs):
+            return np.zeros(source.shape,dtype=dtype)
         direct=(self.specification.populationSolver == "direct" or
                 (self.specification.populationSolver == "auto" and self.parent.size <= 512))
         if direct:
-            # Complex factors serve both real stationary/dc and optical RHSs.
-            factor=self._factors.get(cache_key) if cache_key is not None else None
+            factor=self._factors.get(factor_key) if factor_key is not None else None
             if factor is None:
-                factor=splu(operator.astype(complex).tocsc())
-                if cache_key is not None:
-                    self._factors[cache_key]=factor
+                factor=splu(matrix)
+                if factor_key is not None:
+                    self._factors[factor_key]=factor
                     while len(self._factors)>2:
                         self._factors.popitem(last=False)
-            elif cache_key is not None:
-                self._factors.move_to_end(cache_key)
-            result=factor.solve(source.astype(complex))
+            elif factor_key is not None:
+                self._factors.move_to_end(factor_key)
+            result=factor.solve(rhs)
+            for _ in range(3):
+                correction=rhs-matrix@result
+                if np.linalg.norm(correction) <= self.specification.solverTolerance*np.linalg.norm(rhs):
+                    break
+                result+=factor.solve(correction)
         else:
-            diagonal=operator.diagonal()
-            preconditioner=LinearOperator(operator.shape,dtype=operator.dtype,
-                matvec=lambda x:x/diagonal)
-            result,info=gmres(operator,source,M=preconditioner,
+            diagonal=matrix.diagonal().astype(complex)
+            diagonal[np.abs(diagonal) <= self.specification.linewidthFloor]=1.
+            preconditioner=LinearOperator(matrix.shape,dtype=complex,matvec=lambda x:x/diagonal)
+            result,info=gmres(matrix,rhs,M=preconditioner,
                 rtol=self.specification.solverTolerance,atol=0.,restart=50,maxiter=200)
             if info != 0:
                 raise RuntimeError(f"EPC population GMRES did not converge (info={info})")
-        residual=np.linalg.norm(operator@result-source)/np.linalg.norm(source)
+        residual=np.linalg.norm(matrix@result-rhs)/np.linalg.norm(rhs)
         if not np.isfinite(residual) or residual > max(10*self.specification.solverTolerance,1e-12):
             raise RuntimeError(f"EPC population solve residual {residual:.3g} exceeds tolerance")
+        if constrained:
+            result=result[:-1]
+            result=result-self.number_mode*result.sum()
         return result
 
     def _stationary_state(self):
-        target=self.reservoir_occupations
+        target=self.equilibrium_occupations
         gamma=self.specification.constantLinewidth
         def residual(p):
-            return self.parent.population_collision(p)-gamma*(p-target)
+            reference=self._fermi_for_number(p.sum())
+            return self.parent.population_collision(p)-gamma*(p-reference)
         p=target.copy()
         initial=float(np.max(np.abs(residual(p))))
+        if self.specification.enforceDetailedBalance:
+            scale=max(float(np.max(self.parent.transition_rates.data))
+                      if self.parent.transition_rates.nnz else 0.,gamma,1.)
+            if initial > max(100*np.finfo(float).eps*scale,10*self.specification.stationaryTolerance):
+                raise RuntimeError(f"pair-balanced EPC rates violate their Fermi stationary state by {initial:.3g} eV")
+            return p,dict(iterations=0,residual_eV=initial,detailed_balance=True,
+                detailed_balance_rate_change=self.parent.rate_balance_relative_change,
+                particle_number=self.target_particle_number,max_population_shift=0.)
         for iteration in range(80):
             rhs=residual(p)
             norm=float(np.max(np.abs(rhs)))
             if norm <= self.specification.stationaryTolerance:
-                return p,dict(iterations=iteration,residual_eV=norm,
-                    reservoir_residual_eV=initial,max_population_shift=float(np.max(np.abs(p-target))))
-            step=self._linear_solve(self._damping(p),rhs.ravel()).real.reshape(p.shape)
+                return p,dict(iterations=iteration,residual_eV=norm,detailed_balance=False,
+                    raw_rate_initial_residual_eV=initial,particle_number=float(p.sum()),
+                    max_population_shift=float(np.max(np.abs(p-target))))
+            step=self._linear_solve(self._damping(p),rhs.ravel(),constrained=True).real.reshape(p.shape)
             step=np.where(((p <= 0)&(step < 0))|((p >= 1)&(step > 0)),0.,step)
-            # Damped Newton with Pauli bounds and a residual-decrease line search.
             length=1.
             positive,negative=step>0,step<0
             if np.any(positive):
@@ -497,7 +598,8 @@ class _CollisionOperatorFullFermi(CollisionOperator):
             if np.any(negative):
                 length=min(length,float(np.min(-p[negative]/step[negative])))
             for _ in range(50):
-                trial=np.clip(p+length*step,0.,1.)
+                trial=p+length*step
+                trial+=self.number_mode.reshape(p.shape)*(self.target_particle_number-trial.sum())
                 if np.max(np.abs(residual(trial))) < norm:
                     p=trial
                     break
@@ -507,7 +609,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         raise RuntimeError("EPC stationary-state solve did not converge")
 
     def collision_integral(self, matrix):
-        """Nonlinear secular Pauli/CRTA DM equation, excluding -i[H,rho].
+        """Nonlinear fixed-number Pauli/BGK equation, excluding -i[H,rho].
 
         Coherences have half-sum population-dependent gain/loss damping.
         This closure omits coherence transfer and pure-dephasing vertices.
@@ -518,8 +620,9 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         linewidth=(self.specification.constantLinewidth+r@p.ravel()+rt@(1-p.ravel())).reshape(p.shape)
         result=-.5*(linewidth[..., :,None]+linewidth[...,None,:])*array
         indices=np.arange(p.shape[-1])
+        reference=self._fermi_for_number(p.sum())
         result[...,indices,indices]=(self.parent.population_collision(p)
-            -self.specification.constantLinewidth*(p-self.reservoir_occupations))
+            -self.specification.constantLinewidth*(p-reference))
         return result
 
     def second_variation(self, left, right):
@@ -531,7 +634,8 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         result=-.5*((gx[..., :,None]+gx[...,None,:])*y
                      +(gy[..., :,None]+gy[...,None,:])*x)
         indices=np.arange(px.shape[-1])
-        result[...,indices,indices]=-px*gy-py*gx
+        bgk=self.specification.constantLinewidth*self.number_mode_second.reshape(px.shape)*px.sum()*py.sum()
+        result[...,indices,indices]=-px*gy-py*gx+bgk
         return result
 
     def stationary_derivative(self, direction, drive_velocity=None):
@@ -541,7 +645,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         e=self.owner.energies
         result=fermi_divided_difference(e[..., :,None],e[...,None,:],self.fermi,self.owner.kBT)
         result=result*self.owner.velocity_K[...,direction,:,:]
-        correction=self.stationary_occupations-self.reservoir_occupations
+        correction=self.stationary_occupations-self.equilibrium_occupations
         if np.any(correction):
             result=result+self.mesh_derivative(diagonal_matrix(correction),direction)
         return result
@@ -582,7 +686,10 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         array=np.asarray(values)
         if array.shape != shape:
             raise ValueError(f"population source has shape {array.shape}, expected {shape}")
-        return np.asarray(self.population_damping@array.reshape(-1)).reshape(shape)
+        flat=array.reshape(-1)
+        result=self.population_damping@flat
+        result-=self.specification.constantLinewidth*self.number_mode*flat.sum()
+        return np.asarray(result).reshape(shape)
 
     def solve_population(self, source, frequency=0.0):
         shape=self.owner.energies.shape
@@ -992,7 +1099,7 @@ class _SecondOrderDMKernel:
         return self.channel_names if self.full_covariant_derivative else ("IE", "EE")
 
     def fermi_state(self, ifermi, fermi) -> _SecondOrderDMFermiState:
-        if self.collision.mesh_coupled and self.collision.transition_rates.nnz:
+        if self.collision.mesh_coupled:
             if not self.full_covariant_derivative:
                 raise ValueError("Nonlinear EPC response requires fullCovariantDerivative=True")
             return MarkovSecondOrderFermiState(self,fermi,
@@ -1176,7 +1283,7 @@ class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
             np.divide(1.0, self.deltaE_mn, out=self.inter_inverse, where=self.inter_mask)
 
     def fermi_state(self, ifermi, fermi):
-        if self.collision.mesh_coupled and self.collision.transition_rates.nnz:
+        if self.collision.mesh_coupled:
             return _SecondOrderDMKernel.fermi_state(self,ifermi,fermi)
         if self.full_covariant_derivative:
             return DividedDifferenceLGFermiState(self, fermi)

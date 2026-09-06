@@ -241,11 +241,12 @@ to a primitive electronic grid `(S*K,S*K,1)` and phonon grid `(S,S,1)`.
 calculations; they do not override these matched moving-phonon grids.
 `--skip-tdse` and `--phonon-dynamics` are mutually exclusive.
 
-Each ion follows `u(t)=x*cos(Eph*t)+y*sin(Eph*t)`, with independent Gaussian
-quadratures x and y, so both its initial position and velocity are thermal.
-Time is in hbar/eV; velocity is in Angstrom/(hbar/eV). This integrates the
-Einstein oscillator exactly. There is no electronic backreaction, phonon
-thermostat, or quantized joint electron-phonon wavefunction. The orbital
+With the default `--phonon-damping 0`, each ion follows
+`u(t)=x*cos(Eph*t)+y*sin(Eph*t)`, with independent Gaussian quadratures x and
+y, so both its initial position and velocity are thermal. Time is in hbar/eV;
+velocity is in Angstrom/(hbar/eV). This integrates the Einstein oscillator
+exactly. There is no electronic backreaction or quantized joint
+electron-phonon wavefunction. The orbital
 basis and centers stay at their equilibrium reference: SSH changes hopping
 amplitudes, including optional quadratic beta, while Rashba and exchange
 remain fixed. Velocity and contact matrices are differentiated from the
@@ -322,7 +323,7 @@ automatically in the `--phonon-dynamics` example. For instance:
 python examples/honeycomb_conductivity.py --phonon-dynamics --serta none --omega 1.3 --phonon-trajectories 2 --steps 128 --phonon-phase-points 33
 ```
 
-The previous moving-ion implementation is a classical-path approximation
+The moving-ion implementation is a classical-path approximation
 with a phenomenological electronic reservoir. It is not self-consistent
 Ehrenfest dynamics, since electronic forces never change the ionic paths,
 and it is not the ECEID algorithm of Rizzi et al. Adding a scalar damping
@@ -339,7 +340,29 @@ misses this effect as well as correlations between density, hopping, and
 current vertices. A 50% discrepancy cannot be assigned solely to omitted
 scattering-in without checking these other differences.
 
-For equal Einstein energies nu, each sampled harmonic trajectory is periodic
+Finite phonon lifetime is enabled with, for example:
+
+```text
+--phonon-damping 0.005 --phonon-bath-cycles 8 --phonon-phase-points 33
+```
+
+Here `phonon-damping` is the amplitude-correlation decay rate kappa in eV for
+`u''+2*kappa*u'+omega0^2*u=noise`. A bare factor `exp(-kappa*t)` is not used,
+because it would cool the ions to zero. Instead, the code samples a stationary
+Gaussian Fourier series from
+
+```text
+S_u(nu) proportional to 1/[(omega0^2-nu^2)^2+(2*kappa*nu)^2]
+```
+
+and normalizes it to the requested classical or Wigner mean-square
+displacement. This is the fluctuation-dissipation-consistent classical shape;
+the finite Fourier series is periodic, with a period of
+`phonon-bath-cycles` slowest-mode periods. Increase both that period and the
+odd `phonon-phase-points` until the correlation function and conductivity are
+stable. The saved cosine and sine coefficients reconstruct the complete path.
+
+For equal Einstein energies and zero damping, each sampled harmonic trajectory is periodic
 in theta=nu*t, even though different ions have independent phases. Define
 H(theta), v_a(theta)=dH/dA_a, and w_ba(theta)=d2H/dA_b dA_a. The new solver
 first obtains the periodic zero-field stationary density, then the response
@@ -400,14 +423,15 @@ noise in their implementation comparison; estimating the physical ensemble
 conductivity still requires trajectory and supercell convergence.
 
 `--phonon-phase-points` must be odd (default 33); increase it, e.g. to 49 or
-65, to resolve sharper phase dependence at lower temperature or stronger
-EPC. `--phonon-solver-tolerance` controls the linear-system residual, not
-harmonic truncation. Failed solves raise an error. The current one-phase
-implementation requires equal active Einstein energies and rejects unequal
-frequencies. Dispersive/incommensurate phonons require a multi-frequency or
-auxiliary-variable generalization. A positive background is required for a
-unique stationary solution. Quantum detailed balance and electronic force
-feedback remain outside this benchmark in both domains.
+65, to resolve sharper phase dependence at lower temperature, stronger EPC,
+or a longer damped-bath period. `--phonon-solver-tolerance` controls the
+linear-system residual, not harmonic truncation. Failed solves raise an error.
+The undamped one-phase implementation requires equal active Einstein energies.
+The damped periodic representation puts distinct mode spectra on one common
+Fourier grid and therefore accepts unequal energies, subject to its frequency
+resolution check. A positive electronic background is required for a unique
+stationary solution. Quantum detailed balance and electronic force feedback
+remain outside this benchmark in both domains.
 
 On the saved 4x4x1, two-trajectory, 300 K, omega=1.3 eV, gamma=0.2 eV run,
 the 33-point frequency solve took about 7 s. Its maximum in-plane discrepancy

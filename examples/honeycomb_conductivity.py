@@ -32,6 +32,10 @@ def relative_error(value, reference):
     imax = np.argsort(reference_line)[-4:]
     return tuple(difference_line[imax] / reference_line[imax])
 
+def global_relative_error(value, reference):
+    denominator = np.linalg.norm(reference)
+    return float(np.linalg.norm(value-reference)/denominator) if denominator else float('inf')
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -63,6 +67,10 @@ def main():
     parser.add_argument('--phonon-seed', type=int, default=2026)
     parser.add_argument('--phonon-phase-points', type=int, default=33,
                         help='Odd Fourier phase-grid size for the matched frequency-domain Liouville solver')
+    parser.add_argument('--phonon-damping', type=float, default=0.,
+                        help='Phonon amplitude damping in eV; zero retains ideal harmonic motion')
+    parser.add_argument('--phonon-bath-cycles', type=float, default=8.,
+                        help='Period of the stationary damped trajectory in slowest-phonon cycles')
     parser.add_argument('--phonon-solver-tolerance', type=float, default=1e-9)
     parser.add_argument('--measure-cycles', type=int, default=2)
     parser.add_argument('--transient-lifetimes', type=float, default=12.)
@@ -77,6 +85,8 @@ def main():
     parser.add_argument('--epc-qgrid', type=int, default=4,
                         help='Markov phonon grid; must divide --grid')
     parser.add_argument('--epc-population-solver', choices=('auto','direct','iterative'), default='auto')
+    parser.add_argument('--epc-raw-rates', action='store_true',
+                        help='Disable pairwise detailed balance for a diagnostic raw-rate Markov calculation')
     parser.add_argument('--tdse-collision', choices=('crta','static','dynamic'), default='crta')
     parser.add_argument('--tdse-min-linewidth', type=float, default=.02,
                         help='Floor in eV for optional SERTA TDSE only; set 0 for unmodified rates')
@@ -149,7 +159,8 @@ def main():
     if args.epc_markov != 'none':
         markov_specification=CollisionSpecification('epc',qgrid=(args.epc_qgrid,args.epc_qgrid,1),
             phononTemperature=args.temperature,bathStatistics=args.epc_markov,delta=args.epc_delta,
-            constantLinewidth=args.constantLinewidth,populationSolver=args.epc_population_solver)
+            constantLinewidth=args.constantLinewidth,populationSolver=args.epc_population_solver,
+            enforceDetailedBalance=not args.epc_raw_rates)
         markov_options=dict(options,collisionSpecification=markov_specification)
         markov_dc_lg=AnormalousHallConductance_LG_DM(**markov_options)
         markov_dc_vg=AnormalousHallConductance_VG_DM(**markov_options)
@@ -159,9 +170,10 @@ def main():
         arrays.update(sigma_dc_LG_Markov=markov_dc_lg.sigma,sigma_dc_VG_Markov=markov_dc_vg.sigma,
             sigma_ac_LG_Markov=markov_lg.sigma,sigma_ac_VG_Markov=markov_vg.sigma,
             markov_stationary_occupations=view.stationary_occupations,
-            markov_reservoir_occupations=view.reservoir_occupations)
+            markov_equilibrium_occupations=view.equilibrium_occupations)
         summary['epc_markov']=dict(statistics=args.epc_markov,
             qgrid=list(markov_specification.qgrid),stationary_state=view.stationary_info,
+            fixed_particle_number=True,detailed_balance=markov_specification.enforceDetailedBalance,
             population_solver=args.epc_population_solver,transition_matrix_nnz=view.parent.transition_rates.nnz,
             dc_LG_VG_relative_error=relative_error(markov_dc_vg.sigma,markov_dc_lg.sigma),
             ac_LG_VG_relative_error=relative_error(markov_vg.sigma,markov_lg.sigma))
@@ -216,12 +228,15 @@ def main():
             **dict(options, model=sc, kgrid=supercell_grid),
             phononTemperature=args.temperature, phononStatistics=args.phonon_statistics,
             nPhononTrajectories=args.phonon_trajectories, phononSeed=args.phonon_seed,
-            phononPhasePoints=args.phonon_phase_points, solverTolerance=args.phonon_solver_tolerance)
+            phononPhasePoints=args.phonon_phase_points, phononDamping=args.phonon_damping,
+            phononBathCycles=args.phonon_bath_cycles, solverTolerance=args.phonon_solver_tolerance)
         showElapsedTime(extraInfo='Full harmonic VG density-matrix frequency solve finished')
         td = Opticalconductivity_TDSE(**dict(options, model=sc, kgrid=supercell_grid),
             phononDynamics=True, phononTemperature=args.temperature,
             phononStatistics=args.phonon_statistics, nPhononTrajectories=args.phonon_trajectories,
             phononSeed=args.phonon_seed, phononCycles=args.phonon_cycles,
+            phononDamping=args.phonon_damping, phononBathCycles=args.phonon_bath_cycles,
+            phononPhasePoints=args.phonon_phase_points,
             E0=args.field, n_steps_per_cycle=args.steps,
             n_cycles_measure=args.measure_cycles, transient_lifetimes=args.transient_lifetimes,
             recordCurrent=True)
@@ -247,7 +262,9 @@ def main():
             sigma_ac_phonon_TDSE_stderr_imag=td.sigma_stderr_imag,
             phonon_energies_atom_cartesian_eV=td.phonon_energies,
             phonon_initial_positions_A=td.phonon_initial_positions,
-            phonon_initial_velocities_A_per_hbar_over_eV=td.phonon_initial_velocities)
+            phonon_initial_velocities_A_per_hbar_over_eV=td.phonon_initial_velocities,
+            phonon_trajectory_cosine_A=td.phonon_trajectory_cosine,
+            phonon_trajectory_sine_A=td.phonon_trajectory_sine)
         for (sample, fi, wi, a), trace in td.time_traces.items():
             for key, value in trace.items():
                 arrays[f'phonon_trace_s{sample}_f{fi}_w{wi}_a{a}_{key}'] = value
@@ -260,6 +277,8 @@ def main():
             frequency_solver_max_relative_residual=max(s['relative_residual'] for s in frequency_dm.solver_info),
             frequency_solver_max_iterations=max(s['iterations'] for s in frequency_dm.solver_info),
             frequency_TDSE_relative_difference=relative_error(frequency_lockin.mean(axis=0), td.sigma),
+            frequency_TDSE_global_relative_difference=global_relative_error(
+                frequency_lockin.mean(axis=0), td.sigma),
             frequency_TDSE_carrier_relative_difference=relative_error(frequency_dm.sigma, td.sigma),
             matched_bath_RTA_relative_difference=relative_error(td.sigma,
                 arrays[f'sigma_ac_VG_phonon_{args.phonon_statistics}_RTA']),
@@ -273,11 +292,15 @@ def main():
                     collisionSpecification=CollisionSpecification('epc',qgrid=qgrid,
                         phononTemperature=args.temperature,bathStatistics=args.epc_markov,
                         delta=args.epc_delta,constantLinewidth=args.constantLinewidth,
-                        populationSolver=args.epc_population_solver)))
+                        populationSolver=args.epc_population_solver,
+                        enforceDetailedBalance=not args.epc_raw_rates)))
             showElapsedTime(extraInfo='Markov full collision incorporated VG DM conductivity finished')
             arrays['sigma_ac_VG_phonon_Markov']=markov_vg.sigma
             summary['phonon_dynamics']['markov_relative_difference']=relative_error(markov_vg.sigma,td.sigma)
+            summary['phonon_dynamics']['markov_global_relative_difference'] = global_relative_error(
+                markov_vg.sigma, td.sigma)
             summary['phonon_dynamics']['markov_statistics']=args.epc_markov
+            summary['phonon_dynamics']['markov_energy_delta_eV']=args.epc_delta
     if args.snapshots:
         sc = copy.deepcopy(model)
         sc.make_supercell(np.diag([args.supercell,args.supercell,1]))

@@ -451,12 +451,14 @@ def _solveLinearConductivity(param, calculatorClass):
     if calculatorClass is Opticalconductivity_TDSE:
         for key in ('E0', 'n_steps_per_cycle', 'n_cycles_measure', 'transient_lifetimes', 'max_phase_step', 'recordCurrent',
                     'phononDynamics', 'phononTemperature', 'phononStatistics',
-                    'nPhononTrajectories', 'phononSeed', 'phononCycles'):
+                    'nPhononTrajectories', 'phononSeed', 'phononCycles',
+                    'phononDamping', 'phononBathCycles', 'phononPhasePoints'):
             if key in param:
                 options[key] = param[key]
     elif calculatorClass is Opticalconductivity_VG_DM_Phonon:
         for key in ('phononTemperature', 'phononStatistics', 'nPhononTrajectories',
-                    'phononSeed', 'phononPhasePoints', 'solverTolerance', 'solverMaxiter', 'solverRestart'):
+                    'phononSeed', 'phononPhasePoints', 'phononDamping', 'phononBathCycles',
+                    'solverTolerance', 'solverMaxiter', 'solverRestart'):
             if key in param:
                 options[key] = param[key]
     else:
@@ -477,6 +479,8 @@ def _solveLinearConductivity(param, calculatorClass):
                       ('sigma stderr imag', 'sigma_stderr_imag'), ('phonon dynamics info', 'phonon_dynamics_info'),
                       ('phonon initial positions', 'phonon_initial_positions'),
                       ('phonon initial velocities', 'phonon_initial_velocities'),
+                      ('phonon trajectory cosine', 'phonon_trajectory_cosine'),
+                      ('phonon trajectory sine', 'phonon_trajectory_sine'),
                       ('phonon energies', 'phonon_energies'), ('solver info', 'solver_info'),
                       ('conductivity harmonics', 'conductivity_harmonics'),
                       ('phonon harmonics', 'phonon_harmonics'), ('phonon frequency', 'phonon_frequency')):

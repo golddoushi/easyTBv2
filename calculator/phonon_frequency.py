@@ -1,4 +1,4 @@
-"""Frequency-domain stochastic Liouville response for a harmonic SSH bath.
+"""Frequency-domain stochastic Liouville response for a periodic SSH bath.
 
 For one sampled equal-frequency trajectory let theta=nu*t. Solve
   (nu*d_theta + gamma + i[H(theta),.]) rho0 = gamma*f(H(theta)),
@@ -25,13 +25,13 @@ class HarmonicPhononLiouvillian:
     derivatives are spectral. The preconditioner inverts the bare electronic
     Liouvillian at every harmonic; it does not approximate the solved operator.
     """
-    def __init__(self, hamiltonian, bare_energies, phonon_energy, gamma,
+    def __init__(self, hamiltonian, bare_energies, base_energy, gamma,
                  tolerance=1e-9, maxiter=100, restart=30):
         self.h = np.asarray(hamiltonian)
         self.shape = self.h.shape
         self.size = self.h.size
         self.harmonics = np.fft.fftfreq(len(self.h))*len(self.h)
-        self.derivative = 1j*phonon_energy*self.harmonics[:, None, None]
+        self.derivative = 1j*base_energy*self.harmonics[:, None, None]
         self.gaps = bare_energies[:, None]-bare_energies[None, :]
         self.gamma = gamma
         self.tolerance, self.maxiter, self.restart = tolerance, maxiter, restart
@@ -64,7 +64,8 @@ class HarmonicPhononLiouvillian:
 
 
 def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed,
-                             phase_points, tolerance, maxiter, restart):
+                             phase_points, tolerance, maxiter, restart,
+                             damping=0., bath_cycles=8.):
     if owner.collision.specification.mode != 'crta':
         raise ValueError("Explicit harmonic Liouville dynamics requires CRTA background; adding SERTA would double count EPC")
     gamma = owner.collision.specification.constantLinewidth
@@ -77,23 +78,48 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
             raise ValueError(f"{name} must be an integer >= {minimum}")
     if phase_points % 2 == 0:
         raise ValueError("Use an odd phononPhasePoints to avoid an unpaired Nyquist harmonic")
+    damping, bath_cycles = float(damping), float(bath_cycles)
+    if not np.isfinite(damping) or damping < 0:
+        raise ValueError("phononDamping must be nonnegative and finite, in eV")
+    if not np.isfinite(bath_cycles) or bath_cycles <= 0:
+        raise ValueError("phononBathCycles must be positive and finite")
     operators = SSHTimeOperators(owner)
     phonons = owner.model.modelPhonons
-    nu = float(phonons.energies.flat[0])
-    if not np.allclose(phonons.energies, nu, rtol=1e-12, atol=0):
-        raise NotImplementedError("One-phase Liouville solver requires equal Einstein mode energies; dispersive modes need multiple phases")
-    samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)
-               for s in np.random.SeedSequence(seed).spawn(trajectories)]
-    owner.phonon_initial_positions = np.array([s.cosine for s in samples])
+    mode_energy = float(phonons.energies.flat[0])
+    spawned_seeds = np.random.SeedSequence(seed).spawn(trajectories)
+    if damping == 0:
+        if not np.allclose(phonons.energies, mode_energy, rtol=1e-12, atol=0):
+            raise NotImplementedError("Undamped one-phase Liouville solver requires equal Einstein mode energies")
+        base_energy, bath_period = mode_energy, 2*np.pi/mode_energy
+        samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)
+                   for s in spawned_seeds]
+        bath_name = 'prescribed harmonic'
+    else:
+        bath_period = bath_cycles*2*np.pi/np.min(phonons.energies)
+        base_energy = 2*np.pi/bath_period
+        max_resolved = ((phase_points-1)//2)*base_energy
+        if max_resolved < np.max(phonons.energies):
+            required = 2*int(np.ceil(np.max(phonons.energies)/base_energy))+1
+            raise ValueError(f"phononPhasePoints must be at least {required} for the damped bath spectrum")
+        samples = [phonons.sampleDampedTrajectory(
+            temperature, damping, bath_period, phase_points, seed=s, statistics=statistics)
+            for s in spawned_seeds]
+        bath_name = 'stationary periodic damped-Langevin spectrum'
+    owner.phonon_initial_positions = np.array([s.displacements(0) for s in samples])
     owner.phonon_initial_velocities = np.array([s.velocities(0) for s in samples])
+    owner.phonon_trajectory_cosine = np.array([s.cosine for s in samples])
+    owner.phonon_trajectory_sine = np.array([s.sine for s in samples])
     owner.phonon_energies = samples[0].energies.copy()
-    owner.phonon_frequency = nu
+    owner.phonon_frequency = base_energy
     owner.phonon_harmonics = np.fft.fftfreq(phase_points)*phase_points
-    owner.phonon_dynamics_info = dict(bath='prescribed harmonic', statistics=statistics,
+    owner.phonon_dynamics_info = dict(bath=bath_name, statistics=statistics,
         temperature_K=float(temperature), trajectories=int(trajectories), seed=seed,
         electronic_backreaction=False, orbital_centers='fixed equilibrium SSH basis',
         background_linewidth_eV=float(gamma), solver='frequency-domain harmonic Liouville',
-        phase_points=int(phase_points), tolerance=float(tolerance))
+        phase_points=int(phase_points), tolerance=float(tolerance),
+        phonon_damping_eV=damping, bath_period_hbar_per_eV=float(bath_period),
+        bath_cycles=float(1. if damping == 0 else bath_cycles),
+        fundamental_energy_eV=float(base_energy))
     owner.solver_info = []
     owner.sigma_samples = np.zeros((trajectories,)+owner.sigma.shape, complex)
     # Phase-resolved conductivity envelopes permit finite-window comparison
@@ -105,7 +131,7 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
     vectors = owner.vectors.reshape(operators.nk, operators.nb, operators.nb)
     energies = owner.energies.reshape(operators.nk, operators.nb)
     for sample_index, trajectory in enumerate(samples):
-        sampled = [operators.at_displacement(trajectory.displacements(theta/nu)) for theta in phases]
+        sampled = [operators.at_displacement(trajectory.displacements(theta/base_energy)) for theta in phases]
         h_all, v_all, w_all = [np.array(items) for items in zip(*sampled)]
         envelopes = np.zeros((len(owner.fermiList), len(owner.omegaList), phase_points, 3, 3), complex)
         for k in range(operators.nk):
@@ -113,7 +139,8 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
             h = udag @ h_all[:, k] @ u
             v = udag @ v_all[:, k] @ u
             w = udag @ w_all[:, k] @ u
-            liouvillian = HarmonicPhononLiouvillian(h, energies[k], nu, gamma, tolerance, maxiter, restart)
+            liouvillian = HarmonicPhononLiouvillian(
+                h, energies[k], base_energy, gamma, tolerance, maxiter, restart)
             e, z = np.linalg.eigh(h)
             zadj = z.conj().swapaxes(-2, -1)
             for fi, fermi in enumerate(owner.fermiList):

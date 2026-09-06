@@ -1841,15 +1841,17 @@ class Opticalconductivity_VG_DM(_LinearConductivityDM):
     gauge = "VG"
 
 class Opticalconductivity_VG_DM_Phonon(Velocity):
-    """Frequency-domain VG DM for the prescribed harmonic SSH bath.
+    """Frequency-domain VG DM for a prescribed periodic SSH phonon bath.
 
     Full conditional density matrices and phonon harmonics replace the
     linewidth-only EPC approximation. This is the stationary counterpart of
     Opticalconductivity_TDSE(phononDynamics=True), including its positive CRTA
     background and instantaneous Fermi relaxation target. It is neither
-    quantum SERTA nor ECEID. Currently all active Einstein mode energies must
-    be equal. Use the same model, seed, temperature/statistics, and supercell
-    electronic mesh as TDSE. Converge phononPhasePoints (odd) and solverTolerance.
+    quantum SERTA nor ECEID. ``phononDamping > 0`` samples a stationary periodic
+    approximation to a damped-Langevin spectrum; zero retains exact harmonic
+    motion and requires equal Einstein energies. Use the same bath parameters,
+    seed, and mesh as TDSE. Converge phononPhasePoints (odd), phononBathCycles,
+    the trajectory ensemble, and solverTolerance.
 
     sigma is the central complex-drive response; conductivity_harmonics also
     stores sidebands. lockinConductivity(times, sample, ifermi, iomega) applies
@@ -1858,6 +1860,7 @@ class Opticalconductivity_VG_DM_Phonon(Velocity):
     """
     def __init__(self, phononTemperature=300., phononStatistics='classical',
                  nPhononTrajectories=4, phononSeed=2026, phononPhasePoints=33,
+                 phononDamping=0., phononBathCycles=8.,
                  solverTolerance=1e-9, solverMaxiter=100, solverRestart=30,
                  currentProjectionList=None, fullCovariantDerivative=True,
                  finiteTemperatureOccupations=True, **kwarg):
@@ -1878,7 +1881,8 @@ class Opticalconductivity_VG_DM_Phonon(Velocity):
         from .phonon_frequency import solve_phonon_conductivity
         solve_phonon_conductivity(self, phononTemperature, phononStatistics,
             nPhononTrajectories, phononSeed, phononPhasePoints,
-            solverTolerance, solverMaxiter, solverRestart)
+            solverTolerance, solverMaxiter, solverRestart,
+            damping=phononDamping, bath_cycles=phononBathCycles)
 
     def lockinConductivity(self, times, sample=0, ifermi=0, iomega=0):
         from .phonon_frequency import lockin_conductivity
@@ -1900,11 +1904,14 @@ class Opticalconductivity_TDSE(Velocity):
     in S/m. Converge E0, n_steps_per_cycle, and transient_lifetimes. Requires
     strictly positive frequencies and linewidths for a periodic steady state.
 
-    phononDynamics=True instead propagates electrons in prescribed harmonic
-    SSH trajectories on the supplied (usually supercell) model. Positions
+    phononDynamics=True instead propagates electrons in prescribed SSH
+    trajectories on the supplied (usually supercell) model. Positions
     and velocities are sampled at phononTemperature; phononStatistics is
     'classical' or 'wigner'. The latter gives symmetrized quantum noise, not
-    quantum detailed balance. No electronic force acts on the phonon bath.
+    quantum detailed balance. ``phononDamping > 0`` uses a stationary periodic
+    damped-Langevin spectrum, including the noise required to retain the chosen
+    temperature; zero gives undamped harmonic motion. No electronic force acts
+    on the phonon bath.
     This path uses the exact field derivative of each TDSE step (E0 sets
     only recorded field units), sharing one eigensolve across all drives.
     It requires a positive CRTA background and forbids adding SERTA on top
@@ -1921,7 +1928,8 @@ class Opticalconductivity_TDSE(Velocity):
                  currentProjectionList=None, fullCovariantDerivative=True,
                  finiteTemperatureOccupations=True, phononDynamics=False,
                  phononTemperature=300., phononStatistics='classical',
-                 nPhononTrajectories=4, phononSeed=2026, phononCycles=1., **kwarg):
+                 nPhononTrajectories=4, phononSeed=2026, phononCycles=1.,
+                 phononDamping=0., phononBathCycles=8., phononPhasePoints=33, **kwarg):
         if currentProjectionList:
             raise NotImplementedError("TDSE currently supports total current only")
         if not fullCovariantDerivative or not finiteTemperatureOccupations:
@@ -1963,7 +1971,9 @@ class Opticalconductivity_TDSE(Velocity):
                 transient_lifetimes=transient_lifetimes, max_phase_step=max_phase_step,
                 recordCurrent=recordCurrent, temperature=phononTemperature,
                 statistics=phononStatistics, trajectories=nPhononTrajectories,
-                seed=phononSeed, phonon_cycles=phononCycles)
+                seed=phononSeed, phonon_cycles=phononCycles,
+                phonon_damping=phononDamping, bath_cycles=phononBathCycles,
+                phase_points=phononPhasePoints)
             return
         h0 = diagonal_matrix(self.energies)
         scale = elementary_charge**2 / (hbar*angstrom*abs(self.model.Vcell))

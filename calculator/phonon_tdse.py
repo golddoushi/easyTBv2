@@ -47,7 +47,8 @@ def linear_tdse_step(rho, response, hamiltonian, velocity, vector_potential,
 def propagate_phonon_conductivity(owner, *, n_steps_per_cycle, n_cycles_measure,
                                  transient_lifetimes, max_phase_step, recordCurrent,
                                  temperature, statistics, trajectories, seed,
-                                 phonon_cycles):
+                                 phonon_cycles, phonon_damping=0., bath_cycles=8.,
+                                 phase_points=33):
     """Populate the existing Opticalconductivity_TDSE output interface."""
     if owner.collision.specification.mode != 'crta':
         raise ValueError("Explicit phonon trajectories require CRTA background only; EPC SERTA would double count scattering")
@@ -59,21 +60,54 @@ def propagate_phonon_conductivity(owner, *, n_steps_per_cycle, n_cycles_measure,
             or not np.isfinite(transient_lifetimes) or transient_lifetimes < 0
             or not np.isfinite(phonon_cycles) or phonon_cycles < 0):
         raise ValueError("Require positive background linewidth, integer steps/cycles/trajectories, and valid time controls")
+    phonon_damping, bath_cycles = float(phonon_damping), float(bath_cycles)
+    if not np.isfinite(phonon_damping) or phonon_damping < 0:
+        raise ValueError("phononDamping must be nonnegative and finite, in eV")
+    if not np.isfinite(bath_cycles) or bath_cycles <= 0:
+        raise ValueError("phononBathCycles must be positive and finite")
     operators = SSHTimeOperators(owner)
     phonons = owner.model.modelPhonons
-    samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)
-               for s in np.random.SeedSequence(seed).spawn(int(trajectories))]
-    owner.phonon_initial_positions = np.array([s.cosine for s in samples])
+    spawned_seeds = np.random.SeedSequence(seed).spawn(int(trajectories))
+    if phonon_damping == 0:
+        samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)
+                   for s in spawned_seeds]
+        bath_period = 2*np.pi/np.min(phonons.energies)
+        base_energy = np.min(phonons.energies)
+        bath_name = 'prescribed harmonic'
+    else:
+        bath_period = bath_cycles*2*np.pi/np.min(phonons.energies)
+        base_energy = 2*np.pi/bath_period
+        if (not isinstance(phase_points, (int, np.integer)) or phase_points < 5
+                or phase_points % 2 == 0):
+            raise ValueError("phononPhasePoints must be an odd integer >= 5")
+        max_resolved = ((phase_points-1)//2)*base_energy
+        if max_resolved < np.max(phonons.energies):
+            required = 2*int(np.ceil(np.max(phonons.energies)/base_energy))+1
+            raise ValueError(f"phononPhasePoints must be at least {required} for the damped bath spectrum")
+        samples = [phonons.sampleDampedTrajectory(
+            temperature, phonon_damping, bath_period, phase_points, seed=s, statistics=statistics)
+            for s in spawned_seeds]
+        bath_name = 'stationary periodic damped-Langevin spectrum'
+    owner.phonon_initial_positions = np.array([s.displacements(0) for s in samples])
     owner.phonon_initial_velocities = np.array([s.velocities(0) for s in samples])
+    owner.phonon_trajectory_cosine = np.array([s.cosine for s in samples])
+    owner.phonon_trajectory_sine = np.array([s.sine for s in samples])
     owner.phonon_energies = samples[0].energies.copy()
+    owner.phonon_frequency = base_energy
     owner.phonon_dynamics_info = dict(
-        bath='prescribed harmonic', statistics=statistics, temperature_K=float(temperature),
+        bath=bath_name, statistics=statistics, temperature_K=float(temperature),
         trajectories=int(trajectories), seed=seed, electronic_backreaction=False,
         orbital_centers='fixed equilibrium SSH basis', background_linewidth_eV=float(gamma),
-        integrator='linearized exact midpoint TDSE/CRTA', phonon_cycles_min=float(phonon_cycles))
+        integrator='linearized exact midpoint TDSE/CRTA', phonon_cycles_min=float(phonon_cycles),
+        phonon_damping_eV=phonon_damping, bath_period_hbar_per_eV=float(bath_period),
+        bath_cycles=float(1. if phonon_damping == 0 else bath_cycles),
+        phase_points=(None if phonon_damping == 0 else int(phase_points)),
+        fundamental_energy_eV=float(base_energy))
     owner.sigma_samples = np.zeros((int(trajectories),)+owner.sigma.shape, complex)
     scale = elementary_charge**2/(hbar*angstrom*abs(owner.model.Vcell))
     longest_phonon_period = 2*np.pi/np.min(phonons.energies)
+    bath_bandwidth = (np.max(phonons.energies) if phonon_damping == 0
+                      else ((phase_points-1)//2)*base_energy)
     span = np.max(np.ptp(owner.energies, axis=-1))
     # Frame remains the localized basis for the entire moving-ion trajectory.
     vectors = owner.vectors.reshape(operators.nk, operators.nb, operators.nb)
@@ -81,7 +115,7 @@ def propagate_phonon_conductivity(owner, *, n_steps_per_cycle, n_cycles_measure,
     for iw, omega in enumerate(owner.omegaList):
         period = 2*np.pi/omega
         steps = max(int(n_steps_per_cycle), int(np.ceil(
-            period*max(span, gamma, np.max(phonons.energies))/max_phase_step)))
+            period*max(span, gamma, bath_bandwidth)/max_phase_step)))
         dt = period/steps
         ntrans = int(np.ceil(transient_lifetimes/(gamma*period)))*steps
         needed_cycles = phonon_cycles*longest_phonon_period/period
