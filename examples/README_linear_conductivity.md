@@ -38,10 +38,10 @@ td = Opticalconductivity_TDSE(E0=1e-4, n_steps_per_cycle=256, **small)
 Run the standalone benchmark:
 
 ```text
-python examples/honeycomb_conductivity.py --grid 32 --tdse-grid 4
-python examples/honeycomb_conductivity.py --grid 32 --skip-tdse --snapshots 20 --supercell 2
-python examples/honeycomb_conductivity.py --grid 24 --serta both --skip-tdse
-python examples/honeycomb_conductivity.py --grid 12 --serta static --snapshots 200 --supercell 2 --skip-tdse
+python examples/honeycomb_conductivity.py --electronic-k-grid 32 --clamped-tdse-k-grid 4
+python examples/honeycomb_conductivity.py --electronic-k-grid 32 --skip-tdse --snapshots 20 --phonon-supercell 2
+python examples/honeycomb_conductivity.py --electronic-k-grid 24 --serta both --skip-tdse
+python examples/honeycomb_conductivity.py --electronic-k-grid 12 --serta static --snapshots 200 --phonon-supercell 2 --skip-tdse
 ```
 
 It writes `tmp/honeycomb_conductivity/summary.json` and `conductivity.npz`.
@@ -232,12 +232,12 @@ a prescribed harmonic SSH bath. Enable the supercell example with:
 python examples/honeycomb_conductivity.py --phonon-dynamics --serta none --omega 1.3 --phonon-trajectories 4
 ```
 
-The default `--supercell 4` has 64 electronic states and 64 in-plane phonon
-degrees of freedom. `--phonon-grid 1` samples the supercell at Gamma. Its
+The default `--phonon-supercell 4` has 64 electronic states and 64 in-plane phonon
+degrees of freedom. `--supercell-k-grid 1` samples the supercell at Gamma. Its
 frequency-domain comparisons use primitive electronic and phonon meshes
 `(4,4,1)`. More generally, supercell S and reduced electronic grid K correspond
 to a primitive electronic grid `(S*K,S*K,1)` and phonon grid `(S,S,1)`.
-`--grid`, `--tdse-grid`, and `--serta-qgrid` control the separate legacy
+`--electronic-k-grid`, `--clamped-tdse-k-grid`, and `--serta-q-grid` control separate
 calculations; they do not override these matched moving-phonon grids.
 `--skip-tdse` and `--phonon-dynamics` are mutually exclusive.
 
@@ -256,8 +256,8 @@ current and ionic current are outside this hopping-only model.
 The electronic algorithm linearizes the exact midpoint TDSE step. It
 propagates the zero-field density and three field derivatives using one
 eigensolve per timestep; it uses no optical DM frequency kernel or fitted EPC
-linewidth. `--field` only rescales the saved drive trace in this linear path.
-The scalar `--constantLinewidth` is a background relaxation toward
+linewidth. `--optical-field` only rescales the saved drive trace in this linear path.
+The scalar `--background-linewidth` is a background relaxation toward
 `f(H[u(t),A(t)])`; it must be positive. The corresponding DM comparisons add
 the same background to their EPC linewidths. Adding `--tdse-collision dynamic`
 or `static` to moving-phonon propagation is rejected to avoid double counting.
@@ -320,7 +320,7 @@ model as `Opticalconductivity_TDSE(phononDynamics=True)`. It is now included
 automatically in the `--phonon-dynamics` example. For instance:
 
 ```text
-python examples/honeycomb_conductivity.py --phonon-dynamics --serta none --omega 1.3 --phonon-trajectories 2 --steps 128 --phonon-phase-points 33
+python examples/honeycomb_conductivity.py --phonon-dynamics --serta none --omega 1.3 --phonon-trajectories 2 --tdse-steps-per-cycle 128 --phonon-phase-points 33
 ```
 
 The moving-ion implementation is a classical-path approximation

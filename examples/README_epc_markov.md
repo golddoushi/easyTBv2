@@ -32,13 +32,13 @@ the electric drive must use the total velocity vertex.
 The honeycomb example exposes the calculation alongside CRTA/SERTA:
 
 ```text
-python examples/honeycomb_conductivity.py --grid 16 --skip-tdse --serta none --epc-markov quantum --epc-qgrid 4 --omega 1.3 --constantLinewidth .2
+python examples/honeycomb_conductivity.py --electronic-k-grid 16 --skip-tdse --serta none --epc-markov quantum --markov-q-grid 4 --omega 1.3 --background-linewidth .2
 ```
 
 For comparison with the prescribed moving-phonon benchmark:
 
 ```text
-python examples/honeycomb_conductivity.py --grid 4 --phonon-dynamics --serta none --epc-markov classical --epc-qgrid 4 --supercell 4 --omega 1.3 --constantLinewidth .2 --phonon-trajectories 2 --steps 128
+python examples/honeycomb_conductivity.py --electronic-k-grid 4 --phonon-dynamics --serta none --epc-markov classical --markov-q-grid 4 --phonon-supercell 4 --omega 1.3 --background-linewidth .2 --phonon-trajectories 2 --tdse-steps-per-cycle 128
 ```
 
 The latter stores `sigma_ac_VG_phonon_Markov` on the same folded electronic
