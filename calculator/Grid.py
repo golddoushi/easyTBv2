@@ -1840,6 +1840,47 @@ class Opticalconductivity_VG_DM(_LinearConductivityDM):
     """
     gauge = "VG"
 
+class Opticalconductivity_VG_DM_StaticEPC(Velocity):
+    """Complete static Gaussian EPC correction, second order in displacement.
+
+    Linear electric response including Fan-type repeated linear vertices,
+    quadratic/Debye-Waller vertices, occupations and optical current changes.
+    Use a commensurate supercell carrying the desired phonon covariance and a
+    CRTA background. No numerical EPC delta, displaced eigensolve, displacement
+    finite difference or extra SERTA linewidth enters this calculation.
+
+    sigma = sigma_bare + sigma_correction, all shaped (fermi,omega,drive,current)
+    in S/m. movingCenters=True matches static makeDisplacedModel snapshots;
+    False matches hopping-only snapshots and the phonon TDSE basis convention.
+    At omega=0 the same analytic VG pole removal as Opticalconductivity_VG_DM
+    is used. At nonzero omega the contact residue is retained and reported.
+    Only first electric-field order is implemented; this is not a BPVE kernel.
+    """
+    def __init__(self, phononTemperature=300., phononStatistics='quantum',
+                 movingCenters=True, displacementFactors=None, kBatchSize=4,
+                 currentProjectionList=None, fullCovariantDerivative=True,
+                 finiteTemperatureOccupations=True, **kwarg):
+        if currentProjectionList or kwarg['model'].overlap or kwarg.get('skip_low', False):
+            raise NotImplementedError('Static EPC VG DM requires total current and a complete orthogonal basis')
+        if not fullCovariantDerivative or not finiteTemperatureOccupations:
+            raise ValueError('Static EPC VG DM requires full covariant finite-temperature occupations')
+        requested = kwarg.get('collisionSpecification')
+        requested_mode = requested.lower() if isinstance(requested, str) else getattr(requested, 'mode', 'crta')
+        if requested_mode != 'crta':
+            raise ValueError('Static EPC expansion requires CRTA background only; adding SERTA/full collision would double count EPC')
+        kwarg.pop('highOrderVelocity', None)
+        super().__init__(highOrderVelocity=False, **kwarg)
+        if np.any(~np.isfinite(self.omegaList)):
+            raise ValueError('Optical frequencies must be finite')
+        self.collision = CollisionSpecification.fromOwner(self)
+        self.Iodd, self.Todd = False, True
+        self.conductivity_units = 'S/m'
+        self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
+        from .phonon_static import solve_static_epc_conductivity
+        solve_static_epc_conductivity(self, phononTemperature, phononStatistics,
+            movingCenters, displacementFactors, kBatchSize)
+
+
 class Opticalconductivity_VG_DM_Phonon(Velocity):
     """Frequency-domain VG DM for a prescribed periodic SSH phonon bath.
 

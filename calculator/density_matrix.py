@@ -839,6 +839,139 @@ def fermi_second_divided_difference(x, y, z, fermi, kBT):
         result[nearby] = series / kBT**2
     return result
 
+def fermi_third_divided_difference(x, y, z, w, fermi, kBT):
+    """Symmetric f[x,y,z,w], with analytic confluent limits at degeneracy.
+
+    Nearby nodes use the Fermi Taylor series and complete homogeneous
+    polynomials. No inverse electronic-gap cutoff or k-neighbor data is used.
+    """
+    if kBT <= 0:
+        raise ValueError('Fermi divided differences require kBT > 0')
+    nodes = np.sort(np.stack(np.broadcast_arrays(x, y, z, w)), axis=0)
+    low, middle1, middle2, high = nodes
+    span = high-low
+    nearby = span <= .5*kBT
+    result = np.zeros_like(span)
+    far = ~nearby
+    if np.any(far):
+        result[far] = (fermi_second_divided_difference(middle1[far], middle2[far], high[far], fermi, kBT)
+                       -fermi_second_divided_difference(low[far], middle1[far], middle2[far], fermi, kBT))/span[far]
+    if np.any(nearby):
+        center = low[nearby]+.5*span[nearby]
+        dx = (nodes[:, nearby]-center)/kBT
+        e1 = np.sum(dx, axis=0)
+        e2 = sum(dx[i]*dx[j] for i in range(4) for j in range(i+1, 4))
+        e3 = sum(dx[i]*dx[j]*dx[l] for i in range(4) for j in range(i+1, 4) for l in range(j+1, 4))
+        e4 = np.prod(dx, axis=0)
+        t = (center-fermi)/kBT
+        f = expit(-np.abs(t))
+        coefficients = [f, -f*(1-f)]
+        for order in range(1, 22):
+            convolution = sum(coefficients[j]*coefficients[order-j] for j in range(1, order))
+            coefficients.append(((2*f-1)*coefficients[order]+convolution)/(order+1))
+        h0 = np.ones_like(t)
+        h1, h2, h3 = np.zeros_like(t), np.zeros_like(t), np.zeros_like(t)
+        value = np.zeros_like(t)
+        for order in range(20):
+            c = coefficients[order+3]
+            if order % 2:
+                c = np.where(t < 0, -c, c)
+            value += c*h0
+            h0, h1, h2, h3 = e1*h0-e2*h1+e3*h2-e4*h3, h0, h1, h2
+        result[nearby] = value/kBT**3
+    return result
+
+
+class StaticDisplacementDMKernel:
+    """Complete static Gaussian expansion of the CRTA electric response.
+
+    H=H0+x*H1+x^2*H2, v=v0+x*v1+x^2*v2, <x^2>=1. All matrices
+    use the equilibrium eigenbasis; H2 is the quadratic coefficient, not the
+    second derivative. This expands the same covariant instantaneous-Fermi
+    background as the first-order VG kernel. No extra EPC linewidth is added.
+
+    Returned r matrices include the electron-current minus sign, like the
+    established first-order kernels. They obey
+      (gamma-i*omega+i ad_H0) r_j = -d_j-i[H1,r_(j-1)]-i[H2,r_(j-2)],
+    where d_j are coefficients of D f(H(x))[v(x)]. The VG equilibrium pole
+    and observable derivatives are contracted by the consuming calculator.
+    """
+
+    def __init__(self, energies, fermi, kBT, linewidth, thirdBlockSize=8):
+        self.e = np.asarray(energies)
+        if self.e.ndim != 2 or not np.isfinite(self.e).all():
+            raise ValueError('energies must be finite (nk,nb)')
+        if not np.isfinite(kBT) or kBT <= 0 or not np.isfinite(linewidth) or linewidth <= 0:
+            raise ValueError('static DM expansion requires positive temperature and background linewidth')
+        if not isinstance(thirdBlockSize, (int, np.integer)) or thirdBlockSize < 1:
+            raise ValueError('thirdBlockSize must be a positive integer')
+        self.fermi, self.kBT, self.gamma = float(fermi), float(kBT), float(linewidth)
+        self.f = expit((fermi-self.e)/kBT)
+        self.gaps = self.e[:, :, None]-self.e[:, None, :]
+        self.dd1 = fermi_divided_difference(self.e[:, :, None], self.e[:, None, :], fermi, kBT)
+        self.dd2 = fermi_second_divided_difference(self.e[:, :, None, None],
+            self.e[:, None, :, None], self.e[:, None, None, :], fermi, kBT)
+        self.third_block_size = thirdBlockSize
+        # Cache only small fourth-rank tensors. Large supercells stream the
+        # last band index, bounding scratch memory rather than allocating nb^4.
+        self._cache_third = len(self.e)*self.e.shape[1]**4 <= 1_000_000
+        self.dd3 = None
+
+    def _third(self, columns):
+        e = self.e
+        return fermi_third_divided_difference(e[:, :, None, None, None],
+            e[:, None, :, None, None], e[:, None, None, :, None],
+            e[:, None, None, None, columns], self.fermi, self.kBT)
+
+    def second_product(self, a, b):
+        return np.einsum('kilj,kil,klj->kij', self.dd2, a, b, optimize=True)
+
+    def coefficients(self, h1, h2, v0, v1, v2):
+        """Return equilibrium f0/f1/f2 and electric-source d0/d1/d2.
+
+        v arrays have shape (nk,drive,nb,nb). No displaced eigensolve or
+        displacement finite difference occurs in this kernel.
+        """
+        f0 = diagonal_matrix(self.f)
+        f1 = self.dd1*h1
+        f2 = self.dd1*h2+self.second_product(h1, h1)
+        d0 = self.dd1[:, None]*v0
+        d1 = self.dd1[:, None]*v1
+        d2 = self.dd1[:, None]*v2
+        for a in range(v0.shape[1]):
+            d1[:, a] += self.second_product(h1, v0[:, a])+self.second_product(v0[:, a], h1)
+            d2[:, a] += (self.second_product(h1, v1[:, a])+self.second_product(v1[:, a], h1)
+                          +self.second_product(h2, v0[:, a])+self.second_product(v0[:, a], h2))
+        active = [a for a in range(v0.shape[1]) if np.any(v0[:, a])]
+        if not np.any(h1) or not active:
+            return (f0, f1, f2), (d0, d1, d2)
+        if self._cache_third and self.dd3 is None:
+            self.dd3 = self._third(slice(None))
+        nb = self.e.shape[1]
+        block = nb if self.dd3 is not None else self.third_block_size
+        for start in range(0, nb, block):
+            columns = slice(start, min(start+block, nb))
+            dd = self.dd3 if self.dd3 is not None else self._third(columns)
+            for a in active:
+                v = v0[:, a]
+                # D^3 f[H1,H1,v]/2 has three distinct ordered products.
+                for left, middle, right in ((h1, h1, v), (h1, v, h1), (v, h1, h1)):
+                    d2[:, a, :, columns] += np.einsum('kilpj,kil,klp,kpj->kij',
+                        dd, left, middle, right[:, :, columns], optimize=True)
+        return (f0, f1, f2), (d0, d1, d2)
+
+    def response(self, sources, h1, h2, omega):
+        if not np.isfinite(omega):
+            raise ValueError('omega must be finite')
+        denominator = self.gamma+1j*(self.gaps-float(omega))
+        d0, d1, d2 = sources
+        r0 = -d0/denominator[:, None]
+        r1 = (-d1-1j*commutator(h1[:, None], r0))/denominator[:, None]
+        r2 = (-d2-1j*commutator(h1[:, None], r1)
+              -1j*commutator(h2[:, None], r0))/denominator[:, None]
+        return r0, r1, r2
+
+
 @dataclass
 class SecondOrderDensityMatrixBlock:
     """Density matrices for one ordered optical tensor component."""

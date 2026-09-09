@@ -23,7 +23,8 @@ import numpy as np
 from scipy.constants import Boltzmann, electron_volt
 from examples.chain_four_band import build_model
 from calculator import (Opticalconductivity_LG_DM, Opticalconductivity_VG_DM,
-                        Opticalconductivity_TDSE, Opticalconductivity_VG_DM_Phonon)
+                        Opticalconductivity_TDSE, Opticalconductivity_VG_DM_Phonon,
+                        Opticalconductivity_VG_DM_StaticEPC)
 from calculator import CollisionSpecification, ModelEPCLinewidth
 from auxiliary import uniform_qmesh
 from system.phonon_selection import PhononModeSelection
@@ -176,6 +177,10 @@ def main(argv=None):
     p.add_argument('--curvature', action='store_true',
                    help='Evaluate the Gaussian snapshot average to second order without sampling noise')
     p.add_argument('--curvature-step', type=float, default=.005)
+    p.add_argument('--static-epc-dm', action='store_true',
+                   help='Complete static Gaussian EPC response through second displacement order, using DM coefficients and CRTA background')
+    p.add_argument('--static-epc-kbatch', type=int, default=4,
+                   help='Maximum supercell k points per static DM derivative batch')
     p.add_argument('--tdse', action='store_true', help='Also propagate electrons in moving phonon trajectories on --supercell; positive frequencies only')
     p.add_argument('--tdse-trajectories', type=int, default=4)
     p.add_argument('--tdse-statistics', choices=['wigner', 'classical'], default='wigner',
@@ -217,6 +222,8 @@ def main(argv=None):
         p.error('frequencies must be finite')
     if a.curvature and (not np.isfinite(a.curvature_step) or a.curvature_step <= 0):
         p.error('--curvature-step must be positive and finite')
+    if a.static_epc_kbatch < 1:
+        p.error('--static-epc-kbatch must be positive')
     if a.tdse_frequency_check and not a.tdse:
         p.error('--tdse-frequency-check requires --tdse')
     if a.tdse:
@@ -289,11 +296,27 @@ def main(argv=None):
     print('Frequency-domain solvers finished', round(time.perf_counter()-start, 2), flush=True)
     if a.tdse:
         run_tdse_alignment(model, a, common, bg, base, arrays, meta)
-    if a.pairs or a.curvature:
+    if a.pairs or a.curvature or a.static_epc_dm:
         sc = copy.deepcopy(model)
         sc.make_supercell(np.diag([a.supercell, 1, 1]))
         scgrid = a.grid//a.supercell
         arrays['supercell_equilibrium'] = xx(solve(sc, grid=scgrid))
+        if a.static_epc_dm:
+            opts = dict(common, model=sc, kgrid=(scgrid, 1, 1), collisionSpecification=bg)
+            for fixed in ([False, True] if a.fixed_centers else [False]):
+                result = Opticalconductivity_VG_DM_StaticEPC(**opts,
+                    phononTemperature=a.temperature, movingCenters=not fixed,
+                    kBatchSize=a.static_epc_kbatch)
+                key = 'static_epc_dm_fixed' if fixed else 'static_epc_dm'
+                arrays[key] = xx(result)
+                arrays[key+'_bare'] = result.sigma_bare[0, :, 0, 0]
+                arrays[key+'_change'] = result.sigma_correction[0, :, 0, 0]
+                arrays[key+'_change_by_mode'] = result.sigma_correction_by_mode[:, 0, :, 0, 0]
+                arrays[key+'_sum_rule_residual'] = result.correction_sum_rule_residual
+                for name, value in result.sigma_correction_channels.items():
+                    arrays[key+'_'+name] = value[0, :, 0, 0]
+                meta[key] = result.static_epc_info
+            print('Complete static EPC DM finished', round(time.perf_counter()-start, 2), flush=True)
         if a.curvature and selection is not None:
             # Selected q modes correlate different cells. Contract the full
             # covariance through real normal-coordinate directions, retaining
@@ -368,12 +391,15 @@ def main(argv=None):
             change_references[name] = reference
     if a.tdse:
         change_references['tdse'] = 'tdse_clean'
+    for name in ('static_epc_dm', 'static_epc_dm_fixed'):
+        if name in arrays:
+            change_references[name] = name+'_bare'
     meta['change_references'] = change_references
     meta['elapsed_seconds'] = time.perf_counter()-start
     np.savez(out/'results.npz', **arrays)
     (out/'metadata.json').write_text(json.dumps(meta, indent=2)+'\n', encoding='utf-8')
     print(f"sigma0: {arrays['baseline'][0].real:12.5E}", flush=True)
-    for name in ('static_serta', 'dynamic_serta', 'balanced_rta', 'full', 'snapshot', 'fixed_center_snapshot', 'snapshot_second_order'):
+    for name in ('static_serta', 'dynamic_serta', 'balanced_rta', 'full', 'snapshot', 'fixed_center_snapshot', 'snapshot_second_order', 'static_epc_dm', 'static_epc_dm_fixed'):
         if name in arrays:
             change       = arrays[name+'_change']
             change_ratio = change/np.abs(arrays[change_references[name]])*100
