@@ -56,9 +56,19 @@ class CollisionSpecification:
         linewidth < this, the calculator threw errors.
     linewidthSource
         Band/k-resolved linewidth source used only by ``serta``.
+    secondOrderLinewidthDerivative : ``'frozen'`` | ``'covariant'``
+        Second-order CRTA/SERTA only. The default retains the historical
+        frozen-linewidth derivative. ``covariant`` differentiates the damping
+        matrix in the complete orthogonal orbital basis, including its band
+        projectors, and uses the same kinetic equation in LG and VG. Requires
+        fullCovariantDerivative=True and a converged electronic mesh.
     qgrid : tuple(3), optional
         Uniform phonon mesh for ``epc``.  It defaults to the calculator k mesh
         and each q-grid dimension must divide the corresponding k-grid one.
+    phononSelection : PhononModeSelection, optional
+        Restricted q/branch quadrature for ``epc``, also read from
+        modelPhonons.modeSelection. Supersedes qgrid, preserves absolute weights
+        and requires the selected q shifts to close on the electronic mesh.
     phononTemperature : float
         Bath temperature in kelvin used by ``epc``.
     delta : float
@@ -89,7 +99,8 @@ class CollisionSpecification:
                  linewidthSource=None, qgrid=None, phononTemperature=300.,
                  delta=.03, bathStatistics="quantum", populationSolver="auto",
                  solverTolerance=1e-10, stationaryTolerance=1e-12,
-                 enforceDetailedBalance=True):
+                 enforceDetailedBalance=True, secondOrderLinewidthDerivative="frozen",
+                 phononSelection=None):
         mode=str(mode).lower()
         if mode in ("full", "epc_markov"):
             mode="epc"
@@ -100,6 +111,7 @@ class CollisionSpecification:
         self.linewidthFloor=float(linewidthFloor)
         self.linewidthSource=linewidthSource
         self.qgrid=None if qgrid is None else tuple(qgrid)
+        self.phononSelection=phononSelection
         self.phononTemperature=float(phononTemperature)
         self.delta=float(delta)
         self.bathStatistics=str(bathStatistics).lower()
@@ -107,6 +119,9 @@ class CollisionSpecification:
         self.solverTolerance=float(solverTolerance)
         self.stationaryTolerance=float(stationaryTolerance)
         self.enforceDetailedBalance=bool(enforceDetailedBalance)
+        if secondOrderLinewidthDerivative not in ("frozen", "covariant"):
+            raise ValueError("secondOrderLinewidthDerivative must be frozen or covariant")
+        self.secondOrderLinewidthDerivative=secondOrderLinewidthDerivative
         if (not np.isfinite(self.constantLinewidth) or self.constantLinewidth < 0
                 or not np.isfinite(self.linewidthFloor) or self.linewidthFloor < 0):
             raise ValueError("constantLinewidth and linewidthFloor must be finite and nonnegative")
@@ -152,6 +167,38 @@ class CollisionOperator:
     """
 
     mesh_coupled=False
+
+    def mesh_derivative(self, matrix, direction):
+        """Covariant spectral derivative in the complete orthogonal basis.
+
+        Even-grid Nyquist derivatives are zero to preserve Hermiticity.
+        The orbital connection is shared by linewidth and full collisions.
+        """
+        owner = self.owner
+        if owner.model.overlap or owner.energies.shape[-1] != owner.model.norbs:
+            raise NotImplementedError("Covariant collision derivatives require the complete orthogonal model basis")
+        if not hasattr(self, "_mesh_connection"):
+            buffer = np.zeros(owner.kgrid + (3, owner.model.norbs, owner.model.norbs), complex)
+            for ir, rv in enumerate(owner.model.iRvec):
+                buffer[tuple(np.asarray(rv) % owner.kgrid)] += owner.model.AA_R_W[ir]*owner.phaseFactorR[ir]
+            connection = np.fft.ifftn(buffer, axes=(0, 1, 2))*np.prod(owner.kgrid)
+            self._mesh_connection = .5*(connection + connection.conj().swapaxes(-1, -2))
+        u = owner.vectors
+        adj = u.conj().swapaxes(-1, -2)
+        orbital = u @ matrix @ adj
+        coefficients = np.fft.fftn(orbital, axes=(0, 1, 2))
+        moment = np.zeros(owner.kgrid)
+        for axis, n in enumerate(owner.kgrid):
+            r = np.fft.fftfreq(n)*n
+            if n % 2 == 0:
+                r[n//2] = 0.
+            shape = [1, 1, 1]
+            shape[axis] = n
+            moment += r.reshape(shape)*owner.model.lattice[axis, direction]
+        derivative = np.fft.ifftn(1j*moment[..., None, None]*coefficients, axes=(0, 1, 2))
+        connection = self._mesh_connection[..., direction, :, :]
+        derivative -= 1j*(connection @ orbital - orbital @ connection)
+        return adj @ derivative @ u
 
     def forFermi(self, fermi):
         """Return the collision view linearized around one chemical potential."""
@@ -301,12 +348,19 @@ class CollisionOperator_full(CollisionOperator):
             raise NotImplementedError("mesh-global EPC collision requires the complete model basis")
         model.modelEPC.validate(model)
         self.kgrid=np.asarray(owner.kgrid,dtype=int)
+        self.phononSelection = (getattr(model.modelPhonons, 'modeSelection', None)
+                                if specification.phononSelection is None else specification.phononSelection)
         qgrid=self.kgrid if specification.qgrid is None else np.asarray(specification.qgrid)
         if (qgrid.shape != (3,) or not np.all(np.isfinite(qgrid))
                 or np.any(qgrid < 1) or not np.all(qgrid == qgrid.astype(int))):
             raise ValueError("EPC qgrid must contain three positive integers")
         self.qgrid=qgrid.astype(int)
-        if np.any(self.kgrid % self.qgrid):
+        if self.phononSelection is not None:
+            self.phononSelection.mesh_shifts(self.kgrid)
+            if len(getattr(model.modelPhonons, '_cell_origins', [None])) != 1:
+                raise ValueError('evaluate selected EPC collisions on the primitive model; the selection uses primitive q and branch labels')
+            self.phononSelection.branch_indices(len(model.modelPhonons.modes(self.phononSelection.qpoints[0])[0]))
+        elif np.any(self.kgrid % self.qgrid):
             raise ValueError("each EPC qgrid dimension must divide the calculator kgrid")
         bath_kBT=Boltzmann*specification.phononTemperature/electron_volt
         if specification.enforceDetailedBalance:
@@ -354,9 +408,14 @@ class CollisionOperator_full(CollisionOperator):
         kpoints=uniform_qmesh(grid)+owner.kOffset
         energies=owner.energies.reshape(self.nk,self.nbands)
         vectors=owner.vectors.reshape(self.nk,self.nbands,self.nbands)
-        qindices=np.indices(self.qgrid).reshape(3,-1).T
-        qpoints=uniform_qmesh(self.qgrid)
-        qstep=grid//np.asarray(self.qgrid)
+        if self.phononSelection is None:
+            qpoints=uniform_qmesh(self.qgrid)
+            qshifts=np.indices(self.qgrid).reshape(3,-1).T*(grid//np.asarray(self.qgrid))
+            qweights=np.full(len(qpoints), 1/len(qpoints))
+        else:
+            qpoints=self.phononSelection.qpoints
+            qshifts=self.phononSelection.mesh_shifts(grid)
+            qweights=self.phononSelection.weights
         # q maps each initial state to a distinct final k block. Sum modes
         # before storage and fill CSC directly, avoiding mode-resolved COO
         # triplets and their concatenation copies. No rate cutoff is applied.
@@ -366,15 +425,17 @@ class CollisionOperator_full(CollisionOperator):
         rows=np.empty(values.shape,dtype=index_dtype)
         source_k=np.arange(self.nk)
         modes=owner.model.modelPhonons
-        qweight=1/len(qpoints)
-        for iq, (qindex, q) in enumerate(zip(qindices,qpoints)):
-            destination_indices=(kindices+qindex*qstep) % grid
+        for iq, (qshift, q, qweight) in enumerate(zip(qshifts,qpoints,qweights)):
+            destination_indices=(kindices+qshift) % grid
             destination_k=np.ravel_multi_index(destination_indices.T,tuple(grid))
             phonon_energies,_=modes.modes(q)
+            branches=(np.arange(len(phonon_energies)) if self.phononSelection is None
+                      else self.phononSelection.branch_indices(len(phonon_energies)))
+            phonon_energies=phonon_energies[branches]
             if np.any(phonon_energies <= 0) or not np.all(np.isfinite(phonon_energies)):
                 raise ValueError("EPC rates require positive finite mode energies; zero acoustic modes need an explicit limiting prescription")
             population=self._phonon_population(phonon_energies)
-            g=model.getModelEPCBatch(kpoints,q,vectors,vectors[destination_k])
+            g=model.getModelEPCBatch(kpoints,q,vectors,vectors[destination_k])[:,branches]
             initial=energies[:,None,None,:]
             final=energies[destination_k][:,None,:,None]
             difference=initial-final
@@ -649,37 +710,6 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         if np.any(correction):
             result=result+self.mesh_derivative(diagonal_matrix(correction),direction)
         return result
-
-    def mesh_derivative(self, matrix, direction):
-        """Gauge-covariant spectral derivative in the complete orbital basis.
-
-        It differentiates arbitrary solved matrices, including their k-dependent
-        scattering. Even-grid Nyquist derivatives are set to zero, preserving
-        Hermiticity. Convergence requires a resolved electronic k mesh.
-        """
-        if not hasattr(self,"_mesh_connection"):
-            owner=self.owner
-            buffer=np.zeros(owner.kgrid+(3,owner.model.norbs,owner.model.norbs),complex)
-            for ir,rv in enumerate(owner.model.iRvec):
-                buffer[tuple(np.asarray(rv)%owner.kgrid)]+=owner.model.AA_R_W[ir]*owner.phaseFactorR[ir]
-            self._mesh_connection=np.fft.ifftn(buffer,axes=(0,1,2))*np.prod(owner.kgrid)
-            self._mesh_connection=.5*(self._mesh_connection+self._mesh_connection.conj().swapaxes(-1,-2))
-        u=self.owner.vectors
-        adj=u.conj().swapaxes(-1,-2)
-        orbital=u@matrix@adj
-        coefficients=np.fft.fftn(orbital,axes=(0,1,2))
-        moment=np.zeros(self.owner.kgrid)
-        for axis,n in enumerate(self.owner.kgrid):
-            r=np.fft.fftfreq(n)*n
-            if n%2 == 0:
-                r[n//2]=0.
-            shape=[1,1,1]
-            shape[axis]=n
-            moment+=r.reshape(shape)*self.owner.model.lattice[axis,direction]
-        derivative=np.fft.ifftn(1j*moment[...,None,None]*coefficients,axes=(0,1,2))
-        connection=self._mesh_connection[...,direction,:,:]
-        derivative-=1j*(connection@orbital-orbital@connection)
-        return adj@derivative@u
 
     def apply_population(self, values):
         shape=self.owner.energies.shape
@@ -1082,6 +1112,15 @@ class _SecondOrderDMKernel:
         self.indices = np.arange(self.nbands)
         self.deltaE_mn = owner.deltaE
         self.collision = CollisionSpecification.fromOwner(owner)
+        self.covariant_linewidth = (
+            not self.collision.mesh_coupled
+            and self.collision.specification.secondOrderLinewidthDerivative == "covariant")
+        if self.covariant_linewidth:
+            if not self.full_covariant_derivative:
+                raise ValueError("Covariant linewidth derivatives require fullCovariantDerivative=True")
+            self.intra_mask = self.diag.astype(bool)
+            self.inter_mask = ~self.intra_mask
+            self.inter_inverse = owner.deltaEInverse_pure*self.off_diag
         self.g0_mn = (None if self.collision.mesh_coupled
                       else self.collision.resolvent(self.deltaE_mn))
 
@@ -1099,6 +1138,9 @@ class _SecondOrderDMKernel:
         return self.channel_names if self.full_covariant_derivative else ("IE", "EE")
 
     def fermi_state(self, ifermi, fermi) -> _SecondOrderDMFermiState:
+        if self.covariant_linewidth:
+            return CovariantLinewidthSecondOrderFermiState(self, fermi,
+                velocity_gauge=isinstance(self, VelocityGaugeSecondOrderDMKernel))
         if self.collision.mesh_coupled:
             if not self.full_covariant_derivative:
                 raise ValueError("Nonlinear EPC response requires fullCovariantDerivative=True")
@@ -1283,7 +1325,7 @@ class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
             np.divide(1.0, self.deltaE_mn, out=self.inter_inverse, where=self.inter_mask)
 
     def fermi_state(self, ifermi, fermi):
-        if self.collision.mesh_coupled:
+        if self.collision.mesh_coupled or self.covariant_linewidth:
             return _SecondOrderDMKernel.fermi_state(self,ifermi,fermi)
         if self.full_covariant_derivative:
             return DividedDifferenceLGFermiState(self, fermi)
@@ -1484,3 +1526,55 @@ class MarkovSecondOrderFrequencyState(_SecondOrderDMFrequencyState):
         return SecondOrderDensityMatrixBlock(state.rho0,
             {"I":left*kernel.diag,"E":left*kernel.off_diag},
             {"I":right*kernel.diag,"E":right*kernel.off_diag},channels,total)
+
+class CovariantLinewidthSecondOrderFermiState(DividedDifferenceLGFermiState):
+    """Linear RTA collision with its full k derivative, in either gauge.
+
+    Half-sum coherence damping is C[X]={G,X}/2 with G=diag(Gamma_n).
+    Thus (D C)[X]={D G,X}/2. Differentiating G in orbital space includes
+    both linewidth gradients and derivatives of the band projectors.
+    This does not add scattering-in or occupation-dependent collision rates.
+    """
+
+    def __init__(self, kernel, fermi, velocity_gauge=False):
+        super().__init__(kernel, fermi)
+        self.velocity_gauge = velocity_gauge
+        damping = diagonal_matrix(self.collision.population_linewidth)
+        # Remove a constant identity before FFT to retain the exact CRTA limit.
+        damping -= np.eye(kernel.nbands)*np.mean(self.collision.population_linewidth)
+        self.damping_derivative = np.stack([
+            self.collision.mesh_derivative(damping, a) for a in range(3)], axis=-3)
+
+    def at_frequency(self, omega):
+        return CovariantLinewidthSecondOrderFrequencyState(self, omega)
+
+    def relaxation(self, a, b):
+        # The common VG transformation already includes the target vertices.
+        return {name: np.zeros_like(self.rho0) for name in self.kernel.channel_names}
+
+
+class CovariantLinewidthSecondOrderFrequencyState(MarkovSecondOrderFrequencyState):
+    """Use the common LG/VG assembly with an analytic Liouvillian derivative."""
+
+    def __init__(self, state, omega):
+        if not np.isfinite(omega) or omega == 0:
+            raise ValueError("Second-order optical response requires nonzero finite frequency")
+        self.state, self.kernel, self.omega = state, state.kernel, float(omega)
+        self.derivatives = {}
+        self.rho1 = {(a, sign): state.collision.solve(
+            1j*state.df[..., a, :, :], self.kernel.deltaE_mn, sign*self.omega)
+            for a in range(3) for sign in (-1, 1)}
+
+    def derivative(self, drive, sign, direction, intraband=False):
+        key = (drive, sign, direction, intraband)
+        if key not in self.derivatives:
+            state, kernel = self.state, self.kernel
+            rho = self.rho1[drive, sign]*(kernel.diag if intraband else 1.)
+            d2f = state.d2f_i if intraband else state.d2f
+            dg = state.damping_derivative[..., direction, :, :]
+            # A=ad_H-Omega-i C: D rho=A^-1(i D^2 f-[v,rho]+i (D C)[rho]).
+            source = (1j*d2f[..., drive, direction, :, :]
+                      - commutator(state.owner.velocity_K[..., direction, :, :], rho)
+                      + .5j*(dg @ rho + rho @ dg))
+            self.derivatives[key] = state.collision.solve(source, kernel.deltaE_mn, sign*self.omega)
+        return self.derivatives[key]

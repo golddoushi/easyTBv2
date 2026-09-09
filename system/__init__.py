@@ -1371,6 +1371,11 @@ class System:
         T = np.array(Tmatrix, dtype=int)
         invT = np.linalg.inv(T)
         Nsc = int(np.round(abs(np.linalg.det(T))))
+        selection = getattr(model_phonons, 'modeSelection', None)
+        if selection is not None:
+            selection.check_supercell(T)
+            if len(model_phonons._cell_origins) != 1:
+                raise NotImplementedError('build a selected-mode supercell directly from the primitive model')
         if self.verbose: print(f"Supercell volume ratio: {Nsc}")
         
         # 1. Find internal cells (primitive cell origins located inside the supercell)
@@ -1564,7 +1569,10 @@ class System:
                 new_extra_dict["model_epc_alpha"][tuple(R)] for R in self.iRvec]),
                 np.array([new_extra_dict["model_epc_beta"][tuple(R)] for R in self.iRvec]))
         if model_phonons is not None:
-            self.modelPhonons = model_phonons.supercell(Nsc)
+            if getattr(model_phonons, 'modeSelection', None) is not None:
+                self.modelPhonons = model_phonons.supercell(Nsc, internal_cells, T)
+            else:
+                self.modelPhonons = model_phonons.supercell(Nsc)
         
         # 6. Reconstruct dependent operators
         self._refreshExchangeDerivedMatrices()
@@ -2491,3 +2499,4 @@ from .system_w90 import System_w90
 from .system_omx import System_omx
 from .system_tb import System_tb
 from .model_epc import SSHModelEPC, EinsteinPhonons
+from .phonon_selection import PhononModeSelection
