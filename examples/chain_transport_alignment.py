@@ -44,7 +44,8 @@ def run_tdse_alignment(model, args, common, background, base, arrays, meta):
     sc.make_supercell(np.diag([args.supercell, 1, 1]))
     options = dict(common, model=sc, kgrid=(args.grid//args.supercell, 1, 1),
                    omegaList=np.asarray(args.omega)[indices], collisionSpecification=background)
-    bath = dict(phononTemperature=args.temperature, phononStatistics=args.tdse_statistics,
+    trajectory_statistics = 'classical' if args.phonon_statistics == 'classical' else 'wigner'
+    bath = dict(phononTemperature=args.temperature, phononStatistics=trajectory_statistics,
                 nPhononTrajectories=args.tdse_trajectories, phononSeed=args.seed,
                 phononDamping=args.tdse_phonon_damping, phononBathCycles=args.tdse_bath_cycles,
                 phononPhasePoints=args.tdse_phase_points)
@@ -77,14 +78,14 @@ def run_tdse_alignment(model, args, common, background, base, arrays, meta):
     for kind, static in [('static', True), ('dynamic', False)]:
         rates = ModelEPCLinewidth(qgrid=(args.supercell, 1, 1), temperature=args.temperature,
             fermi=args.fermi, delta=args.delta, adiabatic=static,
-            bathStatistics=args.tdse_statistics).populationLinewidth(base)
+            bathStatistics=trajectory_statistics).populationLinewidth(base)
         calc = Opticalconductivity_VG_DM(**dict(common, model=model,
             collisionSpecification=CollisionSpecification('serta', linewidthSource=rates+args.background)))
         arrays['tdse_bath_'+kind+'_rta'] = calc.sigma[0, :, 0, 0]
         arrays['tdse_bath_'+kind+'_rates_eV'] = rates
     selection = getattr(model.modelPhonons, 'modeSelection', None)
     if args.supercell != args.qgrid and selection is None:
-        print('TDSE uses the supercell phonon grid; main quantum-SERTA/full qgrid differs.', flush=True)
+        print('TDSE uses the supercell phonon grid; main SERTA/full qgrid differs.', flush=True)
     if args.tdse_phonon_damping > 0:
         print('Noise-RTA references use undamped phonon poles; only the frequency-check solver matches the damped trajectory spectrum.', flush=True)
 
@@ -121,7 +122,7 @@ def run_tdse_alignment(model, args, common, background, base, arrays, meta):
         integration_info=td.integration_info,
         correction_reference='zero-EPC TDSE with identical time controls',
         background_target='instantaneous f_mu,T(H(u(t),A(t))); exchanges particles/energy with a reservoir',
-        snapshot_comparison='TDSE uses fixed orbital centers; compare hopping-only snapshots. Wigner matches quantum snapshot variance; classical does not.',
+        snapshot_comparison='Shared equal-time phonon variance. TDSE uses fixed orbital centers; compare hopping-only snapshots/static DM.',
         bath_rta_comparison='same undamped harmonic noise statistics and qgrid, but only Born linewidths; finite delta and dressed vertices differ',
         bath_rta_includes_phonon_damping=False)
     print('Moving-phonon TDSE finished', round(time.perf_counter()-tick, 2), flush=True)
@@ -165,6 +166,8 @@ def main(argv=None):
     p.add_argument('--scale', type=float, default=.5)
     p.add_argument('--phonon-energy', type=float, default=.04)
     p.add_argument('--temperature', type=float, default=300.)
+    p.add_argument('--phonon-statistics', choices=['quantum', 'wigner', 'classical'], default='quantum',
+                   help='Shared bath for every EPC method: quantum (default) uses quantum collision rates and Wigner trajectories; wigner uses symmetric noise rates; classical uses equipartition throughout')
     p.add_argument('--background', type=float, default=.02,
                    help='Physical/background response linewidth in eV; included in all methods')
     p.add_argument('--delta', type=float, default=.02,
@@ -183,8 +186,6 @@ def main(argv=None):
                    help='Maximum supercell k points per static DM derivative batch')
     p.add_argument('--tdse', action='store_true', help='Also propagate electrons in moving phonon trajectories on --supercell; positive frequencies only')
     p.add_argument('--tdse-trajectories', type=int, default=4)
-    p.add_argument('--tdse-statistics', choices=['wigner', 'classical'], default='wigner',
-                   help='Wigner matches snapshot equal-time variance but is not a quantum thermal bath')
     p.add_argument('--tdse-steps', type=int, default=128, help='Minimum steps per optical period; max-phase-step may require more')
     p.add_argument('--tdse-max-phase-step', type=float, default=.3)
     p.add_argument('--tdse-transient-lifetimes', type=float, default=12.)
@@ -196,6 +197,7 @@ def main(argv=None):
     p.add_argument('--tdse-frequency-check', action='store_true', help='Compare with the existing periodic-phonon VG DM solver on identical trajectories')
     p.add_argument('--tdse-record-current', action='store_true', help='Save x-drive time traces as well as ensemble conductivities')
     a = p.parse_args(argv)
+    quantum_variance = a.phonon_statistics != 'classical'
     if min(a.grid, a.qgrid, a.supercell) < 1 or a.pairs < 0:
         p.error('grids/supercell must be positive and pairs nonnegative')
     if ((a.phonon_q is None and a.grid % a.qgrid) or a.grid % a.supercell
@@ -242,7 +244,9 @@ def main(argv=None):
     start = time.perf_counter()
     kbt = Boltzmann*a.temperature/electron_volt
     # u^2 is proportional to coth(Eph/2kBT)/(M Eph). Keep its value at
-    # reference Eph=40 meV, then scale all displacements by a.scale.
+    # reference Eph=40 meV, then scale all displacements by a.scale. This
+    # mass convention is independent of statistics: do not compensate away
+    # the smaller classical variance when changing the bath at fixed model.
     mass_factor = (.04/a.phonon_energy
                    * np.tanh(.04/(2*kbt))/np.tanh(a.phonon_energy/(2*kbt))
                    / a.scale**2)
@@ -250,6 +254,7 @@ def main(argv=None):
         model = build_model(out/'model', masses=np.array([12., 14.])*mass_factor,
                             phononEnergy=a.phonon_energy)
     model.modelPhonons.modeSelection = selection
+    print('Phonon statistics:', a.phonon_statistics, flush=True)
     if selection is not None:
         print('Selected phonon bath:', json.dumps(selection.as_dict()), flush=True)
     common = dict(kgrid=(a.grid, 1, 1), kBT=kbt, fermiList=np.array([a.fermi]),
@@ -265,24 +270,33 @@ def main(argv=None):
     xx = lambda calc: calc.sigma[0, :, 0, 0]
     arrays = dict(omega_eV=np.array(a.omega), baseline=xx(base))
     meta = dict(parameters=vars(a), masses_amu=(np.array([12., 14.])*mass_factor).tolist(),
-                rms_displacements_A=np.sqrt(model.modelPhonons.meanSquareDisplacements(a.temperature)[:, 0]).tolist())
+                rms_displacements_A=np.sqrt(model.modelPhonons.meanSquareDisplacements(
+                    a.temperature, quantum=quantum_variance)[:, 0]).tolist())
+    meta['phonon_statistics'] = dict(
+        requested=a.phonon_statistics, collision=a.phonon_statistics,
+        static_covariance='quantum' if quantum_variance else 'classical',
+        trajectories='wigner' if quantum_variance else 'classical',
+        quantum_trajectory_approximation=a.phonon_statistics == 'quantum',
+        mass_convention='Fixed quantum reference variance at 40 meV; masses do not depend on statistics',
+        full_collision_balance='Full and balanced RTA retain thermal pair balancing; for Wigner/classical noise this is a thermally balanced surrogate')
     meta['phonon_selection'] = None if selection is None else selection.as_dict()
     if selection is not None:
         arrays['phonon_qpoints'] = selection.qpoints
         arrays['phonon_qweights'] = selection.weights
         arrays['phonon_branches'] = selection.branch_indices(2)
-    bond_rms = np.sqrt(model.modelPhonons.meanSquareDisplacements(a.temperature)[:, 0].sum())
+    bond_rms = np.sqrt(model.modelPhonons.meanSquareDisplacements(
+        a.temperature, quantum=quantum_variance)[:, 0].sum())
     meta['rms_hopping_changes_eV'] = (bond_rms*np.array([.45, .35])).tolist()
     meta['rms_hopping_relative'] = (bond_rms*np.array([.45, .35])/np.array([1., .72])).tolist()
     for name, static in [('static_serta', True), ('dynamic_serta', False)]:
         source = ModelEPCLinewidth(qgrid=(a.qgrid, 1, 1), temperature=a.temperature,
-            fermi=a.fermi, delta=a.delta, adiabatic=static)
+            fermi=a.fermi, delta=a.delta, adiabatic=static, bathStatistics=a.phonon_statistics)
         rates = source.populationLinewidth(base)
         arrays[name+'_rates_eV'] = rates
         arrays[name] = xx(solve(spec=CollisionSpecification('serta', linewidthSource=rates+a.background)))
     full = solve(spec=CollisionSpecification('epc', qgrid=(a.qgrid, 1, 1),
         phononTemperature=a.temperature, delta=a.delta, constantLinewidth=a.background,
-        bathStatistics='quantum', populationSolver='direct'), vg=True)
+        bathStatistics=a.phonon_statistics, populationSolver='direct'), vg=True)
     arrays['full'] = xx(full)
     view = full.density_matrix_kernel.collision.forFermi(a.fermi)
     # Same balanced rates, but omit scattering-in: distinguishes redistribution
@@ -305,7 +319,7 @@ def main(argv=None):
             opts = dict(common, model=sc, kgrid=(scgrid, 1, 1), collisionSpecification=bg)
             for fixed in ([False, True] if a.fixed_centers else [False]):
                 result = Opticalconductivity_VG_DM_StaticEPC(**opts,
-                    phononTemperature=a.temperature, movingCenters=not fixed,
+                    phononTemperature=a.temperature, phononStatistics=a.phonon_statistics, movingCenters=not fixed,
                     kBatchSize=a.static_epc_kbatch)
                 key = 'static_epc_dm_fixed' if fixed else 'static_epc_dm'
                 arrays[key] = xx(result)
@@ -322,7 +336,7 @@ def main(argv=None):
             # covariance through real normal-coordinate directions, retaining
             # cross-atom/cell Hessian contributions instead of local variances.
             correction = np.zeros(len(a.omega), complex)
-            for factor in sc.modelPhonons.displacementFactors(a.temperature):
+            for factor in sc.modelPhonons.displacementFactors(a.temperature, quantum=quantum_variance):
                 amplitude = np.max(np.abs(factor))
                 if amplitude == 0:
                     continue
@@ -337,7 +351,7 @@ def main(argv=None):
             # Independent Einstein atoms: <sigma> = sigma0 + sum_i <u_i^2>
             # d_i^2 sigma/2 + O(u^4). Translation symmetry makes every cell's
             # derivative identical, leaving only two inequivalent atoms.
-            variance = sc.modelPhonons.meanSquareDisplacements(a.temperature)[:, 0]
+            variance = sc.modelPhonons.meanSquareDisplacements(a.temperature, quantum=quantum_variance)[:, 0]
             correction = np.zeros(len(a.omega), complex)
             for atom in range(2):
                 pair = []
@@ -349,7 +363,8 @@ def main(argv=None):
             arrays['snapshot_second_order'] = arrays['supercell_equilibrium']+correction
             print('Snapshot curvature finished', round(time.perf_counter()-start, 2), flush=True)
     if a.pairs:
-        displacements = sc.sampleModelDisplacements(a.temperature, nSamples=a.pairs, seed=a.seed)
+        displacements = sc.sampleModelDisplacements(a.temperature, nSamples=a.pairs, seed=a.seed,
+                                                   quantum=quantum_variance)
         arrays['snapshot_displacements_A'] = displacements
         samples, fixed = [], []
         for ip, u in enumerate(displacements):

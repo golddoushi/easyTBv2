@@ -472,3 +472,39 @@ class SSHTimeOperators:
                 for b in range(3):
                     np.add.at(w[k, b, a], (self.i, self.j), -self.bonds[:, b]*self.bonds[:, a]*hopping[k])
         return h, v, w
+
+    def displacement_coefficients(self, u, kslice=slice(None), moving_centers=False):
+        """Exact coefficients through x^2 for H(xu), v(xu), w(xu).
+
+        Optical vertices are differentiated along with the SSH Hamiltonian.
+        Moving centers implement the static makeDisplacedModel convention;
+        fixed centers implement the hopping-only trajectory convention.
+        The quadratic coefficient includes the 1/2 multiplying beta.
+        """
+        u = np.asarray(u, float)
+        difference = u[self.final_atoms]-u[self.initial_atoms]
+        stretch = np.sum(self.unit_bonds*difference, axis=1)
+        dr = difference if moving_centers else np.zeros_like(difference)
+        hs = (self.h0, self.alpha*stretch, .5*self.beta*stretch**2)
+        phase = self.phase[kslice]
+        nk = len(phase)
+        h = np.zeros((3, nk, self.nb, self.nb), complex)
+        v = np.zeros((3, nk, 3, self.nb, self.nb), complex)
+        w = np.zeros((3, nk, 3, 3, self.nb, self.nb), complex)
+        for order in range(3):
+            hopping = phase*hs[order]
+            previous = phase*hs[order-1] if order >= 1 else np.zeros_like(hopping)
+            previous2 = phase*hs[order-2] if order >= 2 else np.zeros_like(hopping)
+            for k in range(nk):
+                np.add.at(h[order, k], (self.i, self.j), hopping[k])
+            for a in range(3):
+                velocity = 1j*(self.bonds[:, a]*hopping+dr[:, a]*previous)
+                for k in range(nk):
+                    np.add.at(v[order, k, a], (self.i, self.j), velocity[k])
+                for b in range(3):
+                    contact = -(self.bonds[:, a]*self.bonds[:, b]*hopping
+                        +(dr[:, a]*self.bonds[:, b]+self.bonds[:, a]*dr[:, b])*previous
+                        +dr[:, a]*dr[:, b]*previous2)
+                    for k in range(nk):
+                        np.add.at(w[order, k, b, a], (self.i, self.j), contact[k])
+        return h, v, w
