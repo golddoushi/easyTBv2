@@ -8,7 +8,8 @@ from .Grid import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAccelerat
 from .Grid import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
 from .Grid import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag, OrbitalHallConductance
 from .Grid import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
-from .Grid import SpinTorque, SpintorqueGalvanicConductance
+from .Grid import SpinGalvanicConductivity_LG_DM, OrbitalGalvanicConductivity_LG_DM
+from .Grid import SpinTorque, SpintorqueGalvanicConductance, SpintorqueGalvanicConductivity_LG_DM
 from .Grid import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 
 from .Grid import ExchangeCoupling, Chern_FHS, Z2_FHS

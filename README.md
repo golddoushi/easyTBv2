@@ -221,6 +221,21 @@ the kernel module provides the response density matrices.
 It is consumed by `AnormalousHallConductance_LG_DM` and
 `SpinHallConductance_LG_DM`.
 
+`LengthGaugeFirstOrderDMKernel`, shared with the optical-conductivity classes,
+uses the finite Fermi divided difference inside degenerate manifolds. Evaluated
+at zero frequency, it is also consumed by:
+
+- `SpinGalvanicConductivity_LG_DM`
+- `OrbitalGalvanicConductivity_LG_DM`
+- `SpintorqueGalvanicConductivity_LG_DM`
+
+Their tensors use axes `[fermi, electric-field direction, observable direction]`.
+They expose `I` (displaced population) and `E` (interband coherence) separately,
+support CRTA, frozen SERTA and mesh-coupled EPC collisions, and can record the
+k-resolved response for selected Fermi indices. Spin and local orbital responses
+are in `mu_B/(V/angstrom)/cell`; the exchange-torque response is in
+`mu_B*eV/(V/angstrom)/cell` before the LLG reaction sign and division by hbar.
+
 ### Second-Order Optical Kernels
 
 `LengthGaugeSecondOrderDMKernel` and `VelocityGaugeSecondOrderDMKernel` preserve

@@ -14,6 +14,7 @@ from task import BZGridTask, BZLineTask
 from task import solvePDOS, solveVelocity, solveVelocity_diag
 from task import solveSHC, solveSHC_LG_DM, solveSHC_diag, solveOHC, solveStGC, solveAHC, solveAHC_LG_DM
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
+from task import solveSGC_LG_DM, solveOGC_LG_DM, solveStGC_LG_DM
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_BlochAcceleration_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
 from task import solveIFTorque_TDSE, solveIFTorque_VG_DM, solveIFTorque_LG_DM
@@ -32,8 +33,8 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/Fe/"
-    model=System_w90(
+    mainDir="./mcalc/2D-random-spin-ife/"
+    model=System_tb(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -72,7 +73,7 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        spinSeparated=True,
+        #spinSeparated=True,
     )
     '''
     # Symmetrize the direction-independent collinear and orbital-SOI
@@ -86,7 +87,7 @@ def run():
     #'''
 
     # include el-ph self energy
-    model.includeElectronSelfEnergy(f"{mainDir}/vaspout.h5",temperature=300.,)
+    #model.includeElectronSelfEnergy(f"{mainDir}/vaspout.h5",temperature=300.,)
 
     # For an independent noncollinear VASP model, rotate its SAXIS frame manually
     # NOTE: this is only for independent vasp_ncl + wannier90 scheme, DO NOT apply for vasp_std + V_soi scheme
@@ -157,11 +158,11 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
-    #fermi=0            # model hamiltonian
+    #fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
+    fermi=0            # model hamiltonian
 
-    #fermiAxis=np.linspace(fermi-0.1,fermi+0.1,101)
-    fermiAxis=np.array([fermi,])
+    fermiAxis=np.linspace(fermi-0.1,fermi+0.1,101)
+    #fermiAxis=np.array([fermi,])
     omegaAxis=np.arange(0.1,3.05,1.0)
     model.setFermi(fermi)
     
@@ -222,13 +223,13 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(60,60,60)
+    BZGrid=(30,30,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="AHC" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveAHC_LG_DM,
+    ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
+    calc=BZGridTask(model, solveSGC_diag,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
@@ -247,7 +248,7 @@ def run():
                           "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
 
                           "finiteTemperatureOccupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
-                          "collisionSpecification": CollisionSpecification(mode="serta", constantLinewidth=0.06582), # collision model, currently only for DM based calculators
+                          "collisionSpecification": CollisionSpecification(mode="crta", constantLinewidth=0.06582), # collision model, currently only for DM based calculators
                           "degen":1e-1,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
