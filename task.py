@@ -17,8 +17,10 @@ from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcce
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
 from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag, OrbitalHallConductance
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
-from calculator import SpinGalvanicConductivity_LG_DM, OrbitalGalvanicConductivity_LG_DM
-from calculator import SpinTorque, SpintorqueGalvanicConductance, SpintorqueGalvanicConductivity_LG_DM
+from calculator import (SpinGalvanicConductivity_LG_DM, SpinGalvanicConductivity_VG_DM,
+                        OrbitalGalvanicConductivity_LG_DM, OrbitalGalvanicConductivity_VG_DM)
+from calculator import (SpinTorque, SpintorqueGalvanicConductance,
+                        SpintorqueGalvanicConductivity_LG_DM, SpintorqueGalvanicConductivity_VG_DM)
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
 from calculator import AnormalousHallConductance_VG_DM, Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE
@@ -832,8 +834,9 @@ def solveOGC_diag(param):
             "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
             "iq":param["iq"]}
 
-def _solveGalvanicConductivity_LG_DM(param, calculatorClass, projectionArgument, projectionKeys):
-    """BZGridTask adapter for dc LG density-matrix galvanic responses."""
+def _solveGalvanicConductivity_DM(param, calculatorClass, projectionArgument,
+                                  projectionKeys, extraOptions=None):
+    """BZGridTask adapter for dc LG or VG density-matrix galvanic responses."""
     projectionList = []
     for key in projectionKeys:
         if key in param:
@@ -850,33 +853,60 @@ def _solveGalvanicConductivity_LG_DM(param, calculatorClass, projectionArgument,
                    fullCovariantDerivative=param.get('full covariant derivative', True),
                    verbose=param.get('verbose', 0))
     options[projectionArgument] = projectionList
+    if extraOptions:
+        options.update(extraOptions)
     calc = calculatorClass(**options)
-    return {"energies": calc.energies, "projected sigma": calc.projected_sigma,
-            "sigma": calc.sigma, "projected response": calc.projected_response,
-            "projected sigma channels": calc.projected_sigma_channels,
-            "projected response channels": calc.projected_response_channels,
-            "sigma channels": calc.sigma_channels,
-            "response fermi ids": calc.responseFermiIndexList,
-            "units": calc.galvanic_units, "iq": param["iq"]}
+    result = {"energies": calc.energies, "projected sigma": calc.projected_sigma,
+              "sigma": calc.sigma, "projected response": calc.projected_response,
+              "projected sigma channels": calc.projected_sigma_channels,
+              "projected response channels": calc.projected_response_channels,
+              "sigma channels": calc.sigma_channels,
+              "response fermi ids": calc.responseFermiIndexList,
+              "units": calc.galvanic_units, "iq": param["iq"]}
+    if hasattr(calc, 'sum_rule_residual'):
+        result['sum rule residual'] = calc.sum_rule_residual
+        result['projected sum rule residual'] = calc.projected_sum_rule_residual
+    return result
 
 def solveSGC_LG_DM(param):
-    return _solveGalvanicConductivity_LG_DM(
+    return _solveGalvanicConductivity_DM(
         param, SpinGalvanicConductivity_LG_DM, 'spinProjectionList',
         ('projected shells for detecting spin accumulation',)
     )
 
+def solveSGC_VG_DM(param):
+    return _solveGalvanicConductivity_DM(
+        param, SpinGalvanicConductivity_VG_DM, 'spinProjectionList',
+        ('projected shells for detecting spin accumulation',)
+    )
+
 def solveOGC_LG_DM(param):
-    return _solveGalvanicConductivity_LG_DM(
+    return _solveGalvanicConductivity_DM(
         param, OrbitalGalvanicConductivity_LG_DM, 'orbitalProjectionList',
         ('projected shells for detecting orbital accumulation',
          'projected shells for detecting spin accumulation')
     )
 
+def solveOGC_VG_DM(param):
+    return _solveGalvanicConductivity_DM(
+        param, OrbitalGalvanicConductivity_VG_DM, 'orbitalProjectionList',
+        ('projected shells for detecting orbital accumulation',
+         'projected shells for detecting spin accumulation')
+    )
+
 def solveStGC_LG_DM(param):
-    return _solveGalvanicConductivity_LG_DM(
+    return _solveGalvanicConductivity_DM(
         param, SpintorqueGalvanicConductivity_LG_DM, 'spinTorqueProjectionList',
         ('projected shells for detecting torque',
          'projected shells for detecting spin accumulation')
+    )
+
+def solveStGC_VG_DM(param):
+    return _solveGalvanicConductivity_DM(
+        param, SpintorqueGalvanicConductivity_VG_DM, 'spinTorqueProjectionList',
+        ('projected shells for detecting torque',
+         'projected shells for detecting spin accumulation'),
+        {'exchangeVelocity': param.get('exchange velocity', True)}
     )
 
 def solveVelocity(param):

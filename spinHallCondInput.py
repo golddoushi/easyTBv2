@@ -14,7 +14,7 @@ from task import BZGridTask, BZLineTask
 from task import solvePDOS, solveVelocity, solveVelocity_diag
 from task import solveSHC, solveSHC_LG_DM, solveSHC_diag, solveOHC, solveStGC, solveAHC, solveAHC_LG_DM
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
-from task import solveSGC_LG_DM, solveOGC_LG_DM, solveStGC_LG_DM
+from task import solveSGC_LG_DM, solveOGC_LG_DM, solveStGC_LG_DM, solveSGC_VG_DM, solveOGC_VG_DM, solveStGC_VG_DM
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_BlochAcceleration_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
 from task import solveIFTorque_TDSE, solveIFTorque_VG_DM, solveIFTorque_LG_DM
@@ -232,7 +232,7 @@ def run():
     BZDistributionRepeat=(1,1,0)
     ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
-    calc=BZGridTask(model, solveOGC_LG_DM,
+    calc=BZGridTask(model, solveOGC_VG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

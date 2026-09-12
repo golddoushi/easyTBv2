@@ -133,126 +133,301 @@ def _sum_density_matrix_channels(channels):
         np.add(total, value, out=total)
     return total
 
-def _solve_dc_galvanic_density_matrix(owner, observable_vertices,
-                                       responseFermiIndexList,
-                                       finiteTemperatureOccupations,
-                                       fullCovariantDerivative, units):
-    """Contract the modern first-order LG kernel with a vector observable."""
-    owner.fullCovariantDerivative = bool(fullCovariantDerivative)
+def _first_order_observable_shape(owner, observable_vertices):
+    """Validate first-order vertices and return the observable component axes."""
+    if not observable_vertices:
+        raise ValueError("At least one observable vertex is required")
+    nk_dimensions = len(owner.kgrid)
+    nbands = owner.energies.shape[-1]
+    drive_shape = tuple(owner.kgrid) + (3, nbands, nbands)
+    for vertex in observable_vertices:
+        if (tuple(vertex.shape[:nk_dimensions]) != tuple(owner.kgrid)
+                or vertex.shape[-2:] != (nbands, nbands)):
+            raise ValueError("Observable vertices must have shape kgrid + components + (nbands, nbands)")
+    component_shape = tuple(observable_vertices[0].shape[nk_dimensions:-2])
+    if any(tuple(vertex.shape[nk_dimensions:-2]) != component_shape for vertex in observable_vertices):
+        raise ValueError("All observable vertices must have the same component shape")
+    return drive_shape, component_shape
+
+def _contract_first_order_observable(rho, observable, component_shape):
+    """Evaluate Tr(rho O) for an observable with arbitrary component axes."""
+    expanded = rho.reshape(rho.shape[:-2] + (1,)*len(component_shape) + rho.shape[-2:])
+    return np.sum(expanded*observable.swapaxes(-1, -2), axis=(-2, -1))
+
+def _contract_first_order_density_matrix_response(owner, kernel_class, drive_vertices,
+                                                   observable_vertices, frequencies,
+                                                   responseFermiIndexList,
+                                                   responseOmegaIndexList,
+                                                   finiteTemperatureOccupations,
+                                                   fullCovariantDerivative):
+    """Gauge-independent contraction engine for a first-order DM kernel.
+
+    Returned projected arrays contain raw BZ sums with axes
+    ``drive_projection, observable_projection, fermi, frequency,
+    drive_direction, observable_components``. Response arrays retain the
+    selected k-resolved integrands. Units and observable-specific signs belong
+    to the consuming calculator.
+    """
     owner.calcDeltaEInverse()
-    kernel = LengthGaugeFirstOrderDMKernel(
-        owner, owner.fullCovariantDerivative, finiteTemperatureOccupations)
+    kernel = kernel_class(owner, fullCovariantDerivative, finiteTemperatureOccupations)
     owner.density_matrix_kernel = kernel
-    owner.channel_names = kernel.channel_names
-    owner.channel_descriptions = dict(kernel.channel_descriptions)
+    frequencies = np.asarray(frequencies, dtype=float)
+    if frequencies.ndim != 1 or not np.all(np.isfinite(frequencies)):
+        raise ValueError("frequencies must be a finite one-dimensional array")
+    if not drive_vertices:
+        raise ValueError("At least one drive vertex is required")
+    drive_shape, component_shape = _first_order_observable_shape(owner, observable_vertices)
+    for vertex in drive_vertices:
+        if vertex.shape != drive_shape:
+            raise ValueError(f"Drive vertices must have shape {drive_shape}")
+
     owner.responseFermiIndexList = tuple(
         _normalize_response_index_list(responseFermiIndexList, len(owner.fermiList)))
+    owner.responseOmegaIndexList = tuple(
+        _normalize_response_index_list(responseOmegaIndexList, len(frequencies)))
     fermi_records = {value:index for index, value in enumerate(owner.responseFermiIndexList)}
-    drive_vertices = [owner.velocity_K] + owner.projected_velocity_K_list
-    projected_shape = (len(drive_vertices), len(observable_vertices),
-                       len(owner.fermiList), 3, 3)
-    response_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
-                      + (len(fermi_records), 3, 3))
+    omega_records = {value:index for index, value in enumerate(owner.responseOmegaIndexList)}
+    projected_shape = ((len(drive_vertices), len(observable_vertices), len(owner.fermiList),
+                        len(frequencies), 3) + component_shape)
+    response_shape = ((len(drive_vertices), len(observable_vertices)) + tuple(owner.kgrid)
+                      + (len(fermi_records), len(omega_records), 3) + component_shape)
     projected_channels = {
-        name:np.zeros(projected_shape, dtype=float) for name in owner.channel_names}
+        name:np.zeros(projected_shape, dtype=complex) for name in kernel.channel_names}
     response_channels = {
-        name:np.zeros(response_shape, dtype=float) for name in owner.channel_names}
-    k_axes = tuple(range(3))
+        name:np.zeros(response_shape, dtype=complex) for name in kernel.channel_names}
+    k_slices = (slice(None),)*len(owner.kgrid)
+    k_axes = tuple(range(len(owner.kgrid)))
+    response_tail = (slice(None),)*(1 + len(component_shape))
 
     if kernel.collision.mesh_coupled:
-        # The full EPC collision mixes populations on different k points and
-        # must be inverted for every drive. Keep the general matrix route.
+        # Mesh-global collisions cannot be reduced to independent band-pair
+        # weights. Preserve the exact density-matrix solve for this path.
         for ifermi, fermi in enumerate(owner.fermiList):
             state = kernel.fermi_state(ifermi, fermi)
-            frequency = state.at_frequency(0.)
-            irecord = fermi_records.get(ifermi)
-            for idrive, drive_vertex in enumerate(drive_vertices):
-                for direction in range(3):
-                    block = frequency.block(direction, drive_vertex)
-                    for iobservable, observable_vertex in enumerate(observable_vertices):
-                        for name, rho in block.rho1.items():
-                            value = _contract_second_order_observable(rho, observable_vertex).real
-                            projected_channels[name][idrive, iobservable, ifermi, direction] = np.sum(value, axis=k_axes)
-                            if irecord is not None:
-                                response_channels[name][idrive, iobservable, :, :, :, irecord, direction] = value
+            irecord_fermi = fermi_records.get(ifermi)
+            for iomega, omega in enumerate(frequencies):
+                frequency = state.at_frequency(omega)
+                irecord_omega = omega_records.get(iomega)
+                for idrive, drive_vertex in enumerate(drive_vertices):
+                    for direction in range(3):
+                        block = frequency.block(direction, drive_vertex)
+                        for iobservable, observable_vertex in enumerate(observable_vertices):
+                            for name, rho in block.rho1.items():
+                                value = _contract_first_order_observable(
+                                    rho, observable_vertex, component_shape)
+                                projected_channels[name][idrive, iobservable, ifermi,
+                                                         iomega, direction] = np.sum(value, axis=k_axes)
+                                if irecord_fermi is not None and irecord_omega is not None:
+                                    index = ((idrive, iobservable) + k_slices
+                                             + (irecord_fermi, irecord_omega, direction)
+                                             + (slice(None),)*len(component_shape))
+                                    response_channels[name][index] = value
+        return kernel, projected_channels, response_channels
+
+    # For local CRTA/SERTA collisions, reduce regular interband pairs to one
+    # band weight per frequency. Near-degenerate pairs retain the confluent
+    # Fermi divided difference and are accumulated separately.
+    nbands = owner.energies.shape[-1]
+    off_diagonal = ~kernel.diag
+    inverse_gap = np.zeros_like(owner.deltaE)
+    if kernel.full_covariant_derivative:
+        near_tolerance = 1e-5*owner.kBT
+        regular = off_diagonal & (np.abs(owner.deltaE) > near_tolerance)
+        np.divide(1., owner.deltaE, out=inverse_gap, where=regular)
+        near = off_diagonal & ~regular
     else:
-        # CRTA and SERTA are local and diagonal in each band-pair channel. The
-        # regular interband response is linear in the occupations, so reduce
-        # its Fermi-independent pair algebra to one weight per band. Pairs too
-        # close for a stable occupation difference retain the exact divided
-        # difference and are accumulated separately below.
-        resolvent = kernel.collision.resolvent(owner.deltaE)
-        off_diagonal = ~kernel.diag
-        inverse_gap = np.zeros_like(owner.deltaE)
-        if owner.fullCovariantDerivative:
-            # This threshold is numerical, not the physical/degen cutoff. Its
-            # only role is choosing the stable confluent divided difference.
-            near_tolerance = 1e-5*owner.kBT
-            regular = off_diagonal & (np.abs(owner.deltaE) > near_tolerance)
-            np.divide(1., owner.deltaE, out=inverse_gap, where=regular)
-            near = off_diagonal & ~regular
-        else:
-            inverse_gap[...] = owner.deltaEInverse_pure
-            regular = inverse_gap != 0.
-            near = np.zeros_like(regular)
+        inverse_gap[...] = owner.deltaEInverse_pure
+        regular = inverse_gap != 0.
+        near = np.zeros_like(regular)
+
+    nk_dimensions = len(owner.kgrid)
+    near_indices = np.nonzero(near)
+    if near_indices[0].size:
+        near_k_flat = np.ravel_multi_index(near_indices[:nk_dimensions], owner.kgrid)
+        near_left_energy = owner.energies[
+            near_indices[:nk_dimensions] + (near_indices[nk_dimensions],)]
+        near_right_energy = owner.energies[
+            near_indices[:nk_dimensions] + (near_indices[nk_dimensions + 1],)]
+        near_band_left = near_indices[nk_dimensions]
+        near_band_right = near_indices[nk_dimensions + 1]
+    else:
+        near_k_flat = near_left_energy = near_right_energy = None
+        near_band_left = near_band_right = None
+
+    fermi_data = []
+    for fermi in owner.fermiList:
+        occupations = (owner.fdOccupation(fermi) if kernel.full_covariant_derivative
+                       or finiteTemperatureOccupations else (owner.energies < fermi).astype(float))
+        derivative = (owner.fdEnergyDerivatives(occupations)[0]
+                      if kernel.full_covariant_derivative else None)
+        near_difference = (fermi_divided_difference(
+            near_left_energy, near_right_energy, fermi, owner.kBT)
+            if near_k_flat is not None else None)
+        fermi_data.append((occupations, derivative, near_difference))
+
+    nk = int(np.prod(owner.kgrid))
+    component_count = int(np.prod(component_shape)) if component_shape else 1
+    for iomega, omega in enumerate(frequencies):
+        resolvent = kernel.collision.resolvent(owner.deltaE, omega)
         pair_factor = -1j*resolvent*inverse_gap
-
-        near_indices = np.nonzero(near)
-        if near_indices[0].size:
-            near_k_flat = np.ravel_multi_index(near_indices[:3], owner.kgrid)
-            near_left_energy = owner.energies[near_indices[:3] + (near_indices[3],)]
-            near_right_energy = owner.energies[near_indices[:3] + (near_indices[4],)]
-            near_resolvent = -1j*resolvent[near_indices]
-        else:
-            near_k_flat = near_left_energy = near_right_energy = near_resolvent = None
-
-        fermi_data = []
-        for fermi in owner.fermiList:
-            occupations = (owner.fdOccupation(fermi) if owner.fullCovariantDerivative
-                           or finiteTemperatureOccupations else (owner.energies < fermi).astype(float))
-            derivative = (owner.fdEnergyDerivatives(occupations)[0]
-                          if owner.fullCovariantDerivative else None)
-            near_difference = (fermi_divided_difference(
-                near_left_energy, near_right_energy, fermi, owner.kBT)
-                if near_k_flat is not None else None)
-            fermi_data.append((occupations, derivative, near_difference))
-
+        population_factor = np.diagonal(-1j*resolvent, axis1=-2, axis2=-1)
+        near_resolvent = -1j*resolvent[near_indices] if near_k_flat is not None else None
+        irecord_omega = omega_records.get(iomega)
         for idrive, drive_vertex in enumerate(drive_vertices):
             drive_diagonal = np.diagonal(drive_vertex, axis1=-2, axis2=-1)
-            near_drive = (drive_vertex[near_indices[:3] + (slice(None), near_indices[3], near_indices[4])]
-                          if near_k_flat is not None else None)
+            near_drive = None
+            if near_k_flat is not None:
+                drive_at_k = drive_vertex.reshape((nk, 3, nbands, nbands))[near_k_flat]
+                near_drive = drive_at_k[
+                    np.arange(len(near_k_flat))[:, None], np.arange(3)[None, :],
+                    near_band_left[:, None], near_band_right[:, None]]
             for iobservable, observable_vertex in enumerate(observable_vertices):
                 observable_diagonal = np.diagonal(observable_vertex, axis1=-2, axis2=-1)
-                weights_i = (drive_diagonal[..., :, None, :]
-                             * observable_diagonal[..., None, :, :]
-                             * kernel.collision.population_inverse[..., None, None, :])
-                weights_e = np.zeros(owner.kgrid + (3, 3, owner.energies.shape[-1]), complex)
+                drive_diag = drive_diagonal.reshape(tuple(owner.kgrid) + (3,)
+                                                    + (1,)*len(component_shape) + (nbands,))
+                observable_diag = observable_diagonal.reshape(
+                    tuple(owner.kgrid) + (1,) + component_shape + (nbands,))
+                pop_factor = population_factor.reshape(
+                    tuple(owner.kgrid) + (1,)*(1 + len(component_shape)) + (nbands,))
+                weights_i = drive_diag*observable_diag*pop_factor
+                weights_e = np.zeros(tuple(owner.kgrid) + (3,) + component_shape + (nbands,),
+                                     dtype=complex)
                 for direction in range(3):
                     drive_component = drive_vertex[..., direction, :, :]
-                    for component in range(3):
-                        pair_weight = (pair_factor*drive_component
-                                       * observable_vertex[..., component, :, :].swapaxes(-1, -2))
-                        weights_e[..., direction, component, :] = (
-                            np.sum(pair_weight, axis=-1)-np.sum(pair_weight, axis=-2))
-                near_observable = (observable_vertex[
-                    near_indices[:3] + (slice(None), near_indices[4], near_indices[3])]
-                    if near_k_flat is not None else None)
+                    for components in np.ndindex(component_shape):
+                        observable_index = k_slices + components + (slice(None), slice(None))
+                        observable_nm = observable_vertex[observable_index].swapaxes(-1, -2)
+                        pair_weight = pair_factor*drive_component*observable_nm
+                        weight_index = k_slices + (direction,) + components + (slice(None),)
+                        weights_e[weight_index] = (np.sum(pair_weight, axis=-1)
+                                                   - np.sum(pair_weight, axis=-2))
+
+                near_observable = None
+                if near_k_flat is not None:
+                    observable_at_k = observable_vertex.reshape(
+                        (nk, component_count, nbands, nbands))[near_k_flat]
+                    near_observable = observable_at_k[
+                        np.arange(len(near_k_flat))[:, None],
+                        np.arange(component_count)[None, :], near_band_right[:, None],
+                        near_band_left[:, None]].reshape((len(near_k_flat),) + component_shape)
 
                 for ifermi, (occupations, derivative, near_difference) in enumerate(fermi_data):
-                    value_i = (np.sum(weights_i*derivative[..., None, None, :], axis=-1).real
-                               if derivative is not None else np.zeros(owner.kgrid + (3, 3)))
-                    value_e = np.sum(weights_e*occupations[..., None, None, :], axis=-1).real
+                    fermi_weight_shape = tuple(owner.kgrid) + (1,)*(1 + len(component_shape)) + (nbands,)
+                    value_e = np.sum(weights_e*occupations.reshape(fermi_weight_shape), axis=-1)
                     if near_k_flat is not None:
                         near_weight = near_resolvent*near_difference
-                        near_value = (near_weight[:, None, None]
-                                      * near_drive[:, :, None]*near_observable[:, None, :]).real
-                        np.add.at(value_e.reshape((-1, 3, 3)), near_k_flat, near_value)
-                    projected_channels["I"][idrive, iobservable, ifermi] = np.sum(value_i, axis=k_axes)
-                    projected_channels["E"][idrive, iobservable, ifermi] = np.sum(value_e, axis=k_axes)
-                    irecord = fermi_records.get(ifermi)
-                    if irecord is not None:
-                        response_channels["I"][idrive, iobservable, :, :, :, irecord] = value_i
-                        response_channels["E"][idrive, iobservable, :, :, :, irecord] = value_e
+                        near_value = (near_weight.reshape((-1, 1) + (1,)*len(component_shape))
+                                      * near_drive.reshape((-1, 3) + (1,)*len(component_shape))
+                                      * near_observable.reshape((-1, 1) + component_shape))
+                        np.add.at(value_e.reshape((nk, 3) + component_shape),
+                                  near_k_flat, near_value)
+                    value_i = (np.sum(weights_i*derivative.reshape(fermi_weight_shape), axis=-1)
+                               if derivative is not None else np.zeros_like(value_e))
+                    projected_channels["I"][idrive, iobservable, ifermi, iomega] = np.sum(
+                        value_i, axis=k_axes)
+                    projected_channels["E"][idrive, iobservable, ifermi, iomega] = np.sum(
+                        value_e, axis=k_axes)
+                    irecord_fermi = fermi_records.get(ifermi)
+                    if irecord_fermi is not None and irecord_omega is not None:
+                        index = ((idrive, iobservable) + k_slices
+                                 + (irecord_fermi, irecord_omega) + response_tail)
+                        response_channels["I"][index] = value_i
+                        response_channels["E"][index] = value_e
+    return kernel, projected_channels, response_channels
+
+def _contract_first_order_lg_response(owner, drive_vertices, observable_vertices,
+                                      frequencies, responseFermiIndexList=None,
+                                      responseOmegaIndexList=None,
+                                      finiteTemperatureOccupations=True,
+                                      fullCovariantDerivative=True):
+    """Contract a length-gauge first-order density matrix with observables."""
+    return _contract_first_order_density_matrix_response(
+        owner, LengthGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
+        frequencies, responseFermiIndexList, responseOmegaIndexList,
+        finiteTemperatureOccupations, fullCovariantDerivative)
+
+def _contract_first_order_vg_response(owner, drive_vertices, observable_vertices,
+                                      contact_vertices, frequencies,
+                                      responseFermiIndexList=None,
+                                      responseOmegaIndexList=None,
+                                      finiteTemperatureOccupations=True,
+                                      fullCovariantDerivative=True):
+    """Contract the pole-subtracted VG response and its observable contact term.
+
+    ``contact_vertices[idrive][iobservable]`` is ``dO/dA`` with shape
+    ``kgrid + observable_components + (drive_direction, nbands, nbands)``.
+    The returned pole residue has no frequency axis and enters channel ``C``
+    as ``i*residue/Omega``. At exactly zero frequency its periodic-BZ limit is
+    removed analytically.
+    """
+    kernel, projected_channels, response_channels = _contract_first_order_density_matrix_response(
+        owner, VelocityGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
+        frequencies, responseFermiIndexList, responseOmegaIndexList,
+        finiteTemperatureOccupations, fullCovariantDerivative)
+    _, component_shape = _first_order_observable_shape(owner, observable_vertices)
+    if len(contact_vertices) != len(drive_vertices) or any(
+            len(values) != len(observable_vertices) for values in contact_vertices):
+        raise ValueError("contact_vertices must be indexed by drive and observable projection")
+    expected_contact_shape = tuple(owner.kgrid) + component_shape + (
+        3, owner.energies.shape[-1], owner.energies.shape[-1])
+    if any(vertex.shape != expected_contact_shape for values in contact_vertices for vertex in values):
+        raise ValueError(f"VG contact vertices must have shape {expected_contact_shape}")
+
+    projected_channels["C"] = np.zeros_like(projected_channels["I"])
+    response_channels["C"] = np.zeros_like(response_channels["I"])
+    pole_shape = ((len(drive_vertices), len(observable_vertices), len(owner.fermiList), 3)
+                  + component_shape)
+    pole_residual = np.zeros(pole_shape, dtype=complex)
+    fermi_records = {value:index for index, value in enumerate(owner.responseFermiIndexList)}
+    omega_records = {value:index for index, value in enumerate(owner.responseOmegaIndexList)}
+    k_slices = (slice(None),)*len(owner.kgrid)
+    k_axes = tuple(range(len(owner.kgrid)))
+    nbands = owner.energies.shape[-1]
+    for ifermi, fermi in enumerate(owner.fermiList):
+        state = kernel.fermi_state(ifermi, fermi)
+        irecord_fermi = fermi_records.get(ifermi)
+        occupation_shape = tuple(owner.kgrid) + (1,)*len(component_shape) + (nbands,)
+        for idrive, drive_vertex in enumerate(drive_vertices):
+            for iobservable, observable_vertex in enumerate(observable_vertices):
+                contact_vertex = contact_vertices[idrive][iobservable]
+                for direction in range(3):
+                    equilibrium_derivative = _contract_first_order_observable(
+                        state.derivative(direction, drive_vertex), observable_vertex,
+                        component_shape)
+                    contact = contact_vertex[..., direction, :, :]
+                    contact_diagonal = np.diagonal(contact, axis1=-2, axis2=-1)
+                    equilibrium_derivative += np.sum(
+                        state.f.reshape(occupation_shape)*contact_diagonal, axis=-1)
+                    residue = -equilibrium_derivative
+                    pole_residual[idrive, iobservable, ifermi, direction] = np.sum(
+                        residue, axis=k_axes)
+                    for iomega, omega in enumerate(np.asarray(frequencies, dtype=float)):
+                        if omega == 0:
+                            continue
+                        value = 1j*residue/omega
+                        projected_channels["C"][idrive, iobservable, ifermi,
+                                                iomega, direction] = np.sum(value, axis=k_axes)
+                        irecord_omega = omega_records.get(iomega)
+                        if irecord_fermi is not None and irecord_omega is not None:
+                            index = ((idrive, iobservable) + k_slices
+                                     + (irecord_fermi, irecord_omega, direction)
+                                     + (slice(None),)*len(component_shape))
+                            response_channels["C"][index] = value
+    return kernel, projected_channels, response_channels, pole_residual
+
+def _store_dc_galvanic_density_matrix(owner, kernel, projected_channels,
+                                       response_channels, units, pole_residual=None):
+    """Store a zero-frequency first-order response in the galvanic API."""
+    owner.density_matrix_kernel = kernel
+    owner.channel_names = tuple(projected_channels)
+    owner.channel_descriptions = dict(kernel.channel_descriptions)
+    if "C" in owner.channel_names:
+        owner.channel_descriptions["C"] = "equilibrium observable-contact pole residue (zero in the analytic dc limit)"
+    projected_channels = {name:value[:, :, :, 0].real
+                          for name, value in projected_channels.items()}
+    frequency_axis = 2 + len(owner.kgrid) + 1
+    response_channels = {name:np.take(value, 0, axis=frequency_axis).real
+                         for name, value in response_channels.items()}
 
     scale = 1.0/np.prod(owner.kgrid)
     owner.galvanic_units = units
@@ -260,6 +435,10 @@ def _solve_dc_galvanic_density_matrix(owner, observable_vertices,
     owner.projected_sigma_channels = {
         name: response*scale for name, response in projected_channels.items()
     }
+    if pole_residual is not None:
+        owner.projected_sum_rule_residual = pole_residual*scale
+        owner.sum_rule_residual = owner.projected_sum_rule_residual[0, 0]
+        owner.sum_rule_residual_units = units+"*eV"
     owner.projected_response_channels = response_channels
     owner.projected_sigma = _sum_density_matrix_channels(owner.projected_sigma_channels)
     owner.projected_response = _sum_density_matrix_channels(owner.projected_response_channels)
@@ -271,6 +450,43 @@ def _solve_dc_galvanic_density_matrix(owner, observable_vertices,
         setattr(owner, f"projected_sigma_{name}", owner.projected_sigma_channels[name])
         setattr(owner, f"projected_response_{name}", owner.projected_response_channels[name])
         setattr(owner, f"sigma_{name}", owner.sigma_channels[name])
+
+def _solve_dc_galvanic_lg_density_matrix(owner, observable_vertices,
+                                          responseFermiIndexList,
+                                          finiteTemperatureOccupations,
+                                          fullCovariantDerivative, units):
+    """Contract the first-order LG kernel with a vector observable."""
+    owner.fullCovariantDerivative = bool(fullCovariantDerivative)
+    drive_vertices = [owner.velocity_K] + owner.projected_velocity_K_list
+    kernel, projected_channels, response_channels = _contract_first_order_lg_response(
+        owner, drive_vertices, observable_vertices, np.array([0.]),
+        responseFermiIndexList=responseFermiIndexList, responseOmegaIndexList=[0],
+        finiteTemperatureOccupations=finiteTemperatureOccupations,
+        fullCovariantDerivative=owner.fullCovariantDerivative)
+    _store_dc_galvanic_density_matrix(
+        owner, kernel, projected_channels, response_channels, units)
+
+def _solve_dc_galvanic_vg_density_matrix(owner, observable_vertices,
+                                          observable_contact_vertices,
+                                          responseFermiIndexList,
+                                          finiteTemperatureOccupations,
+                                          fullCovariantDerivative, units):
+    """Contract the pole-subtracted first-order VG kernel at zero frequency."""
+    owner.fullCovariantDerivative = bool(fullCovariantDerivative)
+    if owner.projected_velocity_K_list:
+        raise NotImplementedError("VG galvanic response does not support projected drive currents")
+    kernel, projected_channels, response_channels, pole_residual = _contract_first_order_vg_response(
+        owner, [owner.velocity_K], observable_vertices, [observable_contact_vertices],
+        np.array([0.]), responseFermiIndexList=responseFermiIndexList,
+        responseOmegaIndexList=[0], finiteTemperatureOccupations=finiteTemperatureOccupations,
+        fullCovariantDerivative=owner.fullCovariantDerivative)
+    _store_dc_galvanic_density_matrix(
+        owner, kernel, projected_channels, response_channels, units, pole_residual)
+
+def _zero_vg_observable_contacts(observable_vertices):
+    """Return dO/dA=0 vertices for field-independent local observables."""
+    return [np.zeros(vertex.shape[:-2]+(3,)+vertex.shape[-2:], dtype=complex)
+            for vertex in observable_vertices]
 
 class Calculator():
     Iodd = False  # inversion gives minus
@@ -1886,54 +2102,37 @@ class _LinearConductivityDM(Velocity):
         super().__init__(velocityProjectionList=projections, highOrderVelocity=self.gauge == "VG", **kwarg)
         self.Iodd, self.Todd = False, True
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
-        self.calcDeltaEInverse()
-        kernel_class = VelocityGaugeFirstOrderDMKernel if self.gauge == "VG" else LengthGaugeFirstOrderDMKernel
-        kernel = kernel_class(self, fullCovariantDerivative, finiteTemperatureOccupations)
+        vertices = [self.velocity_K] + self.projected_velocity_K_list
+        current_vertices = [-vertex for vertex in vertices]
+        if self.gauge == "VG":
+            kernel, sigma, response, pole_residual = _contract_first_order_vg_response(
+                self, vertices, current_vertices, [[-self.w_K]], self.omegaList,
+                responseFermiIndexList=responseFermiIndexList,
+                responseOmegaIndexList=responseOmegaIndexList,
+                finiteTemperatureOccupations=finiteTemperatureOccupations,
+                fullCovariantDerivative=self.fullCovariantDerivative)
+            self.channel_names = ("I", "E", "C")
+        else:
+            kernel, sigma, response = _contract_first_order_lg_response(
+                self, vertices, current_vertices, self.omegaList,
+                responseFermiIndexList=responseFermiIndexList,
+                responseOmegaIndexList=responseOmegaIndexList,
+                finiteTemperatureOccupations=finiteTemperatureOccupations,
+                fullCovariantDerivative=self.fullCovariantDerivative)
+            pole_residual = None
+            self.channel_names = kernel.channel_names
         self.density_matrix_kernel = kernel
-        self.channel_names = ("I", "E", "C") if self.gauge == "VG" else ("I", "E")
-        self.channel_descriptions = dict(I="first-order diagonal population", E="first-order interband coherence")
+        self.channel_descriptions = dict(I="first-order diagonal population",
+                                         E="first-order interband coherence")
         if self.gauge == "VG":
             self.channel_descriptions['C'] = "equilibrium contact/pole residue (vanishes on a converged periodic BZ)"
-        self.responseFermiIndexList = tuple(_normalize_response_index_list(responseFermiIndexList, len(self.fermiList)))
-        self.responseOmegaIndexList = tuple(_normalize_response_index_list(responseOmegaIndexList, len(self.omegaList)))
-        f_records = {v:i for i,v in enumerate(self.responseFermiIndexList)}
-        w_records = {v:i for i,v in enumerate(self.responseOmegaIndexList)}
-        vertices = [self.velocity_K] + self.projected_velocity_K_list
-        shape = (len(vertices), len(vertices), len(self.fermiList), len(self.omegaList), 3, 3)
-        record_shape = (len(vertices), len(vertices)) + self.kgrid + (
-            len(f_records), len(w_records), 3, 3)
-        sigma = {name: np.zeros(shape, complex) for name in self.channel_names}
-        response = {name: np.zeros(record_shape, complex) for name in self.channel_names}
-        scale = elementary_charge**2 / (hbar*angstrom*abs(self.model.Vcell))
+        scale = elementary_charge**2 / (
+            hbar*angstrom*abs(self.model.Vcell)*np.prod(self.kgrid))
         self.conductivity_units = "S/m"
         self.fourier_convention = "exp(-i*Omega*t), Omega in eV, t in hbar/eV"
-        # SI conductivity times eV; divide by Omega and multiply by i for C.
-        self.sum_rule_residual = np.zeros((len(self.fermiList), 3, 3), complex)
-        for ifermi, fermi in enumerate(self.fermiList):
-            state = kernel.fermi_state(ifermi, fermi)
-            residue = []
-            if self.gauge == "VG":
-                for a in range(3):
-                    value = _contract_second_order_observable(state.derivative(a), self.velocity_K)
-                    value += np.einsum('...n,...bnn->...b', state.f, self.w_K[..., :, a, :, :])
-                    residue.append(value)
-                    self.sum_rule_residual[ifermi, a] = value.mean(axis=(0,1,2))*scale
-            for iw, omega in enumerate(self.omegaList):
-                frequency = state.at_frequency(omega)
-                for ip, drive in enumerate(vertices):
-                    for a in range(3):
-                        block = frequency.block(a, drive)
-                        for jp, observable in enumerate(vertices):
-                            # Physical charge current j=-v. C below already
-                            # combines this minus with E=i*Omega*A.
-                            values = {name: -_contract_second_order_observable(rho, observable)
-                                      for name, rho in block.rho1.items()}
-                            if self.gauge == "VG":
-                                values['C'] = 1j*residue[a]/omega if omega != 0 else np.zeros_like(residue[a])
-                            for name, value in values.items():
-                                sigma[name][ip,jp,ifermi,iw,a] = value.mean(axis=(0,1,2))*scale
-                                if ifermi in f_records and iw in w_records:
-                                    response[name][ip,jp,:,:,:,f_records[ifermi],w_records[iw],a,:] = value
+        sigma = {name:value*scale for name, value in sigma.items()}
+        self.sum_rule_residual = (pole_residual[0, 0]*scale if pole_residual is not None
+                                  else np.zeros((len(self.fermiList), 3, 3), complex))
         if self.dc:
             sigma = {name: value[:,:,:,0].real for name,value in sigma.items()}
             # The dc record has no frequency dimension, like the LG dc class.
@@ -4665,12 +4864,41 @@ class SpinGalvanicConductivity_LG_DM(Spin, Velocity):
         super().__init__(velocityProjectionList=currentProjectionList,
                          spinProjectionList=spinProjectionList, **kwarg)
         observable_vertices = [self.spin_K] + self.projected_spin_K_list
-        _solve_dc_galvanic_density_matrix(
+        _solve_dc_galvanic_lg_density_matrix(
             self, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
             "mu_B/(V/angstrom)/cell"
         )
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin galvanic conductivity finished")
+
+class SpinGalvanicConductivity_VG_DM(Spin, Velocity):
+    """Dc electric-field-induced spin moment from the pole-subtracted VG DM kernel.
+
+    The spin operator is field independent, so its explicit ``dO/dA`` contact
+    vertex vanishes. At zero frequency the analytic periodic-BZ limit removes
+    the pure-gauge pole; ``sum_rule_residual`` records its finite-mesh residue.
+    """
+    Iodd = True
+    Todd = True
+
+    def __init__(self, currentProjectionList=None, spinProjectionList=None,
+                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, **kwarg):
+        currentProjectionList = [] if currentProjectionList is None else currentProjectionList
+        spinProjectionList = [] if spinProjectionList is None else spinProjectionList
+        if currentProjectionList:
+            raise NotImplementedError("VG spin galvanic conductivity requires the total drive current")
+        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+            raise NotImplementedError("VG spin galvanic conductivity requires the complete orthogonal model basis")
+        kwarg.pop('highOrderVelocity', None)
+        super().__init__(velocityProjectionList=[], spinProjectionList=spinProjectionList,
+                         highOrderVelocity=False, **kwarg)
+        observable_vertices = [self.spin_K] + self.projected_spin_K_list
+        _solve_dc_galvanic_vg_density_matrix(
+            self, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
+            responseFermiIndexList, finiteTemperatureOccupations,
+            fullCovariantDerivative, "mu_B/(V/angstrom)/cell")
+        if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix spin galvanic conductivity finished")
 
 class SpinGalvanicConductance(SpinVelocityCorrelation):
     def __init__(self, fermiList=[], currentProjectionList=[], spinProjectionList=[], **kwarg) -> None:
@@ -4740,12 +4968,41 @@ class OrbitalGalvanicConductivity_LG_DM(Orbital, Velocity):
         super().__init__(velocityProjectionList=currentProjectionList,
                          orbitalProjectionList=orbitalProjectionList, **kwarg)
         observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
-        _solve_dc_galvanic_density_matrix(
+        _solve_dc_galvanic_lg_density_matrix(
             self, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
             "mu_B/(V/angstrom)/cell"
         )
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix orbital galvanic conductivity finished")
+
+class OrbitalGalvanicConductivity_VG_DM(Orbital, Velocity):
+    """Dc local-orbital moment induced by an electric field in the VG DM kernel.
+
+    This uses the same local-circulation orbital operator as the LG class and
+    treats it as field independent. It does not include itinerant-circulation
+    terms or an explicit vector-potential derivative of the orbital operator.
+    """
+    Iodd = True
+    Todd = True
+
+    def __init__(self, currentProjectionList=None, orbitalProjectionList=None,
+                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, **kwarg):
+        currentProjectionList = [] if currentProjectionList is None else currentProjectionList
+        orbitalProjectionList = [] if orbitalProjectionList is None else orbitalProjectionList
+        if currentProjectionList:
+            raise NotImplementedError("VG orbital galvanic conductivity requires the total drive current")
+        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+            raise NotImplementedError("VG orbital galvanic conductivity requires the complete orthogonal model basis")
+        kwarg.pop('highOrderVelocity', None)
+        super().__init__(velocityProjectionList=[], orbitalProjectionList=orbitalProjectionList,
+                         highOrderVelocity=False, **kwarg)
+        observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
+        _solve_dc_galvanic_vg_density_matrix(
+            self, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
+            responseFermiIndexList, finiteTemperatureOccupations,
+            fullCovariantDerivative, "mu_B/(V/angstrom)/cell")
+        if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix orbital galvanic conductivity finished")
 
 class OrbitalGalvanicConductance(OrbitalVelocityCorrelation):
     def __init__(self, fermiList=[], currentProjectionList=[], orbitalProjectionList=[], **kwarg) -> None:
@@ -4906,12 +5163,44 @@ class SpintorqueGalvanicConductivity_LG_DM(SpinExchangeTorque, Velocity):
         super().__init__(velocityProjectionList=currentProjectionList,
                          spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
         observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list
-        _solve_dc_galvanic_density_matrix(
+        _solve_dc_galvanic_lg_density_matrix(
             self, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
             "mu_B*eV/(V/angstrom)/cell"
         )
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin-torque galvanic conductivity finished")
+
+class SpintorqueGalvanicConductivity_VG_DM(SpinExchangeTorque, Velocity):
+    """Dc electric-field-induced exchange torque from the VG DM kernel.
+
+    For nonlocal exchange, ``exchangeVelocity=True`` includes
+    ``dT_XC/dA=-i[mu_S,v_XC]`` in the pure-gauge sum rule. The analytic dc
+    response is pole subtracted and should agree with the LG counterpart;
+    ``sum_rule_residual`` exposes finite-mesh or incomplete-vertex errors.
+    """
+    Iodd = True
+    Todd = False
+
+    def __init__(self, currentProjectionList=None, spinTorqueProjectionList=None,
+                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, exchangeVelocity=True, **kwarg):
+        currentProjectionList = [] if currentProjectionList is None else currentProjectionList
+        spinTorqueProjectionList = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
+        if currentProjectionList:
+            raise NotImplementedError("VG spin-torque galvanic conductivity requires the total drive current")
+        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+            raise NotImplementedError("VG spin-torque galvanic conductivity requires the complete orthogonal model basis")
+        kwarg.pop('highOrderVelocity', None)
+        super().__init__(velocityProjectionList=[], spinTorqueProjectionList=spinTorqueProjectionList,
+                         highOrderVelocity=False, exchangeVelocity=exchangeVelocity, **kwarg)
+        self.buildSpinTorqueVelocityCommutator()
+        observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list
+        contact_vertices = [self.spinTorqueA_K] + self.projected_spinTorqueA_K_list
+        _solve_dc_galvanic_vg_density_matrix(
+            self, observable_vertices, contact_vertices, responseFermiIndexList,
+            finiteTemperatureOccupations, fullCovariantDerivative,
+            "mu_B*eV/(V/angstrom)/cell")
+        if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix spin-torque galvanic conductivity finished")
 
 class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):
     def __init__(self, currentProjectionList=[], spinTorqueProjectionList=[], **kwarg) -> None:
