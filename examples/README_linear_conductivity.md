@@ -62,27 +62,33 @@ results, preserving their complex values.
 Photon energies `Omega` and linewidths are in eV. The Fourier convention is
 `exp(-i*Omega*t)` with time in hbar/eV. The physical electron Hamiltonian is
 `H(k+A)`, electric field is `E=-dA/dt`, and charge current is proportional to
-`-Tr[rho*v(A)]`. Kernels return **minus the physical first-order density** so
-their contraction with `+v` is the charge-current response.
+`-Tr[rho*v(A)]`. Every kernel returns the **physical density matrix**.
+Charge-current calculators supply the minus sign explicitly; generic
+observable contractions always evaluate `Tr[rho*O]`.
 
-For `Delta_mn=E_m-E_n` and `Df=f[E_m,E_n]*v`, the first-order current-weighted
-density is `i*Df/(Delta-Omega-i*Gamma_mn)`. Its diagonal gives the Drude
+For `Delta_mn=E_m-E_n` and `Df=f[E_m,E_n]*v`, the first-order electric-field
+density is `-i*Df/(Delta-Omega-i*Gamma_mn)`. Contracting with `-v` gives the Drude
 conductivity `(-f')*v_a*v_b/(Gamma_n-i*Omega)`. The full finite-temperature
 kernel uses the stable divided difference, including the `f'` limit at
 degeneracy, rather than dropping small energy gaps. I/E denote diagonal and
 off-diagonal contributions; only the total is invariant under arbitrary
 rotations of exactly degenerate bands.
 
-The older dc LG kernel had `+i*(f_n-f_m)` in its E-channel numerator, while
-its I-channel already used the positive-conductivity convention. The E term
-gave negative longitudinal absorption. It is corrected to `-i*(f_n-f_m)` in
-both the block kernel and the optimized contraction. **Previously computed
-first-order DM E-channel tensors, including Hall and shared-kernel spin-Hall
-responses, change sign.** The I channel and its VASP SERTA transport validation
-are unchanged. The separate historical Berry-curvature calculators are not
-modified here. When comparing Hall signs, also account for the drive/current
-axis ordering. Existing dc LG still applies its historical small-gap cutoff;
-the new full optical kernels retain the finite degenerate limit.
+The September 12 sign migration removes the former negative-density/positive-
+current compensation. Both dc density channels and the optimized generic
+contraction now have the physical sign. Linear charge conductivities, including
+their records, remain unchanged because the charge-current minus moved to the
+calculator. Direct spin/orbital/torque galvanic responses also remain unchanged.
+DM spin Hall results reverse sign: `spinVelocity_K` is the magnetic-moment
+current `{mu_S,v}/2`, not a charge current or an angular-momentum current.
+The separate historical Berry-curvature calculators retain their existing
+conventions. When comparing Hall signs, also account for drive/current axis
+ordering. The dc LG kernel retains its small-gap cutoff; the full optical
+kernels retain the finite degenerate limit.
+
+The VG contact `+i*residue/Omega` retains its sign: it already combines `j=-v`
+with `E=i*Omega*A`. See [the sign migration](README_density_matrix_signs.md)
+for second-order densities, BPVE and torque vertices.
 
 ## Why the VG contact and relaxation terms matter
 
