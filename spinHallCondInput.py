@@ -33,8 +33,8 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/2D-random-spin-ife/"
-    model=System_tb(
+    mainDir="./mcalc/FeCl2/"
+    model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -73,14 +73,14 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        #spinSeparated=True,
+        spinSeparated=True,
     )
-    '''
+    #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = 5/180*np.pi, 0.0
+    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0.0
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -147,7 +147,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-3.0         # VASP 2H-FeCl2 U=2.0
+    fermi=-3.0         # VASP 2H-FeCl2 U=2.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
@@ -159,11 +159,12 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
 
-    fermiAxis=np.linspace(fermi-0.1,fermi+0.1,101)
+    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,21)
     #fermiAxis=np.array([fermi,])
-    omegaAxis=np.arange(0.1,3.05,1.0)
+    #omegaAxis=np.arange(0.1,3.05,1.0)
+    omegaAxis=[0]
     model.setFermi(fermi)
     
     '''
@@ -229,16 +230,14 @@ def run():
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
     ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveSGC_diag,
+    calc=BZGridTask(model, solveStGC_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
                            ],
                           'projected shells for detecting spincurrent':[],
                           'projected shells for detecting spin accumulation':[
-                              #{"source":edgeRegion1, "target":edgeRegion1},
-                              #{"source":edgeRegion2, "target":edgeRegion2},
-                              #{"source":block, "target":block} for block in blockRegionList
+                              #{"source":Cl1, "target":Cl1},
                           ],
                           'omega':omegaAxis,
                           'record frequency ids':recordOmegaIndexList,

@@ -3,6 +3,12 @@
 The kernels in this module only build density matrices. Observable vertices,
 Brillouin-zone integration, projections and output storage remain the
 responsibility of the calculator classes that consume these blocks.
+
+All response orders are physical densities, with H_V=H(k+A), E=-dA/dt,
+H_L=H0+E*r and exp(-i*omega*t), in hbar=e=1 units. In particular the
+electric-field first-order equation is (Gamma-i*omega+i ad_H)rho1=D f.
+Only a charge-current observable supplies j=-dH/dA; density kernels never
+absorb that minus sign. A second-order block has no extra electron charge.
 """
 
 from dataclasses import dataclass
@@ -890,9 +896,9 @@ class StaticDisplacementDMKernel:
     second derivative. This expands the same covariant instantaneous-Fermi
     background as the first-order VG kernel. No extra EPC linewidth is added.
 
-    Returned r matrices include the electron-current minus sign, like the
-    established first-order kernels. They obey
-      (gamma-i*omega+i ad_H0) r_j = -d_j-i[H1,r_(j-1)]-i[H2,r_(j-2)],
+    Returned r matrices are physical electric-field density coefficients.
+    They obey
+      (gamma-i*omega+i ad_H0) r_j = d_j-i[H1,r_(j-1)]-i[H2,r_(j-2)],
     where d_j are coefficients of D f(H(x))[v(x)]. The VG equilibrium pole
     and observable derivatives are contracted by the consuming calculator.
     """
@@ -965,16 +971,22 @@ class StaticDisplacementDMKernel:
             raise ValueError('omega must be finite')
         denominator = self.gamma+1j*(self.gaps-float(omega))
         d0, d1, d2 = sources
-        r0 = -d0/denominator[:, None]
-        r1 = (-d1-1j*commutator(h1[:, None], r0))/denominator[:, None]
-        r2 = (-d2-1j*commutator(h1[:, None], r1)
+        r0 = d0/denominator[:, None]
+        r1 = (d1-1j*commutator(h1[:, None], r0))/denominator[:, None]
+        r2 = (d2-1j*commutator(h1[:, None], r1)
               -1j*commutator(h2[:, None], r0))/denominator[:, None]
         return r0, r1, r2
 
 
 @dataclass
 class SecondOrderDensityMatrixBlock:
-    """Density matrices for one ordered optical tensor component."""
+    """Physical densities for one ordered optical tensor component.
+
+    LG blocks multiply electric-field amplitudes; VG second-order blocks
+    multiply vector-potential amplitudes. No observable charge is included.
+    rho2 is the mixed coefficient for the ordered (-omega,+omega) fields,
+    including both drive orderings (not divided by 2!).
+    """
 
     rho0: np.ndarray
     rho1_minus: dict
@@ -989,7 +1001,11 @@ class SecondOrderDensityMatrixBlock:
 
 @dataclass
 class FirstOrderDensityMatrixBlock:
-    """First-order dc density matrices for one electric-field direction."""
+    """Physical first-order electric-field density, without observable charge.
+
+    The VG linear kernel exposes the pole-subtracted electric-field response;
+    vector_potential_density() returns its full physical delta-rho/A instead.
+    """
 
     rho0: np.ndarray
     rho1: dict
@@ -1017,18 +1033,18 @@ class LengthGaugeDCFirstOrderFermiState:
         velocity_direction = velocity[..., direction, :, :]
         if self.collision.mesh_coupled:
             derivative=self.collision.stationary_derivative(direction,drive_velocity)
-            rho=self.collision.solve(1j*derivative,self.owner.deltaE)
+            rho=self.collision.solve(-1j*derivative,self.owner.deltaE)
             return FirstOrderDensityMatrixBlock(self.rho0,
                 {"I":rho*kernel.diag if kernel.full_covariant_derivative else np.zeros_like(rho),
                  "E":rho*kernel.off_diag})
         rho_e = self.collision.solve(
-            -1j*self.f_nm*kernel.deltaE_inverse_pure*velocity_direction*kernel.off_diag,
+            1j*self.f_nm*kernel.deltaE_inverse_pure*velocity_direction*kernel.off_diag,
             self.owner.deltaE,
         )*kernel.off_diag
         rho_i = np.zeros_like(rho_e)
         if kernel.full_covariant_derivative:
             velocity_diag = np.diagonal(velocity_direction, axis1=-2, axis2=-1).real
-            population = self.collision.solve_steady_population(-self.fp*velocity_diag)
+            population = self.collision.solve_steady_population(self.fp*velocity_diag)
             rho_i[..., kernel.indices, kernel.indices] = population
         return FirstOrderDensityMatrixBlock(
             rho0=self.rho0,
@@ -1043,12 +1059,12 @@ class LengthGaugeDCFirstOrderDMKernel:
     which requires finite temperature and finite relaxation energy. 
     In the conventions of the calculator module,
 
-        rho_E[m,n] = -i (f_n-f_m) v_a[m,n]
+        rho_E[m,n] = +i (f_n-f_m) v_a[m,n]
                      / (DeltaE_mn (DeltaE_mn-i eta)),
-        rho_I[n,n] = -(df_n/dE) v_a[n,n] / eta.
+        rho_I[n,n] = (df_n/dE) v_a[n,n] / eta.
 
-    These blocks include the electron-current minus sign: they are minus the
-    physical density response for H(k+A), E=-dA/dt, and contract with +v.
+    These are physical density responses for H(k+A), E=-dA/dt and H_L=H0+E*r.
+    Observables contract as Tr(rho O); charge-current calculators supply j=-v.
     """
 
     channel_names = DC_CHANNEL_NAMES
@@ -1096,8 +1112,8 @@ class LengthGaugeDCFirstOrderDMKernel:
 class LengthGaugeFirstOrderDMKernel:
     """Linear conductivity, with exp(-i*Omega*t) and Omega in energy units.
 
-    The returned matrices include the charge-current minus sign and contract
-    with +v, as in the dc kernel. Full mode uses the Frechet derivative of
+    The returned matrices are physical delta-rho/E for H_L=H0+E*r and contain
+    no charge-current sign. Full mode uses the Frechet derivative of
     f(H), including its finite degenerate limit, with no inverse-gap cutoff.
     I/E label diagonal/off-diagonal matrices (only their sum is invariant
     under rotations inside an exactly degenerate subspace).
@@ -1160,7 +1176,7 @@ class FirstOrderFrequencyState:
         self.collision = self.state.collision
 
     def block(self, direction, drive_velocity=None):
-        rho = self.collision.solve(1j*self.state.derivative(direction, drive_velocity),
+        rho = self.collision.solve(-1j*self.state.derivative(direction, drive_velocity),
                                    self.kernel.owner.deltaE,self.omega)
         return FirstOrderDensityMatrixBlock(self.state.rho0,
                                             {"I": rho*self.kernel.diag, "E": rho*~self.kernel.diag})
@@ -1198,8 +1214,8 @@ class VelocityGaugeFirstOrderFrequencyState(FirstOrderFrequencyState):
         if self.collision.mesh_coupled:
             # Gauge transform of the LG response. This also transforms the
             # mesh-global collision and its nonthermal stationary reference.
-            rho=self.collision.solve(1j*df,self.kernel.owner.deltaE,self.omega)
-            return df-1j*self.omega*rho
+            rho=self.collision.solve(-1j*df,self.kernel.owner.deltaE,self.omega)
+            return df+1j*self.omega*rho
         source = -commutator(self.kernel.owner.velocity_K[..., direction, :, :], self.state.rho0)
         source -= 1j*self.collision.apply(df)
         return self.collision.solve(source,self.kernel.owner.deltaE,self.omega)
@@ -1308,7 +1324,7 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
             r_direction = self.owner.r_K[..., direction, :, :]
             for sign in (-1, 1):
                 frequency = sign * omega
-                source=fermi_state.f_nm*r_direction
+                source=-fermi_state.f_nm*r_direction
                 self.rho1_e[(direction, sign)] = fermi_state.collision.solve(
                     source,self.kernel.deltaE_mn,frequency
                 )*self.kernel.off_diag
@@ -1324,7 +1340,7 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
         comm_ba = commutator(r_b, rho1_e_a)
         comm_ab = commutator(r_a, rho1_e_b)
         zero = np.zeros_like(kernel.deltaE_mn, dtype=complex)
-        total=state.collision.solve(comm_ba+comm_ab,kernel.deltaE_mn)
+        total=state.collision.solve(-comm_ba-comm_ab,kernel.deltaE_mn)
         rho2 = {
             "II": zero,
             "EI": zero,
@@ -1397,7 +1413,7 @@ class DividedDifferenceLGFrequencyState(_SecondOrderDMFrequencyState):
         for sign in (-1, 1):
             for a in range(3):
                 rho = fermi_state.collision.solve(
-                    1j*fermi_state.df[..., a, :, :],self.kernel.deltaE_mn,sign*omega)
+                    -1j*fermi_state.df[..., a, :, :],self.kernel.deltaE_mn,sign*omega)
                 self.rho1[(a, sign)] = rho
                 self.rho1_i[(a, sign)] = rho * self.kernel.intra_mask
                 self.rho1_e[(a, sign)] = rho * self.kernel.inter_mask
@@ -1409,10 +1425,10 @@ class DividedDifferenceLGFrequencyState(_SecondOrderDMFrequencyState):
         for drive, derivative, sign in ((a, b, -1), (b, a, 1)):
             v = self.owner.velocity_K[..., derivative, :, :]
             source += state.collision.solve(
-                -state.d2f[..., drive, derivative, :, :] - 1j*commutator(v,self.rho1[(drive,sign)]),
+                -state.d2f[..., drive, derivative, :, :] + 1j*commutator(v,self.rho1[(drive,sign)]),
                 kernel.deltaE_mn,sign*self.omega)
             source_i += state.collision.solve(
-                -state.d2f_i[..., drive, derivative, :, :] - 1j*commutator(v,self.rho1_i[(drive,sign)]),
+                -state.d2f_i[..., drive, derivative, :, :] + 1j*commutator(v,self.rho1_i[(drive,sign)]),
                 kernel.deltaE_mn,sign*self.omega)
         total = state.collision.solve(source,kernel.deltaE_mn)
         from_i = state.collision.solve(source_i,kernel.deltaE_mn)
@@ -1484,11 +1500,11 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
             for sign in (-1, 1):
                 frequency = sign * omega
                 self.rho1_e[(direction, sign)] = fermi_state.collision.solve(
-                    source_e,self.kernel.deltaE_mn,frequency
+                    -source_e,self.kernel.deltaE_mn,frequency
                 )*self.kernel.off_diag
                 if self.kernel.full_covariant_derivative:
                     population=fermi_state.collision.solve_population(
-                        1j*fermi_state.collision.apply_population(fermi_state.dfdk[...,direction,:]),frequency)
+                        -1j*fermi_state.collision.apply_population(fermi_state.dfdk[...,direction,:]),frequency)
                     self.rho1_i[(direction, sign)] = diagonal_matrix(population)
 
     def block(self, a, b):
@@ -1502,7 +1518,7 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
         )
         rho1_e_a = self.rho1_e[(a, -1)]
         rho1_e_b = self.rho1_e[(b, 1)]
-        source_e = commutator(v_b, rho1_e_a) + commutator(v_a, rho1_e_b)
+        source_e = -commutator(v_b, rho1_e_a) - commutator(v_a, rho1_e_b)
         source_contact = -w_ab * state.f_nm
         zero = np.zeros_like(kernel.deltaE_mn, dtype=complex)
         resolved_e=state.collision.solve(source_e,kernel.deltaE_mn)
@@ -1516,7 +1532,7 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
             rho1_i_b = self.rho1_i[(b, 1)]
             population_a = np.diagonal(rho1_i_a, axis1=-2, axis2=-1)
             population_b = np.diagonal(rho1_i_b, axis1=-2, axis2=-1)
-            source_i = (
+            source_i = -(
                 v_b * (population_a[..., None, :] - population_a[..., :, None])
                 + v_a * (population_b[..., None, :] - population_b[..., :, None])
             )
@@ -1609,10 +1625,10 @@ class MarkovSecondOrderFrequencyState(_SecondOrderDMFrequencyState):
         self.derivatives={}
         for a in range(3):
             for sign in (-1,1):
-                self.rho1[a,sign]=state.collision.solve(1j*state.df[...,a,:,:],
+                self.rho1[a,sign]=state.collision.solve(-1j*state.df[...,a,:,:],
                     self.kernel.deltaE_mn,sign*self.omega)
                 self.reference_rho1[a,sign]=state.reference.collision.solve(
-                    1j*state.reference.df[...,a,:,:],self.kernel.deltaE_mn,sign*self.omega)
+                    -1j*state.reference.df[...,a,:,:],self.kernel.deltaE_mn,sign*self.omega)
 
     def derivative(self,drive,sign,direction,intraband=False):
         key=(drive,sign,direction,intraband)
@@ -1622,7 +1638,7 @@ class MarkovSecondOrderFrequencyState(_SecondOrderDMFrequencyState):
             reference=self.reference_rho1[drive,sign]*mask
             d2f=state.reference.d2f_i if intraband else state.reference.d2f
             analytic=state.reference.collision.solve(
-                1j*d2f[...,drive,direction,:,:]
+                -1j*d2f[...,drive,direction,:,:]
                 -commutator(state.owner.velocity_K[...,direction,:,:],reference),
                 kernel.deltaE_mn,sign*self.omega)
             correction=self.rho1[drive,sign]*mask-reference
@@ -1635,27 +1651,27 @@ class MarkovSecondOrderFrequencyState(_SecondOrderDMFrequencyState):
         db_left,da_right=self.derivative(a,-1,b),self.derivative(b,1,a)
         db_left_i,da_right_i=self.derivative(a,-1,b,True),self.derivative(b,1,a,True)
         nonlinear=state.collision.second_variation(left,right)
-        total=state.collision.solve(1j*(db_left+da_right-nonlinear),kernel.deltaE_mn)
+        total=state.collision.solve(-1j*(db_left+da_right+nonlinear),kernel.deltaE_mn)
         # Nonlinear terms contain at least one population perturbation and are
         # reported with the intraband-origin channels; totals are independent
         # of this reporting choice.
-        from_i=state.collision.solve(1j*(db_left_i+da_right_i-nonlinear),kernel.deltaE_mn)
+        from_i=state.collision.solve(-1j*(db_left_i+da_right_i+nonlinear),kernel.deltaE_mn)
         from_e=total-from_i
         channels={"II":from_i*kernel.diag,"EI":from_i*kernel.off_diag,
                   "IE":from_e*kernel.diag,"EE":from_e*kernel.off_diag}
         if state.velocity_gauge:
             for name in channels:
                 channels[name]*=self.omega**2
-            cross_i=1j*self.omega*(db_left_i-da_right_i)+state.d2f[...,a,b,:,:]
-            cross_e=1j*self.omega*(db_left-da_right)-1j*self.omega*(db_left_i-da_right_i)
+            cross_i=-1j*self.omega*(db_left_i-da_right_i)+state.d2f[...,a,b,:,:]
+            cross_e=-1j*self.omega*(db_left-da_right)+1j*self.omega*(db_left_i-da_right_i)
             channels['II']+=cross_i*kernel.diag
             channels['EI']+=cross_i*kernel.off_diag
             channels['IE']+=cross_e*kernel.diag
             channels['EE']+=cross_e*kernel.off_diag
             total=sum(channels.values())
-            # Existing VG observable contractions expect minus delta-rho/A.
-            left=-state.df[...,a,:,:]-1j*self.omega*left
-            right=-state.df[...,b,:,:]+1j*self.omega*right
+            # Physical VG density: delta-rho/A = D rho0 + i*frequency*rho_LG.
+            left=state.df[...,a,:,:]-1j*self.omega*left
+            right=state.df[...,b,:,:]+1j*self.omega*right
         return SecondOrderDensityMatrixBlock(state.rho0,
             {"I":left*kernel.diag,"E":left*kernel.off_diag},
             {"I":right*kernel.diag,"E":right*kernel.off_diag},channels,total)
@@ -1695,7 +1711,7 @@ class CovariantLinewidthSecondOrderFrequencyState(MarkovSecondOrderFrequencyStat
         self.state, self.kernel, self.omega = state, state.kernel, float(omega)
         self.derivatives = {}
         self.rho1 = {(a, sign): state.collision.solve(
-            1j*state.df[..., a, :, :], self.kernel.deltaE_mn, sign*self.omega)
+            -1j*state.df[..., a, :, :], self.kernel.deltaE_mn, sign*self.omega)
             for a in range(3) for sign in (-1, 1)}
 
     def derivative(self, drive, sign, direction, intraband=False):
@@ -1705,8 +1721,8 @@ class CovariantLinewidthSecondOrderFrequencyState(MarkovSecondOrderFrequencyStat
             rho = self.rho1[drive, sign]*(kernel.diag if intraband else 1.)
             d2f = state.d2f_i if intraband else state.d2f
             dg = state.damping_derivative[..., direction, :, :]
-            # A=ad_H-Omega-i C: D rho=A^-1(i D^2 f-[v,rho]+i (D C)[rho]).
-            source = (1j*d2f[..., drive, direction, :, :]
+            # A=ad_H-Omega-i C: D rho=A^-1(-i D^2 f-[v,rho]+i (D C)[rho]).
+            source = (-1j*d2f[..., drive, direction, :, :]
                       - commutator(state.owner.velocity_K[..., direction, :, :], rho)
                       + .5j*(dg @ rho + rho @ dg))
             self.derivatives[key] = state.collision.solve(source, kernel.deltaE_mn, sign*self.omega)

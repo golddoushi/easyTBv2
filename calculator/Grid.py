@@ -28,7 +28,7 @@ def _normalize_response_index_list(index_list, axis_length):
 def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_vertices,
                                             observable_component_shape, responseFermiIndexList,
                                             finiteTemperatureOccupations, fullCovariantDerivative):
-    """Contract the dc kernel through exact band-resolved response weights.
+    """Evaluate Tr(rho O) through exact band-resolved response weights.
 
     The expensive band-pair algebra is independent of Fermi level. Reducing it
     to one weight per band before the Fermi scan preserves the density-matrix
@@ -85,7 +85,7 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
         for ialpha in range(3):
             drive_a = drive_vertex[..., ialpha, :, :]
             coherence_prefactor = (
-                -1j * kernel.deltaE_inverse_pure * kernel.g0_mn
+                1j * kernel.deltaE_inverse_pure * kernel.g0_mn
                 * drive_a * kernel.off_diag
             )
             drive_diag = np.diagonal(drive_a, axis1=-2, axis2=-1).real
@@ -100,7 +100,7 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
                     weights_e[weight_index] = band_weight_e
                     if weights_i is not None:
                         observable_diag = np.diagonal(observable_vertex[vertex_index], axis1=-2, axis2=-1)
-                        weights_i[weight_index] = (-drive_diag * observable_diag * kernel.collision.population_inverse).real
+                        weights_i[weight_index] = (drive_diag * observable_diag * kernel.collision.population_inverse).real
 
     fermi_shape = ((1, 1) + owner.kgrid + (1,)*(1 + len(observable_component_shape)) + (nbands,))
     k_axes = tuple(range(2, 2 + len(owner.kgrid)))
@@ -168,10 +168,7 @@ def _solve_dc_galvanic_density_matrix(owner, observable_vertices,
                 block = frequency.block(direction, drive_vertex)
                 for iobservable, observable_vertex in enumerate(observable_vertices):
                     for name, rho in block.rho1.items():
-                        # The conductivity kernel stores minus the physical
-                        # density response to absorb the electron-current sign.
-                        # These are direct observables, so restore delta rho.
-                        value = -_contract_second_order_observable(rho, observable_vertex).real
+                        value = _contract_second_order_observable(rho, observable_vertex).real
                         projected_channels[name][idrive, iobservable, ifermi, direction] = np.sum(value, axis=k_axes)
                         if irecord is not None:
                             response_channels[name][idrive, iobservable, :, :, :, irecord, direction] = value
@@ -607,7 +604,7 @@ class SpinTorque(Spin):
         '''
         Build vector-potential torque vertices for velocity-gauge calculations.
 
-        With H(A) = H0 - A_a v_a + 1/2 A_a A_b w_ab,
+        With H(A) = H0 + A_a v_a + 1/2 A_a A_b w_ab,
         T(A) = -i[mu_S,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
         '''
         nbasis = self.energies.shape[-1]
@@ -618,7 +615,7 @@ class SpinTorque(Spin):
             S_c = self.spin_K[..., c, :, :]
             for a in range(3):
                 v_a = self.velocity_K[..., a, :, :]
-                self.spinTorqueA_K[..., c, a, :, :] = 1j * (S_c @ v_a - v_a @ S_c)
+                self.spinTorqueA_K[..., c, a, :, :] = -1j * (S_c @ v_a - v_a @ S_c)
                 for b in range(3):
                     w_ab = self.w_K[..., a, b, :, :]
                     self.spinTorqueAA_K[..., c, a, b, :, :] = -1j * (S_c @ w_ab - w_ab @ S_c)
@@ -639,14 +636,14 @@ class SpinTorque(Spin):
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity corrected spin torque in eig.-basis finished")
 
     def buildSpinTorqueDipoleCommutator(self):
-        '''Build the electric-field torque vertex i[mu_S,r_a] for length-gauge calculations.'''
+        '''Build -i[mu_S,r_a], the torque derivative for H_L=H0+E_a*r_a.'''
         nbasis = self.energies.shape[-1]
         self.spinTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         for c in range(3):
             spin_c = self.spin_K[..., c, :, :]
             for a in range(3):
                 r_a = self.r_K[..., a, :, :]
-                self.spinTorqueE_K[..., c, a, :, :] = 1j * (spin_c @ r_a - r_a @ spin_c)
+                self.spinTorqueE_K[..., c, a, :, :] = -1j * (spin_c @ r_a - r_a @ spin_c)
 
         self.projected_spinTorqueE_K_list = []
         for spinTorqueProjection in self.spinTorqueProjectionList:
@@ -719,8 +716,8 @@ class SpinExchangeTorque(Spin):
         '''
         Build vector-potential vertices for the exchange torque operator.
 
-        For H_XC(A)=H_XC-A_a v_XC,a+1/2 A_a A_b w_XC,ab, the vertices are
-        i[mu_S,v_XC,a] and -i[mu_S,w_XC,ab]. If exchangeVelocity was disabled,
+        For H_XC(A)=H_XC+A_a v_XC,a+1/2 A_a A_b w_XC,ab, the vertices are
+        -i[mu_S,v_XC,a] and -i[mu_S,w_XC,ab]. If exchangeVelocity was disabled,
         retain the local field-independent approximation with zero vertices.
         '''
         nbasis=self.energies.shape[-1]
@@ -733,7 +730,7 @@ class SpinExchangeTorque(Spin):
                 spin_c=self.spin_K[...,c,:,:]
                 for a in range(3):
                     velocity_xc_a=self.velocity_xc_K[...,a,:,:]
-                    self.spinExchangeTorqueA_K[...,c,a,:,:]=1j*(spin_c@velocity_xc_a-velocity_xc_a@spin_c)
+                    self.spinExchangeTorqueA_K[...,c,a,:,:]=-1j*(spin_c@velocity_xc_a-velocity_xc_a@spin_c)
                     for b in range(3):
                         w_xc_ab=self.w_xc_K[...,a,b,:,:]
                         self.spinExchangeTorqueAA_K[...,c,a,b,:,:]=-1j*(spin_c@w_xc_ab-w_xc_ab@spin_c)
@@ -805,7 +802,7 @@ class OrbitalTorque(Orbital):
         '''
         Build vector-potential torque vertices for velocity-gauge calculations.
 
-        With H(A) = H0 - A_a v_a + 1/2 A_a A_b w_ab,
+        With H(A) = H0 + A_a v_a + 1/2 A_a A_b w_ab,
         T(A) = -i[mu_L,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
         '''
         nbasis = self.energies.shape[-1]
@@ -816,7 +813,7 @@ class OrbitalTorque(Orbital):
             L_c = self.orbital_K[..., c, :, :]
             for a in range(3):
                 v_a = self.velocity_K[..., a, :, :]
-                self.orbitalTorqueA_K[..., c, a, :, :] = 1j * (L_c @ v_a - v_a @ L_c)
+                self.orbitalTorqueA_K[..., c, a, :, :] = -1j * (L_c @ v_a - v_a @ L_c)
                 for b in range(3):
                     w_ab = self.w_K[..., a, b, :, :]
                     self.orbitalTorqueAA_K[..., c, a, b, :, :] = -1j * (L_c @ w_ab - w_ab @ L_c)
@@ -837,14 +834,14 @@ class OrbitalTorque(Orbital):
         if self.verbose==2: showElapsedTime(extraInfo=f"velocity correctd orbital torque in eig.-basis finished")
 
     def buildOrbitalTorqueDipoleCommutator(self):
-        '''Build the electric-field torque vertex i[mu_L,r_a] for length-gauge calculations.'''
+        '''Build -i[mu_L,r_a], the torque derivative for H_L=H0+E_a*r_a.'''
         nbasis = self.energies.shape[-1]
         self.orbitalTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         for c in range(3):
             orbital_c = self.orbital_K[..., c, :, :]
             for a in range(3):
                 r_a = self.r_K[..., a, :, :]
-                self.orbitalTorqueE_K[..., c, a, :, :] = 1j * (orbital_c @ r_a - r_a @ orbital_c)
+                self.orbitalTorqueE_K[..., c, a, :, :] = -1j * (orbital_c @ r_a - r_a @ orbital_c)
 
         self.projected_orbitalTorqueE_K_list = []
         for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
@@ -1408,8 +1405,10 @@ class Velocity_diag(FermiScan):
 class SpinVelocity(Velocity, Spin):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
         '''
-        Compute spin velocity matrix in original basis and eigen-basis
-        and projected spin velocity matrix.
+        Compute spin magnetic-moment current {mu_S,v}/2 and its projections.
+        spin_K is mu_S/mu_B = -gS*S/hbar, so this is a magnetic-moment
+        current, not the spin-angular-momentum current {S,v}/2. No additional
+        electron charge multiplies this observable.
         Note, the projection is on the velocity component, corresponding to the spin-currents running in specific basis.
 
         Indexing:
@@ -1759,8 +1758,9 @@ class AnormalousHallConductance_LG_DM(Velocity):
         self.channel_descriptions = dict(DC_DM_CHANNEL_DESCRIPTIONS)
 
         velocity_vertices = [self.velocity_K] + self.projected_velocity_K_list
+        current_vertices = [-vertex for vertex in velocity_vertices]  # j=-v in electron units
         kernel, projected_channels, response_channels = _contract_dc_first_order_density_matrix(
-            self, velocity_vertices, velocity_vertices, (3,), responseFermiIndexList,
+            self, velocity_vertices, current_vertices, (3,), responseFermiIndexList,
             finiteTemperatureOccupations, self.fullCovariantDerivative
         )
         self.density_matrix_kernel = kernel
@@ -1843,7 +1843,9 @@ class _LinearConductivityDM(Velocity):
                     for a in range(3):
                         block = frequency.block(a, drive)
                         for jp, observable in enumerate(vertices):
-                            values = {name: _contract_second_order_observable(rho, observable)
+                            # Physical charge current j=-v. C below already
+                            # combines this minus with E=i*Omega*A.
+                            values = {name: -_contract_second_order_observable(rho, observable)
                                       for name, rho in block.rho1.items()}
                             if self.gauge == "VG":
                                 values['C'] = 1j*residue[a]/omega if omega != 0 else np.zeros_like(residue[a])
@@ -2686,7 +2688,7 @@ class BulkPhotovoltaicEffect_VG_DM(Dipole):
             self, self.fullCovariantDerivative, finiteTemperatureOccupations
         )
         self.density_matrix_kernel = kernel
-        velocity_observable = self.velocity_K
+        velocity_observable = -self.velocity_K  # j(A)=-v-A*w-A*A*u/2
         for ifermi, fermi in enumerate(self.fermiList):
             fermi_state = kernel.fermi_state(ifermi, fermi)
             relaxation_response_k = {
@@ -2722,7 +2724,7 @@ class BulkPhotovoltaicEffect_VG_DM(Dipole):
                             + _contract_second_order_observable(block.rho1_plus["E"], self.w_K[..., :, a, :, :])
                         )
                         u_cab = 0.5 * (self.u_K[..., :, a, b, :, :] + self.u_K[..., :, b, a, :, :])
-                        response_k["II"] += np.einsum(
+                        response_k["II"] -= np.einsum(
                             "...n,...cn->...c", fermi_state.f,
                             np.diagonal(u_cab, axis1=-2, axis2=-1), optimize=True
                         )
@@ -2914,7 +2916,7 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
         )
         self.density_matrix_kernel = kernel
         self.channel_descriptions = dict(kernel.channel_descriptions)
-        velocity_observable = self.velocity_K
+        velocity_observable = -self.velocity_K  # physical electron current
         for ifermi, fermi in enumerate(self.fermiList):
             fermi_state = kernel.fermi_state(ifermi, fermi)
             for iomega, Omega in enumerate(self.omegaList):
@@ -2980,7 +2982,7 @@ class BulkPhotovoltaicEffect_TDSE(Velocity):
 
             J0 = np.zeros(3)
             for ibeta in range(3):
-                j0_val = np.sum(rho0 * self.velocity_K[..., ibeta, :, :].swapaxes(-1, -2), axis=(-1, -2)).real
+                j0_val = -np.sum(rho0 * self.velocity_K[..., ibeta, :, :].swapaxes(-1, -2), axis=(-1, -2)).real
                 J0[ibeta] = np.sum(j0_val)
 
             for iomega, Omega in enumerate(self.omegaList):
@@ -3014,14 +3016,14 @@ class BulkPhotovoltaicEffect_TDSE(Velocity):
                         
                         # Measure current in all 3 directions
                         for ibeta in range(3):
-                            J_op = self.velocity_K[..., ibeta, :, :]
+                            J_op = -self.velocity_K[..., ibeta, :, :]
                             for i, A_i in enumerate(A_t):
                                 J_op = J_op - A_i * self.w_K[..., ibeta, directions[i], :, :]
                             for i, A_i in enumerate(A_t):
                                 for j, A_j in enumerate(A_t):
-                                    J_op = J_op + 0.5 * A_i * A_j * self.u_K[..., ibeta, directions[i], directions[j], :, :]
+                                    J_op = J_op - 0.5 * A_i * A_j * self.u_K[..., ibeta, directions[i], directions[j], :, :]
 
-                            # Tr(rho * v) summed over all k-points and bands
+                            # Physical charge current Tr(rho * (-dH/dA)).
                             j_val = np.sum(rho * J_op.swapaxes(-1, -2), axis=(-1,-2)).real
                             J_dc[ibeta] += np.sum(j_val) / (n_cycles_measure * n_steps_per_cycle)
 
@@ -3073,10 +3075,10 @@ class BulkPhotovoltaicEffect_TDSE(Velocity):
         # A(t) = A(W) exp(-iWt) + A(-W) exp(iWt) = (-i/W) E(W) exp(-iWt) + (i/W) E(-W) exp(iWt) = -2 E0/W sin(Wt)
         def dRho_dt(rho_state, time_val):
             A_t = [-2 * E0 / Omega * np.sin(Omega * time_val + phase) for phase in phases]
-            # Full Minimal Coupling: H = H0 - A*v + 1/2 A^2 w - 1/6 A^3 u
+            # H(k+A) through the second order needed by this response.
             H_t = H_diag
             for i, A_i in enumerate(A_t):
-                H_t = H_t - A_i * self.velocity_K[..., directions[i], :, :]
+                H_t = H_t + A_i * self.velocity_K[..., directions[i], :, :]
             for i, A_i in enumerate(A_t):
                 for j, A_j in enumerate(A_t):
                     H_t = H_t + 0.5 * A_i * A_j * self.w_K[..., directions[i], directions[j], :, :]
@@ -3134,8 +3136,8 @@ class BulkPhotovoltaicEffect_TDSE_LG_Naive(Dipole):
 
                         for ibeta in range(3):
                             v_beta = self.velocity_K[..., ibeta, :, :]
-                            # Current Operator in LG is strictly just 'v'
-                            j_val = np.sum(rho * v_beta.swapaxes(-1, -2), axis=(-1,-2)).real
+                            # Charge current in LG is -v.
+                            j_val = -np.sum(rho * v_beta.swapaxes(-1, -2), axis=(-1,-2)).real
                             J_dc[ibeta] += np.sum(j_val) / (n_cycles_measure * n_steps_per_cycle)
                             
                     self.sigma_TDSE[ifermi, iomega, ialpha, ialpha, :] = J_dc / E0**2 / np.prod(self.kgrid)
@@ -3147,7 +3149,7 @@ class BulkPhotovoltaicEffect_TDSE_LG_Naive(Dipole):
         def dRho_dt(rho_state, time_val):
             # A(t) = -2E0/Omega * sin(Omega t) -> E(t) = -dA/dt = 2*E0*cos(Omega t)
             E_t = 2.0 * E0 * np.cos(Omega * time_val)
-            H_t = H_diag - E_t * r_alpha
+            H_t = H_diag + E_t * r_alpha
             
             comm = H_t @ rho_state - rho_state @ H_t
             return -1j * comm - self.eta * (rho_state - rho0)
@@ -3662,8 +3664,8 @@ class InverseFaradayEffect_TDSE(Dipole, Spin, Orbital):
         if self.fullCovariantDerivative:
             for direction in directions:
                 c1_i, c1_e = self.fermiCovariantFirstDerivativeChannels(f, dfdk, direction)
-                data["q1_I"].append(1j * c1_i * diag)
-                data["q1_E"].append(1j * c1_e * off_diag)
+                data["q1_I"].append(-1j * c1_i * diag)
+                data["q1_E"].append(-1j * c1_e * off_diag)
             for direction_i in directions:
                 row = []
                 for direction_j in directions:
@@ -3686,13 +3688,13 @@ class InverseFaradayEffect_TDSE(Dipole, Spin, Orbital):
             result = [free_evolution(rho) for rho in current_state]
 
             for i, A_i in enumerate(A_t):
-                result[1] += 1j * A_i * drive_data["comm_v_rho0"][i]
+                result[1] -= 1j * A_i * drive_data["comm_v_rho0"][i]
                 if self.fullCovariantDerivative:
                     result[0] += self.eta * A_i * drive_data["q1_I"][i]
                     result[1] += self.eta * A_i * drive_data["q1_E"][i]
 
-                source_i = 1j * A_i * commutator(drive_data["velocity"][i], rho1_i)
-                source_e = 1j * A_i * commutator(drive_data["velocity"][i], rho1_e)
+                source_i = -1j * A_i * commutator(drive_data["velocity"][i], rho1_i)
+                source_e = -1j * A_i * commutator(drive_data["velocity"][i], rho1_e)
                 result[3] += source_i * off_diag
                 result[4] += source_e * diag
                 result[5] += source_e * off_diag
@@ -3811,8 +3813,8 @@ class InverseFaradayEffect_BlochAcceleration_TDSE(Spin, Orbital):
         if self.verbose == 2: showElapsedTime(extraInfo=f"Bloch-acceleration TDSE IFE finished")
 
     def _hamiltonian_eigenbasis_at_vector_potential(self, A_cart):
-        phase_A = np.exp(-1j * (self._R_cart @ A_cart))
-        orbital_phase = np.exp(1j * (A_cart @ self._r_cart))
+        phase_A = np.exp(1j * (self._R_cart @ A_cart))
+        orbital_phase = np.exp(-1j * (A_cart @ self._r_cart))
         ham_R_A = (self._ham_R_phase * phase_A[:, None, None]
                    * orbital_phase[None, :, None] * orbital_phase.conj()[None, None, :])
         ham_R_grid = np.zeros(self.kgrid + (self.model.norbs, self.model.norbs), dtype=complex)
@@ -4073,8 +4075,8 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
             if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
             if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
 
-        # H_LG(t) = H0 - E_a(t) r_a, hence the full torque contains
-        # T_c(E) = -i[mu_c,H_LG] = T_c(0) + E_a i[mu_c,r_a].
+        # H_LG(t) = H0 + E_a(t) r_a, hence the full torque contains
+        # T_c(E) = -i[mu_c,H_LG] = T_c(0) - i E_a [mu_c,r_a].
         proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]:
             self.buildSpinTorqueDipoleCommutator()
@@ -4398,9 +4400,11 @@ class SpinHallConductance_LG_DM(SpinVelocity):
     def __init__(self, currentProjectionList=[], spincurrentProjectionList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
-        Calculate the dc spin-current response from the common first-order
+        Calculate the dc spin magnetic-moment current response from the common first-order
         length-gauge density-matrix kernel. Tensor axes are electric-field
-        direction, spin-current flow direction and spin polarization.
+        direction, spin-current flow direction and spin polarization. The
+        observable is {mu_S,v}/2, with mu_S/mu_B=-gS*S/hbar; there is no
+        charge-current minus. The historical 2D normalization below is retained.
         '''
         super().__init__(velocityProjectionList=currentProjectionList,
                          spinvelocityProjectionList=spincurrentProjectionList, **kwarg)
@@ -4703,7 +4707,7 @@ class SpinVelocityCorrelation_diag(Spin_diag, Velocity_diag):
             for ispin, proj_spin_K in enumerate([self.spin_diag_K]+self.projected_spin_diag_K_list):
                 for ialpha in range(3):
                     for igamma in range(3):
-                        self.projected_spinVelocityCorrelation_diag[ivelocity,ispin,...,ialpha,igamma,:]=-(proj_spin_K[...,igamma,:]*proj_velocity_K[...,ialpha,:]).real/self.eta
+                        self.projected_spinVelocityCorrelation_diag[ivelocity,ispin,...,ialpha,igamma,:]=(proj_spin_K[...,igamma,:]*proj_velocity_K[...,ialpha,:]).real/self.eta
         
         self.spinVelocityCorrelation_diag=self.projected_spinVelocityCorrelation_diag[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on intra band contributions on correlation functions <Spin><velocity> finished")
@@ -4749,7 +4753,7 @@ class OrbitalVelocityCorrelation_diag(Orbital_diag, Velocity_diag):
             for iorbital, proj_orbital_K in enumerate([self.orbital_diag_K]+self.projected_orbital_diag_K_list):
                 for ialpha in range(3):
                     for igamma in range(3):
-                        self.projected_orbitalVelocityCorrelation_diag[ivelocity,iorbital,...,ialpha,igamma,:]=-(proj_orbital_K[...,igamma,:]*proj_velocity_K[...,ialpha,:]).real/self.eta
+                        self.projected_orbitalVelocityCorrelation_diag[ivelocity,iorbital,...,ialpha,igamma,:]=(proj_orbital_K[...,igamma,:]*proj_velocity_K[...,ialpha,:]).real/self.eta
         
         self.orbitalVelocityCorrelation_diag=self.projected_orbitalVelocityCorrelation_diag[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on intra band contributions on correlation functions <L><velocity> finished")

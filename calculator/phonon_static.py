@@ -51,8 +51,11 @@ def solve_static_epc_conductivity(owner, temperature, statistics, moving_centers
     scale = elementary_charge**2/(hbar*angstrom*abs(owner.model.Vcell)*nk)
     batch_size = min(batch_size, max(1, 1_000_000//max(1, nb**4)))
 
-    def current(r, v):
+    def velocity_trace(r, v):
         return np.einsum('kaij,kbji->ab', r, v, optimize=True)*scale
+
+    def current(r, v):
+        return -velocity_trace(r, v)  # electron current j=-v
 
     def contact(f, w):
         return np.einsum('kij,kbaji->ab', f, w, optimize=True)*scale
@@ -76,17 +79,19 @@ def solve_static_epc_conductivity(owner, temperature, statistics, moving_centers
             indices = np.arange(nb)
             f0[:, indices, indices] = kernel.f
             d0 = kernel.dd1[:, None]*vzero[0]
-            residue0 = current(d0, vzero[0])+contact(f0, wzero[0])
+            # The VG pole i/omega*(Tr[Df*v]+Tr[f*w]) already combines
+            # the electron-current minus with E=i*omega*A.
+            residue0 = velocity_trace(d0, vzero[0])+contact(f0, wzero[0])
             owner.sum_rule_residual[fi] += residue0
             for wi, omega in enumerate(owner.omegaList):
-                r0 = -d0/(gamma+1j*(kernel.gaps-omega))[:, None]
+                r0 = d0/(gamma+1j*(kernel.gaps-omega))[:, None]
                 owner.sigma_bare[fi, wi] += current(r0, vzero[0])
                 if omega != 0:
                     owner.sigma_bare[fi, wi] += 1j*residue0/omega
             for mode, factor in enumerate(factors):
                 h, v, w = rotate(operators.displacement_coefficients(factor, ks, moving_centers))
                 fs, ds = kernel.coefficients(h[1], h[2], v[0], v[1], v[2])
-                residue2 = (current(ds[2], v[0])+current(ds[1], v[1])+current(ds[0], v[2])
+                residue2 = (velocity_trace(ds[2], v[0])+velocity_trace(ds[1], v[1])+velocity_trace(ds[0], v[2])
                             +contact(fs[2], w[0])+contact(fs[1], w[1])+contact(fs[0], w[2]))
                 owner.correction_sum_rule_residual[fi] += residue2
                 for wi, omega in enumerate(owner.omegaList):
