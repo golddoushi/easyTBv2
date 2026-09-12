@@ -16,7 +16,7 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
                              LengthGaugeDCFirstOrderDMKernel,
                              LengthGaugeFirstOrderDMKernel,
                              VelocityGaugeFirstOrderDMKernel,
-                             CollisionSpecification, diagonal_matrix,
+                             CollisionSpecification, diagonal_matrix, fermi_divided_difference,
                              LengthGaugeSecondOrderDMKernel,
                              VelocityGaugeSecondOrderDMKernel)
 
@@ -159,19 +159,100 @@ def _solve_dc_galvanic_density_matrix(owner, observable_vertices,
         name:np.zeros(response_shape, dtype=float) for name in owner.channel_names}
     k_axes = tuple(range(3))
 
-    for ifermi, fermi in enumerate(owner.fermiList):
-        state = kernel.fermi_state(ifermi, fermi)
-        frequency = state.at_frequency(0.)
-        irecord = fermi_records.get(ifermi)
+    if kernel.collision.mesh_coupled:
+        # The full EPC collision mixes populations on different k points and
+        # must be inverted for every drive. Keep the general matrix route.
+        for ifermi, fermi in enumerate(owner.fermiList):
+            state = kernel.fermi_state(ifermi, fermi)
+            frequency = state.at_frequency(0.)
+            irecord = fermi_records.get(ifermi)
+            for idrive, drive_vertex in enumerate(drive_vertices):
+                for direction in range(3):
+                    block = frequency.block(direction, drive_vertex)
+                    for iobservable, observable_vertex in enumerate(observable_vertices):
+                        for name, rho in block.rho1.items():
+                            value = _contract_second_order_observable(rho, observable_vertex).real
+                            projected_channels[name][idrive, iobservable, ifermi, direction] = np.sum(value, axis=k_axes)
+                            if irecord is not None:
+                                response_channels[name][idrive, iobservable, :, :, :, irecord, direction] = value
+    else:
+        # CRTA and SERTA are local and diagonal in each band-pair channel. The
+        # regular interband response is linear in the occupations, so reduce
+        # its Fermi-independent pair algebra to one weight per band. Pairs too
+        # close for a stable occupation difference retain the exact divided
+        # difference and are accumulated separately below.
+        resolvent = kernel.collision.resolvent(owner.deltaE)
+        off_diagonal = ~kernel.diag
+        inverse_gap = np.zeros_like(owner.deltaE)
+        if owner.fullCovariantDerivative:
+            # This threshold is numerical, not the physical/degen cutoff. Its
+            # only role is choosing the stable confluent divided difference.
+            near_tolerance = 1e-5*owner.kBT
+            regular = off_diagonal & (np.abs(owner.deltaE) > near_tolerance)
+            np.divide(1., owner.deltaE, out=inverse_gap, where=regular)
+            near = off_diagonal & ~regular
+        else:
+            inverse_gap[...] = owner.deltaEInverse_pure
+            regular = inverse_gap != 0.
+            near = np.zeros_like(regular)
+        pair_factor = -1j*resolvent*inverse_gap
+
+        near_indices = np.nonzero(near)
+        if near_indices[0].size:
+            near_k_flat = np.ravel_multi_index(near_indices[:3], owner.kgrid)
+            near_left_energy = owner.energies[near_indices[:3] + (near_indices[3],)]
+            near_right_energy = owner.energies[near_indices[:3] + (near_indices[4],)]
+            near_resolvent = -1j*resolvent[near_indices]
+        else:
+            near_k_flat = near_left_energy = near_right_energy = near_resolvent = None
+
+        fermi_data = []
+        for fermi in owner.fermiList:
+            occupations = (owner.fdOccupation(fermi) if owner.fullCovariantDerivative
+                           or finiteTemperatureOccupations else (owner.energies < fermi).astype(float))
+            derivative = (owner.fdEnergyDerivatives(occupations)[0]
+                          if owner.fullCovariantDerivative else None)
+            near_difference = (fermi_divided_difference(
+                near_left_energy, near_right_energy, fermi, owner.kBT)
+                if near_k_flat is not None else None)
+            fermi_data.append((occupations, derivative, near_difference))
+
         for idrive, drive_vertex in enumerate(drive_vertices):
-            for direction in range(3):
-                block = frequency.block(direction, drive_vertex)
-                for iobservable, observable_vertex in enumerate(observable_vertices):
-                    for name, rho in block.rho1.items():
-                        value = _contract_second_order_observable(rho, observable_vertex).real
-                        projected_channels[name][idrive, iobservable, ifermi, direction] = np.sum(value, axis=k_axes)
-                        if irecord is not None:
-                            response_channels[name][idrive, iobservable, :, :, :, irecord, direction] = value
+            drive_diagonal = np.diagonal(drive_vertex, axis1=-2, axis2=-1)
+            near_drive = (drive_vertex[near_indices[:3] + (slice(None), near_indices[3], near_indices[4])]
+                          if near_k_flat is not None else None)
+            for iobservable, observable_vertex in enumerate(observable_vertices):
+                observable_diagonal = np.diagonal(observable_vertex, axis1=-2, axis2=-1)
+                weights_i = (drive_diagonal[..., :, None, :]
+                             * observable_diagonal[..., None, :, :]
+                             * kernel.collision.population_inverse[..., None, None, :])
+                weights_e = np.zeros(owner.kgrid + (3, 3, owner.energies.shape[-1]), complex)
+                for direction in range(3):
+                    drive_component = drive_vertex[..., direction, :, :]
+                    for component in range(3):
+                        pair_weight = (pair_factor*drive_component
+                                       * observable_vertex[..., component, :, :].swapaxes(-1, -2))
+                        weights_e[..., direction, component, :] = (
+                            np.sum(pair_weight, axis=-1)-np.sum(pair_weight, axis=-2))
+                near_observable = (observable_vertex[
+                    near_indices[:3] + (slice(None), near_indices[4], near_indices[3])]
+                    if near_k_flat is not None else None)
+
+                for ifermi, (occupations, derivative, near_difference) in enumerate(fermi_data):
+                    value_i = (np.sum(weights_i*derivative[..., None, None, :], axis=-1).real
+                               if derivative is not None else np.zeros(owner.kgrid + (3, 3)))
+                    value_e = np.sum(weights_e*occupations[..., None, None, :], axis=-1).real
+                    if near_k_flat is not None:
+                        near_weight = near_resolvent*near_difference
+                        near_value = (near_weight[:, None, None]
+                                      * near_drive[:, :, None]*near_observable[:, None, :]).real
+                        np.add.at(value_e.reshape((-1, 3, 3)), near_k_flat, near_value)
+                    projected_channels["I"][idrive, iobservable, ifermi] = np.sum(value_i, axis=k_axes)
+                    projected_channels["E"][idrive, iobservable, ifermi] = np.sum(value_e, axis=k_axes)
+                    irecord = fermi_records.get(ifermi)
+                    if irecord is not None:
+                        response_channels["I"][idrive, iobservable, :, :, :, irecord] = value_i
+                        response_channels["E"][idrive, iobservable, :, :, :, irecord] = value_e
 
     scale = 1.0/np.prod(owner.kgrid)
     owner.galvanic_units = units

@@ -1145,13 +1145,20 @@ class FirstOrderFermiState:
                   or kernel.finite_temperature_occupations else (owner.energies < fermi).astype(float))
         if self.collision.mesh_coupled:
             self.f=self.collision.stationary_occupations
-        self.rho0 = diagonal_matrix(self.f)
+        self._rho0 = None
         if kernel.full_covariant_derivative:
             e = owner.energies
             self.divided_difference = fermi_divided_difference(
                 e[..., :, None], e[..., None, :], fermi, owner.kBT)
         else:
             self.divided_difference = (self.f[..., :, None]-self.f[..., None, :]) * owner.deltaEInverse_pure
+
+    @property
+    def rho0(self):
+        """Build the equilibrium density matrix only for clients that need it."""
+        if self._rho0 is None:
+            self._rho0 = diagonal_matrix(self.f)
+        return self._rho0
 
     def derivative(self, direction, drive_velocity=None):
         if self.collision.mesh_coupled:

@@ -33,8 +33,8 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
-    model=System_w90(
+    mainDir="./mcalc/Co3Pt4/"
+    model=System_tb(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -55,6 +55,7 @@ def run():
             #"Pt":(0,0,1,1,2,2,),
             "C":(0,1,),
             "Fe":(0,1,2,),
+            "Co":(0,1,2,),
             "Mo":(2,),
             "Nb":(0,2,),
             "S":(1,),
@@ -73,9 +74,9 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        spinSeparated=True,
+        #spinSeparated=True,
     )
-    #'''
+    '''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
@@ -94,15 +95,15 @@ def run():
     #model.rotateSpinBasisToGlobal(alpha=np.pi/2, beta=np.pi/2) # SAXIS = 0 1 0
     #model.rotateSpinBasisToGlobal(alpha=0, beta=np.pi/2) # SAXIS = 1 0 0
     
-    '''
+    #'''
     # global symmetrization
     # usage: regularized independent noncollinear model, collinear model
     # NOT for vasp_std + V_soi scheme, use the symmerizeCollinearAndSOI rather
     atomicMagMomList=[
-        np.array([1, 0, 0]),
-    ]*1+[
         np.array([0, 0, 0]),
-    ]*2
+    ]*4+[
+        np.array([0, 0, 1]),
+    ]*3
     model.symmerizeHamAndOverlap(
         atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
     )
@@ -147,7 +148,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-3.0         # VASP 2H-FeCl2 U=2.0
+    #fermi=-3.0         # VASP 2H-FeCl2 U=2.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
@@ -158,10 +159,10 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    #fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
+    fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
     #fermi=0            # model hamiltonian
 
-    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,21)
+    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,11)
     #fermiAxis=np.array([fermi,])
     #omegaAxis=np.arange(0.1,3.05,1.0)
     omegaAxis=[0]
@@ -224,20 +225,23 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(30,30,1)
+    BZGrid=(24,32,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
     ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
-    calc=BZGridTask(model, solveStGC_LG_DM,
+    Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
+    calc=BZGridTask(model, solveOGC_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},
                            ],
                           'projected shells for detecting spincurrent':[],
                           'projected shells for detecting spin accumulation':[
-                              #{"source":Cl1, "target":Cl1},
+                              {"source":Co1, "target":Co1},
+                              {"source":Co2, "target":Co2},
+                              {"source":Co3, "target":Co3},
                           ],
                           'omega':omegaAxis,
                           'record frequency ids':recordOmegaIndexList,
@@ -252,7 +256,7 @@ def run():
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
-                    ncores=8)
+                    parallelBackend="thread", ncores=8)
     #exit()
     #_,_,_,nbands=calc.results[0]["energies"].shape
     #pdos=np.zeros((101,nbands,))
