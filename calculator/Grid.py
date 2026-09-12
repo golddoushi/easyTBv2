@@ -133,6 +133,67 @@ def _sum_density_matrix_channels(channels):
         np.add(total, value, out=total)
     return total
 
+def _solve_dc_galvanic_density_matrix(owner, observable_vertices,
+                                       responseFermiIndexList,
+                                       finiteTemperatureOccupations,
+                                       fullCovariantDerivative, units):
+    """Contract the modern first-order LG kernel with a vector observable."""
+    owner.fullCovariantDerivative = bool(fullCovariantDerivative)
+    owner.calcDeltaEInverse()
+    kernel = LengthGaugeFirstOrderDMKernel(
+        owner, owner.fullCovariantDerivative, finiteTemperatureOccupations)
+    owner.density_matrix_kernel = kernel
+    owner.channel_names = kernel.channel_names
+    owner.channel_descriptions = dict(kernel.channel_descriptions)
+    owner.responseFermiIndexList = tuple(
+        _normalize_response_index_list(responseFermiIndexList, len(owner.fermiList)))
+    fermi_records = {value:index for index, value in enumerate(owner.responseFermiIndexList)}
+    drive_vertices = [owner.velocity_K] + owner.projected_velocity_K_list
+    projected_shape = (len(drive_vertices), len(observable_vertices),
+                       len(owner.fermiList), 3, 3)
+    response_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
+                      + (len(fermi_records), 3, 3))
+    projected_channels = {
+        name:np.zeros(projected_shape, dtype=float) for name in owner.channel_names}
+    response_channels = {
+        name:np.zeros(response_shape, dtype=float) for name in owner.channel_names}
+    k_axes = tuple(range(3))
+
+    for ifermi, fermi in enumerate(owner.fermiList):
+        state = kernel.fermi_state(ifermi, fermi)
+        frequency = state.at_frequency(0.)
+        irecord = fermi_records.get(ifermi)
+        for idrive, drive_vertex in enumerate(drive_vertices):
+            for direction in range(3):
+                block = frequency.block(direction, drive_vertex)
+                for iobservable, observable_vertex in enumerate(observable_vertices):
+                    for name, rho in block.rho1.items():
+                        # The conductivity kernel stores minus the physical
+                        # density response to absorb the electron-current sign.
+                        # These are direct observables, so restore delta rho.
+                        value = -_contract_second_order_observable(rho, observable_vertex).real
+                        projected_channels[name][idrive, iobservable, ifermi, direction] = np.sum(value, axis=k_axes)
+                        if irecord is not None:
+                            response_channels[name][idrive, iobservable, :, :, :, irecord, direction] = value
+
+    scale = 1.0/np.prod(owner.kgrid)
+    owner.galvanic_units = units
+    owner.conductivity_units = units
+    owner.projected_sigma_channels = {
+        name: response*scale for name, response in projected_channels.items()
+    }
+    owner.projected_response_channels = response_channels
+    owner.projected_sigma = _sum_density_matrix_channels(owner.projected_sigma_channels)
+    owner.projected_response = _sum_density_matrix_channels(owner.projected_response_channels)
+    owner.sigma_channels = {
+        name: response[0, 0] for name, response in owner.projected_sigma_channels.items()
+    }
+    owner.sigma = _sum_density_matrix_channels(owner.sigma_channels)
+    for name in owner.channel_names:
+        setattr(owner, f"projected_sigma_{name}", owner.projected_sigma_channels[name])
+        setattr(owner, f"projected_response_{name}", owner.projected_response_channels[name])
+        setattr(owner, f"sigma_{name}", owner.sigma_channels[name])
+
 class Calculator():
     Iodd = False  # inversion gives minus
     Todd = False  # time reversal gives minus
@@ -1880,7 +1941,6 @@ class Opticalconductivity_VG_DM_StaticEPC(Velocity):
         solve_static_epc_conductivity(self, phononTemperature, phononStatistics,
             movingCenters, displacementFactors, kBatchSize)
 
-
 class Opticalconductivity_VG_DM_Phonon(Velocity):
     """Frequency-domain VG DM for a prescribed periodic SSH phonon bath.
 
@@ -1928,7 +1988,6 @@ class Opticalconductivity_VG_DM_Phonon(Velocity):
     def lockinConductivity(self, times, sample=0, ifermi=0, iomega=0):
         from .phonon_frequency import lockin_conductivity
         return lockin_conductivity(self, times, sample, ifermi, iomega)
-
 
 class Opticalconductivity_TDSE(Velocity):
     """Independent real-time VG benchmark with collision relaxation.
@@ -2064,7 +2123,6 @@ class Opticalconductivity_TDSE(Velocity):
                     if recordCurrent:
                         self.time_traces[ifermi,iw,a] = dict(time=times, normalized_current=currents,
                                                             electric_field=E0*np.cos(omega*times))
-
 
 class BerryConnectionPolarizability(Velocity):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
@@ -4502,6 +4560,33 @@ class SpinVelocityCorrelation(Spin,Velocity):
         self.spinVelocityCorrelation=self.projected_spinVelocityCorrelation[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation functions <Spin \dot velocity> finished")
 
+class SpinGalvanicConductivity_LG_DM(Spin, Velocity):
+    """Dc electric-field-induced spin magnetic moment from the LG DM kernel.
+
+    ``sigma[fermi, field_direction, spin_direction]`` is measured in
+    ``mu_B/(V/angstrom)/cell``. The ``I`` and ``E`` channels respectively
+    contain the intraband displaced population and interband coherence.
+    ``fullCovariantDerivative=True`` enables both channels and supports the
+    CRTA, frozen-SERTA, and mesh-coupled EPC collision specifications.
+    """
+    Iodd = True
+    Todd = True
+
+    def __init__(self, currentProjectionList=None, spinProjectionList=None,
+                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, **kwarg):
+        currentProjectionList = [] if currentProjectionList is None else currentProjectionList
+        spinProjectionList = [] if spinProjectionList is None else spinProjectionList
+        super().__init__(velocityProjectionList=currentProjectionList,
+                         spinProjectionList=spinProjectionList, **kwarg)
+        observable_vertices = [self.spin_K] + self.projected_spin_K_list
+        _solve_dc_galvanic_density_matrix(
+            self, observable_vertices, responseFermiIndexList,
+            finiteTemperatureOccupations, fullCovariantDerivative,
+            "mu_B/(V/angstrom)/cell"
+        )
+        if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin galvanic conductivity finished")
+
 class SpinGalvanicConductance(SpinVelocityCorrelation):
     def __init__(self, fermiList=[], currentProjectionList=[], spinProjectionList=[], **kwarg) -> None:
         '''
@@ -4550,6 +4635,32 @@ class OrbitalVelocityCorrelation(Orbital,Velocity):
         
         self.orbitalVelocityCorrelation=self.projected_orbitalVelocityCorrelation[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation functions <L \dot velocity> finished")
+
+class OrbitalGalvanicConductivity_LG_DM(Orbital, Velocity):
+    """Dc electric-field-induced local orbital moment from the LG DM kernel.
+
+    ``sigma[fermi, field_direction, orbital_direction]`` is measured in
+    ``mu_B/(V/angstrom)/cell``. This class uses the local-circulation orbital
+    operator exposed by :class:`Orbital`; it does not add modern-theory
+    itinerant-circulation terms.
+    """
+    Iodd = True
+    Todd = True
+
+    def __init__(self, currentProjectionList=None, orbitalProjectionList=None,
+                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, **kwarg):
+        currentProjectionList = [] if currentProjectionList is None else currentProjectionList
+        orbitalProjectionList = [] if orbitalProjectionList is None else orbitalProjectionList
+        super().__init__(velocityProjectionList=currentProjectionList,
+                         orbitalProjectionList=orbitalProjectionList, **kwarg)
+        observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
+        _solve_dc_galvanic_density_matrix(
+            self, observable_vertices, responseFermiIndexList,
+            finiteTemperatureOccupations, fullCovariantDerivative,
+            "mu_B/(V/angstrom)/cell"
+        )
+        if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix orbital galvanic conductivity finished")
 
 class OrbitalGalvanicConductance(OrbitalVelocityCorrelation):
     def __init__(self, fermiList=[], currentProjectionList=[], orbitalProjectionList=[], **kwarg) -> None:
@@ -4690,6 +4801,32 @@ class SpintorqueVelocityCorrelation(SpinExchangeTorque,Velocity):
                         self.projected_spintorqueVelocityCorrelation[ivelocity,ispinTorque,...,ialpha,igamma,:]=-2*np.diagonal(proj_spinTorque_K[...,igamma,:,:] @ (dEInverse2*proj_velocity_K[...,ialpha,:,:]),0,-2,-1).imag
         
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation function <Torque_Spin velocity> finished")
+
+class SpintorqueGalvanicConductivity_LG_DM(SpinExchangeTorque, Velocity):
+    """Dc electric-field-induced spin exchange torque from the LG DM kernel.
+
+    ``sigma[fermi, field_direction, torque_direction]`` is the electronic
+    exchange-torque vertex in ``mu_B*eV/(V/angstrom)/cell``. Divide by hbar in
+    eV*fs and apply the electron-to-order reaction sign when converting it to
+    the magnetic-moment rate used by an LLG equation.
+    """
+    Iodd = True
+    Todd = False
+
+    def __init__(self, currentProjectionList=None, spinTorqueProjectionList=None,
+                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, **kwarg):
+        currentProjectionList = [] if currentProjectionList is None else currentProjectionList
+        spinTorqueProjectionList = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
+        super().__init__(velocityProjectionList=currentProjectionList,
+                         spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
+        observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list
+        _solve_dc_galvanic_density_matrix(
+            self, observable_vertices, responseFermiIndexList,
+            finiteTemperatureOccupations, fullCovariantDerivative,
+            "mu_B*eV/(V/angstrom)/cell"
+        )
+        if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin-torque galvanic conductivity finished")
 
 class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):
     def __init__(self, currentProjectionList=[], spinTorqueProjectionList=[], **kwarg) -> None:
