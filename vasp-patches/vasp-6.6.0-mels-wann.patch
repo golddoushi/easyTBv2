@@ -1,0 +1,699 @@
+--- src/elphon_common.F
++++ src/elphon_common.F
+@@ -1482,11 +1482,16 @@
+    USE mpimy, ONLY: communic
+    USE mkpoints, ONLY: kpoints_struct
+    USE ini, ONLY: register_allocate
++   USE wave, ONLY: SETWDES, NB_LOCAL
++   USE choleski, ONLY: CALC_PAW_OVERLAP
++   USE wave_high, ONLY: ELEMENTS, NEWWAVA, DELWAVA
++   USE vhdf5
+    USE hamil_struct_def, ONLY: ham_handle
+    USE nonl_high, ONLY: nonl_struct, nonlr_struct, phase
+-   USE wave_struct_def, ONLY: wavedes, wavespin, wavedes1
++   USE wave_struct_def, ONLY: wavedes, wavespin, wavedes1, wavefuna
+    USE wave_interpolate, ONLY: wave_interpolator, wave_interpolator_kpoints, wave_mapper, wave_mapper_from_wave_interp
+-   USE elphon_base, ONLY: elph_settings
++   USE elphon_base, ONLY: elph_settings, elph_mels_use_wann
++   USE elphon_wann_export, ONLY: wann_bridge
+ #ifdef VASP_HDF5
+    USE vhdf5, ONLY : HID_T
+ #endif
+@@ -1519,7 +1524,17 @@
+ #ifdef VASP_HDF5
+    integer(HID_T) :: groupid
+ #endif
++   type(wavedes1), TARGET :: BR_COARSE, BR_DENSE
++   type(wavefuna) :: BR_REFERENCE
++   integer :: BR_REF, BR_MATCH, BR_NB, BR_LOCAL, BR_BAND, BR_IB, BR_NPW
++   COMPLEX(q), ALLOCATABLE :: BR_CW(:,:), BR_CP(:,:)
++   logical :: BR_COMPAT
++   COMPLEX(q), ALLOCATABLE :: BR_O(:,:,:,:),BR_SC(:,:,:,:),BR_SD(:,:,:,:)
++   GDEF, ALLOCATABLE :: BR_TMP(:,:)
++   REAL(q), ALLOCATABLE :: BR_E(:,:,:), BR_IDS(:,:), BR_LAYOUT(:,:)
++   integer(HID_T) :: BR_GROUP
+    integer :: ierr
++   type(info_struct) :: INFO_DENSE_DIAGNOSTIC
+ 
+    ! local variables
+    integer :: isp, ik, ikcoarse, ikdense, i, ibandmax
+@@ -1532,11 +1547,16 @@
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! Compute orbitals on a dense k-point mesh !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
++   INFO_DENSE_DIAGNOSTIC=INFO
++   IF (ELPH_SET%mels_use==elph_mels_use_wann) THEN
++      INFO_DENSE_DIAGNOSTIC%LDIAG=.TRUE.
++      INFO_DENSE_DIAGNOSTIC%IALGO=8
++   ENDIF
+    PROFILING_START('elph_wfs')
+    !Deactivate IO when using wave interpolator IU6 = -1; IU0 = -1
+    CALL WAVE_INTERPOLATOR_KPOINTS(WAVE_INTERP, HAMILTONIAN, &
+               LATT_CUR, LATT_INI, T_INFO, NONLR_S, NONL_S, LMDIM, P, SV, &
+-              CQIJ, CDIJ, SYMM, INFO, -1, -1, WDES_COMM=WDES_DENSE_IBZ)
++              CQIJ, CDIJ, SYMM, INFO_DENSE_DIAGNOSTIC, -1, -1, WDES_COMM=WDES_DENSE_IBZ)
+    PROFILING_STOP('elph_wfs')
+ 
+    ! Now the orbitals and its descriptor live inside WAVE_INTERP
+@@ -1545,6 +1565,98 @@
+ 
+    ! Get mapping from k-points in the batch to the IBZ
+    CALL WAVE_MAPPER_FROM_WAVE_INTERP(WAVE_MAP,WAVE_INTERP)
++#ifdef VASP_HDF5
++   ! Nonhybrid batches omit original k-points; access the preserved original pointer.
++   IF (ELPH_SET%mels_use==elph_mels_use_wann) THEN
++   BR_NB=WDES_DENSE_IBZ%NB_TOT
++   ALLOCATE(BR_O(BR_NB,BR_NB,WDES_DENSE_IBZ%NKPTS,WDES_DENSE_IBZ%ISPIN))
++   ALLOCATE(BR_SC,MOLD=BR_O); ALLOCATE(BR_SD,MOLD=BR_O)
++   ALLOCATE(BR_TMP(BR_NB,BR_NB),BR_E(BR_NB,WDES_DENSE_IBZ%NKPTS,WDES_DENSE_IBZ%ISPIN))
++   ALLOCATE(BR_IDS(WDES_DENSE_IBZ%NKPTS,WDES_DENSE_IBZ%ISPIN),BR_LAYOUT(WDES_DENSE_IBZ%NKPTS,WDES_DENSE_IBZ%ISPIN))
++   BR_O=0; BR_SC=0; BR_SD=0; BR_E=0; BR_IDS=0; BR_LAYOUT=0
++   ! Version 2: retain loaded equilibrium gauge and gather reference bands.
++   ! Supported layout: KPAR=NCORE=1, ELPH_KPAR=number of MPI ranks.
++   ! Every rank participates in reference gathers in the SAME global k order.
++   ! Each k-batch owner then evaluates its PAW overlap on its serial descriptor.
++   IF (INFO%IALGO==2.AND.WAVE_INTERP%W_ORIG%WDES%COMM_INB%NCPU==1.AND.&
++       WAVE_INTERP%W_ORIG%WDES%COMM_KINTER%NCPU==1.AND.WDES_KBATCH%COMM%NCPU==1.AND.&
++       COMM_KBATCH%NCPU==WAVE_INTERP%W_ORIG%WDES%COMM_INTER%NCPU) THEN
++   ALLOCATE(BR_CW(WAVE_INTERP%W_ORIG%WDES%NRPLWV,BR_NB))
++   ALLOCATE(BR_CP(WAVE_INTERP%W_ORIG%WDES%NPROD,BR_NB))
++   DO ISP=1,WDES_DENSE_IBZ%ISPIN
++      DO IKDENSE=1,WDES_DENSE_IBZ%NKPTS
++         BR_MATCH=0
++         DO BR_REF=1,WAVE_INTERP%W_ORIG%WDES%NKPTS
++            IF(MAXVAL(ABS(WAVE_INTERP%W_ORIG%WDES%VKPT(:,BR_REF)-WDES_DENSE_IBZ%VKPT(:,IKDENSE)))<1E-10_q) BR_MATCH=BR_REF
++         ENDDO
++         IF(BR_MATCH==0) CYCLE
++         CALL SETWDES(WAVE_INTERP%W_ORIG%WDES,BR_COARSE,BR_MATCH)
++         IF(BR_COARSE%NB_TOT/=BR_NB) CYCLE
++         BR_CW=0; BR_CP=0
++         DO BR_BAND=1,BR_NB
++            BR_IB=NB_LOCAL(BR_BAND,BR_COARSE)
++            IF(BR_IB==0) CYCLE
++            BR_CW(:,BR_BAND)=WAVE_INTERP%W_ORIG%CW(:,BR_IB,BR_MATCH,ISP)
++            BR_CP(:,BR_BAND)=WAVE_INTERP%W_ORIG%CPROJ(:,BR_IB,BR_MATCH,ISP)
++         ENDDO
++         CALLMPI(M_sum_z(BR_COARSE%COMM_INTER,BR_CW,SIZE(BR_CW)))
++         CALLMPI(M_sum_z(BR_COARSE%COMM_INTER,BR_CP,SIZE(BR_CP)))
++         BR_LOCAL=0
++         DO IK=1,WAVE_MAP%NKPTS_BATCH
++            IF(WAVE_MAP%KPOINTS_INDEX(IK)==IKDENSE) BR_LOCAL=WAVE_MAP%NKPTS_ORIG+IK
++         ENDDO
++         IF(BR_LOCAL==0) CYCLE
++         IKCOARSE=BR_LOCAL
++         CALL SETWDES(WDES_KBATCH,BR_DENSE,IKCOARSE)
++         BR_IDS(IKDENSE,ISP)=BR_MATCH
++         BR_NPW=BR_COARSE%NGVECTOR
++         BR_COMPAT=BR_COARSE%NB_TOT==BR_DENSE%NB_TOT.AND.BR_NPW==BR_DENSE%NGVECTOR
++         BR_COMPAT=BR_COMPAT.AND.BR_COARSE%NPRO==BR_DENSE%NPRO
++         BR_COMPAT=BR_COMPAT.AND.BR_DENSE%NRPLWV>=BR_NPW
++         BR_COMPAT=BR_COMPAT.AND.BR_COARSE%GRID%NGX==BR_DENSE%GRID%NGX.AND.BR_COARSE%GRID%NGY==BR_DENSE%GRID%NGY.AND.BR_COARSE%GRID%NGZ==BR_DENSE%GRID%NGZ
++         IF(BR_COMPAT) BR_COMPAT=ALL(BR_COARSE%NINDPW(:BR_NPW)==BR_DENSE%NINDPW(:BR_NPW))
++         IF(.NOT.BR_COMPAT) CYCLE
++         CALL NEWWAVA(BR_REFERENCE,BR_DENSE,BR_NB)
++         BR_REFERENCE%ISP=ISP
++         BR_REFERENCE%CW=0
++         BR_REFERENCE%CW(:BR_NPW,:)=BR_CW(:BR_NPW,:)
++         ! NPROD includes band-parallel padding; only NPRO entries are physical.
++         BR_REFERENCE%CPROJ=0
++         BR_REFERENCE%CPROJ(:BR_DENSE%NPRO,:)=BR_CP(:BR_COARSE%NPRO,:)
++         CALL CALC_PAW_OVERLAP(BR_REFERENCE,ELEMENTS(W_KBATCH,BR_DENSE,ISP),CQIJ,BR_TMP)
++         BR_O(:,:,IKDENSE,ISP)=BR_TMP
++         CALL CALC_PAW_OVERLAP(BR_REFERENCE,BR_REFERENCE,CQIJ,BR_TMP)
++         BR_SC(:,:,IKDENSE,ISP)=BR_TMP
++         CALL CALC_PAW_OVERLAP(ELEMENTS(W_KBATCH,BR_DENSE,ISP),ELEMENTS(W_KBATCH,BR_DENSE,ISP),CQIJ,BR_TMP)
++         BR_SD(:,:,IKDENSE,ISP)=BR_TMP
++         CALL DELWAVA(BR_REFERENCE)
++         BR_E(:,IKDENSE,ISP)=REAL(WAVE_INTERP%W_ORIG%CELTOT(:,BR_MATCH,ISP),q)
++         BR_LAYOUT(IKDENSE,ISP)=1
++      ENDDO
++   ENDDO
++   DEALLOCATE(BR_CW,BR_CP)
++   ENDIF
++   CALLMPI(M_sum_z(COMM_KBATCH,BR_O,SIZE(BR_O)))
++   CALLMPI(M_sum_z(COMM_KBATCH,BR_SC,SIZE(BR_SC)))
++   CALLMPI(M_sum_z(COMM_KBATCH,BR_SD,SIZE(BR_SD)))
++   CALLMPI(M_sum_d(COMM_KBATCH,BR_E,SIZE(BR_E)))
++   CALLMPI(M_sum_d(COMM_KBATCH,BR_IDS,SIZE(BR_IDS)))
++   CALLMPI(M_sum_d(COMM_KBATCH,BR_LAYOUT,SIZE(BR_LAYOUT)))
++   VH5_CHECK(vh5_group_open_or_create(ih5outfileid,'results/electron_phonon/source_bridge',BR_GROUP))
++   VH5_CHECK(vh5_write(BR_GROUP,'mpi_layout',[WAVE_INTERP%W_ORIG%WDES%COMM%NCPU,WAVE_INTERP%W_ORIG%WDES%COMM_INB%NCPU,WAVE_INTERP%W_ORIG%WDES%COMM_KINTER%NCPU,COMM_KBATCH%NCPU,INFO%IALGO]))
++   VH5_CHECK(vh5_write(BR_GROUP,'coarse_bra_dense_ket_overlap',BR_O))
++   VH5_CHECK(vh5_write(BR_GROUP,'coarse_metric',BR_SC))
++   VH5_CHECK(vh5_write(BR_GROUP,'dense_metric',BR_SD))
++   VH5_CHECK(vh5_write(BR_GROUP,'coarse_eigenvalues',BR_E))
++   VH5_CHECK(vh5_write(BR_GROUP,'coarse_match_index',BR_IDS))
++   VH5_CHECK(vh5_write(BR_GROUP,'layout_compatible',BR_LAYOUT))
++   VH5_CHECK(vh5_write(BR_GROUP,'provenance','PAW bridge v2; unchanged equilibrium WAVECAR; global reference band gather; exact local PW/projection maps; KPAR=NCORE=1 ELPH_KPAR=MPI ranks'))
++   VH5_CHECK(vh5_group_close_writing(BR_GROUP))
++   CALL wann_bridge(BR_O,BR_SC,BR_SD,BR_IDS,BR_LAYOUT,WDES_DENSE_IBZ%VKPT)
++   DEALLOCATE(BR_O,BR_SC,BR_SD,BR_TMP,BR_E,BR_IDS,BR_LAYOUT)
++   ENDIF
++#endif
++
+ 
+    ! Save eigenvalues
+    W_DENSE_IBZ%CELTOT = 0.0_q
+@@ -1583,7 +1695,7 @@
+    USE ini, ONLY: register_allocate
+    USE hamil_struct_def, ONLY: ham_handle
+    USE nonl_high, ONLY: nonl_struct, nonlr_struct, phase
+-   USE wave_struct_def, ONLY: wavedes, wavespin, wavedes1
++   USE wave_struct_def, ONLY: wavedes, wavespin, wavedes1, wavefuna
+    USE wave_interpolate, ONLY: wave_interpolator, wave_interpolator_kpoints, wave_mapper, wave_mapper_from_wave_interp
+    USE elphon_base, ONLY: elph_settings
+ #ifdef VASP_HDF5
+--- src/elphon_driver.F
++++ src/elphon_driver.F
+@@ -35,6 +35,7 @@
+                            elph_write_settings, elph_scattering_approx_mrta_tau, elph_scattering_approx_mrta_lambda, &
+                            elph_scattering_approx_erta_tau, elph_scattering_approx_erta_lambda, elph_scattering_approx_crta, &
+                            elph_mels_use_pw, elph_mels_use_wann, elph_read_ifc_pot, scattering_approx_all_crta
++    USE elphon_wann_export, ONLY: wann_read
+     USE elphon_mels, ONLY: elph_mels_init_pw, elph_mels_init_wannier, elph_mels_compute_velocity, elph_mels_ifc_init, elph_mels_g_init, elph_mels_free, elph_mels_barrier
+     USE elphon_common, ONLY: elphon_comm_init, elphon_get_kpoints_inter, elphon_prepare_selfenergy_accumulators, elphon_set_nbands, &
+                              transport_elphon, elphon_prepare_ikpt
+@@ -84,6 +85,14 @@
+     OFFLOAD_ALLOW = .FALSE.
+ #endif
+ 
++    if (elph_set%mels_use==elph_mels_use_wann) then
++        if (w%wdes%ispin/=1.or.w%wdes%lnoncollinear.or.info%ialgo/=2.or.symm%isym/=-1) &
++            call vtutor%error('ELPH_MELS=wann requires nonmagnetic/no-SOC, ALGO=None, ISYM=-1')
++        call wann_read(w%wdes%nb_tot,w%wdes%vkpt,latt_cur%a)
++        ! wann selects the Cartesian matrix exporter, not a native self-energy driver.
++        elph_set%driver=elph_driver_mels
++        elph_set%mels_cart=.true.
++    endif
+     call elph_header_write(io)
+     call elph_write_settings(elph_set,io%iu6)
+ 
+@@ -108,14 +117,9 @@
+     ! read kpoint_dense file
+     call elphon_get_kpoints_inter(kpoints_inter, kgrid, kpoints, elph_set, latt_cur, t_info, wdes_dense_ibz, comm_kbatch, symm%isym, io)
+ 
+-    select case(elph_set%mels_use)
+-        case(elph_mels_use_pw)
+-          call elph_mels_init_pw(elph_mels,elph_set,latt_ini,latt_cur,kpoints,kpoints_inter,kgrid,w,wdes_dense_ibz,lmdim,&
+-                                 hamiltonian,grid,nonl_s,nonlr_s,info,t_info,symm,p,sv,cqij,cdij,chempot,bandgap,io,comm_kbatch,comm_global)
+-        case(elph_mels_use_wann)
+-          call elph_mels_init_wannier(elph_mels,elph_set,latt_ini,latt_cur,kpoints,kpoints_inter,w,wdes_dense_ibz,lmdim,irdmax,&
+-                                 hamiltonian,grid,gridc,gridus,nonl_s,nonlr_s,info,t_info,symm,p,sv,cqij,cdij,chempot,bandgap,io,comm_kbatch,comm_global)
+-    end select
++    ! Both modes retain the physical PW/ae PAW vertex. wann changes the output gauge.
++    call elph_mels_init_pw(elph_mels,elph_set,latt_ini,latt_cur,kpoints,kpoints_inter,kgrid,w,wdes_dense_ibz,lmdim,&
++                           hamiltonian,grid,nonl_s,nonlr_s,info,t_info,symm,p,sv,cqij,cdij,chempot,bandgap,io,comm_kbatch,comm_global)
+ 
+     ! initialize the force constants
+     if (elph_read_ifc_pot(elph_set)) then
+@@ -396,6 +400,9 @@
+                            get_elph_kpoints_eigenvals_list, get_elph_nkpoints_local, &
+                            elph_progress, wdes_get_global_band_index
+     USE elphon_mels, ONLY: elph_mels_compute_g, elph_mels_compute_g_ibz, elph_mels_set_wavemap_pointer, elph_mels_set_ikp_fbz_list_pointer
++    USE elphon_wann_export, ONLY: wann_begin, wann_emit, wann_finish
++    USE elphon_base, ONLY: elph_mels_use_pw, elph_mels_use_wann
++    USE tutor, ONLY: vtutor
+     USE elphon_accumulators, ONLY: elph_accumulator_g
+     USE elphon_accumulators_high, ONLY: elph_accumulators_g_init, elph_accumulators_g_accumulate, &
+                                    elph_accumulators_g_free
+@@ -422,7 +429,7 @@
+ #endif
+     logical :: lhdf5_mpiio
+     integer,pointer :: ikp_fbz_list(:) !< indexes of the k' points present locally
+-    integer :: isp, ikp_progress
++    integer :: isp, ikp_progress, wann_rounds
+     integer :: nkpts_k_local, nkpts_kp_local
+     integer :: ik_ibz
+     integer :: ikp_ibz, ikp_write
+@@ -445,6 +452,39 @@
+     call elph_mels_set_wavemap_pointer(elph_mels,wave_map)
+     call elph_mels_set_ikp_fbz_list_pointer(elph_mels,ikp_fbz_list)
+ 
++    if (elph_set%mels_use==elph_mels_use_wann) then
++        if (elph_mels%elph_mels_use/=elph_mels_use_pw.or.elph_set%selfen_g_skip.or.elph_set%metagga.or. &
++            .not.elph_set%lgaddv.or..not.elph_set%lgaddd.or..not.elph_set%lgaddp.or..not.elph_set%lgaddr.or. &
++            elph_set%lgaddq.or.elph_set%lgadds.or.elph_set%lgaddt) &
++            call vtutor%error('Wannier export requires complete physical PW/ae semilocal vertex')
++        if (elph_mels%ispin/=1.or.elph_mels%wdes_dense_ibz%lnoncollinear.or.elph_mels%waverot%nrotk/=1.or. &
++            elph_mels%band_start_k/=1.or.elph_mels%band_start_kp/=1.or. &
++            elph_mels%nbands_k/=elph_mels%wdes_dense_ibz%nb_tot.or.elph_mels%nbands_local/=elph_mels%nbands_k.or. &
++            kpoints%mode==LineMode.or.kpoints%mode==ExplicitList) &
++            call vtutor%error('Wannier export requires full bands, ISYM=-1 and regular full mesh')
++        call wann_begin(elph_mels%comm_global,elph_mels%natoms_pc,elph_mels%w_dense_ibz%celtot, &
++                        kpoints%vkpt,wave_map%nkpts_batch,wann_rounds)
++        ! Unequal batches (including empty ranks) participate in the same gathers.
++        do ikp=1,wann_rounds
++            ikp_ibz=0
++            if (ikp<=wave_map%nkpts_batch) then
++                ikp_ibz=wave_map%kpoints_index(ikp+wave_map%nkpts_orig)
++                call kpoint_init_kibz(triplet%kp,kpoints,elph_mels%latt_cur,ikp_ibz)
++            endif
++            do ik=1,kpoints%nkfull
++                if (ikp_ibz>0) then
++                    call kpoint_init_kibz(triplet%k,kpoints,elph_mels%latt_cur,ik)
++                    call kpoint_init_kint(triplet%q,kpoints,triplet%k%kint-triplet%kp%kint)
++                    call elph_mels_compute_g(elph_mels,elph_set,kpoints,triplet%k%kindex, &
++                         triplet%kp%kindex,triplet%q%kindex,1,gcart_kkp,gmode_kkp)
++                endif
++                call wann_emit(ik,ikp_ibz,gcart_kkp)
++            enddo
++        enddo
++        call wann_finish()
++        return
++    endif
++
+     ! select k-points
+     if (allocated(elph_set%selfen_ikpt)) then
+         allocate(kpoint_index(size(elph_set%selfen_ikpt)))
+--- src/.objects
++++ src/.objects
+@@ -303,6 +303,7 @@
+ 	elphon_accumulators_high.o \
+ 	elphon_kgrid.o \
+ 	transport.o \
++	elphon_wann_export.o \
+ 	elphon_common.o \
+ 	elphon_mels_pw.o \
+ 	elphon_mels_wann.o \
+--- src/makefile
++++ src/makefile
+@@ -288,3 +288,7 @@
+ 
+ main.o : main$(SUFFIX)
+ 	$(FC) $(FREE) $(FFLAGS) $(DEBUG) $(INCS) $(INCMODS) -c $*$(SUFFIX)
++
++# Direct Wannier EPC exporter module dependency
++elphon_common.o elphon_driver.o: elphon_wann_export.o
++elphon_wann_export.o: mpi.o tutor.o
+--- /dev/null
++++ src/elphon_wann_export.F
+@@ -0,0 +1,409 @@
++! Physical PW/ae Cartesian vertices projected into one equilibrium Wannier90 gauge.
++! Linear EPC and RIA DW inputs do not constitute a general displacement Hessian.
++module elphon_wann_export
++  use prec, only: q
++  use hdf5
++  use tutor, only: vtutor
++  use mpimy, only: communic
++#ifdef MPI
++  use mpi, only: MPI_INTEGER, MPI_DOUBLE_PRECISION, MPI_MAX
++#endif
++  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
++  implicit none
++  private
++  public :: wann_read, wann_bridge, wann_begin, wann_emit, wann_finish
++  integer, save :: nb,nw,nref,nk,nat
++  complex(q), allocatable, save :: uref(:,:,:),coeff(:,:,:),href(:,:,:)
++  real(q), allocatable, save :: kref(:,:),eref(:,:),ksrc(:,:),sendbuf(:,:,:,:,:),recvbuf(:,:,:,:,:,:)
++  integer, allocatable, save :: received(:,:)
++  logical, allocatable, save :: seen(:,:)
++  type(communic), save :: comm
++  integer(HID_T), save :: fid,did,fspace,mspace
++contains
++  subroutine io_check(ios,name)
++    integer,intent(in) :: ios
++    character(*),intent(in) :: name
++    if (ios/=0) call vtutor%error('ELPH_MELS=wann: cannot read '//name//' (missing, truncated or invalid)')
++  end subroutine
++
++  subroutine hcheck(err)
++    integer,intent(in) :: err
++    if (err<0) call vtutor%error('ELPH_MELS=wann: wannelph.h5 HDF5 operation failed')
++  end subroutine
++
++  subroutine wann_read(expected_bands,expected_k,lattice)
++    integer,intent(in) :: expected_bands
++    real(q),intent(in) :: expected_k(:,:),lattice(3,3)
++    integer :: unit,ios,ne,mesh(3),nntot,dis,i,j,k,n,ib,ik,packed_row
++    integer,allocatable :: window(:,:),ndim(:)
++    logical,allocatable :: eig_seen(:,:)
++    real(q) :: alat(3,3),recip(3,3),omega,energy
++    real(q),allocatable :: centres(:,:),spreads(:)
++    complex(q),allocatable :: local(:,:,:),optimal(:,:,:),packed(:,:,:),eye(:,:)
++    character(80) :: header
++    character(20) :: checkpoint
++    logical :: exists
++    if (allocated(uref)) call vtutor%error('Wannier input initialized twice')
++    ! Check every required input before reading any large arrays.
++    inquire(file='wannier90.chk',exist=exists)
++    if (.not.exists) call vtutor%error('ELPH_MELS=wann requires wannier90.chk in the working directory')
++    inquire(file='wannier90.eig',exist=exists)
++    if (.not.exists) call vtutor%error('ELPH_MELS=wann requires wannier90.eig in the working directory')
++    inquire(file='wannier90_hr.dat',exist=exists)
++    if (.not.exists) call vtutor%error('ELPH_MELS=wann requires wannier90_hr.dat in the working directory')
++    inquire(file='wannier90_wsvec.dat',exist=exists)
++    if (.not.exists) call vtutor%error('ELPH_MELS=wann requires wannier90_wsvec.dat in the working directory')
++    open(newunit=unit,file='wannier90.chk',form='unformatted',status='old',action='read',iostat=ios)
++    call io_check(ios,'wannier90.chk')
++    read(unit,iostat=ios); call io_check(ios,'chk header')
++    read(unit,iostat=ios) nb; call io_check(ios,'chk bands')
++    read(unit,iostat=ios) ne; call io_check(ios,'chk exclusions')
++    if (nb/=expected_bands.or.ne/=0) call vtutor%error('Wannier checkpoint requires full source bands and no excluded bands')
++    read(unit,iostat=ios); call io_check(ios,'chk exclusion record')
++    read(unit,iostat=ios) alat; call io_check(ios,'chk lattice')
++    read(unit,iostat=ios) recip; call io_check(ios,'chk reciprocal lattice')
++    ! Wannier90 stores lattice vectors as rows; VASP LATT_CUR%A uses columns.
++    if (.not.all(ieee_is_finite(alat)).or.maxval(abs(alat-transpose(lattice)))>1e-7_q) &
++      call vtutor%error('Wannier checkpoint lattice differs from POSCAR')
++    read(unit,iostat=ios) nref; call io_check(ios,'chk k count')
++    read(unit,iostat=ios) mesh; call io_check(ios,'chk mesh')
++    if (nref/=size(expected_k,2).or.any(mesh<1).or.product(mesh)/=nref) call vtutor%error('Wannier checkpoint mesh differs from WAVECAR')
++    allocate(kref(3,nref),eref(nb,nref))
++    read(unit,iostat=ios) kref; call io_check(ios,'chk k coordinates')
++    if (.not.all(ieee_is_finite(kref)).or.maxval(abs(kref-expected_k))>1e-9_q) &
++      call vtutor%error('Wannier checkpoint and equilibrium WAVECAR k order differ')
++    read(unit,iostat=ios) nntot; call io_check(ios,'chk neighbors')
++    read(unit,iostat=ios) nw; call io_check(ios,'chk Wannier count')
++    if (nw<1.or.nw>nb.or.nntot<1) call vtutor%error('Invalid Wannier checkpoint dimensions')
++    read(unit,iostat=ios); call io_check(ios,'chk checkpoint state')
++    read(unit,iostat=ios) dis; call io_check(ios,'chk disentanglement')
++    allocate(uref(nb,nw,nref),local(nw,nw,nref),eye(nw,nw))
++    eye=0
++    do i=1,nw
++      eye(i,i)=1
++    enddo
++    if (dis/=0) then
++      read(unit,iostat=ios) omega; call io_check(ios,'chk invariant spread')
++      allocate(window(nb,nref),ndim(nref),packed(nb,nw,nref),optimal(nb,nw,nref))
++      read(unit,iostat=ios) window; call io_check(ios,'chk disentanglement windows')
++      read(unit,iostat=ios) ndim; call io_check(ios,'chk window dimensions')
++      read(unit,iostat=ios) packed; call io_check(ios,'chk optimal gauge')
++      optimal=0
++      do k=1,nref
++        if (count(window(:,k)/=0)/=ndim(k).or.ndim(k)<nw.or.ndim(k)>nb) call vtutor%error('Invalid Wannier disentanglement window')
++        packed_row=0
++        do i=1,nb
++          if (window(i,k)==0) cycle
++          packed_row=packed_row+1
++          optimal(i,:,k)=packed(packed_row,:,k)
++        enddo
++      enddo
++    else if (nb/=nw) then
++      call vtutor%error('A checkpoint without disentanglement must have equal band and Wannier counts')
++    endif
++    read(unit,iostat=ios) local; call io_check(ios,'chk local gauge')
++    do k=1,nref
++      if (dis/=0) then
++        uref(:,:,k)=matmul(optimal(:,:,k),local(:,:,k))
++      else
++        uref(:,:,k)=local(:,:,k)
++      endif
++      if (.not.all(ieee_is_finite(real(uref(:,:,k),q))).or..not.all(ieee_is_finite(aimag(uref(:,:,k))))) &
++        call vtutor%error('Nonfinite Wannier gauge')
++      if (maxval(abs(matmul(conjg(transpose(uref(:,:,k))),uref(:,:,k))-eye))>1e-9_q) &
++        call vtutor%error('Wannier gauge is not an isometry')
++    enddo
++    read(unit,iostat=ios); call io_check(ios,'chk overlaps')
++    allocate(centres(3,nw),spreads(nw))
++    read(unit,iostat=ios) centres; call io_check(ios,'chk centres')
++    read(unit,iostat=ios) spreads; call io_check(ios,'chk spreads')
++    read(unit,iostat=ios)
++    if (ios>=0) call vtutor%error('Unexpected trailing Wannier checkpoint record')
++    close(unit)
++    open(newunit=unit,file='wannier90.eig',status='old',action='read',iostat=ios)
++    call io_check(ios,'wannier90.eig')
++    allocate(eig_seen(nb,nref)); eig_seen=.false.
++    do n=1,nb*nref
++      read(unit,*,iostat=ios) ib,ik,energy; call io_check(ios,'wannier90.eig')
++      if (ib<1.or.ib>nb.or.ik<1.or.ik>nref.or..not.ieee_is_finite(energy)) call vtutor%error('Invalid Wannier eigenvalue index/value')
++      if (eig_seen(ib,ik)) call vtutor%error('Duplicate Wannier eigenvalue')
++      eref(ib,ik)=energy; eig_seen(ib,ik)=.true.
++    enddo
++    read(unit,*,iostat=ios) energy
++    if (ios>=0) call vtutor%error('Unexpected trailing Wannier eigenvalue data')
++    close(unit)
++    call wann_check_hr()
++  end subroutine
++
++  subroutine wann_check_hr()
++    integer :: hrunit,wsunit,ios,nh,nr,i,j,r,t,a,b,nimg,s,rv(3),wv(3),shift(3)
++    integer,allocatable :: degeneracy(:),vectors(:,:),shifts(:,:)
++    logical,allocatable :: present(:,:,:)
++    real(q) :: re,im,tolerance,angle
++    complex(q),allocatable :: hr(:,:,:),reconstructed(:,:,:)
++    complex(q) :: factor
++    character(256) :: line
++    open(newunit=hrunit,file='wannier90_hr.dat',status='old',action='read',iostat=ios)
++    call io_check(ios,'wannier90_hr.dat')
++    read(hrunit,'(A)',iostat=ios) line; call io_check(ios,'HR header')
++    read(hrunit,*,iostat=ios) nh; call io_check(ios,'HR Wannier count')
++    read(hrunit,*,iostat=ios) nr; call io_check(ios,'HR translation count')
++    if (nh/=nw.or.nr<1) call vtutor%error('HR dimensions differ from checkpoint')
++    allocate(degeneracy(nr),vectors(3,nr),hr(nw,nw,nr),present(nw,nw,nr),reconstructed(nw,nw,nref))
++    read(hrunit,*,iostat=ios) degeneracy; call io_check(ios,'HR degeneracies')
++    if (any(degeneracy<1)) call vtutor%error('Nonpositive HR degeneracy')
++    present=.false.
++    do r=1,nr
++      do t=1,nw*nw
++        read(hrunit,*,iostat=ios) rv,a,b,re,im; call io_check(ios,'HR entries')
++        if (min(a,b)<1.or.max(a,b)>nw.or..not.ieee_is_finite(re).or..not.ieee_is_finite(im)) call vtutor%error('Invalid HR entry')
++        if (present(a,b,r)) call vtutor%error('Duplicate HR matrix entry')
++        if (t==1) vectors(:,r)=rv
++        if (any(rv/=vectors(:,r))) call vtutor%error('Mixed HR translations')
++        hr(a,b,r)=cmplx(re,im,q); present(a,b,r)=.true.
++      enddo
++      do s=1,r-1
++        if (all(vectors(:,s)==vectors(:,r))) call vtutor%error('Duplicate HR translation')
++      enddo
++    enddo
++    read(hrunit,*,iostat=ios) rv
++    if (ios>=0) call vtutor%error('Unexpected trailing HR entries')
++    close(hrunit)
++    open(newunit=wsunit,file='wannier90_wsvec.dat',status='old',action='read',iostat=ios)
++    call io_check(ios,'wannier90_wsvec.dat')
++    read(wsunit,'(A)',iostat=ios) line; call io_check(ios,'wsvec header')
++    if (index(line,'use_ws_distance=.true.')==0) call vtutor%error('wsvec must declare use_ws_distance=.true.')
++    present=.false.; reconstructed=0
++    do t=1,nr*nw*nw
++      read(wsunit,*,iostat=ios) wv,a,b; call io_check(ios,'wsvec block')
++      if (min(a,b)<1.or.max(a,b)>nw) call vtutor%error('Invalid wsvec orbital')
++      r=0
++      do s=1,nr
++        if (all(wv==vectors(:,s))) r=s
++      enddo
++      if (r==0) call vtutor%error('Unknown wsvec translation')
++      if (present(a,b,r)) call vtutor%error('Duplicate wsvec block')
++      present(a,b,r)=.true.
++      read(wsunit,*,iostat=ios) nimg; call io_check(ios,'wsvec degeneracy')
++      if (nimg<1) call vtutor%error('Empty wsvec image set')
++      allocate(shifts(3,nimg))
++      do s=1,nimg
++        read(wsunit,*,iostat=ios) shift; call io_check(ios,'wsvec image')
++        do i=1,s-1
++          if (all(shifts(:,i)==shift)) call vtutor%error('Duplicate wsvec image')
++        enddo
++        shifts(:,s)=shift
++        do i=1,nref
++          angle=2*acos(-1._q)*dot_product(kref(:,i),real(wv+shift,q))
++          factor=cmplx(cos(angle),sin(angle),q)/(real(degeneracy(r),q)*nimg)
++          reconstructed(a,b,i)=reconstructed(a,b,i)+hr(a,b,r)*factor
++        enddo
++      enddo
++      deallocate(shifts)
++    enddo
++    read(wsunit,*,iostat=ios) wv
++    if (ios>=0) call vtutor%error('Unexpected trailing wsvec entries')
++    close(wsunit)
++    ! Bound six-decimal HR coefficient rounding; PAW bridge tolerance stays strict.
++    tolerance=sqrt(2._q)*5.01e-7_q*sum(1._q/real(degeneracy,q))
++    do i=1,nref
++      reconstructed(:,:,i)=reconstructed(:,:,i)-matmul(conjg(transpose(uref(:,:,i))),uref(:,:,i)*spread(eref(:,i),2,nw))
++    enddo
++    if (maxval(abs(reconstructed))>tolerance) call vtutor%error('Wannier HR/wsvec Hamiltonian differs from checkpoint/eig')
++  end subroutine
++
++  subroutine wann_bridge(b,sr,ss,ids,layout,ksource)
++    complex(q),intent(in) :: b(:,:,:,:),sr(:,:,:,:),ss(:,:,:,:)
++    real(q),intent(in) :: ids(:,:),layout(:,:),ksource(:,:)
++    complex(q),allocatable :: eye(:,:),retained(:,:)
++    integer :: i,k,ir
++    if (.not.allocated(uref)) call vtutor%error('Missing Wannier checkpoint initialization')
++    if (size(b,4)/=1.or.any(layout/=1).or.size(b,1)/=nb.or.size(b,2)/=nb) call vtutor%error('Unsupported Wannier PAW bridge layout')
++    nk=size(b,3)
++    if (size(ksource,2)/=nk.or.any(ids<1).or.any(ids>nref).or.any(ids/=anint(ids))) call vtutor%error('Invalid Wannier endpoint mapping')
++    allocate(coeff(nb,nw,nk),href(nw,nw,nk),ksrc(3,nk),eye(nb,nb),retained(nw,nw))
++    ksrc=ksource; eye=0
++    do i=1,nb
++      eye(i,i)=1
++    enddo
++    if (maxval(abs(sr(:,:,:,1)-spread(eye,3,nk)))>1e-8_q.or.maxval(abs(ss(:,:,:,1)-spread(eye,3,nk)))>1e-8_q) &
++      call vtutor%error('Nonorthonormal Wannier PAW endpoints')
++    do k=1,nk
++      ir=nint(ids(k,1))
++      if (maxval(abs(ksrc(:,k)-kref(:,ir)))>1e-9_q) call vtutor%error('Wannier source/reference representatives differ')
++      coeff(:,:,k)=matmul(conjg(transpose(b(:,:,k,1))),uref(:,:,ir))
++      retained=matmul(conjg(transpose(coeff(:,:,k))),coeff(:,:,k))-eye(:nw,:nw)
++      if (maxval(abs(retained))>1e-7_q.or.maxval(abs(uref(:,:,ir)-matmul(b(:,:,k,1),coeff(:,:,k))))>1e-7_q) &
++        call vtutor%error('Wannier retained PAW subspace is incomplete')
++      href(:,:,k)=matmul(conjg(transpose(uref(:,:,ir))),uref(:,:,ir)*spread(eref(:,ir),2,nw))
++    enddo
++  end subroutine
++
++  subroutine attr_string(object,name,value)
++    integer(HID_T),intent(in) :: object
++    character(*),intent(in) :: name,value
++    integer(HID_T) :: space,atype,attribute
++    integer(HSIZE_T) :: dims(1)
++    integer :: err
++    dims=1
++    call h5screate_f(H5S_SCALAR_F,space,err); call hcheck(err)
++    call h5tcopy_f(H5T_FORTRAN_S1,atype,err); call hcheck(err)
++    call h5tset_size_f(atype,int(len(value),SIZE_T),err); call hcheck(err)
++    call h5acreate_f(object,name,atype,space,attribute,err); call hcheck(err)
++    call h5awrite_f(attribute,atype,value,dims,err); call hcheck(err)
++    call h5aclose_f(attribute,err); call hcheck(err)
++    call h5tclose_f(atype,err); call hcheck(err)
++    call h5sclose_f(space,err); call hcheck(err)
++  end subroutine
++
++  subroutine ints(name,values)
++    character(*),intent(in) :: name
++    integer,intent(in) :: values(:)
++    integer(HID_T) :: space,data
++    integer(HSIZE_T) :: dims(1)
++    integer :: err
++    dims=shape(values)
++    call h5screate_simple_f(1,dims,space,err); call hcheck(err)
++    call h5dcreate_f(fid,name,H5T_NATIVE_INTEGER,space,data,err); call hcheck(err)
++    call h5dwrite_f(data,H5T_NATIVE_INTEGER,values,dims,err); call hcheck(err)
++    call h5dclose_f(data,err); call hcheck(err)
++    call h5sclose_f(space,err); call hcheck(err)
++  end subroutine
++
++  subroutine real_matrix(name,values)
++    character(*),intent(in) :: name
++    real(q),intent(in) :: values(:,:)
++    integer(HID_T) :: space,data
++    integer(HSIZE_T) :: dims(2)
++    integer :: err
++    dims=shape(values)
++    call h5screate_simple_f(2,dims,space,err); call hcheck(err)
++    call h5dcreate_f(fid,name,H5T_NATIVE_DOUBLE,space,data,err); call hcheck(err)
++    call h5dwrite_f(data,H5T_NATIVE_DOUBLE,values,dims,err); call hcheck(err)
++    call h5dclose_f(data,err); call hcheck(err)
++    call h5sclose_f(space,err); call hcheck(err)
++  end subroutine
++
++  subroutine wann_begin(communicator,natoms,energies,kcoords,nlocal,nrounds)
++    type(communic),intent(in) :: communicator
++    integer,intent(in) :: natoms,nlocal
++    integer,intent(out) :: nrounds
++    complex(q),intent(in) :: energies(:,:,:)
++    real(q),intent(in) :: kcoords(:,:)
++    integer :: k,err,i,j
++    integer(HID_T) :: space,data,plist
++    integer(HSIZE_T) :: dims(7),tile(7),udims(4)
++    real(q),allocatable :: saved_u(:,:,:,:)
++    complex(q) :: h(nw,nw)
++    comm=communicator; nat=natoms
++    if (size(energies,1)/=nb.or.size(energies,2)/=nk.or.size(energies,3)/=1) call vtutor%error('Wannier source band/k window differs')
++    if (any(shape(kcoords)/=shape(ksrc))) call vtutor%error('Wannier source k shape differs')
++    if (maxval(abs(kcoords-ksrc))>1e-9_q) call vtutor%error('Wannier source k order differs')
++    do k=1,nk
++      h=matmul(conjg(transpose(coeff(:,:,k))),coeff(:,:,k)*spread(real(energies(:,k,1),q),2,nw))
++      if (maxval(abs(h-href(:,:,k)))>1e-6_q) call vtutor%error('Wannier projected source Hamiltonian differs from reference')
++    enddo
++    nrounds=nlocal
++#ifdef MPI
++    call MPI_ALLREDUCE(nlocal,nrounds,1,MPI_INTEGER,MPI_MAX,comm%MPI_COMM,err)
++    call io_check(err,'MPI maximum batch count')
++#endif
++    allocate(sendbuf(2,nw,nw,3,nat))
++    ! Only the writer allocates one compact block per rank, never the full mesh tensor.
++    allocate(recvbuf(2,nw,nw,3,nat,merge(comm%ncpu,1,comm%node_me==1)),received(2,comm%ncpu))
++    if (comm%node_me/=1) return
++    allocate(seen(nk,nk)); seen=.false.
++    call h5open_f(err); call hcheck(err)
++    call h5fcreate_f('wannelph.h5',H5F_ACC_EXCL_F,fid,err); call hcheck(err)
++    call attr_string(fid,'schema','potential-wannier/wannelph/1')
++    call attr_string(fid,'physical_vertex','PW/ae')
++    call attr_string(fid,'cartesian_phase','cell')
++    call attr_string(fid,'general_hessian','unknown')
++    call attr_string(fid,'ria_dw_approximation','vasp_pw_ae_ria')
++    call ints('dimensions',[nb,nw,nk,nat,comm%ncpu])
++    call ints('capabilities',[1,1,0])
++    call real_matrix('kpoints_frac',ksrc)
++    call real_matrix('reference_kpoints_frac',kref)
++    call real_matrix('reference_energies_ev',eref)
++    call real_matrix('source_energies_ev',real(energies(:,:,1),q))
++    allocate(saved_u(2,nw,nb,nref))
++    do k=1,nref
++      do j=1,nw
++        do i=1,nb
++          saved_u(:,j,i,k)=[real(uref(i,j,k),q),aimag(uref(i,j,k))]
++        enddo
++      enddo
++    enddo
++    udims=shape(saved_u)
++    call h5screate_simple_f(4,udims,space,err); call hcheck(err)
++    call h5dcreate_f(fid,'reference_u',H5T_NATIVE_DOUBLE,space,data,err); call hcheck(err)
++    call h5dwrite_f(data,H5T_NATIVE_DOUBLE,saved_u,udims,err); call hcheck(err)
++    call h5dclose_f(data,err); call hcheck(err)
++    call h5sclose_f(space,err); call hcheck(err)
++    dims=[2,nw,nw,3,nat,nk,nk]; tile=[2,nw,nw,3,nat,1,1]
++    call h5screate_simple_f(7,dims,fspace,err); call hcheck(err)
++    call h5pcreate_f(H5P_DATASET_CREATE_F,plist,err); call hcheck(err)
++    call h5pset_chunk_f(plist,7,tile,err); call hcheck(err)
++    call h5dcreate_f(fid,'cartesian',H5T_NATIVE_DOUBLE,fspace,did,err,dcpl_id=plist); call hcheck(err)
++    call h5pclose_f(plist,err); call hcheck(err)
++    call attr_string(did,'axes','ket_k,bra_k,atom,xyz,ket_wannier,bra_wannier,real_imag')
++    call attr_string(did,'units','eV/Angstrom')
++    call h5screate_simple_f(7,tile,mspace,err); call hcheck(err)
++  end subroutine
++
++  subroutine wann_emit(bra,ket,g)
++    integer,intent(in) :: bra,ket
++    complex(q),intent(in) :: g(:,:,:,:)
++    integer :: a,d,rank,err,pair(2),ob,ik
++    complex(q) :: projected(nw,nw)
++    integer(HSIZE_T) :: start(7),tile(7)
++    sendbuf=0; pair=[bra,ket]
++    if (ket>0) then
++      if (any(shape(g)/=[nb,nb,3,nat])) call vtutor%error('Wannier physical PW vertex dimensions differ')
++      if (min(bra,ket)<1.or.max(bra,ket)>nk) call vtutor%error('Invalid Wannier vertex endpoint')
++      do a=1,nat
++        do d=1,3
++          projected=matmul(conjg(transpose(coeff(:,:,bra))),matmul(g(:,:,d,a),coeff(:,:,ket)))
++          if (.not.all(ieee_is_finite(real(projected,q))).or..not.all(ieee_is_finite(aimag(projected)))) &
++            call vtutor%error('Nonfinite Wannier vertex')
++          sendbuf(1,:,:,d,a)=real(projected,q); sendbuf(2,:,:,d,a)=aimag(projected)
++        enddo
++      enddo
++    endif
++#ifdef MPI
++    call MPI_GATHER(pair,2,MPI_INTEGER,received,2,MPI_INTEGER,0,comm%MPI_COMM,err)
++    call io_check(err,'MPI Wannier endpoint gather')
++    call MPI_GATHER(sendbuf,size(sendbuf),MPI_DOUBLE_PRECISION,recvbuf,size(sendbuf),MPI_DOUBLE_PRECISION,0,comm%MPI_COMM,err)
++    call io_check(err,'MPI Wannier vertex gather')
++#else
++    received(:,1)=pair; recvbuf(:,:,:,:,:,1)=sendbuf
++#endif
++    if (comm%node_me/=1) return
++    tile=[2,nw,nw,3,nat,1,1]
++    do rank=1,comm%ncpu
++      ob=received(1,rank); ik=received(2,rank)
++      if (ik==0) cycle
++      if (min(ob,ik)<1.or.max(ob,ik)>nk) call vtutor%error('Invalid gathered Wannier endpoint')
++      if (seen(ob,ik)) call vtutor%error('Duplicate Wannier k pair')
++      start=[0,0,0,0,0,ob-1,ik-1]
++      call h5sselect_hyperslab_f(fspace,H5S_SELECT_SET_F,start,tile,err); call hcheck(err)
++      call h5dwrite_f(did,H5T_NATIVE_DOUBLE,recvbuf(:,:,:,:,:,rank),tile,err,file_space_id=fspace,mem_space_id=mspace)
++      call hcheck(err)
++      seen(ob,ik)=.true.
++    enddo
++  end subroutine
++
++  subroutine wann_finish()
++    integer :: err
++    if (comm%node_me==1) then
++      if (.not.all(seen)) call vtutor%error('Incomplete Wannier export')
++      call ints('complete',[nk,nk])
++      call h5dclose_f(did,err); call hcheck(err)
++      call h5sclose_f(fspace,err); call hcheck(err)
++      call h5sclose_f(mspace,err); call hcheck(err)
++      call h5fclose_f(fid,err); call hcheck(err)
++      deallocate(seen)
++    endif
++    deallocate(uref,eref,kref,coeff,href,ksrc,sendbuf,recvbuf,received)
++  end subroutine
++end module elphon_wann_export
