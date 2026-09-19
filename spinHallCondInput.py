@@ -34,7 +34,7 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 def run():
     # Pbene, spin hall conductance
     mainDir="./mcalc/Co3Pt4/"
-    model=System_tb(
+    model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
         #hamR="BN_fm_rashiba",
@@ -74,14 +74,14 @@ def run():
              "O":(0,0,1,1,2,),
         },
         ispin=2,
-        #spinSeparated=True,
+        spinSeparated=True,
     )
-    '''
+    #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0.0
+    magnetizationTheta ,magnetizationPhi = 90/180*np.pi, 90/180*np.pi
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -104,9 +104,9 @@ def run():
     ]*4+[
         np.array([0, 0, 1]),
     ]*3
-    model.symmerizeHamAndOverlap(
-        atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
-    )
+    #model.symmerizeHamAndOverlap(
+    #    atomicMagMomList=atomicMagMomList,spinor=True,print_row=(0,1,9,10,),print_col=(0,1,9,10,),
+    #)
     #'''
 
     # modulate the SOC, exchange fields, baised fields, etc.
@@ -232,7 +232,7 @@ def run():
     BZDistributionRepeat=(1,1,0)
     ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
-    calc=BZGridTask(model, solveOGC_VG_DM,
+    calc=BZGridTask(model, solveSGC_VG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":bulkRegion, "target":bulkRegion},

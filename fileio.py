@@ -1570,13 +1570,17 @@ class W90CHK:
         m_matrix:np.ndarray = readcomplex().reshape((self.num_kpts, self.nntot, self.num_wann, self.num_wann))
         
         if have_disentangled:
-            self.v_matrix = np.array([u@u_opt[:, :nd] for u, u_opt, nd in zip(u_matrix, u_matrix_opt, ndimwin)])
+            matrices = [u@u_opt[:, :nd] for u, u_opt, nd in zip(u_matrix, u_matrix_opt, ndimwin)]
+            # A disentanglement window can contain different band counts at
+            # different k points. NumPy no longer implicitly makes ragged arrays.
+            self.v_matrix = np.array(matrices) if len(set(ndimwin)) == 1 else matrices
         else:
             self.v_matrix = np.array([u for u in u_matrix])
         self.wannier_centers:np.ndarray = readfloat().reshape((self.num_wann, 3))
         self.wannier_spreads:np.ndarray = readfloat().reshape((self.num_wann))
+        FIN.close()
         del u_matrix, m_matrix
-        print(f"self.v_matrix:{self.v_matrix.shape}")
+        print(f"self.v_matrix: {len(self.v_matrix)} k points, {self.num_wann} Wannier orbitals")
 
 class ElectronSelfEnergy:
     """Read VASP electron-phonon self energies from ``vaspout.h5``.

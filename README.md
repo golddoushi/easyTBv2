@@ -340,6 +340,21 @@ where possible.  BPVE/IFE/IFT batch observable directions and skip inactive
 channels.  Keep this separation: copying the kernel algebra back into each
 final calculator makes both correctness and parallel performance worse.
 
+### First-principles EPC vertices
+
+First-principles EPC uses an independent displacement potential and one equilibrium
+Wannier90 gauge, with the reviewed PAW vertex. Patched VASP exports one
+`wannelph.h5`; `epc.WannierEPCModel` reads it, the matching `vaspout.h5`/POSCAR,
+equilibrium `.chk/.eig/_hr.dat/_wsvec.dat`, and independent force constants.
+Initialization prepares the Fourier coefficients, image maps and phonons in RAM.
+Reuse the model for SERTA or labelled RIA-DW/Fan calculations.
+
+See the [VASP compact-export guide](docs/epc_potential_replacement/COMPACT_EXPORT.md)
+and [RAM model and transport guide](docs/epc_potential_replacement/RUNNING.md).
+Linear EPC and RIA thermal Debye-Waller are separate capabilities; a general 
+displacement Hessian remains unknown.
+Toy-model EPC and the native VASP self-energy reader below remain separate functionality.
+
 ### Electron-Phonon SERTA
 
 `fileio.ElectronSelfEnergy` reads VASP electron-phonon self energies from the
@@ -786,6 +801,13 @@ broadening, or exchange provenance changes.
     step policy.
 
 ## Suggested Next Reading
+
+First-principles frozen-phonon conductivity and correlated finite-difference
+curvature are documented in
+[FROZEN_TRANSPORT.md](docs/epc_potential_replacement/FROZEN_TRANSPORT.md).
+The calculator uses the equilibrium Wannier position matrices and includes
+the displacement-induced current. It keeps the unknown general EPC Hessian
+and the separately labelled RIA DW capability distinct.
 
 For a new coding session, inspect these files in order:
 
