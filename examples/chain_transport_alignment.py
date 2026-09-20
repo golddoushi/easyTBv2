@@ -27,7 +27,7 @@ from calculator import (Opticalconductivity_LG_DM, Opticalconductivity_VG_DM,
                         Opticalconductivity_VG_DM_StaticEPC)
 from calculator import CollisionSpecification, ModelEPCLinewidth
 from auxiliary import uniform_qmesh
-from system.phonon_selection import PhononModeSelection
+from system.phonons import PhononModeSelection
 
 
 def run_tdse_alignment(model, epc, args, common, background, base, arrays, meta):

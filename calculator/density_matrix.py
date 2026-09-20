@@ -142,7 +142,6 @@ def fermi_third_divided_difference(x, y, z, w, fermi, kBT):
         result[nearby] = value/kBT**3
     return result
 
-
 class StaticDisplacementDMKernel:
     """Complete static Gaussian expansion of the CRTA electric response.
 
@@ -231,7 +230,6 @@ class StaticDisplacementDMKernel:
         r2 = (d2-1j*commutator(h1[:, None], r1)
               -1j*commutator(h2[:, None], r0))/denominator[:, None]
         return r0, r1, r2
-
 
 @dataclass
 class SecondOrderDensityMatrixBlock:
@@ -463,11 +461,9 @@ class VelocityGaugeFirstOrderDMKernel(LengthGaugeFirstOrderDMKernel):
     def fermi_state(self, ifermi, fermi):
         return VelocityGaugeFirstOrderFermiState(self, fermi)
 
-
 class VelocityGaugeFirstOrderFermiState(FirstOrderFermiState):
     def at_frequency(self, omega):
         return VelocityGaugeFirstOrderFrequencyState(self, omega)
-
 
 class VelocityGaugeFirstOrderFrequencyState(FirstOrderFrequencyState):
     def vector_potential_density(self, direction):
@@ -487,7 +483,6 @@ class VelocityGaugeFirstOrderFrequencyState(FirstOrderFrequencyState):
         # Evaluate this identity before subtraction, retaining precision at dc.
         # The omitted R(0)=Df pole is restored with f*w by the calculator.
         return super().block(direction, drive_velocity)
-
 
 class _SecondOrderDMFrequencyState:
     '''Abstract of the 2nd order density matrix at specific real frequency'''
@@ -873,7 +868,6 @@ class MarkovSecondOrderFermiState(_SecondOrderDMFermiState):
         # The VG gauge transformation already contains the complete D^2 rho0.
         return {name:np.zeros_like(self.rho0) for name in self.kernel.channel_names}
 
-
 class MarkovSecondOrderFrequencyState(_SecondOrderDMFrequencyState):
     """Second-order response of the explicit nonlinear secular Pauli model."""
     def __init__(self,state,omega):
@@ -962,7 +956,6 @@ class CovariantLinewidthSecondOrderFermiState(DividedDifferenceLGFermiState):
     def relaxation(self, a, b):
         # The common VG transformation already includes the target vertices.
         return {name: np.zeros_like(self.rho0) for name in self.kernel.channel_names}
-
 
 class CovariantLinewidthSecondOrderFrequencyState(MarkovSecondOrderFrequencyState):
     """Use the common LG/VG assembly with an analytic Liouvillian derivative."""

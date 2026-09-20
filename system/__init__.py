@@ -2356,5 +2356,4 @@ from .system_w90 import System_w90
 from .system_omx import System_omx
 from .system_tb import System_tb
 from .model_epc import SSHModelEPC
-from .phonons import EinsteinPhonons
-from .phonon_selection import PhononModeSelection
+from .phonons import EinsteinPhonons, PhononModeSelection
