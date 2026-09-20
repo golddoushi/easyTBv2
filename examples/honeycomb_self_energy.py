@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from calculator import ModelElectronSelfEnergy
 from calculator.model_self_energy import uniform_qmesh
 from examples.honeycomb_four_band import build_model, write_hr
-from system import SSHModelEPC
+from elph import SSHModelEPC
 
 
 def sample_gaps(sc_epc, temperature, pairs, seed):

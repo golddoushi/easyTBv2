@@ -132,7 +132,7 @@ class ModelElectronSelfEnergy:
         self.debye_waller_matrix = np.zeros((nk, nb, nb), dtype=complex)
         kBT = Boltzmann * self.temperature / electron_volt
         epc, phonons = epc_model, epc_model.phonon_model
-        has_quadratic = np.any(epc.beta_R != 0)
+        has_quadratic = epc.has_second_order
 
         # q is the outer loop so all electronic k points share one vectorized
         # EPC construction and one set of medium-sized contractions.  This is
@@ -181,18 +181,9 @@ class ModelElectronSelfEnergy:
                 "kvmi,kavm,kvmj->kaij", g.conj(), propagator, g, optimize=True)
             if has_quadratic:
                 displacements = phonons.modeDisplacements(q)[branches]
-                if hasattr(epc, "secondDisplacementVertices"):
-                    hessian = epc.secondDisplacementVertices(
-                        self.kpoints, q, displacements)
-                else:
-                    hessian = np.array([
-                        [epc.secondDisplacementVertex(k, q, u)
-                         for u in displacements]
-                        for k in self.kpoints])
-                hessian_band = (self.vectors.conj().swapaxes(-2, -1)[:, None]
-                                @ hessian @ self.vectors[:, None])
-                self.debye_waller_matrix += 0.5*weight*np.einsum(
-                    "v,kvij->kij", 2*population, hessian_band, optimize=True)
+                hessian = epc.secondDisplacementVertices(self.kpoints, q, displacements)
+                hessian_band = (self.vectors.conj().swapaxes(-2, -1)[:, None] @ hessian @ self.vectors[:, None])
+                self.debye_waller_matrix += 0.5*weight*np.einsum("v,kvij->kij", 2*population, hessian_band, optimize=True)
 
     def _prepare_electronic_states(self):
         """Index established calculator results; no separate eigensolver.

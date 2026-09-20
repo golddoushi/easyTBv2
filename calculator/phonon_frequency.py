@@ -15,7 +15,9 @@ from scipy.sparse.linalg import LinearOperator, gmres
 from scipy.constants import elementary_charge, hbar, angstrom
 
 from .density_matrix import fermi_divided_difference
-from system.model_epc import SSHTimeOperators
+from elph import SSHTimeOperators
+from phonon import EinsteinPhonon
+from auxiliary import uniform_qmesh
 
 
 class HarmonicPhononLiouvillian:
@@ -69,9 +71,6 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
     if collision.specification.mode != 'crta':
         raise ValueError("Explicit harmonic Liouville dynamics requires CRTA background; adding SERTA would double count EPC")
     gamma = collision.specification.constantLinewidth
-    if (not np.isfinite(gamma) or gamma <= 0 or not np.isfinite(tolerance) or tolerance <= 0
-            or not np.isfinite(temperature) or temperature < 0):
-        raise ValueError("Require positive finite background linewidth/tolerance and nonnegative temperature")
     for name, value, minimum in (('phase_points', phase_points, 5), ('trajectories', trajectories, 1),
                                  ('maxiter', maxiter, 1), ('restart', restart, 1)):
         if not isinstance(value, (int, np.integer)) or value < minimum:
@@ -79,12 +78,10 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
     if phase_points % 2 == 0:
         raise ValueError("Use an odd phononPhasePoints to avoid an unpaired Nyquist harmonic")
     damping, bath_cycles = float(damping), float(bath_cycles)
-    if not np.isfinite(damping) or damping < 0:
-        raise ValueError("phononDamping must be nonnegative and finite, in eV")
-    if not np.isfinite(bath_cycles) or bath_cycles <= 0:
-        raise ValueError("phononBathCycles must be positive and finite")
-    operators = SSHTimeOperators(owner, epc_model)
     phonons = epc_model.phonon_model
+    if not isinstance(phonons, EinsteinPhonon):
+        raise NotImplementedError("This displacement solver currently requires EinsteinPhonon")
+    operators = SSHTimeOperators(epc_model, uniform_qmesh(owner.kgrid) + owner.kOffset)
     mode_energy = float(phonons.energies.flat[0])
     spawned_seeds = np.random.SeedSequence(seed).spawn(trajectories)
     if damping == 0:

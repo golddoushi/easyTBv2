@@ -118,6 +118,9 @@ preparation function. They require an explicit
 The static and frequency-domain variants use `PhononPreparation`; TDSE selects
 its explicit-phonon branch directly. Phonon solvers and `SSHTimeOperators`
 receive the EPC model as an argument instead of looking it up through `owner`.
+`SSHTimeOperators` lives in `elph` and takes `(epc_model, kpoints)`; it does
+not receive a calculator. The response solver constructs these fractional
+k-points from its electronic grid and offset.
 Their displacement corrections or explicit phonon dynamics
 remain in their own response solvers; adding an EPC collision would double
 count scattering.

@@ -17,7 +17,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from system import System_tb, SSHModelEPC, EinsteinPhonons
+from system import System_tb
+from elph import SSHModelEPC
+from phonon import EinsteinPhonon
 
 
 def write_hr(path, iRvec, values, title):
@@ -96,7 +98,7 @@ def build_model(directory, latticeConstant=2.2, intracellDistance=.9,
     model.addExchangeSplitting([(0, (0,)), (1, (0,))],
                                -exchange*direction/np.linalg.norm(direction))
     model.addRashbaSOC()
-    phonons = EinsteinPhonons(masses, phononEnergy, directions=(0,))
+    phonons = EinsteinPhonon(masses, phononEnergy, directions=(0,))
     epc_model = SSHModelEPC.from_files(model, phonons)
     return model, epc_model
 

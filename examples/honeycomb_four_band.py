@@ -15,7 +15,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from system import System_tb, SSHModelEPC, EinsteinPhonons
+from system import System_tb
+from elph import SSHModelEPC
+from phonon import EinsteinPhonon
 
 def write_hr(path, iRvec, values, title):
     """Write dense hr-format blocks, with unit degeneracies and 1-based indices."""
@@ -78,7 +80,7 @@ def build_model(directory, hopping=(1.0, 0.9, 1.1), delta=0.45, rashba=0.2,
         raise ValueError("Exchange direction must be a finite nonzero three-vector")
     model.addExchangeSplitting([(0, (0,)), (1, (0,))], -exchange*n/np.linalg.norm(n))
     model.addRashbaSOC()
-    phonons = EinsteinPhonons(np.full(2, mass), phononEnergy, directions=(0, 1))
+    phonons = EinsteinPhonon(np.full(2, mass), phononEnergy, directions=(0, 1))
     epc_model = SSHModelEPC.from_files(model, phonons)
     return model, epc_model
 

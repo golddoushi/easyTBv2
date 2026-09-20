@@ -8,7 +8,9 @@ a response expansion, not an additional lifetime on top of SERTA.
 import numpy as np
 from scipy.constants import elementary_charge, hbar, angstrom
 from .density_matrix import StaticDisplacementDMKernel
-from system.model_epc import SSHTimeOperators
+from elph import SSHTimeOperators
+from phonon import EinsteinPhonon
+from auxiliary import uniform_qmesh
 
 
 def solve_static_epc_conductivity(owner, temperature, statistics, moving_centers,
@@ -17,16 +19,12 @@ def solve_static_epc_conductivity(owner, temperature, statistics, moving_centers
     if specification.mode != 'crta':
         raise ValueError('Static EPC expansion requires CRTA background only; adding SERTA/full collision would double count EPC')
     gamma = specification.constantLinewidth
-    if not np.isfinite(gamma) or gamma <= 0 or not np.isfinite(owner.kBT) or owner.kBT <= 0:
-        raise ValueError('Static EPC expansion requires positive finite background linewidth and electronic kBT')
     if statistics not in ('quantum', 'classical', 'wigner'):
         raise ValueError('static phononStatistics must be quantum, wigner or classical')
-    if not np.isfinite(temperature) or temperature < 0:
-        raise ValueError('phononTemperature must be finite and nonnegative')
-    if not isinstance(batch_size, (int, np.integer)) or batch_size < 1:
-        raise ValueError('kBatchSize must be a positive integer')
-    operators = SSHTimeOperators(owner, epc_model)
     phonons = epc_model.phonon_model
+    if not isinstance(phonons, EinsteinPhonon):
+        raise NotImplementedError("This displacement solver currently requires EinsteinPhonon")
+    operators = SSHTimeOperators(epc_model, uniform_qmesh(owner.kgrid) + owner.kOffset)
     covariance_source = 'model phonons' if factors is None else 'provided covariance factors'
     factors = (phonons.displacementFactors(temperature, quantum=statistics != 'classical')
                if factors is None else np.asarray(factors))

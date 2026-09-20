@@ -125,14 +125,16 @@ model; orbital-dependent angular hopping laws are not implemented.
 ```python
 import copy
 import numpy as np
-from system import System_tb, SSHModelEPC, EinsteinPhonons
+from system import System_tb
+from elph import SSHModelEPC
+from phonon import EinsteinPhonon
 
 directory = "tmp/honeycomb_four_band"  # generate inputs with the example first
 model = System_tb(directory, hamR="honeycomb", ispin=2,
                   projections={"A": [0], "B": [0]})
 model.addExchangeSplitting([(0, (0,)), (1, (0,))], [-0.105, -0.14, -0.3031088913])
 model.addRashbaSOC(seed="rashba", normal=(0, 0, 1))
-phonons = EinsteinPhonons([12.0, 12.0], .02, directions=(0, 1))
+phonons = EinsteinPhonon([12.0, 12.0], .02, directions=(0, 1))
 epc = SSHModelEPC.from_files(model, phonons, alphaR="epc")
 
 k, q = np.array([0.17, 0.23, 0]), np.array([1/3, 0, 0])
@@ -150,7 +152,7 @@ accumulated contribution in `model.rashba_R`.
 `SSHModelEPC.from_files` constructs a separate coupling object without changing
 the equilibrium electronic model. Its optional `betaR` argument uses the same file layout
 for quadratic coefficients; omitting it sets beta to zero.
-`EinsteinPhonons` takes one mass per atom. Phonon energies may be scalar or
+`EinsteinPhonon` takes one mass per atom. Phonon energies may be scalar or
 have shape `(natom,)` or `(natom,len(directions))`.
 
 `epc.supercell()` carries exchange, its rigid-rotation reference, Rashba,

@@ -1,15 +1,54 @@
 # Electronic, phonon, and EPC models
 
-`System` represents only the electronic model. `EinsteinPhonons` is independent,
+`System` represents only the electronic model. `EinsteinPhonon` is independent,
 and `SSHModelEPC` holds an explicit electronic/phonon pair and its coupling
 coefficients. No phonon or EPC object is attached to `System`.
 
+The packages now follow the physical model boundaries:
+
+- `system/`: electronic Hamiltonian, orbitals, and geometry.
+- `phonon/`: the abstract `Phonon`, concrete `EinsteinPhonon`,
+  `PhononModeSelection`, and prescribed displacement trajectories.
+- `elph/`: the abstract `EPCModel`, concrete `SSHModelEPC`, and
+  `SSHTimeOperators(epc_model, kpoints)` for displaced electronic operators.
+- `calculator/`: self-energy, collision preparation, and response solvers.
+
+Import phonon and EPC models directly from their packages. The previous
+`system` exports and plural `EinsteinPhonons` name have been removed.
+The separate `epc/` workflow has not been migrated.
+
+`Phonon.modes(q)` returns energies `(nmodes,)` in eV and dimensionless
+polarizations `(nmodes,natoms,3)` in mass-weighted coordinates. Each polarization
+has unit Euclidean norm. Masses are in amu; atom order and the reciprocal
+lattice for fractional q must agree with the electronic model passed to
+`EPCModel`. The caller supplies that correspondence; matching atom counts
+does not establish it. For cell L, the phase is `exp(2*pi*i*q.L)`; any
+basis-position phase belongs in the polarization.
+
+The base `modeDisplacements(q)` applies `sqrt(hbar/(2*M*Omega))` to each
+atom's polarization and returns Angstrom amplitudes, without thermal or
+`1/sqrt(Ncells)` factors. It requires positive mode energies; zero-frequency
+and unstable modes need an explicit physical prescription. This interface
+can represent dispersive collective modes, but no Debye or force-constant
+model is implemented yet. Snapshot, covariance, supercell, and trajectory
+sampling remain Einstein-specific capabilities used by the current static
+and dynamical phonon response solvers.
+
+`EPCModel` defines displacement vertices and performs their band-basis
+transformation using supplied electronic eigenvectors. Self-energy uses
+`has_second_order` and `secondDisplacementVertices` through this interface;
+it does not read SSH coefficients. `SSHTimeOperators` receives explicit
+fractional k-points and has no dependency on a calculator owner. The SSH
+single-point convenience method can still diagonalize the electronic
+Hamiltonian when eigenvectors are omitted; response stages supply them.
+
 ```python
-from system import EinsteinPhonons, SSHModelEPC
+from elph import SSHModelEPC
+from phonon import EinsteinPhonon
 from calculator import Velocity, CollisionSpecification, prepare_collision
 
 # model is an initialized electronic System with two atoms.
-phonons = EinsteinPhonons([12., 14.], .04, directions=(0,))
+phonons = EinsteinPhonon([12., 14.], .04, directions=(0,))
 epc = SSHModelEPC.from_files(model, phonons, alphaR="epc")
 # Alternatively: epc = SSHModelEPC(model, phonons, alpha_R, beta_R)
 

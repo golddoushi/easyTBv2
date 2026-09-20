@@ -58,7 +58,7 @@ also applies to every temporal Fourier coefficient of the damped trajectory.
 
 ## Shared normalization and implementation
 
-`system.phonons.PhononModeSelection` stores fractional 3D q vectors,
+`phonon.PhononModeSelection` stores fractional 3D q vectors,
 branches and absolute weights. The example attaches it to
 `epc.phonon_model.modeSelection`. Self-energy and full collision consumers
 read that selection automatically; they also accept an explicit
@@ -69,7 +69,7 @@ a selection retain their historical normalized-quadrature semantics.
 The selector contains only quadrature and selection metadata, branch-range
 checks, and mesh/supercell compatibility checks. It does not interpret branches
 as atom/Cartesian directions or construct physical displacements.
-`EinsteinPhonons` owns the local-oscillator covariance basis and projection
+`EinsteinPhonon` owns the local-oscillator covariance basis and projection
 used below. Other phonon models must construct displacements from their own
 frequencies and polarizations. Selection uses one branch list for all q points
 and assumes matching conjugate branch labels at q and -q; it does not establish

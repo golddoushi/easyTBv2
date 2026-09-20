@@ -9,7 +9,9 @@ from scipy.special import expit
 from scipy.constants import elementary_charge, hbar, angstrom
 
 from .density_matrix import fermi_divided_difference
-from system.model_epc import SSHTimeOperators
+from elph import SSHTimeOperators
+from phonon import EinsteinPhonon
+from auxiliary import uniform_qmesh
 
 def linear_tdse_step(rho, response, hamiltonian, velocity, vector_potential,
                      dt, linewidth, fermi, kBT):
@@ -61,12 +63,10 @@ def propagate_phonon_conductivity(owner, *, n_steps_per_cycle, n_cycles_measure,
             or not np.isfinite(phonon_cycles) or phonon_cycles < 0):
         raise ValueError("Require positive background linewidth, integer steps/cycles/trajectories, and valid time controls")
     phonon_damping, bath_cycles = float(phonon_damping), float(bath_cycles)
-    if not np.isfinite(phonon_damping) or phonon_damping < 0:
-        raise ValueError("phononDamping must be nonnegative and finite, in eV")
-    if not np.isfinite(bath_cycles) or bath_cycles <= 0:
-        raise ValueError("phononBathCycles must be positive and finite")
-    operators = SSHTimeOperators(owner, epc_model)
     phonons = epc_model.phonon_model
+    if not isinstance(phonons, EinsteinPhonon):
+        raise NotImplementedError("This displacement solver currently requires EinsteinPhonon")
+    operators = SSHTimeOperators(epc_model, uniform_qmesh(owner.kgrid) + owner.kOffset)
     spawned_seeds = np.random.SeedSequence(seed).spawn(int(trajectories))
     if phonon_damping == 0:
         samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)
