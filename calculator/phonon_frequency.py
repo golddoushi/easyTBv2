@@ -10,6 +10,8 @@ Eliminating nonzero harmonics gives a frequency-dependent, nonsecular memory
 operator and dressed drive/current vertices, not independent band lifetimes.
 """
 import numpy as np
+from .response_inputs import ResponseInputs
+from .response_results import ConductivityResult
 from scipy.special import expit
 from scipy.sparse.linalg import LinearOperator, gmres
 from scipy.constants import elementary_charge, hbar, angstrom
@@ -65,9 +67,10 @@ class HarmonicPhononLiouvillian:
         return solution, dict(omega_eV=float(omega), iterations=len(iterations), relative_residual=residual)
 
 
-def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed,
+def solve_phonon_conductivity(inputs: ResponseInputs, temperature, statistics, trajectories, seed,
                              phase_points, tolerance, maxiter, restart,
                              damping=0., bath_cycles=8., *, epc_model, collision):
+    result = ConductivityResult(np.zeros((len(inputs.fermiList), len(inputs.omegaList), 3, 3), complex))
     if collision.specification.mode != 'crta':
         raise ValueError("Explicit harmonic Liouville dynamics requires CRTA background; adding SERTA would double count EPC")
     gamma = collision.specification.constantLinewidth
@@ -81,7 +84,7 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
     phonons = epc_model.phonon_model
     if not isinstance(phonons, EinsteinPhonon):
         raise NotImplementedError("This displacement solver currently requires EinsteinPhonon")
-    operators = SSHTimeOperators(epc_model, uniform_qmesh(owner.kgrid) + owner.kOffset)
+    operators = SSHTimeOperators(epc_model, uniform_qmesh(inputs.kgrid) + inputs.kOffset)
     mode_energy = float(phonons.energies.flat[0])
     spawned_seeds = np.random.SeedSequence(seed).spawn(trajectories)
     if damping == 0:
@@ -102,14 +105,14 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
             temperature, damping, bath_period, phase_points, seed=s, statistics=statistics)
             for s in spawned_seeds]
         bath_name = 'stationary periodic damped-Langevin spectrum'
-    owner.phonon_initial_positions = np.array([s.displacements(0) for s in samples])
-    owner.phonon_initial_velocities = np.array([s.velocities(0) for s in samples])
-    owner.phonon_trajectory_cosine = np.array([s.cosine for s in samples])
-    owner.phonon_trajectory_sine = np.array([s.sine for s in samples])
-    owner.phonon_energies = samples[0].energies.copy()
-    owner.phonon_frequency = base_energy
-    owner.phonon_harmonics = np.fft.fftfreq(phase_points)*phase_points
-    owner.phonon_dynamics_info = dict(bath=bath_name, statistics=statistics,
+    result.phonon_initial_positions = np.array([s.displacements(0) for s in samples])
+    result.phonon_initial_velocities = np.array([s.velocities(0) for s in samples])
+    result.phonon_trajectory_cosine = np.array([s.cosine for s in samples])
+    result.phonon_trajectory_sine = np.array([s.sine for s in samples])
+    result.phonon_energies = samples[0].energies.copy()
+    result.phonon_frequency = base_energy
+    result.phonon_harmonics = np.fft.fftfreq(phase_points)*phase_points
+    result.phonon_dynamics_info = dict(bath=bath_name, statistics=statistics,
         temperature_K=float(temperature), trajectories=int(trajectories), seed=seed,
         electronic_backreaction=False, orbital_centers='fixed equilibrium SSH basis',
         background_linewidth_eV=float(gamma), solver='frequency-domain harmonic Liouville',
@@ -117,20 +120,20 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
         phonon_damping_eV=damping, bath_period_hbar_per_eV=float(bath_period),
         bath_cycles=float(1. if damping == 0 else bath_cycles),
         fundamental_energy_eV=float(base_energy))
-    owner.solver_info = []
-    owner.sigma_samples = np.zeros((trajectories,)+owner.sigma.shape, complex)
+    result.solver_info = []
+    result.sigma_samples = np.zeros((trajectories,)+result.sigma.shape, complex)
     # Phase-resolved conductivity envelopes permit finite-window comparison
     # with TDSE, including real-drive image terms when frequencies coincide.
-    owner.conductivity_harmonics = np.zeros(
-        (trajectories, len(owner.fermiList), len(owner.omegaList), phase_points, 3, 3), complex)
+    result.conductivity_harmonics = np.zeros(
+        (trajectories, len(inputs.fermiList), len(inputs.omegaList), phase_points, 3, 3), complex)
     phases = 2*np.pi*np.arange(phase_points)/phase_points
-    scale = elementary_charge**2/(hbar*angstrom*abs(owner.model.Vcell)*operators.nk)
-    vectors = owner.vectors.reshape(operators.nk, operators.nb, operators.nb)
-    energies = owner.energies.reshape(operators.nk, operators.nb)
+    scale = elementary_charge**2/(hbar*angstrom*abs(inputs.model.Vcell)*operators.nk)
+    vectors = inputs.vectors.reshape(operators.nk, operators.nb, operators.nb)
+    energies = inputs.energies.reshape(operators.nk, operators.nb)
     for sample_index, trajectory in enumerate(samples):
         sampled = [operators.at_displacement(trajectory.displacements(theta/base_energy)) for theta in phases]
         h_all, v_all, w_all = [np.array(items) for items in zip(*sampled)]
-        envelopes = np.zeros((len(owner.fermiList), len(owner.omegaList), phase_points, 3, 3), complex)
+        envelopes = np.zeros((len(inputs.fermiList), len(inputs.omegaList), phase_points, 3, 3), complex)
         for k in range(operators.nk):
             u, udag = vectors[k], vectors[k].conj().T
             h = udag @ h_all[:, k] @ u
@@ -140,34 +143,35 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
                 h, energies[k], base_energy, gamma, tolerance, maxiter, restart)
             e, z = np.linalg.eigh(h)
             zadj = z.conj().swapaxes(-2, -1)
-            for fi, fermi in enumerate(owner.fermiList):
-                equilibrium = (z*expit((fermi-e)/owner.kBT)[:, None, :]) @ zadj
+            for fi, fermi in enumerate(inputs.fermiList):
+                equilibrium = (z*expit((fermi-e)/inputs.kBT)[:, None, :]) @ zadj
                 rho0, info = liouvillian.solve(gamma*equilibrium)
-                owner.solver_info.append(dict(info, sample=sample_index, k=k, fermi=fi, drive=None))
-                df = fermi_divided_difference(e[:, :, None], e[:, None, :], fermi, owner.kBT)
+                result.solver_info.append(dict(info, sample=sample_index, k=k, fermi=fi, drive=None))
+                df = fermi_divided_difference(e[:, :, None], e[:, None, :], fermi, inputs.kBT)
                 for a in range(3):
                     va = v[:, a]
                     equilibrium_derivative = z @ (df*(zadj @ va @ z)) @ zadj
                     source = -1j*(va @ rho0-rho0 @ va) + gamma*equilibrium_derivative
                     contact = np.einsum('pmn,pbnm->pb', rho0, w[:, :, a])
-                    for iw, omega in enumerate(owner.omegaList):
+                    for iw, omega in enumerate(inputs.omegaList):
                         response, info = liouvillian.solve(source, float(omega))
-                        owner.solver_info.append(dict(info, sample=sample_index, k=k, fermi=fi, drive=a))
+                        result.solver_info.append(dict(info, sample=sample_index, k=k, fermi=fi, drive=a))
                         envelope = np.einsum('pmn,pbnm->pb', response, v)+contact
                         envelopes[fi, iw, :, a] += (1j/omega)*envelope*scale
         harmonics = np.fft.fft(envelopes, axis=2)/phase_points
-        owner.conductivity_harmonics[sample_index] = harmonics
-        owner.sigma_samples[sample_index] = harmonics[:, :, 0]
-    owner.sigma[:] = owner.sigma_samples.mean(axis=0)
+        result.conductivity_harmonics[sample_index] = harmonics
+        result.sigma_samples[sample_index] = harmonics[:, :, 0]
+    result.sigma[:] = result.sigma_samples.mean(axis=0)
     if trajectories > 1:
-        owner.sigma_stderr_real = owner.sigma_samples.real.std(axis=0, ddof=1)/np.sqrt(trajectories)
-        owner.sigma_stderr_imag = owner.sigma_samples.imag.std(axis=0, ddof=1)/np.sqrt(trajectories)
+        result.sigma_stderr_real = result.sigma_samples.real.std(axis=0, ddof=1)/np.sqrt(trajectories)
+        result.sigma_stderr_imag = result.sigma_samples.imag.std(axis=0, ddof=1)/np.sqrt(trajectories)
     else:
-        owner.sigma_stderr_real = np.full(owner.sigma.shape, np.nan)
-        owner.sigma_stderr_imag = np.full(owner.sigma.shape, np.nan)
+        result.sigma_stderr_real = np.full(result.sigma.shape, np.nan)
+        result.sigma_stderr_imag = np.full(result.sigma.shape, np.nan)
+    return result
 
 
-def lockin_conductivity(owner, times, sample=0, ifermi=0, iomega=0):
+def lockin_conductivity(result: ConductivityResult, times, omega, sample=0, ifermi=0, iomega=0):
     """Stationary spectral solution measured with the TDSE real-drive window.
 
     Includes phonon sideband leakage and the conjugate optical image. No time
@@ -176,12 +180,11 @@ def lockin_conductivity(owner, times, sample=0, ifermi=0, iomega=0):
     times = np.asarray(times, dtype=float)
     if times.ndim != 1 or not len(times) or not np.all(np.isfinite(times)):
         raise ValueError("times must be a nonempty finite 1D array in hbar/eV")
-    coefficients = owner.conductivity_harmonics[sample, ifermi, iomega]
-    omega = owner.omegaList[iomega]
+    coefficients = result.conductivity_harmonics[sample, ifermi, iomega]
     output = np.zeros((3, 3), complex)
     for start in range(0, len(times), 4096):
         t = times[start:start+4096]
-        basis = np.exp(1j*owner.phonon_frequency*t[:, None]*owner.phonon_harmonics[None])
+        basis = np.exp(1j*result.phonon_frequency*t[:, None]*result.phonon_harmonics[None])
         envelope = np.einsum('tp,pab->tab', basis, coefficients)
         current = (envelope*np.exp(-1j*omega*t[:, None, None])).real
         output += np.sum(2*current*np.exp(1j*omega*t[:, None, None]), axis=0)

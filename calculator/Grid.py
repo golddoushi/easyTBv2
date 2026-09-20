@@ -22,13 +22,18 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
 
 from .collision import (CollisionSpecification, PreparedCollision, resolve_collision, collision_mode,
                         prepare_phonon_background)
+from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbital,
+                                SpinTorque, SpinExchangeTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity)
+from .response_inputs import ResponseInputs
+from .response_results import publish_conductivity, FirstOrderResponseResult
+from .response_stages import ElectronicResponse, DensityMatrixResponse, PhononResponse, response_requires_full_basis
 
 def _normalize_response_index_list(index_list, axis_length):
     if index_list is None:
         return []
     return [int(index) for index in index_list if 0 <= int(index) < axis_length]
 
-def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_vertices,
+def _contract_dc_first_order_density_matrix(inputs, drive_vertices, observable_vertices,
                                             observable_component_shape, responseFermiIndexList,
                                             finiteTemperatureOccupations, fullCovariantDerivative, *, collision):
     """Evaluate Tr(rho O) through exact band-resolved response weights.
@@ -37,17 +42,15 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
     to one weight per band before the Fermi scan preserves the density-matrix
     result exactly while avoiding repeated ``(..., band, band)`` allocations.
     """
-    owner.calcDeltaEInverse()
-    kernel = LengthGaugeDCFirstOrderDMKernel(owner, fullCovariantDerivative, finiteTemperatureOccupations,
+    kernel = LengthGaugeDCFirstOrderDMKernel(inputs, fullCovariantDerivative, finiteTemperatureOccupations,
                                            collision=collision)
-    owner.density_matrix_kernel = kernel
-    responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(owner.fermiList))
-    owner.responseFermiIndexList = tuple(responseFermiIndexList)
+    responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(inputs.fermiList))
+    fermi_indices = tuple(responseFermiIndexList)
     responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
 
-    projected_shape = ((len(drive_vertices), len(observable_vertices), len(owner.fermiList), 3)
+    projected_shape = ((len(drive_vertices), len(observable_vertices), len(inputs.fermiList), 3)
                        + tuple(observable_component_shape))
-    response_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
+    response_shape = ((len(drive_vertices), len(observable_vertices)) + inputs.kgrid
                       + (len(responseFermiIndexList), 3) + tuple(observable_component_shape))
     projected_channels = {name: np.zeros(projected_shape, dtype=float) for name in kernel.channel_names}
     response_channels = {name: np.zeros(response_shape, dtype=float) for name in kernel.channel_names}
@@ -56,9 +59,9 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
     # so the band-resolved Fermi-weight reduction below is no longer valid.
     # Contract each Fermi-level density matrix directly instead.
     if kernel.collision.mesh_coupled:
-        k_slices = (slice(None),) * len(owner.kgrid)
-        k_axes = tuple(range(len(owner.kgrid)))
-        for ifermi, fermi in enumerate(owner.fermiList):
+        k_slices = (slice(None),) * len(inputs.kgrid)
+        k_axes = tuple(range(len(inputs.kgrid)))
+        for ifermi, fermi in enumerate(inputs.fermiList):
             state = kernel.fermi_state(ifermi, fermi)
             irecord = responseFermiRecord.get(ifermi)
             for idrive, drive_vertex in enumerate(drive_vertices):
@@ -76,14 +79,14 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
                                     response_index = ((idrive, iobservable) + k_slices
                                                       + (irecord, ialpha) + observable_components)
                                     response_channels[name][response_index] = value
-        return kernel, projected_channels, response_channels
+        return FirstOrderResponseResult(kernel, projected_channels, response_channels, fermi_indices)
 
-    nbands = owner.energies.shape[-1]
-    weight_shape = ((len(drive_vertices), len(observable_vertices)) + owner.kgrid
+    nbands = inputs.energies.shape[-1]
+    weight_shape = ((len(drive_vertices), len(observable_vertices)) + inputs.kgrid
                     + (3,) + tuple(observable_component_shape) + (nbands,))
     weights_e = np.zeros(weight_shape, dtype=float)
     weights_i = np.zeros(weight_shape, dtype=float) if kernel.full_covariant_derivative else None
-    k_slices = (slice(None),) * len(owner.kgrid)
+    k_slices = (slice(None),) * len(inputs.kgrid)
 
     for idrive, drive_vertex in enumerate(drive_vertices):
         for ialpha in range(3):
@@ -106,9 +109,9 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
                         observable_diag = np.diagonal(observable_vertex[vertex_index], axis1=-2, axis2=-1)
                         weights_i[weight_index] = (drive_diag * observable_diag * kernel.collision.population_inverse).real
 
-    fermi_shape = ((1, 1) + owner.kgrid + (1,)*(1 + len(observable_component_shape)) + (nbands,))
-    k_axes = tuple(range(2, 2 + len(owner.kgrid)))
-    for ifermi, fermi in enumerate(owner.fermiList):
+    fermi_shape = ((1, 1) + inputs.kgrid + (1,)*(1 + len(observable_component_shape)) + (nbands,))
+    k_axes = tuple(range(2, 2 + len(inputs.kgrid)))
+    for ifermi, fermi in enumerate(inputs.fermiList):
         f, fp = kernel.occupations(ifermi, fermi)
         response_e = np.sum(weights_e * f.reshape(fermi_shape), axis=-1)
         projected_channels["E"][:, :, ifermi] = np.sum(response_e, axis=k_axes)
@@ -123,7 +126,8 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
             projected_channels["I"][:, :, ifermi] = np.sum(response_i, axis=k_axes)
             if irecord is not None:
                 response_channels["I"][response_index] = response_i
-    return kernel, projected_channels, response_channels
+    return FirstOrderResponseResult(kernel, projected_channels, response_channels, fermi_indices)
+
 
 def _contract_second_order_observable(rho, observable):
     """Contract one density matrix with every component of an observable."""
@@ -137,15 +141,15 @@ def _sum_density_matrix_channels(channels):
         np.add(total, value, out=total)
     return total
 
-def _first_order_observable_shape(owner, observable_vertices):
+def _first_order_observable_shape(inputs, observable_vertices):
     """Validate first-order vertices and return the observable component axes."""
     if not observable_vertices:
         raise ValueError("At least one observable vertex is required")
-    nk_dimensions = len(owner.kgrid)
-    nbands = owner.energies.shape[-1]
-    drive_shape = tuple(owner.kgrid) + (3, nbands, nbands)
+    nk_dimensions = len(inputs.kgrid)
+    nbands = inputs.energies.shape[-1]
+    drive_shape = tuple(inputs.kgrid) + (3, nbands, nbands)
     for vertex in observable_vertices:
-        if (tuple(vertex.shape[:nk_dimensions]) != tuple(owner.kgrid)
+        if (tuple(vertex.shape[:nk_dimensions]) != tuple(inputs.kgrid)
                 or vertex.shape[-2:] != (nbands, nbands)):
             raise ValueError("Observable vertices must have shape kgrid + components + (nbands, nbands)")
     component_shape = tuple(observable_vertices[0].shape[nk_dimensions:-2])
@@ -153,12 +157,13 @@ def _first_order_observable_shape(owner, observable_vertices):
         raise ValueError("All observable vertices must have the same component shape")
     return drive_shape, component_shape
 
+
 def _contract_first_order_observable(rho, observable, component_shape):
     """Evaluate Tr(rho O) for an observable with arbitrary component axes."""
     expanded = rho.reshape(rho.shape[:-2] + (1,)*len(component_shape) + rho.shape[-2:])
     return np.sum(expanded*observable.swapaxes(-1, -2), axis=(-2, -1))
 
-def _contract_first_order_density_matrix_response(owner, kernel_class, drive_vertices,
+def _contract_first_order_density_matrix_response(inputs, kernel_class, drive_vertices,
                                                    observable_vertices, frequencies,
                                                    responseFermiIndexList,
                                                    responseOmegaIndexList,
@@ -172,42 +177,40 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
     selected k-resolved integrands. Units and observable-specific signs belong
     to the consuming calculator.
     """
-    owner.calcDeltaEInverse()
-    kernel = kernel_class(owner, fullCovariantDerivative, finiteTemperatureOccupations,
+    kernel = kernel_class(inputs, fullCovariantDerivative, finiteTemperatureOccupations,
                           collision=collision)
-    owner.density_matrix_kernel = kernel
     frequencies = np.asarray(frequencies, dtype=float)
     if frequencies.ndim != 1 or not np.all(np.isfinite(frequencies)):
         raise ValueError("frequencies must be a finite one-dimensional array")
     if not drive_vertices:
         raise ValueError("At least one drive vertex is required")
-    drive_shape, component_shape = _first_order_observable_shape(owner, observable_vertices)
+    drive_shape, component_shape = _first_order_observable_shape(inputs, observable_vertices)
     for vertex in drive_vertices:
         if vertex.shape != drive_shape:
             raise ValueError(f"Drive vertices must have shape {drive_shape}")
 
-    owner.responseFermiIndexList = tuple(
-        _normalize_response_index_list(responseFermiIndexList, len(owner.fermiList)))
-    owner.responseOmegaIndexList = tuple(
+    fermi_indices = tuple(
+        _normalize_response_index_list(responseFermiIndexList, len(inputs.fermiList)))
+    omega_indices = tuple(
         _normalize_response_index_list(responseOmegaIndexList, len(frequencies)))
-    fermi_records = {value:index for index, value in enumerate(owner.responseFermiIndexList)}
-    omega_records = {value:index for index, value in enumerate(owner.responseOmegaIndexList)}
-    projected_shape = ((len(drive_vertices), len(observable_vertices), len(owner.fermiList),
+    fermi_records = {value:index for index, value in enumerate(fermi_indices)}
+    omega_records = {value:index for index, value in enumerate(omega_indices)}
+    projected_shape = ((len(drive_vertices), len(observable_vertices), len(inputs.fermiList),
                         len(frequencies), 3) + component_shape)
-    response_shape = ((len(drive_vertices), len(observable_vertices)) + tuple(owner.kgrid)
+    response_shape = ((len(drive_vertices), len(observable_vertices)) + tuple(inputs.kgrid)
                       + (len(fermi_records), len(omega_records), 3) + component_shape)
     projected_channels = {
         name:np.zeros(projected_shape, dtype=complex) for name in kernel.channel_names}
     response_channels = {
         name:np.zeros(response_shape, dtype=complex) for name in kernel.channel_names}
-    k_slices = (slice(None),)*len(owner.kgrid)
-    k_axes = tuple(range(len(owner.kgrid)))
+    k_slices = (slice(None),)*len(inputs.kgrid)
+    k_axes = tuple(range(len(inputs.kgrid)))
     response_tail = (slice(None),)*(1 + len(component_shape))
 
     if kernel.collision.mesh_coupled:
         # Mesh-global collisions cannot be reduced to independent band-pair
         # weights. Preserve the exact density-matrix solve for this path.
-        for ifermi, fermi in enumerate(owner.fermiList):
+        for ifermi, fermi in enumerate(inputs.fermiList):
             state = kernel.fermi_state(ifermi, fermi)
             irecord_fermi = fermi_records.get(ifermi)
             for iomega, omega in enumerate(frequencies):
@@ -227,31 +230,31 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
                                              + (irecord_fermi, irecord_omega, direction)
                                              + (slice(None),)*len(component_shape))
                                     response_channels[name][index] = value
-        return kernel, projected_channels, response_channels
+        return FirstOrderResponseResult(kernel, projected_channels, response_channels, fermi_indices, omega_indices)
 
     # For local CRTA/SERTA collisions, reduce regular interband pairs to one
     # band weight per frequency. Near-degenerate pairs retain the confluent
     # Fermi divided difference and are accumulated separately.
-    nbands = owner.energies.shape[-1]
+    nbands = inputs.energies.shape[-1]
     off_diagonal = ~kernel.diag
-    inverse_gap = np.zeros_like(owner.deltaE)
+    inverse_gap = np.zeros_like(inputs.deltaE)
     if kernel.full_covariant_derivative:
-        near_tolerance = 1e-5*owner.kBT
-        regular = off_diagonal & (np.abs(owner.deltaE) > near_tolerance)
-        np.divide(1., owner.deltaE, out=inverse_gap, where=regular)
+        near_tolerance = 1e-5*inputs.kBT
+        regular = off_diagonal & (np.abs(inputs.deltaE) > near_tolerance)
+        np.divide(1., inputs.deltaE, out=inverse_gap, where=regular)
         near = off_diagonal & ~regular
     else:
-        inverse_gap[...] = owner.deltaEInverse_pure
+        inverse_gap[...] = inputs.deltaEInverse_pure
         regular = inverse_gap != 0.
         near = np.zeros_like(regular)
 
-    nk_dimensions = len(owner.kgrid)
+    nk_dimensions = len(inputs.kgrid)
     near_indices = np.nonzero(near)
     if near_indices[0].size:
-        near_k_flat = np.ravel_multi_index(near_indices[:nk_dimensions], owner.kgrid)
-        near_left_energy = owner.energies[
+        near_k_flat = np.ravel_multi_index(near_indices[:nk_dimensions], inputs.kgrid)
+        near_left_energy = inputs.energies[
             near_indices[:nk_dimensions] + (near_indices[nk_dimensions],)]
-        near_right_energy = owner.energies[
+        near_right_energy = inputs.energies[
             near_indices[:nk_dimensions] + (near_indices[nk_dimensions + 1],)]
         near_band_left = near_indices[nk_dimensions]
         near_band_right = near_indices[nk_dimensions + 1]
@@ -260,20 +263,20 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
         near_band_left = near_band_right = None
 
     fermi_data = []
-    for fermi in owner.fermiList:
-        occupations = (owner.fdOccupation(fermi) if kernel.full_covariant_derivative
-                       or finiteTemperatureOccupations else (owner.energies < fermi).astype(float))
-        derivative = (owner.fdEnergyDerivatives(occupations)[0]
+    for fermi in inputs.fermiList:
+        occupations = (inputs.fdOccupation(fermi) if kernel.full_covariant_derivative
+                       or finiteTemperatureOccupations else (inputs.energies < fermi).astype(float))
+        derivative = (inputs.fdEnergyDerivatives(occupations)[0]
                       if kernel.full_covariant_derivative else None)
         near_difference = (fermi_divided_difference(
-            near_left_energy, near_right_energy, fermi, owner.kBT)
+            near_left_energy, near_right_energy, fermi, inputs.kBT)
             if near_k_flat is not None else None)
         fermi_data.append((occupations, derivative, near_difference))
 
-    nk = int(np.prod(owner.kgrid))
+    nk = int(np.prod(inputs.kgrid))
     component_count = int(np.prod(component_shape)) if component_shape else 1
     for iomega, omega in enumerate(frequencies):
-        resolvent = kernel.collision.resolvent(owner.deltaE, omega)
+        resolvent = kernel.collision.resolvent(inputs.deltaE, omega)
         pair_factor = -1j*resolvent*inverse_gap
         population_factor = np.diagonal(-1j*resolvent, axis1=-2, axis2=-1)
         near_resolvent = -1j*resolvent[near_indices] if near_k_flat is not None else None
@@ -288,14 +291,14 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
                     near_band_left[:, None], near_band_right[:, None]]
             for iobservable, observable_vertex in enumerate(observable_vertices):
                 observable_diagonal = np.diagonal(observable_vertex, axis1=-2, axis2=-1)
-                drive_diag = drive_diagonal.reshape(tuple(owner.kgrid) + (3,)
+                drive_diag = drive_diagonal.reshape(tuple(inputs.kgrid) + (3,)
                                                     + (1,)*len(component_shape) + (nbands,))
                 observable_diag = observable_diagonal.reshape(
-                    tuple(owner.kgrid) + (1,) + component_shape + (nbands,))
+                    tuple(inputs.kgrid) + (1,) + component_shape + (nbands,))
                 pop_factor = population_factor.reshape(
-                    tuple(owner.kgrid) + (1,)*(1 + len(component_shape)) + (nbands,))
+                    tuple(inputs.kgrid) + (1,)*(1 + len(component_shape)) + (nbands,))
                 weights_i = drive_diag*observable_diag*pop_factor
-                weights_e = np.zeros(tuple(owner.kgrid) + (3,) + component_shape + (nbands,),
+                weights_e = np.zeros(tuple(inputs.kgrid) + (3,) + component_shape + (nbands,),
                                      dtype=complex)
                 for direction in range(3):
                     drive_component = drive_vertex[..., direction, :, :]
@@ -317,7 +320,7 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
                         near_band_left[:, None]].reshape((len(near_k_flat),) + component_shape)
 
                 for ifermi, (occupations, derivative, near_difference) in enumerate(fermi_data):
-                    fermi_weight_shape = tuple(owner.kgrid) + (1,)*(1 + len(component_shape)) + (nbands,)
+                    fermi_weight_shape = tuple(inputs.kgrid) + (1,)*(1 + len(component_shape)) + (nbands,)
                     value_e = np.sum(weights_e*occupations.reshape(fermi_weight_shape), axis=-1)
                     if near_k_flat is not None:
                         near_weight = near_resolvent*near_difference
@@ -338,20 +341,22 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
                                  + (irecord_fermi, irecord_omega) + response_tail)
                         response_channels["I"][index] = value_i
                         response_channels["E"][index] = value_e
-    return kernel, projected_channels, response_channels
+    return FirstOrderResponseResult(kernel, projected_channels, response_channels, fermi_indices, omega_indices)
 
-def _contract_first_order_lg_response(owner, drive_vertices, observable_vertices,
+
+def _contract_first_order_lg_response(inputs, drive_vertices, observable_vertices,
                                       frequencies, responseFermiIndexList=None,
                                       responseOmegaIndexList=None,
                                       finiteTemperatureOccupations=True,
                                       fullCovariantDerivative=True, *, collision):
     """Contract a length-gauge first-order density matrix with observables."""
     return _contract_first_order_density_matrix_response(
-        owner, LengthGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
+        inputs, LengthGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
         frequencies, responseFermiIndexList, responseOmegaIndexList,
         finiteTemperatureOccupations, fullCovariantDerivative, collision=collision)
 
-def _contract_first_order_vg_response(owner, drive_vertices, observable_vertices,
+
+def _contract_first_order_vg_response(inputs, drive_vertices, observable_vertices,
                                       contact_vertices, frequencies,
                                       responseFermiIndexList=None,
                                       responseOmegaIndexList=None,
@@ -365,33 +370,36 @@ def _contract_first_order_vg_response(owner, drive_vertices, observable_vertices
     as ``i*residue/Omega``. At exactly zero frequency its periodic-BZ limit is
     removed analytically.
     """
-    kernel, projected_channels, response_channels = _contract_first_order_density_matrix_response(
-        owner, VelocityGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
+    result = _contract_first_order_density_matrix_response(
+        inputs, VelocityGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
         frequencies, responseFermiIndexList, responseOmegaIndexList,
         finiteTemperatureOccupations, fullCovariantDerivative, collision=collision)
-    _, component_shape = _first_order_observable_shape(owner, observable_vertices)
+    kernel = result.kernel
+    projected_channels, response_channels = result.projected_channels, result.response_channels
+    fermi_indices, omega_indices = result.fermi_indices, result.omega_indices
+    _, component_shape = _first_order_observable_shape(inputs, observable_vertices)
     if len(contact_vertices) != len(drive_vertices) or any(
             len(values) != len(observable_vertices) for values in contact_vertices):
         raise ValueError("contact_vertices must be indexed by drive and observable projection")
-    expected_contact_shape = tuple(owner.kgrid) + component_shape + (
-        3, owner.energies.shape[-1], owner.energies.shape[-1])
+    expected_contact_shape = tuple(inputs.kgrid) + component_shape + (
+        3, inputs.energies.shape[-1], inputs.energies.shape[-1])
     if any(vertex.shape != expected_contact_shape for values in contact_vertices for vertex in values):
         raise ValueError(f"VG contact vertices must have shape {expected_contact_shape}")
 
     projected_channels["C"] = np.zeros_like(projected_channels["I"])
     response_channels["C"] = np.zeros_like(response_channels["I"])
-    pole_shape = ((len(drive_vertices), len(observable_vertices), len(owner.fermiList), 3)
+    pole_shape = ((len(drive_vertices), len(observable_vertices), len(inputs.fermiList), 3)
                   + component_shape)
     pole_residual = np.zeros(pole_shape, dtype=complex)
-    fermi_records = {value:index for index, value in enumerate(owner.responseFermiIndexList)}
-    omega_records = {value:index for index, value in enumerate(owner.responseOmegaIndexList)}
-    k_slices = (slice(None),)*len(owner.kgrid)
-    k_axes = tuple(range(len(owner.kgrid)))
-    nbands = owner.energies.shape[-1]
-    for ifermi, fermi in enumerate(owner.fermiList):
+    fermi_records = {value:index for index, value in enumerate(fermi_indices)}
+    omega_records = {value:index for index, value in enumerate(omega_indices)}
+    k_slices = (slice(None),)*len(inputs.kgrid)
+    k_axes = tuple(range(len(inputs.kgrid)))
+    nbands = inputs.energies.shape[-1]
+    for ifermi, fermi in enumerate(inputs.fermiList):
         state = kernel.fermi_state(ifermi, fermi)
         irecord_fermi = fermi_records.get(ifermi)
-        occupation_shape = tuple(owner.kgrid) + (1,)*len(component_shape) + (nbands,)
+        occupation_shape = tuple(inputs.kgrid) + (1,)*len(component_shape) + (nbands,)
         for idrive, drive_vertex in enumerate(drive_vertices):
             for iobservable, observable_vertex in enumerate(observable_vertices):
                 contact_vertex = contact_vertices[idrive][iobservable]
@@ -418,7 +426,9 @@ def _contract_first_order_vg_response(owner, drive_vertices, observable_vertices
                                      + (irecord_fermi, irecord_omega, direction)
                                      + (slice(None),)*len(component_shape))
                             response_channels["C"][index] = value
-    return kernel, projected_channels, response_channels, pole_residual
+    result.pole_residual = pole_residual
+    return result
+
 
 def _store_dc_galvanic_density_matrix(owner, kernel, projected_channels,
                                        response_channels, units, pole_residual=None):
@@ -456,338 +466,50 @@ def _store_dc_galvanic_density_matrix(owner, kernel, projected_channels,
         setattr(owner, f"projected_response_{name}", owner.projected_response_channels[name])
         setattr(owner, f"sigma_{name}", owner.sigma_channels[name])
 
-def _solve_dc_galvanic_lg_density_matrix(owner, observable_vertices,
+def _solve_dc_galvanic_lg_density_matrix(inputs, observable_vertices,
                                           responseFermiIndexList,
                                           finiteTemperatureOccupations,
                                           fullCovariantDerivative, units, *, collision):
     """Contract the first-order LG kernel with a vector observable."""
-    owner.fullCovariantDerivative = bool(fullCovariantDerivative)
-    drive_vertices = [owner.velocity_K] + owner.projected_velocity_K_list
-    kernel, projected_channels, response_channels = _contract_first_order_lg_response(
-        owner, drive_vertices, observable_vertices, np.array([0.]),
+    full_covariant_derivative = bool(fullCovariantDerivative)
+    drive_vertices = [inputs.velocity_K] + inputs.projected_velocity_K_list
+    result = _contract_first_order_lg_response(
+        inputs, drive_vertices, observable_vertices, np.array([0.]),
         responseFermiIndexList=responseFermiIndexList, responseOmegaIndexList=[0],
         finiteTemperatureOccupations=finiteTemperatureOccupations,
-        fullCovariantDerivative=owner.fullCovariantDerivative, collision=collision)
-    _store_dc_galvanic_density_matrix(
-        owner, kernel, projected_channels, response_channels, units)
+        fullCovariantDerivative=full_covariant_derivative, collision=collision)
+    return result
 
-def _solve_dc_galvanic_vg_density_matrix(owner, observable_vertices,
+
+def _solve_dc_galvanic_vg_density_matrix(inputs, observable_vertices,
                                           observable_contact_vertices,
                                           responseFermiIndexList,
                                           finiteTemperatureOccupations,
                                           fullCovariantDerivative, units, *, collision):
     """Contract the pole-subtracted first-order VG kernel at zero frequency."""
-    owner.fullCovariantDerivative = bool(fullCovariantDerivative)
-    if owner.projected_velocity_K_list:
+    full_covariant_derivative = bool(fullCovariantDerivative)
+    if inputs.projected_velocity_K_list:
         raise NotImplementedError("VG galvanic response does not support projected drive currents")
-    kernel, projected_channels, response_channels, pole_residual = _contract_first_order_vg_response(
-        owner, [owner.velocity_K], observable_vertices, [observable_contact_vertices],
+    result = _contract_first_order_vg_response(
+        inputs, [inputs.velocity_K], observable_vertices, [observable_contact_vertices],
         np.array([0.]), responseFermiIndexList=responseFermiIndexList,
         responseOmegaIndexList=[0], finiteTemperatureOccupations=finiteTemperatureOccupations,
-        fullCovariantDerivative=owner.fullCovariantDerivative, collision=collision)
-    _store_dc_galvanic_density_matrix(
-        owner, kernel, projected_channels, response_channels, units, pole_residual)
+        fullCovariantDerivative=full_covariant_derivative, collision=collision)
+    return result
+
 
 def _zero_vg_observable_contacts(observable_vertices):
     """Return dO/dA=0 vertices for field-independent local observables."""
     return [np.zeros(vertex.shape[:-2]+(3,)+vertex.shape[-2:], dtype=complex)
             for vertex in observable_vertices]
 
-class CollisionPreparation:
-    """Prepare collisions after the electronic stages and before the response.
-
-    collisionSpecification and preparedCollision are alternative inputs.
-    epcModel is passed explicitly to preparation; the prepared result retains
-    the physical model pair. Plain electronic calculators do not own these
-    settings. Cooperative initialization completes all electronic vertices
-    before constructing the collision operator.
-    """
-    def __init__(self, *, collisionSpecification=None, preparedCollision=None,
-                 epcModel=None, **kwarg):
-        collision_mode(collisionSpecification, preparedCollision)
-        super().__init__(**kwarg)
-        self.preparedCollision = resolve_collision(
-            self, collisionSpecification, prepared=preparedCollision, epc_model=epcModel)
-        self.collision = self.preparedCollision.operator
-
-class PhononPreparation:
-    """Explicit phonons with a CRTA background, separate from collision preparation."""
-    def __init__(self, *, collisionSpecification=None, preparedCollision=None,
-                 epcModel=None, **kwarg):
-        if preparedCollision is not None:
-            raise ValueError("Explicit/static phonon calculations do not accept preparedCollision; supply a CRTA background")
-        super().__init__(**kwarg)
-        self.epcModel = epcModel
-        self.collision = prepare_phonon_background(
-            self, collisionSpecification, epc_model=epcModel)
-
-class Calculator():
-    Iodd = False  # inversion gives minus
-    Todd = False  # time reversal gives minus
-
-    def __init__(self,**kwarg) -> None:
-        '''
-        Calculations on gamma-centered kmesh on BZ
-
-        Parameters
-        ----------
-        - model : System
-            The basis system, involving the hopping, basis coordinates, lattice matrix and perharps the overlap
-        - kgrid : tuple(3, dtype=int)
-            Size of kmesh
-        - eta   : float
-            Broadening for calculators using eta directly, usually eV. 
-            NOTE: It does not select or configure a collision operator for DM 
-            responses.
-        - kBT  : float
-            Kinetic energy of electron, in the same unit with energy usually eV
-        - smr_type : str, "Lorentzian"|"Gaussian"
-        - degen : float
-            The threthold two states are treated to be degenerated
-        - skip_low : bool
-            To skip lowest and seperated eigen-states IN ALL CASES
-        - kOffset : array-like, shape (3,)
-            Fractional reciprocal-space offset of the uniform FFT mesh. The
-            Energy stage derives its real-space phase factors from this value.
-        - fermiList : np.ndarray(dtype=float)
-            Fermi levels to scan
-        - omegaList : np.ndarray(dtype=float)
-            photon's frequencies to scan
-        '''
-        defaultSettings={
-            "model":None,
-            "kgrid":(1,1,1),
-            "eta":0.0,
-            "kBT":0.026,
-            "smr_type":"Lorentzian",
-            "degen":1e-6,
-            "skip_low":False,
-
-            "kOffset":(0.,0.,0.),
-
-            "fermiList":np.array([0,]),
-
-            "omegaList":np.array([0,]),
-
-            "greenFuncOmegaBatch":1,
-            "greenFuncNWorkers":1,
-
-            "verbose":0,
-        }
-        defaultSettings.update(kwarg)
-        self.model:System=defaultSettings["model"]
-        self.kgrid:tuple=defaultSettings["kgrid"]
-        assert type(self.kgrid)==tuple, f"expect tuple type of kgrid but {type(self.kgrid)=}"
-        self.eta=defaultSettings["eta"]
-        self.kBT=defaultSettings["kBT"]
-        self.smr_type=defaultSettings["smr_type"]
-        self.degen=defaultSettings["degen"]
-        self.skip_low=defaultSettings["skip_low"]
-
-        offset=defaultSettings["kOffset"]
-        self.kOffset=np.zeros(3) if offset is None else np.asarray(offset,dtype=float)
-        if self.kOffset.shape != (3,) or not np.all(np.isfinite(self.kOffset)):
-            raise ValueError("kOffset must contain three finite fractional coordinates")
-        self.fermiList=defaultSettings["fermiList"]
-        self.omegaList=defaultSettings["omegaList"]
-        self.greenFuncOmegaBatch=max(1, int(defaultSettings["greenFuncOmegaBatch"]))
-        self.greenFuncNWorkers=max(1, int(defaultSettings["greenFuncNWorkers"]))
-
-        self.verbose=defaultSettings["verbose"]
-        if self.verbose==2: print("initializing calculator module finished")
 
 #
 # Implemented calculaors
 # Energy, velocity (ao and eigen gauges), spin velocity (ao and eigen gauges), 
 # Berry curvature, spin Berry curvature
 #
-class Energy(Calculator):
-    def __init__(self, **kwarg) -> None:
-        '''
-        Solve the eigen-eqs. to obtain eigen-vals. and vecs.
-
-        Usually the second father of all calculators
-
-        Indexing:
-        self.energies[ik1, ik2, ik3, ieig] gives eigen-vals.
-
-        self.vectors[ik1, ik2, ik3, ieig, jeig] gives eigen-vecs. in ao basis.
-        '''
-        super().__init__(**kwarg)
-        self.phaseFactorR=np.exp(2j*np.pi*(self.model.iRvec @ self.kOffset))
-        self.ibmin=0             # ignore low-lying bands
-        if self.verbose==2: showElapsedTime(offset=True)
-        
-        if self.model.overlap:
-            self.solveGeneralEigenEquation()
-        else:
-            self.solveEigenEquation()
-
-    def solveGeneralEigenEquation(self):
-        '''
-        Solve the general eig.-eqs. 
-
-        H \dot U = O \dot U \dot \Gamma
-        '''
-        def solveOverlapWithSingleSpinTunnel(O_K:np.ndarray):
-            return np.linalg.eigh(O_K)
-        def solveOverlapWithDoubleSpinTunnels(O_K:np.ndarray):
-            nR1,nR2,nR3,norbs,norbs=O_K.shape
-            O_K_half=O_K[...,:norbs//2,:norbs//2]
-            eigHalf, WHalf = np.linalg.eigh(O_K_half)
-            eigFull=np.zeros((nR1,nR2,nR3,norbs))
-            WFull=np.zeros(O_K.shape,dtype=complex)
-            eigFull[...,:norbs//2]=eigHalf
-            eigFull[...,norbs//2:]=eigHalf
-            WFull[...,:norbs//2,:norbs//2]=WHalf
-            WFull[...,norbs//2:,norbs//2:]=WHalf
-            return eigFull, WFull
-        def solveOverlap(O_K:np.ndarray):
-            if self.model.ispin==1:
-                return solveOverlapWithSingleSpinTunnel(O_K)
-            elif self.model.ispin==2:
-                return solveOverlapWithDoubleSpinTunnels(O_K)
-            else:
-                print(f"Only support ispin=1|2 {self.model.ispin=}")
-                raise ValueError()
-
-        E_R_AO=self.model.energy_R*self.phaseFactorR[:,None,None]
-        O_R_AO=self.model.overlap_R*self.phaseFactorR[:,None,None]
-        
-        self.E_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-        self.O_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-        for iR, Rvec in enumerate(self.model.iRvec):
-            index = tuple(np.asarray(Rvec) % self.kgrid)
-            self.E_R_intepolated[index] += E_R_AO[iR]
-            self.O_R_intepolated[index] += O_R_AO[iR]
-        self.E_K_AO=np.fft.ifftn(self.E_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        self.O_K_AO=np.fft.ifftn(self.O_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        if self.verbose==2: showElapsedTime(extraInfo=f"FFT energy_R to energy_K and O_R to O_K on {self.kgrid=} finished")
-
-        overlapEigValues, Wk =solveOverlap(self.O_K_AO)
-        assert overlapEigValues.min() > 1e-6, f"eigen-value of overlap matrix is too small or negative {overlapEigValues.min()=}"
-        if self.verbose==2: print(f"{overlapEigValues.min()=}")
-
-        WkLam=Wk/np.sqrt(overlapEigValues[...,None,:])
-        if self.verbose==2: showElapsedTime(extraInfo=f"WkLam")
-        EnergyMatrixInK_tilde=WkLam.conj().transpose((0,1,2,4,3)) @ self.E_K_AO @ WkLam
-        if self.verbose==2: showElapsedTime(extraInfo=f"Overlapped energy")
-        self.energies, vecsBeforeOverlap = np.linalg.eigh(EnergyMatrixInK_tilde)
-        if self.verbose==2: showElapsedTime(extraInfo=f"eigen-eqs.")
-        self.vectors = WkLam @ vecsBeforeOverlap
-        if self.verbose==2: showElapsedTime(extraInfo=f"overlapping on eig.-vecs.")
-
-        if self.skip_low: self.getEnergyWindow()
-
-    def solveEigenEquation(self):
-        '''
-        Solve the eig.-eqs. 
-
-        H \dot U = U \dot \Gamma
-
-        ham_R stores signed Hamiltonian matrix elements. The inverse FFT evaluates 
-        H(k)=sum_R ham_R(R)*exp(+2*pi*i*k.R); no extra hopping minus sign is applied. 
-        A model writing H_ij=-t_ij must store -t_ij in the hamR file.
-        '''
-        HH_R_W=self.model.ham_R*self.phaseFactorR[:,None,None]
-        self.ham_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-        for iR, Rvec in enumerate(self.model.iRvec):
-            # Distinct R blocks can alias on a small/shifted mesh. Their
-            # (already phase-shifted) contributions must all enter the sum.
-            self.ham_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += HH_R_W[iR]
-        self.ham_K=np.fft.ifftn(self.ham_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        if self.verbose==2: showElapsedTime(extraInfo=f"FFT ham_R to ham_K on {self.kgrid=} finished")
-        self.energies, self.vectors = np.linalg.eigh(self.ham_K)
-        if self.verbose==2: showElapsedTime(extraInfo=f"eig.-eqs. solved")
-
-        if self.skip_low: self.getEnergyWindow()
     
-    def calcDeltaEInverse(self):
-        '''
-        Calc. the inversed energy difference matrix, the value at degenerated point is set to zero.
-
-        Indexing: 
-        
-        deltaE[ik1, ik2, ik3, ieig, jeig] = E_{ki} - E_{kj}
-
-        deltaEInverse[ik1, ik2, ik3, ieig, jeig] = 1/(E_{ki} - E_{kj} - 1j*eta)
-        '''
-        self.deltaE = self.energies[...,:,None] - self.energies[...,None,:]
-        self.deltaEInverse =np.zeros_like(self.deltaE, dtype=complex)
-        self.deltaEInverse_pure =np.zeros_like(self.deltaE, dtype=float)
-        self.deltaEInverse2=np.zeros_like(self.deltaE, dtype=complex)
-        nondegeneratedCondition=abs(self.deltaE)>self.degen
-        self.deltaEInverse[nondegeneratedCondition] =1./(self.deltaE[nondegeneratedCondition] - 1j*self.eta)
-        self.deltaEInverse_pure[nondegeneratedCondition] =1./self.deltaE[nondegeneratedCondition]
-        self.deltaEInverse2[nondegeneratedCondition]=1./self.deltaE[nondegeneratedCondition]/(self.deltaE[nondegeneratedCondition] - 1j*self.eta)
-        if self.smr_type == 'Lorentzian':
-            return
-        raise NotImplementedError()
-    
-    @property
-    def fd_occupations(self):
-        """
-        Return Fermi-Dirac occupations with axes ``(fermi, *energies.shape)``.
-        
-        The piecewise evaluation avoids overflow far from the Fermi level.
-        ``kBT=0`` gives the strict zero-temperature step convention used by
-        the response calculators.
-        """
-        return fermiDiracOccupations(
-            self.energies,
-            self.fermiList,
-            self.kBT,
-        )
-
-    def fdOccupation(self, fermi):
-        """Return the Fermi-Dirac occupations for one chemical potential."""
-        return fermiDiracOccupations(
-            self.energies,
-            np.asarray([fermi], dtype=float),
-            self.kBT,
-        )[0]
-
-    @property
-    def fd_energy_derivative(self):
-        """Return ``df/dE`` for each Fermi level and band energy."""
-        return self.fdEnergyDerivatives()[0]
-
-    @property
-    def fd_energy_second_derivative(self):
-        """Return ``d2f/dE2`` for each Fermi level and band energy."""
-        return self.fdEnergyDerivatives()[1]
-
-    def fdEnergyDerivatives(self, occupations=None):
-        """Return ``df/dE`` and ``d2f/dE2`` from supplied or computed occupations."""
-        assert self.kBT > 0, "Fermi-Dirac energy derivatives require kBT > 0"
-        f = self.fd_occupations if occupations is None else np.asarray(occupations)
-        fp = -f * (1.0 - f) / self.kBT
-        fpp = f * (1.0 - f) * (1.0 - 2.0 * f) / self.kBT**2
-        return fp, fpp
-    
-    def getEnergyWindow(self,gap=5.0):
-        energy=np.sort(self.energies.flatten()) - self.model.fermi
-        valence_bands=energy[energy<=0]
-        nvb=len(valence_bands)
-        for ilevel in range(nvb-1):
-            dE=valence_bands[nvb-1-ilevel] - valence_bands[nvb-2-ilevel]
-            if dE > gap: break
-        else:
-            return
-        mid_valence=(valence_bands[nvb-1-ilevel] + valence_bands[nvb-2-ilevel])/2
-        self.ibmin=len(self.energies[(0,0,0)][self.energies[(0,0,0)]<mid_valence])
-        self.energies=self.energies[:,:,:,self.ibmin:]
-        self.vectors=self.vectors[:,:,:,:,self.ibmin:]
-        if self.verbose: print(f"Low-lying bands skipped, {self.ibmin=}")
-    
-    def projectorInEigenBasis(self,projectorInLocalBasis:np.ndarray):
-        '''
-        Transform the project operator in local basis into the eigen-basis
-        '''
-        if self.model.overlap:
-            return self.vectors.conj().swapaxes(-2,-1) @ projectorInLocalBasis[None,None,None,:,:] @ self.O_K_AO @ self.vectors
-        else:
-            return self.vectors.conj().swapaxes(-2,-1) @ projectorInLocalBasis[None,None,None,:,:] @ self.vectors
 
 class FermiScan(Energy):
     def __init__(self, **kwarg):
@@ -839,348 +561,6 @@ class PDOS(Energy):
                         self.pdos += tdos[:,None] * rho
         self.pdos /= np.sqrt(2*np.pi)*eta*np.prod(self.kgrid)
 
-class Spin(Energy):
-    def __init__(self, spinProjectionList=[], gS:float=2.0, _computeSpin=True, **kwarg,):
-        '''
-        Compute the spin magnetic-moment matrix in eigen-basis, in mu_B.
-
-        Indexing:
-        self.spin_K[ik1, ik2, ik3, idirection, ieig, jeig] gives the
-        spin magnetic-moment matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z.
-        '''
-        super().__init__(**kwarg)
-        if not _computeSpin:
-            return
-        vectors=self.vectors[:,:,:,None,:,:]
-        spin_operator=-gS*self.model.spin/2
-        if self.model.overlap:
-            self.spin_K=vectors.conj().swapaxes(-2,-1) @ spin_operator[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
-        else:
-            self.spin_K=vectors.conj().swapaxes(-2,-1) @ spin_operator[None,None,None,:,:,:] @ vectors
-        if self.verbose==2: showElapsedTime(extraInfo=f"spin magnetic moment in eig.-basis calculated")
-
-        self.projected_spin_K_list=[]
-        for spinProjection in spinProjectionList:
-            proj1=projectionOperator(spinProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(spinProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            self.projected_spin_K_list.append((proj1_K@self.spin_K + self.spin_K@proj2_K)/2)
-
-class Orbital(Energy):
-    def __init__(self, orbitalProjectionList=[], gL:float=1.0, **kwarg):
-        '''
-        Compute the local orbital magnetic-moment matrix in eigen-basis,
-        in mu_B, using the individual-atom approximation.
-
-        Indexing:
-        self.orbital_K[ik1, ik2, ik3, idirection, ieig, jeig] gives the
-        orbital magnetic-moment matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z.
-        '''
-        super().__init__(**kwarg)
-        vectors=self.vectors[:,:,:,None,:,:]
-        orbital_operator=-gL*self.model.orbital
-        if self.model.overlap:
-            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ orbital_operator[None,None,None,:,:,:] @ self.O_K_AO[...,None,:,:] @ vectors
-        else:
-            self.orbital_K=vectors.conj().swapaxes(-2,-1) @ orbital_operator[None,None,None,:,:,:] @ vectors
-        if self.verbose==2: showElapsedTime(extraInfo=f"local orbital magnetic moment in eig.-basis calculated")
-
-        self.projected_orbital_K_list=[]
-        for orbitalProjection in orbitalProjectionList:
-            proj1=projectionOperator(orbitalProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(orbitalProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            self.projected_orbital_K_list.append((proj1_K@self.orbital_K + self.orbital_K@proj2_K)/2)
-
-class SpinTorque(Spin):
-    def __init__(self, spinTorqueProjectionList=[], **kwarg):
-        '''
-        Compute full spin torque matrix in eigen-basis
-
-        T = -i [mu_S, H]
-
-        In eigen-basis, H is diagonalized eigen-energy and mu_S is computed
-        in the parent Spin class in units of mu_B.
-
-        NOTE: the full spin torque includes exchange torque Tau_XC, spin-orbit torque Tau_SO,
-        and the spin-flux divergence. Only Tau_XC corresponds to the transfer of electron spin
-        to the macroscopic spin magnetization order. 
-
-        Indexing
-        --------
-        self.spinTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives spin torque matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z.
-        '''
-        super().__init__(**kwarg)
-
-        self.spinTorque_K=-1j*(self.spin_K*self.energies[...,None,None,:] - self.spin_K*self.energies[...,None,:,None])
-        if self.verbose==2: showElapsedTime(extraInfo=f"spin torque in eig.-basis finished")
-
-        self.spinTorqueProjectionList=spinTorqueProjectionList
-        self.projected_spinTorque_K_list=[]
-        for spinTorqueProjection in self.spinTorqueProjectionList:
-            proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            self.projected_spinTorque_K_list.append((proj1_K@self.spinTorque_K + self.spinTorque_K@proj2_K)/2)
-        
-
-    def buildSpinTorqueVelocityCommutator(self):
-        '''
-        Build vector-potential torque vertices for velocity-gauge calculations.
-
-        With H(A) = H0 + A_a v_a + 1/2 A_a A_b w_ab,
-        T(A) = -i[mu_S,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
-        '''
-        nbasis = self.energies.shape[-1]
-        self.spinTorqueA_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        self.spinTorqueAA_K = np.zeros(self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
-
-        for c in range(3):
-            S_c = self.spin_K[..., c, :, :]
-            for a in range(3):
-                v_a = self.velocity_K[..., a, :, :]
-                self.spinTorqueA_K[..., c, a, :, :] = -1j * (S_c @ v_a - v_a @ S_c)
-                for b in range(3):
-                    w_ab = self.w_K[..., a, b, :, :]
-                    self.spinTorqueAA_K[..., c, a, b, :, :] = -1j * (S_c @ w_ab - w_ab @ S_c)
-
-        self.projected_spinTorqueA_K_list = []
-        self.projected_spinTorqueAA_K_list = []
-        for spinTorqueProjection in self.spinTorqueProjectionList:
-            proj1 = projectionOperator(spinTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj2 = projectionOperator(spinTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj1_K = self.projectorInEigenBasis(proj1)
-            proj2_K = self.projectorInEigenBasis(proj2)
-            self.projected_spinTorqueA_K_list.append(
-                (proj1_K[..., None, None, :, :] @ self.spinTorqueA_K + self.spinTorqueA_K @ proj2_K[..., None, None, :, :]) / 2
-            )
-            self.projected_spinTorqueAA_K_list.append(
-                (proj1_K[..., None, None, None, :, :] @ self.spinTorqueAA_K + self.spinTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
-            )
-        if self.verbose==2: showElapsedTime(extraInfo=f"velocity corrected spin torque in eig.-basis finished")
-
-    def buildSpinTorqueDipoleCommutator(self):
-        '''Build -i[mu_S,r_a], the torque derivative for H_L=H0+E_a*r_a.'''
-        nbasis = self.energies.shape[-1]
-        self.spinTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        for c in range(3):
-            spin_c = self.spin_K[..., c, :, :]
-            for a in range(3):
-                r_a = self.r_K[..., a, :, :]
-                self.spinTorqueE_K[..., c, a, :, :] = -1j * (spin_c @ r_a - r_a @ spin_c)
-
-        self.projected_spinTorqueE_K_list = []
-        for spinTorqueProjection in self.spinTorqueProjectionList:
-            proj1 = projectionOperator(spinTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj2 = projectionOperator(spinTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
-            proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
-            self.projected_spinTorqueE_K_list.append((proj1_K @ self.spinTorqueE_K + self.spinTorqueE_K @ proj2_K) / 2)
-        if self.verbose==2: showElapsedTime(extraInfo="Dipole corrected spin torque in eig.-basis finished")
-
-class SpinExchangeTorque(Spin):
-    def __init__(self, spinTorqueProjectionList=[], **kwarg):
-        '''
-        Compute the spin exchange-torque vertex in the eigen-basis.
-        PHYSICAL REVIEW RESEARCH 4, L042022 (2022), eq. S11
-        Describes transfer of spin angular momentum from electrons to the
-        magnetic order parameter.
-
-        For mu_S = -g_S mu_B S/hbar, the paper's
-        T_M = -[S,H_XC]/(i hbar) is represented in magnetic-moment units by
-        -i[mu_S,H_XC] = g_S mu_B T_M. It is also hbar times the exchange
-        contribution to the electronic magnetic-moment rate. H_XC is
-        model.exchange_R. Unlike the total Hamiltonian, it is generally not
-        diagonal in the eigen-basis, so the commutator is evaluated by matrix
-        multiplication.
-
-        This is an energy-like torque in mu_B eV. The LLG variable follows the
-        ordered magnetic moment, which is opposite to its angular momentum.
-        Converting this vertex to that magnetic-moment rate therefore requires
-        the reaction minus sign; IFTDevice and outputIFTcoeffs perform it.
-
-        The exposed spinTorque_K and projected_spinTorque_K_list attributes
-        intentionally match SpinTorque, allowing response classes to switch
-        torque definitions without changing their tensor contractions.
-
-        Indexing
-        --------
-        self.spinTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives spin torque matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z.
-        '''
-        super().__init__(**kwarg)
-        assert self.model.exchange_R is not None, "SpinExchangeTorque requires model.exchange_R; call model.getExchangeR first"
-        assert self.model.exchange_R.shape==self.model.ham_R.shape, f"exchange_R shape {self.model.exchange_R.shape} differs from ham_R shape {self.model.ham_R.shape}"
-
-        exchange_R=self.model.exchange_R*self.phaseFactorR[:,None,None]
-        self.exchange_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-        for iR,Rvec in enumerate(self.model.iRvec):
-            self.exchange_R_intepolated[tuple(Rvec)]=exchange_R[iR]
-        self.exchange_K_AO=np.fft.ifftn(self.exchange_R_intepolated,axes=(0,1,2))*np.prod(self.kgrid)
-        self.exchange_K=self.vectors.conj().swapaxes(-2,-1) @ self.exchange_K_AO @ self.vectors
-
-        spin=self.spin_K
-        exchange=self.exchange_K[...,None,:,:]
-        self.spinExchangeTorque_K=-1j*(spin@exchange-exchange@spin)
-        self.spinTorque_K=self.spinExchangeTorque_K
-
-        self.spinTorqueProjectionList = spinTorqueProjectionList
-        self.projected_spinExchangeTorque_K_list=[]
-        for spinTorqueProjection in spinTorqueProjectionList:
-            proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            projected=(proj1_K@self.spinExchangeTorque_K+self.spinExchangeTorque_K@proj2_K)/2
-            self.projected_spinExchangeTorque_K_list.append(projected)
-        self.projected_spinTorque_K_list=self.projected_spinExchangeTorque_K_list
-        if self.verbose==2: showElapsedTime(extraInfo="spin exchange torque in eig.-basis finished")
-
-    def buildSpinTorqueVelocityCommutator(self):
-        '''
-        Build vector-potential vertices for the exchange torque operator.
-
-        For H_XC(A)=H_XC+A_a v_XC,a+1/2 A_a A_b w_XC,ab, the vertices are
-        -i[mu_S,v_XC,a] and -i[mu_S,w_XC,ab]. If exchangeVelocity was disabled,
-        retain the local field-independent approximation with zero vertices.
-        '''
-        nbasis=self.energies.shape[-1]
-        self.spinExchangeTorqueA_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
-        self.spinExchangeTorqueAA_K=np.zeros(self.kgrid+(3,3,3,nbasis,nbasis),dtype=complex)
-        if getattr(self,"exchangeVelocity",False):
-            assert hasattr(self,"velocity_xc_K") and hasattr(self,"w_xc_K"), \
-                "exchange velocity matrices were requested but not constructed"
-            for c in range(3):
-                spin_c=self.spin_K[...,c,:,:]
-                for a in range(3):
-                    velocity_xc_a=self.velocity_xc_K[...,a,:,:]
-                    self.spinExchangeTorqueA_K[...,c,a,:,:]=-1j*(spin_c@velocity_xc_a-velocity_xc_a@spin_c)
-                    for b in range(3):
-                        w_xc_ab=self.w_xc_K[...,a,b,:,:]
-                        self.spinExchangeTorqueAA_K[...,c,a,b,:,:]=-1j*(spin_c@w_xc_ab-w_xc_ab@spin_c)
-        self.spinTorqueA_K=self.spinExchangeTorqueA_K
-        self.spinTorqueAA_K=self.spinExchangeTorqueAA_K
-
-        self.projected_spinExchangeTorqueA_K_list=[]
-        self.projected_spinExchangeTorqueAA_K_list=[]
-        for spinTorqueProjection in self.spinTorqueProjectionList:
-            proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj1_K=self.projectorInEigenBasis(proj1)
-            proj2_K=self.projectorInEigenBasis(proj2)
-            self.projected_spinExchangeTorqueA_K_list.append(
-                (proj1_K[...,None,None,:,:]@self.spinExchangeTorqueA_K
-                 +self.spinExchangeTorqueA_K@proj2_K[...,None,None,:,:])/2)
-            self.projected_spinExchangeTorqueAA_K_list.append(
-                (proj1_K[...,None,None,None,:,:]@self.spinExchangeTorqueAA_K
-                 +self.spinExchangeTorqueAA_K@proj2_K[...,None,None,None,:,:])/2)
-        self.projected_spinTorqueA_K_list=self.projected_spinExchangeTorqueA_K_list
-        self.projected_spinTorqueAA_K_list=self.projected_spinExchangeTorqueAA_K_list
-        if self.verbose==2: showElapsedTime(extraInfo="velocity corrected spin exchange torque finished")
-
-    def buildSpinTorqueDipoleCommutator(self):
-        '''
-        Build zero dipole-potential vertices for the exchange torque operator.
-    
-        H_XC is a field-independent local effective potential. The electric
-        field changes its expectation through the driven density matrix, not
-        through explicit dipole-dependent exchange-torque vertices.
-        '''
-        nbasis=self.energies.shape[-1]
-        self.spinExchangeTorqueE_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
-        self.spinTorqueE_K=self.spinExchangeTorqueE_K
-        self.projected_spinExchangeTorqueE_K_list=[np.zeros_like(self.spinExchangeTorqueE_K) for _ in self.spinTorqueProjectionList]
-        self.projected_spinTorqueE_K_list=self.projected_spinExchangeTorqueE_K_list
-        if self.verbose==2: showElapsedTime(extraInfo="zero dipole corrected spin exchange torque finished")
-
-class OrbitalTorque(Orbital):
-    def __init__(self, orbitalTorqueProjectionList=[], **kwarg):
-        '''
-        Compute orbital torque matrix in eigen-basis
-
-        T = -i [mu_L, H]
-
-        In eigen-basis, H is diagonalized eigen-energy and mu_L is computed
-        in the parent Orbital class in units of mu_B.
-
-        Indexing
-        --------
-        self.orbitalTorque_K[ik1, ik2, ik3, idirection, ieig, jeig] gives orbital torque matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z.
-        '''
-        super().__init__(**kwarg)
-
-        self.orbitalTorque_K=-1j*(self.orbital_K*self.energies[...,None,None,:] - self.orbital_K*self.energies[...,None,:,None])
-        if self.verbose==2: showElapsedTime(extraInfo=f"orbital torque in eig.-basis finished")
-
-        self.orbitalTorqueProjectionList=orbitalTorqueProjectionList
-        self.projected_orbitalTorque_K_list=[]
-        for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
-            proj1=projectionOperator(orbitalTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(orbitalTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            self.projected_orbitalTorque_K_list.append((proj1_K@self.orbitalTorque_K + self.orbitalTorque_K@proj2_K)/2)
-
-    def buildOrbitalTorqueVelocityCommutator(self):
-        '''
-        Build vector-potential torque vertices for velocity-gauge calculations.
-
-        With H(A) = H0 + A_a v_a + 1/2 A_a A_b w_ab,
-        T(A) = -i[mu_L,H(A)] = T0 + A_a T_a + 1/2 A_a A_b T_ab.
-        '''
-        nbasis = self.energies.shape[-1]
-        self.orbitalTorqueA_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        self.orbitalTorqueAA_K = np.zeros(self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
-
-        for c in range(3):
-            L_c = self.orbital_K[..., c, :, :]
-            for a in range(3):
-                v_a = self.velocity_K[..., a, :, :]
-                self.orbitalTorqueA_K[..., c, a, :, :] = -1j * (L_c @ v_a - v_a @ L_c)
-                for b in range(3):
-                    w_ab = self.w_K[..., a, b, :, :]
-                    self.orbitalTorqueAA_K[..., c, a, b, :, :] = -1j * (L_c @ w_ab - w_ab @ L_c)
-
-        self.projected_orbitalTorqueA_K_list = []
-        self.projected_orbitalTorqueAA_K_list = []
-        for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
-            proj1 = projectionOperator(orbitalTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj2 = projectionOperator(orbitalTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj1_K = self.projectorInEigenBasis(proj1)
-            proj2_K = self.projectorInEigenBasis(proj2)
-            self.projected_orbitalTorqueA_K_list.append(
-                (proj1_K[..., None, None, :, :] @ self.orbitalTorqueA_K + self.orbitalTorqueA_K @ proj2_K[..., None, None, :, :]) / 2
-            )
-            self.projected_orbitalTorqueAA_K_list.append(
-                (proj1_K[..., None, None, None, :, :] @ self.orbitalTorqueAA_K + self.orbitalTorqueAA_K @ proj2_K[..., None, None, None, :, :]) / 2
-            )
-        if self.verbose==2: showElapsedTime(extraInfo=f"velocity correctd orbital torque in eig.-basis finished")
-
-    def buildOrbitalTorqueDipoleCommutator(self):
-        '''Build -i[mu_L,r_a], the torque derivative for H_L=H0+E_a*r_a.'''
-        nbasis = self.energies.shape[-1]
-        self.orbitalTorqueE_K = np.zeros(self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        for c in range(3):
-            orbital_c = self.orbital_K[..., c, :, :]
-            for a in range(3):
-                r_a = self.r_K[..., a, :, :]
-                self.orbitalTorqueE_K[..., c, a, :, :] = -1j * (orbital_c @ r_a - r_a @ orbital_c)
-
-        self.projected_orbitalTorqueE_K_list = []
-        for orbitalTorqueProjection in self.orbitalTorqueProjectionList:
-            proj1 = projectionOperator(orbitalTorqueProjection['source'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj2 = projectionOperator(orbitalTorqueProjection['target'], self.model.atomicOrbInfoList, self.model.norbs)
-            proj1_K = self.projectorInEigenBasis(proj1)[..., None, None, :, :]
-            proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
-            self.projected_orbitalTorqueE_K_list.append((proj1_K @ self.orbitalTorqueE_K + self.orbitalTorqueE_K @ proj2_K) / 2)
-        if self.verbose==2: showElapsedTime(extraInfo="dipole corrected orbital torque in eig.-basis finished")
 
 class Spin_diag(FermiScan):
     def __init__(self, spinProjectionList=[], gS:float=2.0, **kwarg):
@@ -1257,354 +637,6 @@ class Orbital_diag(FermiScan):
                 projected_orbital_diag_K=np.sum(vectors.conj() * _ov, axis=(4,))
             self.projected_orbital_diag_K_list.append(projected_orbital_diag_K)
 
-class Velocity(Energy):
-    def __init__(self, velocityProjectionList=[], highOrderVelocity=False, exchangeVelocity=False, **kwarg) -> None:
-        '''
-        Compute velocity matrix in original basis and eigen-basis
-        And the velocity projected in specific basis
-
-        Indexing:
-        self.RHam_K[ik1, ik2, ik3, idirection, iorb, jorb] gives velocity matrix in original basis,
-        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
-
-        self.velocity_K[ik1, ik2, ik3, idirection, ieig, jeig] gives velocity matrix in eigen-basis.
-        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
-
-        self.projected_velocity_K_list[iproj] gives each projected velocity matrix
-        '''
-        self.exchangeVelocity=exchangeVelocity
-        highOrderVelocity=bool(highOrderVelocity or exchangeVelocity)
-        super().__init__(**kwarg)
-        
-        RH_R_W=self.model.RHam_R*self.phaseFactorR[:,None,None,None]
-        self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        AA_R_W=self.model.AA_R_W*self.phaseFactorR[:,None,None,None] # Berry connection in local gauge
-        AA_R_W_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        for iR, Rvec in enumerate(self.model.iRvec):
-            index = tuple(np.asarray(Rvec) % self.kgrid)
-            self.RHam_R_intepolated[index]+=RH_R_W[iR]
-            AA_R_W_intepolated[index]+=AA_R_W[iR]
-        self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
-        vectors=self.vectors[:,:,:,None,:,:]
-        velocity_bare_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
-
-        # ==========================================================
-        # Gauge-Covariant Geometric Corrections for velocity
-        # ==========================================================
-        # v_a = H^(1)_a - i[r_a, H^(0)]
-        AA_K_W        =  np.fft.ifftn(AA_R_W_intepolated,axes=(0,1,2,))*np.prod(self.kgrid) # Berry connection in Bloch gauge
-        AA_K_H = vectors.conj().swapaxes(-2,-1) @ AA_K_W @ vectors # Berry connection in Hamiltonian gauge
-        # The position/Berry-connection operator is Hermitian. Small violations
-        # from the finite Wannier interpolation are strongly amplified by its
-        # k derivatives and would otherwise make the contact vertices acausal.
-        AA_K_H = (AA_K_H + AA_K_H.conj().swapaxes(-2,-1)) / 2
-        AA_K_H_dot_H = AA_K_H * self.energies[...,None,None,:]            # gauge correction term, the commutator [AA_K, Ham.]
-        self.velocity_K = velocity_bare_K - 1j*(AA_K_H_dot_H - AA_K_H_dot_H.conj().swapaxes(-2,-1)) # gauge-covariant velocity
-
-        if exchangeVelocity:
-            assert self.model.exchange_R is not None, "exchangeVelocity requires model.exchange_R; call model.getExchangeR first"
-            assert self.model.RExchange_R is not None, "RExchange_R is required; call model.getRExchange_R first"
-            assert self.model.RRExchange_R is not None, "RRExchange_R is required; call model.getRRExchange_R first"
-
-            exchange_R_W=self.model.exchange_R*self.phaseFactorR[:,None,None]
-            RExchange_R_W=self.model.RExchange_R*self.phaseFactorR[:,None,None,None]
-            RRExchange_R_W=self.model.RRExchange_R*self.phaseFactorR[:,None,None,None,None]
-
-            exchange_R_interpolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-            RExchange_R_interpolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-            RRExchange_R_interpolated=np.zeros(self.kgrid+(3,3,self.model.norbs,self.model.norbs),dtype=complex)
-            for iR,Rvec in enumerate(self.model.iRvec):
-                exchange_R_interpolated[tuple(Rvec)]=exchange_R_W[iR]
-                RExchange_R_interpolated[tuple(Rvec)]=RExchange_R_W[iR]
-                RRExchange_R_interpolated[tuple(Rvec)]=RRExchange_R_W[iR]
-
-            fft_scale=np.prod(self.kgrid)
-            self.exchange_K_AO=np.fft.ifftn(exchange_R_interpolated,axes=(0,1,2))*fft_scale
-            self.RExchange_K=1j*np.fft.ifftn(RExchange_R_interpolated,axes=(0,1,2))*fft_scale
-            self.RRExchange_K=-np.fft.ifftn(RRExchange_R_interpolated,axes=(0,1,2))*fft_scale
-            del exchange_R_interpolated,RExchange_R_interpolated,RRExchange_R_interpolated
-
-            vectors0=self.vectors
-            self.exchange_K=vectors0.conj().swapaxes(-2,-1) @ self.exchange_K_AO @ vectors0
-            vectors1=self.vectors[...,None,:,:]
-            self.velocity_xc_bare_K=vectors1.conj().swapaxes(-2,-1) @ self.RExchange_K @ vectors1
-            self.velocity_xc_K=self.velocity_xc_bare_K-1j*(AA_K_H@self.exchange_K[...,None,:,:]
-                -self.exchange_K[...,None,:,:]@AA_K_H)
-            vectors2=self.vectors[...,None,None,:,:]
-            self.w_xc_bare_K=vectors2.conj().swapaxes(-2,-1) @ self.RRExchange_K @ vectors2
-            del vectors0,vectors1,vectors2
-            if self.verbose==2: showElapsedTime(extraInfo=f"bare and first-order exchange velocity finished")
-
-        if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
-        # check hermity
-        #dconj=np.sum(abs(self.velocity_K.transpose((0,1,2,3,5,4)).conj()-self.velocity_K))
-        #assert dconj<1e-4, f"Hermity of velocity is not satisfied {dconj=}"
-
-        '''
-        # extra modifications to velocity due to orbital overlaps
-        # according to Gemini, this part is not necessary since the effect is automatically included in the dipole correction
-        if self.model.overlap:
-            RO_R_W=self.model.RO_R
-            self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-            RO_R_W=RO_R_W*self.phaseFactorR[:,None,None,None]
-            for iR, Rvec in enumerate(self.model.iRvec):
-                self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
-            self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-            __UdOkU = (vectors.conj().swapaxes(-2,-1) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
-            self.velocity_K -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
-        #'''
-
-        self.projected_velocity_K_list=[]
-        for velocityProjection in velocityProjectionList:
-            proj1=projectionOperator(velocityProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(velocityProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            self.projected_velocity_K_list.append((proj1_K@self.velocity_K@proj2_K + proj2_K@self.velocity_K@proj1_K)/2)
-
-        if highOrderVelocity:
-            RRH_R_W  = getattr(self.model, "RRHam_R", None)
-            RRRH_R_W = getattr(self.model, "RRRHam_R", None)
-            assert RRH_R_W is not None,  "RRHam_R is required for high order velocity,  execute getRRHam_R first"
-            assert RRRH_R_W is not None, "RRRHam_R is required for high order velocity, execute getRRRHam_R first"
-        
-            RRH_R_intepolated  = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-            RRRH_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-        
-            RRH_R_W  = RRH_R_W  * self.phaseFactorR[:, None, None, None, None]
-            RRRH_R_W = RRRH_R_W * self.phaseFactorR[:, None, None, None, None, None]
-                
-            for iR, Rvec in enumerate(self.model.iRvec):
-                index = tuple(np.asarray(Rvec) % self.kgrid)
-                RRH_R_intepolated[index] += RRH_R_W[iR]
-                RRRH_R_intepolated[index] += RRRH_R_W[iR]
-                
-            # w_K = d^2H/dk^2
-            RRHam_K  = -1 * np.fft.ifftn(RRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
-            vectors=self.vectors[:,:,:,None,None,:,:]
-            self.w_K = vectors.conj().swapaxes(-2,-1) @ RRHam_K @ vectors
-        
-            # u_K = d^3H/dk^3
-            RRRHam_K = -1j * np.fft.ifftn(RRRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
-            vectors=self.vectors[:,:,:,None,None,None,:,:]
-            self.u_K = vectors.conj().swapaxes(-2,-1) @ RRRHam_K @ vectors
-
-            # ==============================================================
-            # Gauge-Covariant Geometric Corrections for high order velocity
-            # ==============================================================
-            def comm(A, B):
-                # Helper to compute commutator [A, B] broadcasting over k-grid
-                return A @ B - B @ A
-
-            # Ordinary k derivatives of the Wannier-gauge connection.
-            # These terms vanish in the diagonal tight-binding limit, but are
-            # required when the off-diagonal position matrix depends on k.
-            r1_R_intepolated = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-            for iR, Rvec in enumerate(self.model.iRvec):
-                R_cart = Rvec @ self.model.lattice
-                r1_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += 1j * R_cart[:, None, None, None] * AA_R_W[iR][None, :, :, :]
-
-            r1_K_AO = np.fft.ifftn(r1_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
-            vectors1 = self.vectors[..., None, None, :, :]
-            connectionDerivative1 = vectors1.conj().swapaxes(-2, -1) @ r1_K_AO @ vectors1
-            connectionDerivative1 = (
-                connectionDerivative1 + connectionDerivative1.conj().swapaxes(-2,-1)
-            ) / 2
-            del r1_R_intepolated, r1_K_AO, vectors1
-
-            # Construct the larger second-derivative tensor only after the
-            # first-derivative FFT buffers have been released.
-            r2_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-            for iR, Rvec in enumerate(self.model.iRvec):
-                R_cart = Rvec @ self.model.lattice
-                r2_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += (
-                    -R_cart[:, None, None, None, None] * R_cart[None, :, None, None, None] * AA_R_W[iR][None, None, :, :, :]
-                )
-            r2_K_AO = np.fft.ifftn(r2_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
-            vectors2 = self.vectors[..., None, None, None, :, :]
-            connectionDerivative2 = vectors2.conj().swapaxes(-2, -1) @ r2_K_AO @ vectors2
-            connectionDerivative2 = (
-                connectionDerivative2 + connectionDerivative2.conj().swapaxes(-2,-1)
-            ) / 2
-            del r2_R_intepolated, r2_K_AO, vectors2
-
-            # Store the bare spatial moments and H in the eigenbasis.
-            H0 = self.energies[..., :, None] * np.eye(self.energies.shape[-1], dtype=complex)
-            H1 = velocity_bare_K
-            H2 = self.w_K.copy()
-
-            # partialV_ab = partial_b v_a
-            partialV = np.zeros_like(self.w_K)
-            for a in range(3):
-                for b in range(3):
-                    partialV[..., a, b, :, :] = (
-                        H2[..., a, b, :, :]
-                        - 1j * comm(connectionDerivative1[..., b, a, :, :], H0)
-                        - 1j * comm(AA_K_H[..., a, :, :], H1[..., b, :, :])
-                    )
-                    # w_ab = D_b v_a
-                    self.w_K[..., a, b, :, :] = (partialV[..., a, b, :, :] 
-                        - 1j * comm(AA_K_H[..., b, :, :], self.velocity_K[..., a, :, :])
-                    )
-
-            # w_ab multiplies the commuting product A_a A_b and is the
-            # Hessian/contact-current vertex. Enforce its exact Hermiticity
-            # and Cartesian symmetry after the covariant construction.
-            self.w_K = (self.w_K + self.w_K.conj().swapaxes(-2,-1)) / 2
-            self.w_K = (self.w_K + self.w_K.swapaxes(-4,-3)) / 2
-
-            if exchangeVelocity:
-                exchange0=self.exchange_K
-                exchange1=self.velocity_xc_bare_K
-                exchange2=self.w_xc_bare_K
-                self.w_xc_K=np.zeros_like(exchange2)
-                for a in range(3):
-                    for b in range(3):
-                        partialVxc=(exchange2[...,a,b,:,:]
-                            -1j*comm(connectionDerivative1[...,b,a,:,:],exchange0)
-                            -1j*comm(AA_K_H[...,a,:,:],exchange1[...,b,:,:]))
-                        self.w_xc_K[...,a,b,:,:]=(partialVxc
-                            -1j*comm(AA_K_H[...,b,:,:],self.velocity_xc_K[...,a,:,:]))
-                if self.verbose==2: showElapsedTime(extraInfo=f"second-order exchange velocity finished")
-
-            # u_abc = D_c w_ab.  connectionDerivative1[..., b, a]
-            # is partial_b A_a, and connectionDerivative2[..., c, b, a]
-            # is partial_c partial_b A_a.
-            H3 = self.u_K.copy()
-            for a in range(3):
-                for b in range(3):
-                    for c in range(3):
-                        partial2V = (H3[..., a, b, c, :, :]  
-                            - 1j * comm(connectionDerivative2[..., c, b, a, :, :], H0)
-                            - 1j * comm(connectionDerivative1[..., b, a, :, :], H1[..., c, :, :])
-                            - 1j * comm(connectionDerivative1[..., c, a, :, :], H1[..., b, :, :])
-                            - 1j * comm(AA_K_H[..., a, :, :], H2[..., b, c, :, :])
-                        )
-                        partialW = (partial2V
-                            - 1j * comm(connectionDerivative1[..., c, b, :, :], self.velocity_K[..., a, :, :])
-                            - 1j * comm(AA_K_H[..., b, :, :], partialV[..., a, c, :, :])
-                        )
-                        self.u_K[..., a, b, c, :, :] = (partialW
-                            - 1j * comm(AA_K_H[..., c, :, :], self.w_K[..., a, b, :, :])
-                        )
-            del connectionDerivative1, connectionDerivative2, partialV
-            if self.verbose==2: showElapsedTime(extraInfo=f"higer order velocity modification with position operators finished")
-
-class Dipole(Velocity):
-    def __init__(self, highOrderDipole=False, **kwarg) -> None:
-        '''
-        Compute the off-diagonal dipole matrix in the Hamiltonian gauge.
-
-        Indexing
-        --------
-        self.r_K[ik1, ik2, ik3, idirection, m, n] gives
-        r_mn = v_mn / (i * (E_m - E_n)). Diagonal and numerically
-        degenerate matrix elements are set to zero.
-
-        If highOrderDipole is True,
-        self.r_deriv_K[ik1, ik2, ik3, ideriv, idirection, m, n]
-        gives the generalized derivative D_ideriv r^idirection_mn.
-        '''
-        highOrderVelocity = bool(kwarg.pop("highOrderVelocity", False) or highOrderDipole)
-        super().__init__(highOrderVelocity=highOrderVelocity, **kwarg)
-
-        norbs = self.energies.shape[-1]
-        self.calcDeltaEInverse()
-
-        off_diag = 1.0 - np.eye(norbs)
-        self.r_K = self.velocity_K * self.deltaEInverse_pure[..., None, :, :]  / 1j * off_diag
-        if self.verbose==2: showElapsedTime(extraInfo=f"dipole operators (off diagonal) finished")
-
-        if highOrderDipole:
-            velocity_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1)
-            deltaVelocity = velocity_diag[..., :, :, None] - velocity_diag[..., :, None, :]
-            self.r_deriv_K = np.zeros(self.kgrid + (3, 3, norbs, norbs), dtype=complex)
-            for ideriv in range(3):
-                r_derivative_direction = self.r_K[..., ideriv, :, :]
-                deltaVelocity_deriv = deltaVelocity[..., ideriv, :, :]
-                for idirection in range(3):
-                    velocity_direction = self.velocity_K[..., idirection, :, :]
-                    commutator = r_derivative_direction @ velocity_direction \
-                        - velocity_direction @ r_derivative_direction
-                    self.r_deriv_K[..., ideriv, idirection, :, :] = (
-                        self.w_K[..., idirection, ideriv, :, :]
-                        - velocity_direction * deltaVelocity_deriv * self.deltaEInverse_pure
-                        + 1j * commutator
-                    ) * self.deltaEInverse_pure / 1j * off_diag
-            if self.verbose==2: showElapsedTime(extraInfo=f"generalized k-derivatives of dipole operators finished")
-
-    def buildBandEnergyDerivatives(self):
-        """Build first and second covariant k derivatives of band energies."""
-        velocity_diag = np.diagonal(self.velocity_K, axis1=-2, axis2=-1).real
-        self.energy_deriv1_K = velocity_diag
-
-        nbands = self.energies.shape[-1]
-        self.energy_deriv2_K = np.zeros(self.kgrid + (3, 3, nbands), dtype=float)
-        for idirection in range(3):
-            velocity_direction = self.velocity_K[..., idirection, :, :]
-            for ideriv in range(3):
-                r_derivative_direction = self.r_K[..., ideriv, :, :]
-                commutator = r_derivative_direction @ velocity_direction - velocity_direction @ r_derivative_direction
-                hessian = self.w_K[..., ideriv, idirection, :, :] + 1j * commutator
-                self.energy_deriv2_K[..., ideriv, idirection, :] = np.diagonal(hessian, axis1=-2, axis2=-1).real
-        self.energy_deriv2_K = (self.energy_deriv2_K + self.energy_deriv2_K.swapaxes(-3, -2)) / 2
-
-    def fermiKDerivatives(self, ifermi):
-        """Return ``f``, ``partial_k f`` and ``partial_k partial_k f``."""
-        if self.kBT <= 0:
-            raise ValueError("Fermi-Dirac k derivatives require kBT > 0")
-        if not hasattr(self, "energy_deriv2_K"):
-            self.buildBandEnergyDerivatives()
-
-        f = self.fdOccupation(self.fermiList[ifermi])
-        fp, fpp = self.fdEnergyDerivatives(f)
-        dfdk = fp[..., None, :] * self.energy_deriv1_K
-        d2fdk2 = (
-            fpp[..., None, None, :]
-            * self.energy_deriv1_K[..., :, None, :]
-            * self.energy_deriv1_K[..., None, :, :]
-            + fp[..., None, None, :] * self.energy_deriv2_K
-        )
-        return f, dfdk, d2fdk2
-
-    def fermiCovariantFirstDerivativeChannels(self, f, dfdk, direction):
-        """Return the intraband and interband sectors of ``C_a f``, with ``C_a=iD_a``."""
-        nbands = self.energies.shape[-1]
-        f_nm = f[..., None, :] - f[..., :, None]
-        intraband = np.zeros(f.shape + (nbands,), dtype=complex)
-        indices = np.arange(nbands)
-        intraband[..., indices, indices] = 1j * dfdk[..., direction, :]
-        interband = self.r_K[..., direction, :, :] * f_nm * (1.0 - np.eye(nbands))
-        return intraband, interband
-
-    def fermiCovariantSecondDerivativeChannels(self, f, dfdk, d2fdk2, a, b):
-        """Return II, EI, IE and EE sectors of ``C_a C_b f``, with ``C_a=iD_a``."""
-        nbands = self.energies.shape[-1]
-        indices = np.arange(nbands)
-        diag = np.eye(nbands)
-        off_diag = 1.0 - diag
-        f_nm = f[..., None, :] - f[..., :, None]
-        r_a = self.r_K[..., a, :, :]
-        r_b = self.r_K[..., b, :, :]
-
-        population_b = 1j * dfdk[..., b, :]
-        channels = {
-            "II": np.zeros(self.energies.shape + (nbands,), dtype=complex),
-            "EI": r_a * (population_b[..., None, :] - population_b[..., :, None]) * off_diag,
-        }
-        channels["II"][..., indices, indices] = -d2fdk2[..., a, b, :]
-
-        coherence_b = r_b * f_nm * off_diag
-        delta_f_a = dfdk[..., a, None, :] - dfdk[..., a, :, None]
-        semicolon = (
-            self.r_deriv_K[..., a, b, :, :] * f_nm + r_b * delta_f_a
-        ) * off_diag
-        derivative = 1j * semicolon + r_a @ coherence_b - coherence_b @ r_a
-        channels["IE"] = derivative * diag
-        channels["EE"] = derivative * off_diag
-        return channels
 
 class OrbitalModern_LC(Velocity):
     def __init__(self, orbitalProjectionList=[], _computeOrbitalModernLC=True, **kwarg,):
@@ -1732,84 +764,6 @@ class Velocity_diag(FermiScan):
                 projected_velocity_diag_K -= np.sum(vectors.conj() *_RO_K_proj_vector, axis=(4,))
             self.projected_velocity_diag_K_list.append(projected_velocity_diag_K)
 
-class SpinVelocity(Velocity, Spin):
-    def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
-        '''
-        Compute spin magnetic-moment current {mu_S,v}/2 and its projections.
-        spin_K is mu_S/mu_B = -gS*S/hbar, so this is a magnetic-moment
-        current, not the spin-angular-momentum current {S,v}/2. No additional
-        electron charge multiplies this observable.
-        Note, the projection is on the velocity component, corresponding to the spin-currents running in specific basis.
-
-        Indexing:
-        self.SRHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives spin velocity matrix in original basis,
-        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
-
-        self.spinVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives spin velocity matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to x | y | z spin magnetic moment.
-
-        if spinvelocityProjctionList is not empty
-        self.spinVelocity_K_proj[iproj] gives each projected spin velocity matrix in eigen-basis.
-        '''
-        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
-        
-        __sV=self.spin_K[...,None,:,:,:] @ self.velocity_K[...,None,:,:]
-        self.spinVelocity_K = (__sV + __sV.swapaxes(-2,-1).conj())/2
-
-        self.projected_spinVelocity_K_list=[]
-        #for iproj, proj in enumerate(spinvelocityProjectionList):
-        #    projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
-        #    __sV=self.spin_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
-        #    self.projected_spinVelocity_K_list.append((__sV + __sV.swapaxes(-2,-1).conj())/2)
-        for spinvelocityProj in spinvelocityProjectionList:
-            proj1=projectionOperator(spinvelocityProj['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(spinvelocityProj['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,None,:,:]
-            self.projected_spinVelocity_K_list.append((proj1_K@self.spinVelocity_K@proj2_K + proj2_K@self.spinVelocity_K@proj1_K)/2)
-        
-        if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
-
-class OrbitalVelocity(Velocity, Orbital):
-    def __init__(self, velocityProjectionList=[], orbitalvelocityProjectionList=[], **kwarg) -> None:
-        '''
-        Compute orbital velocity matrix in original basis and eigen-basis
-        and projected orbital velocity matrix.
-        Note, the projection is on the velocity component, corresponding to the orbital-currents running in specific basis.
-
-        Indexing:
-        self.ORHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives orbital velocity matrix in original basis,
-        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
-
-        self.orbitalVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives orbital velocity matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
-
-        if orbitalvelocityProjctionList is not empty
-        self.orbitalVelocity_K_proj[iproj] gives each projected orbital velocity matrix in eigen-basis.
-        '''
-        super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
-        
-        __oV=self.orbital_K[...,None,:,:,:] @ self.velocity_K[...,None,:,:]
-        self.orbitalVelocity_K = (__oV + __oV.swapaxes(-2,-1).conj())/2
-
-        self.projected_orbitalVelocity_K_list=[]
-        for iproj, orbitalvelocityProj in enumerate(orbitalvelocityProjectionList):
-            #projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
-            #__oV=self.orbital_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
-            #self.projected_orbitalVelocity_K_list.append((__oV + __oV.swapaxes(-2,-1).conj())/2)
-            proj1=projectionOperator(orbitalvelocityProj['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(orbitalvelocityProj['target'],self.model.atomicOrbInfoList,self.model.norbs)
-            
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,None,:,:]
-            self.projected_orbitalVelocity_K_list.append((proj1_K@self.orbitalVelocity_K@proj2_K + proj2_K@self.orbitalVelocity_K@proj1_K)/2)
-        
-        if self.verbose==2: showElapsedTime(extraInfo=f"orbital velocity in eig.-basis finished")
 
 class SpinVelocity_diag(Velocity, Spin):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
@@ -2069,7 +1023,7 @@ class AnormalousHallConductance_diag(VelocityVelocityCorrelation_diag):
         #self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Intra-band spin Galvanic conductance finished")
 
-class AnormalousHallConductance_LG_DM(CollisionPreparation, Velocity):
+class AnormalousHallConductance_LG_DM(DensityMatrixResponse):
 
     def __init__(self, currentProjectionList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
@@ -2080,7 +1034,7 @@ class AnormalousHallConductance_LG_DM(CollisionPreparation, Velocity):
         Boltzmann conductivity is the I channel only. 
         The full ``sigma`` additionally contains the broadened E channel.
         '''
-        super().__init__(velocityProjectionList=currentProjectionList, **kwarg)
+        super().__init__(electronic_stages=(), velocityProjectionList=currentProjectionList, **kwarg)
         self.Iodd = False
         self.Todd = True
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
@@ -2089,10 +1043,12 @@ class AnormalousHallConductance_LG_DM(CollisionPreparation, Velocity):
 
         velocity_vertices = [self.velocity_K] + self.projected_velocity_K_list
         current_vertices = [-vertex for vertex in velocity_vertices]  # j=-v in electron units
-        kernel, projected_channels, response_channels = _contract_dc_first_order_density_matrix(
-            self, velocity_vertices, current_vertices, (3,), responseFermiIndexList,
+        result = _contract_dc_first_order_density_matrix(
+            self.inputs, velocity_vertices, current_vertices, (3,), responseFermiIndexList,
             finiteTemperatureOccupations, self.fullCovariantDerivative, collision=self.collision
         )
+        (kernel, projected_channels, response_channels) = result.kernel, result.projected_channels, result.response_channels
+        self.accept_first_order_result(result)
         self.density_matrix_kernel = kernel
 
         # Unit conversion
@@ -2115,7 +1071,7 @@ class AnormalousHallConductance_LG_DM(CollisionPreparation, Velocity):
             setattr(self, f"sigma_{name}", self.sigma_channels[name])
         if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix AHE finished")
 
-class _LinearConductivityDM(CollisionPreparation, Velocity):
+class _LinearConductivityDM(DensityMatrixResponse):
     """Common storage/contraction for linear optical and dc conductivity."""
 
     gauge = "LG"
@@ -2127,31 +1083,35 @@ class _LinearConductivityDM(CollisionPreparation, Velocity):
         projections = [] if currentProjectionList is None else currentProjectionList
         if self.gauge == "VG" and projections:
             raise NotImplementedError("VG currently supports total current; projected contact vertices are not implemented")
-        if self.gauge == "VG" and (kwarg['model'].overlap or kwarg.get('skip_low', False)):
+        if self.gauge == "VG" and (response_requires_full_basis(kwarg)):
             raise NotImplementedError("VG conductivity requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
         if self.dc:
             kwarg['omegaList'] = np.array([0.0])
-        super().__init__(velocityProjectionList=projections, highOrderVelocity=self.gauge == "VG", **kwarg)
+        super().__init__(electronic_stages=(), velocityProjectionList=projections, highOrderVelocity=self.gauge == "VG", **kwarg)
         self.Iodd, self.Todd = False, True
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         vertices = [self.velocity_K] + self.projected_velocity_K_list
         current_vertices = [-vertex for vertex in vertices]
         if self.gauge == "VG":
-            kernel, sigma, response, pole_residual = _contract_first_order_vg_response(
-                self, vertices, current_vertices, [[-self.w_K]], self.omegaList,
+            result = _contract_first_order_vg_response(
+                self.inputs, vertices, current_vertices, [[-self.w_K]], self.omegaList,
                 responseFermiIndexList=responseFermiIndexList,
                 responseOmegaIndexList=responseOmegaIndexList,
                 finiteTemperatureOccupations=finiteTemperatureOccupations,
                 fullCovariantDerivative=self.fullCovariantDerivative, collision=self.collision)
+            (kernel, sigma, response, pole_residual) = result.kernel, result.projected_channels, result.response_channels, result.pole_residual
+            self.accept_first_order_result(result)
             self.channel_names = ("I", "E", "C")
         else:
-            kernel, sigma, response = _contract_first_order_lg_response(
-                self, vertices, current_vertices, self.omegaList,
+            result = _contract_first_order_lg_response(
+                self.inputs, vertices, current_vertices, self.omegaList,
                 responseFermiIndexList=responseFermiIndexList,
                 responseOmegaIndexList=responseOmegaIndexList,
                 finiteTemperatureOccupations=finiteTemperatureOccupations,
                 fullCovariantDerivative=self.fullCovariantDerivative, collision=self.collision)
+            (kernel, sigma, response) = result.kernel, result.projected_channels, result.response_channels
+            self.accept_first_order_result(result)
             pole_residual = None
             self.channel_names = kernel.channel_names
         self.density_matrix_kernel = kernel
@@ -2216,7 +1176,7 @@ class Opticalconductivity_VG_DM(_LinearConductivityDM):
     """
     gauge = "VG"
 
-class Opticalconductivity_VG_DM_StaticEPC(PhononPreparation, Velocity):
+class Opticalconductivity_VG_DM_StaticEPC(PhononResponse):
     """Complete static Gaussian EPC correction, second order in displacement.
 
     Linear electric response including Fan-type repeated linear vertices,
@@ -2236,22 +1196,23 @@ class Opticalconductivity_VG_DM_StaticEPC(PhononPreparation, Velocity):
                  movingCenters=True, displacementFactors=None, kBatchSize=4,
                  currentProjectionList=None, fullCovariantDerivative=True,
                  finiteTemperatureOccupations=True, **kwarg):
-        if currentProjectionList or kwarg['model'].overlap or kwarg.get('skip_low', False):
+        if currentProjectionList or response_requires_full_basis(kwarg):
             raise NotImplementedError('Static EPC VG DM requires total current and a complete orthogonal basis')
         if not fullCovariantDerivative or not finiteTemperatureOccupations:
             raise ValueError('Static EPC VG DM requires full covariant finite-temperature occupations')
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(highOrderVelocity=False, **kwarg)
+        super().__init__(electronic_stages=(), highOrderVelocity=False, **kwarg)
         if np.any(~np.isfinite(self.omegaList)):
             raise ValueError('Optical frequencies must be finite')
         self.Iodd, self.Todd = False, True
         self.conductivity_units = 'S/m'
         self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
         from .phonon_static import solve_static_epc_conductivity
-        solve_static_epc_conductivity(self, phononTemperature, phononStatistics,
+        result = solve_static_epc_conductivity(self.inputs, phononTemperature, phononStatistics,
             movingCenters, displacementFactors, kBatchSize, epc_model=self.epcModel, collision=self.collision)
+        publish_conductivity(self, result)
 
-class Opticalconductivity_VG_DM_Phonon(PhononPreparation, Velocity):
+class Opticalconductivity_VG_DM_Phonon(PhononResponse):
     """Frequency-domain VG DM for a prescribed periodic SSH phonon bath.
 
     Full conditional density matrices and phonon harmonics replace the
@@ -2275,12 +1236,12 @@ class Opticalconductivity_VG_DM_Phonon(PhononPreparation, Velocity):
                  solverTolerance=1e-9, solverMaxiter=100, solverRestart=30,
                  currentProjectionList=None, fullCovariantDerivative=True,
                  finiteTemperatureOccupations=True, **kwarg):
-        if currentProjectionList or kwarg['model'].overlap or kwarg.get('skip_low', False):
+        if currentProjectionList or response_requires_full_basis(kwarg):
             raise NotImplementedError("Phonon VG DM requires total current and a complete orthogonal basis")
         if not fullCovariantDerivative or not finiteTemperatureOccupations:
             raise ValueError("Phonon VG DM requires full covariant finite-temperature equilibrium")
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(highOrderVelocity=False, **kwarg)
+        super().__init__(electronic_stages=(), highOrderVelocity=False, **kwarg)
         if self.kBT <= 0 or np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
             raise ValueError("Phonon VG DM requires kBT > 0 and positive finite optical frequencies")
         self.Iodd, self.Todd = False, True
@@ -2289,16 +1250,17 @@ class Opticalconductivity_VG_DM_Phonon(PhononPreparation, Velocity):
         self.conductivity_units = 'S/m'
         self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
         from .phonon_frequency import solve_phonon_conductivity
-        solve_phonon_conductivity(self, phononTemperature, phononStatistics,
+        result = solve_phonon_conductivity(self.inputs, phononTemperature, phononStatistics,
             nPhononTrajectories, phononSeed, phononPhasePoints,
             solverTolerance, solverMaxiter, solverRestart,
             damping=phononDamping, bath_cycles=phononBathCycles, epc_model=self.epcModel, collision=self.collision)
+        publish_conductivity(self, result)
 
     def lockinConductivity(self, times, sample=0, ifermi=0, iomega=0):
         from .phonon_frequency import lockin_conductivity
-        return lockin_conductivity(self, times, sample, ifermi, iomega)
+        return lockin_conductivity(self.result, times, self.omegaList[iomega], sample, ifermi, iomega)
 
-class Opticalconductivity_TDSE(Velocity):
+class Opticalconductivity_TDSE(ElectronicResponse):
     """Independent real-time VG benchmark with collision relaxation.
 
     Propagate the occupied-state ensemble using unitary TDSE steps for
@@ -2346,10 +1308,10 @@ class Opticalconductivity_TDSE(Velocity):
             raise NotImplementedError("TDSE currently supports total current only")
         if not fullCovariantDerivative or not finiteTemperatureOccupations:
             raise ValueError("TDSE benchmark requires full covariant finite-temperature equilibrium")
-        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+        if response_requires_full_basis(dict(kwarg, preparedCollision=preparedCollision)):
             raise NotImplementedError("TDSE requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(highOrderVelocity=not phononDynamics, **kwarg)
+        super().__init__(highOrderVelocity=not phononDynamics, preparedCollision=preparedCollision, **kwarg)
         if np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
             raise ValueError("TDSE requires positive photon energies; use a DM calculator for dc")
         self.Iodd, self.Todd = False, True
@@ -2357,10 +1319,10 @@ class Opticalconductivity_TDSE(Velocity):
         if not phononDynamics and mode == "epc":
             raise NotImplementedError("Opticalconductivity_TDSE does not propagate the mesh-global EPC collision operator")
         if phononDynamics:
-            self.collision = prepare_phonon_background(self, collisionSpecification, epc_model=epcModel)
+            self.collision = prepare_phonon_background(self.electronic, collisionSpecification, kBT=self.kBT, epc_model=epcModel)
         else:
             self.preparedCollision = resolve_collision(
-                self, collisionSpecification, prepared=preparedCollision, epc_model=epcModel)
+                self.electronic, collisionSpecification, kBT=self.kBT, prepared=preparedCollision, epc_model=epcModel)
             self.collision = self.preparedCollision.operator
         gamma = self.collision.coherence_linewidth
         if np.min(gamma) <= self.collision.specification.linewidthFloor:
@@ -2375,63 +1337,24 @@ class Opticalconductivity_TDSE(Velocity):
         self.integration_info = []
         if phononDynamics:
             from .phonon_tdse import propagate_phonon_conductivity
-            propagate_phonon_conductivity(
-                self, n_steps_per_cycle=n_steps_per_cycle, n_cycles_measure=n_cycles_measure,
+            result = propagate_phonon_conductivity(
+                self.inputs, n_steps_per_cycle=n_steps_per_cycle, n_cycles_measure=n_cycles_measure,
                 transient_lifetimes=transient_lifetimes, max_phase_step=max_phase_step,
                 recordCurrent=recordCurrent, temperature=phononTemperature,
                 statistics=phononStatistics, trajectories=nPhononTrajectories,
                 seed=phononSeed, phonon_cycles=phononCycles,
                 phonon_damping=phononDamping, bath_cycles=phononBathCycles,
-                phase_points=phononPhasePoints, epc_model=epcModel, collision=self.collision)
+                phase_points=phononPhasePoints, E0=E0, epc_model=epcModel, collision=self.collision)
+            publish_conductivity(self, result)
+            self.sigma_TDSE = result.sigma
             return
-        h0 = diagonal_matrix(self.energies)
-        scale = elementary_charge**2 / (hbar*angstrom*abs(self.model.Vcell))
-        # ± fields share a batched evolution. No response kernel enters it.
-        signs = np.array([1.,-1.]).reshape((2,)+(1,)*h0.ndim)
-        for iw, omega in enumerate(self.omegaList):
-            period = 2*np.pi/omega
-            span = np.max(np.ptp(self.energies, axis=-1))
-            steps = max(int(n_steps_per_cycle), int(np.ceil(period*max(span,float(np.max(gamma)))/max_phase_step)))
-            dt = period/steps
-            ntrans = int(np.ceil(transient_lifetimes/(np.min(gamma)*period)))*steps
-            nmeasure = int(n_cycles_measure)*steps
-            self.integration_info.append(dict(steps_per_cycle=steps, dt=dt,
-                                              transient_steps=ntrans, measurement_steps=nmeasure))
-            half_decay = np.exp(-gamma*dt/2)
-            for ifermi, fermi in enumerate(self.fermiList):
-                rho0 = diagonal_matrix(self.fdOccupation(fermi))
-                for a in range(3):
-                    va, waa = self.velocity_K[...,a,:,:], self.w_K[...,a,a,:,:]
-                    rho = np.broadcast_to(rho0, (2,)+rho0.shape).copy()
-                    times, currents = [], []
-
-                    def field_operators(time):
-                        A = -E0/omega*np.sin(omega*time)*signs
-                        H = h0 + A*va + .5*A*A*waa
-                        return A, H
-
-                    for step in range(ntrans+nmeasure):
-                        _, Hmid = field_operators((step+.5)*dt)
-                        eig, vec = np.linalg.eigh(Hmid)
-                        U = (vec*np.exp(-1j*eig*dt)[...,None,:]) @ vec.conj().swapaxes(-1,-2)
-                        f = fermiDiracOccupations(eig, np.array([fermi]), self.kBT)[0]
-                        equilibrium = (vec*f[...,None,:]) @ vec.conj().swapaxes(-1,-2)
-                        rho = equilibrium + half_decay*(rho-equilibrium)
-                        rho = U @ rho @ U.conj().swapaxes(-1,-2)
-                        rho = equilibrium + half_decay*(rho-equilibrium)
-                        if step >= ntrans:
-                            time = (step+1)*dt
-                            A, _ = field_operators(time)
-                            current_vertex = self.velocity_K + A[...,None,:,:]*self.w_K[..., :,a,:,:]
-                            current = -_contract_second_order_observable(rho, current_vertex).real
-                            odd = .5*(current[0]-current[1]).mean(axis=(0,1,2))
-                            times.append(time)
-                            currents.append(odd*scale/E0)
-                    times, currents = np.asarray(times), np.asarray(currents)
-                    self.sigma[ifermi,iw,a] = 2*np.mean(currents*np.exp(1j*omega*times[:,None]), axis=0)
-                    if recordCurrent:
-                        self.time_traces[ifermi,iw,a] = dict(time=times, normalized_current=currents,
-                                                            electric_field=E0*np.cos(omega*times))
+        from .tdse_response import solve_electronic_conductivity
+        result = solve_electronic_conductivity(self.inputs, collision=self.collision, E0=E0,
+            n_steps_per_cycle=n_steps_per_cycle, n_cycles_measure=n_cycles_measure,
+            transient_lifetimes=transient_lifetimes, max_phase_step=max_phase_step,
+            recordCurrent=recordCurrent)
+        publish_conductivity(self, result)
+        self.sigma_TDSE = result.sigma
 
 class BerryConnectionPolarizability(Velocity):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
@@ -2954,7 +1877,7 @@ class BulkPhotovoltaicEffect_VG(Velocity):
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Full Velocity Gauge BPVE finished")
 
-class BulkPhotovoltaicEffect_VG_DM(CollisionPreparation, Dipole):
+class BulkPhotovoltaicEffect_VG_DM(DensityMatrixResponse):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -2966,7 +1889,7 @@ class BulkPhotovoltaicEffect_VG_DM(CollisionPreparation, Dipole):
         currentProjectionList = kwarg.pop("currentProjectionList", None)
         if currentProjectionList is not None and len(velocityProjectionList) == 0:
             velocityProjectionList = currentProjectionList
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+        super().__init__(electronic_stages=(Dipole,), velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          highOrderDipole=fullCovariantDerivative, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
 
@@ -2992,7 +1915,7 @@ class BulkPhotovoltaicEffect_VG_DM(CollisionPreparation, Dipole):
         }
 
         kernel = VelocityGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
             collision=self.collision
         )
         self.density_matrix_kernel = kernel
@@ -3176,7 +2099,7 @@ class BulkPhotovoltaicEffect_LG_Injection(Dipole):
 
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Injection Current finished")
 
-class BulkPhotovoltaicEffect_LG_DM(CollisionPreparation, Dipole):
+class BulkPhotovoltaicEffect_LG_DM(DensityMatrixResponse):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -3194,7 +2117,7 @@ class BulkPhotovoltaicEffect_LG_DM(CollisionPreparation, Dipole):
         if currentProjectionList is not None and len(velocityProjectionList) == 0:
             velocityProjectionList = currentProjectionList
         kwarg.pop("highOrderVelocity", None)
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
+        super().__init__(electronic_stages=(Dipole,), velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
 
         self.channel_names = AC_DM_CHANNEL_NAMES
@@ -3220,7 +2143,7 @@ class BulkPhotovoltaicEffect_LG_DM(CollisionPreparation, Dipole):
         self.projected_response = np.zeros(projected_shape, dtype=complex)
 
         kernel = LengthGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
             collision=self.collision
         )
         self.density_matrix_kernel = kernel
@@ -3545,7 +2468,7 @@ class InverseFaradayEffect_LG(Dipole, Spin, Orbital):
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
 
-class InverseFaradayEffect_LG_DM(CollisionPreparation, Dipole, Spin, Orbital):
+class InverseFaradayEffect_LG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
                  responseFermiIndexList=None, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -3563,7 +2486,7 @@ class InverseFaradayEffect_LG_DM(CollisionPreparation, Dipole, Spin, Orbital):
         - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure]
         '''
         highOrderVelocity = bool(kwarg.pop("highOrderVelocity", False) or fullCovariantDerivative)
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=highOrderVelocity, **kwarg)
+        super().__init__(electronic_stages=(Dipole, Spin, Orbital,), velocityProjectionList=velocityProjectionList, highOrderVelocity=highOrderVelocity, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         if self.fullCovariantDerivative and self.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
@@ -3592,7 +2515,7 @@ class InverseFaradayEffect_LG_DM(CollisionPreparation, Dipole, Spin, Orbital):
         self.chi_IFE = np.zeros(response_shape, dtype=complex)
         self.projected_response = np.zeros(projected_shape, dtype=complex)
 
-        kernel = LengthGaugeSecondOrderDMKernel(self, self.fullCovariantDerivative, collision=self.collision)
+        kernel = LengthGaugeSecondOrderDMKernel(self.inputs, self.fullCovariantDerivative, collision=self.collision)
         self.density_matrix_kernel = kernel
         self.channel_descriptions = dict(kernel.channel_descriptions)
         for ifermi, fermi in enumerate(self.fermiList):
@@ -3628,7 +2551,7 @@ class InverseFaradayEffect_LG_DM(CollisionPreparation, Dipole, Spin, Orbital):
             setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE density matrix finished")
 
-class InverseFaradayEffect_VG_DM(CollisionPreparation, Dipole, Spin, Orbital):
+class InverseFaradayEffect_VG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
                  responseFermiIndexList=None, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -3648,7 +2571,7 @@ class InverseFaradayEffect_VG_DM(CollisionPreparation, Dipole, Spin, Orbital):
         --------
         - chi_IFE[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+        super().__init__(electronic_stages=(Dipole, Spin, Orbital,), velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          highOrderDipole=fullCovariantDerivative, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         if self.fullCovariantDerivative and self.kBT <= 0:
@@ -3677,7 +2600,7 @@ class InverseFaradayEffect_VG_DM(CollisionPreparation, Dipole, Spin, Orbital):
             name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
         }
 
-        kernel = VelocityGaugeSecondOrderDMKernel(self, self.fullCovariantDerivative, collision=self.collision)
+        kernel = VelocityGaugeSecondOrderDMKernel(self.inputs, self.fullCovariantDerivative, collision=self.collision)
         self.density_matrix_kernel = kernel
         for ifermi, fermi in enumerate(self.fermiList):
             fermi_state = kernel.fermi_state(ifermi, fermi)
@@ -4346,7 +3269,7 @@ class InverseFaradayTorque_TDSE(Dipole, SpinExchangeTorque, OrbitalTorque):
     _prepare_covariant_tdse_drive = InverseFaradayEffect_TDSE._prepare_covariant_tdse_drive
     _rk4_step_channels = InverseFaradayEffect_TDSE._rk4_step_channels
 
-class InverseFaradayTorque_LG_DM(CollisionPreparation, Dipole, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_LG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
@@ -4367,7 +3290,7 @@ class InverseFaradayTorque_LG_DM(CollisionPreparation, Dipole, SpinExchangeTorqu
         - chi_IFT[ifermi, iomega, ialpha_drive1, ialpha_drive2, ibeta_measure] : np.ndarray(dtype=complex)
         '''
         highOrderVelocity = bool(kwarg.pop("highOrderVelocity", False) or fullCovariantDerivative)
-        super().__init__(velocityProjectionList=velocityProjectionList,
+        super().__init__(electronic_stages=(Dipole, SpinExchangeTorque, OrbitalTorque,), velocityProjectionList=velocityProjectionList,
                          highOrderVelocity=highOrderVelocity,
                          spinTorqueProjectionList=torqueProjectionList,
                          orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
@@ -4388,10 +3311,10 @@ class InverseFaradayTorque_LG_DM(CollisionPreparation, Dipole, SpinExchangeTorqu
         # T_c(E) = -i[mu_c,H_LG] = T_c(0) - i E_a [mu_c,r_a].
         proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]:
-            self.buildSpinTorqueDipoleCommutator()
+            self.prepare_torque_vertices("spin", "dipole")
             proj_torqueE_K[0] += self.spinTorqueE_K
         if ife_type in ["total", "orbital"]:
-            self.buildOrbitalTorqueDipoleCommutator()
+            self.prepare_torque_vertices("orbital", "dipole")
             proj_torqueE_K[0] += self.orbitalTorqueE_K
         for iproj in range(len(torqueProjectionList)):
             if ife_type in ["total", "spin"]: proj_torqueE_K[iproj+1] += self.projected_spinTorqueE_K_list[iproj]
@@ -4424,7 +3347,7 @@ class InverseFaradayTorque_LG_DM(CollisionPreparation, Dipole, SpinExchangeTorqu
         self.projected_response = np.zeros(projected_response_shape, dtype=complex)
 
         kernel = LengthGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
             collision=self.collision
         )
         self.density_matrix_kernel = kernel
@@ -4495,7 +3418,7 @@ class InverseFaradayTorque_LG_DM(CollisionPreparation, Dipole, SpinExchangeTorqu
             setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
-class InverseFaradayTorque_VG_DM(CollisionPreparation, Dipole, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_VG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, exchangeVelocity=True,
@@ -4509,7 +3432,7 @@ class InverseFaradayTorque_VG_DM(CollisionPreparation, Dipole, SpinExchangeTorqu
         and frozen secular SERTA collision operators are supported. T1*rho1_I
         and T2*rho0 are assigned to II; T1*rho1_E is assigned to EE.
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
+        super().__init__(electronic_stages=(Dipole, SpinExchangeTorque, OrbitalTorque,), velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          highOrderDipole=fullCovariantDerivative, exchangeVelocity=exchangeVelocity,
                          spinTorqueProjectionList=torqueProjectionList,
                          orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
@@ -4523,12 +3446,12 @@ class InverseFaradayTorque_VG_DM(CollisionPreparation, Dipole, SpinExchangeTorqu
         proj_TA_K = np.zeros((nproj,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
         proj_TAA_K = np.zeros((nproj,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
         if ife_type in ["total", "spin"]:
-            self.buildSpinTorqueVelocityCommutator()
+            self.prepare_torque_vertices("spin", "velocity")
             proj_T_K[0] += self.spinTorque_K
             proj_TA_K[0] += self.spinTorqueA_K
             proj_TAA_K[0] += self.spinTorqueAA_K
         if ife_type in ["total", "orbital"]:
-            self.buildOrbitalTorqueVelocityCommutator()
+            self.prepare_torque_vertices("orbital", "velocity")
             proj_T_K[0] += self.orbitalTorque_K
             proj_TA_K[0] += self.orbitalTorqueA_K
             proj_TAA_K[0] += self.orbitalTorqueAA_K
@@ -4566,7 +3489,7 @@ class InverseFaradayTorque_VG_DM(CollisionPreparation, Dipole, SpinExchangeTorqu
         }
 
         kernel = VelocityGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
             collision=self.collision
         )
         self.density_matrix_kernel = kernel
@@ -4707,7 +3630,7 @@ class SpinHallConductance(SpinBerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
-class SpinHallConductance_LG_DM(CollisionPreparation, SpinVelocity):
+class SpinHallConductance_LG_DM(DensityMatrixResponse):
     def __init__(self, currentProjectionList=[], spincurrentProjectionList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -4717,7 +3640,7 @@ class SpinHallConductance_LG_DM(CollisionPreparation, SpinVelocity):
         observable is {mu_S,v}/2, with mu_S/mu_B=-gS*S/hbar; there is no
         charge-current minus. The historical 2D normalization below is retained.
         '''
-        super().__init__(velocityProjectionList=currentProjectionList,
+        super().__init__(electronic_stages=(SpinVelocity,), velocityProjectionList=currentProjectionList,
                          spinvelocityProjectionList=spincurrentProjectionList, **kwarg)
         self.Iodd = False
         self.Todd = False
@@ -4727,10 +3650,12 @@ class SpinHallConductance_LG_DM(CollisionPreparation, SpinVelocity):
 
         drive_vertices = [self.velocity_K] + self.projected_velocity_K_list
         observable_vertices = [self.spinVelocity_K] + self.projected_spinVelocity_K_list
-        kernel, projected_channels, response_channels = _contract_dc_first_order_density_matrix(
-            self, drive_vertices, observable_vertices, (3, 3), responseFermiIndexList,
+        result = _contract_dc_first_order_density_matrix(
+            self.inputs, drive_vertices, observable_vertices, (3, 3), responseFermiIndexList,
             finiteTemperatureOccupations, self.fullCovariantDerivative, collision=self.collision
         )
+        (kernel, projected_channels, response_channels) = result.kernel, result.projected_channels, result.response_channels
+        self.accept_first_order_result(result)
         self.density_matrix_kernel = kernel
 
         # unit conversion
@@ -4875,7 +3800,7 @@ class SpinVelocityCorrelation(Spin,Velocity):
         self.spinVelocityCorrelation=self.projected_spinVelocityCorrelation[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation functions <Spin \dot velocity> finished")
 
-class SpinGalvanicConductivity_LG_DM(CollisionPreparation, Spin, Velocity):
+class SpinGalvanicConductivity_LG_DM(DensityMatrixResponse):
     """Dc electric-field-induced spin magnetic moment from the LG DM kernel.
 
     ``sigma[fermi, field_direction, spin_direction]`` is measured in
@@ -4892,17 +3817,20 @@ class SpinGalvanicConductivity_LG_DM(CollisionPreparation, Spin, Velocity):
                  fullCovariantDerivative=True, **kwarg):
         currentProjectionList = [] if currentProjectionList is None else currentProjectionList
         spinProjectionList = [] if spinProjectionList is None else spinProjectionList
-        super().__init__(velocityProjectionList=currentProjectionList,
+        super().__init__(electronic_stages=(Spin,), velocityProjectionList=currentProjectionList,
                          spinProjectionList=spinProjectionList, **kwarg)
         observable_vertices = [self.spin_K] + self.projected_spin_K_list
-        _solve_dc_galvanic_lg_density_matrix(
-            self, observable_vertices, responseFermiIndexList,
+        result = _solve_dc_galvanic_lg_density_matrix(
+            self.inputs, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
             "mu_B/(V/angstrom)/cell", collision=self.collision
         )
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.accept_first_order_result(result)
+        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin galvanic conductivity finished")
 
-class SpinGalvanicConductivity_VG_DM(CollisionPreparation, Spin, Velocity):
+class SpinGalvanicConductivity_VG_DM(DensityMatrixResponse):
     """Dc electric-field-induced spin moment from the pole-subtracted VG DM kernel.
 
     The spin operator is field independent, so its explicit ``dO/dA`` contact
@@ -4919,16 +3847,19 @@ class SpinGalvanicConductivity_VG_DM(CollisionPreparation, Spin, Velocity):
         spinProjectionList = [] if spinProjectionList is None else spinProjectionList
         if currentProjectionList:
             raise NotImplementedError("VG spin galvanic conductivity requires the total drive current")
-        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+        if response_requires_full_basis(kwarg):
             raise NotImplementedError("VG spin galvanic conductivity requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(velocityProjectionList=[], spinProjectionList=spinProjectionList,
+        super().__init__(electronic_stages=(Spin,), velocityProjectionList=[], spinProjectionList=spinProjectionList,
                          highOrderVelocity=False, **kwarg)
         observable_vertices = [self.spin_K] + self.projected_spin_K_list
-        _solve_dc_galvanic_vg_density_matrix(
-            self, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
+        result = _solve_dc_galvanic_vg_density_matrix(
+            self.inputs, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
             responseFermiIndexList, finiteTemperatureOccupations,
             fullCovariantDerivative, "mu_B/(V/angstrom)/cell", collision=self.collision)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.accept_first_order_result(result)
+        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix spin galvanic conductivity finished")
 
 class SpinGalvanicConductance(SpinVelocityCorrelation):
@@ -4980,7 +3911,7 @@ class OrbitalVelocityCorrelation(Orbital,Velocity):
         self.orbitalVelocityCorrelation=self.projected_orbitalVelocityCorrelation[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation functions <L \dot velocity> finished")
 
-class OrbitalGalvanicConductivity_LG_DM(CollisionPreparation, Orbital, Velocity):
+class OrbitalGalvanicConductivity_LG_DM(DensityMatrixResponse):
     """Dc electric-field-induced local orbital moment from the LG DM kernel.
 
     ``sigma[fermi, field_direction, orbital_direction]`` is measured in
@@ -4996,17 +3927,20 @@ class OrbitalGalvanicConductivity_LG_DM(CollisionPreparation, Orbital, Velocity)
                  fullCovariantDerivative=True, **kwarg):
         currentProjectionList = [] if currentProjectionList is None else currentProjectionList
         orbitalProjectionList = [] if orbitalProjectionList is None else orbitalProjectionList
-        super().__init__(velocityProjectionList=currentProjectionList,
+        super().__init__(electronic_stages=(Orbital,), velocityProjectionList=currentProjectionList,
                          orbitalProjectionList=orbitalProjectionList, **kwarg)
         observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
-        _solve_dc_galvanic_lg_density_matrix(
-            self, observable_vertices, responseFermiIndexList,
+        result = _solve_dc_galvanic_lg_density_matrix(
+            self.inputs, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
             "mu_B/(V/angstrom)/cell", collision=self.collision
         )
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.accept_first_order_result(result)
+        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix orbital galvanic conductivity finished")
 
-class OrbitalGalvanicConductivity_VG_DM(CollisionPreparation, Orbital, Velocity):
+class OrbitalGalvanicConductivity_VG_DM(DensityMatrixResponse):
     """Dc local-orbital moment induced by an electric field in the VG DM kernel.
 
     This uses the same local-circulation orbital operator as the LG class and
@@ -5023,16 +3957,19 @@ class OrbitalGalvanicConductivity_VG_DM(CollisionPreparation, Orbital, Velocity)
         orbitalProjectionList = [] if orbitalProjectionList is None else orbitalProjectionList
         if currentProjectionList:
             raise NotImplementedError("VG orbital galvanic conductivity requires the total drive current")
-        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+        if response_requires_full_basis(kwarg):
             raise NotImplementedError("VG orbital galvanic conductivity requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(velocityProjectionList=[], orbitalProjectionList=orbitalProjectionList,
+        super().__init__(electronic_stages=(Orbital,), velocityProjectionList=[], orbitalProjectionList=orbitalProjectionList,
                          highOrderVelocity=False, **kwarg)
         observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
-        _solve_dc_galvanic_vg_density_matrix(
-            self, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
+        result = _solve_dc_galvanic_vg_density_matrix(
+            self.inputs, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
             responseFermiIndexList, finiteTemperatureOccupations,
             fullCovariantDerivative, "mu_B/(V/angstrom)/cell", collision=self.collision)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.accept_first_order_result(result)
+        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix orbital galvanic conductivity finished")
 
 class OrbitalGalvanicConductance(OrbitalVelocityCorrelation):
@@ -5175,7 +4112,7 @@ class SpintorqueVelocityCorrelation(SpinExchangeTorque,Velocity):
         
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation function <Torque_Spin velocity> finished")
 
-class SpintorqueGalvanicConductivity_LG_DM(CollisionPreparation, SpinExchangeTorque, Velocity):
+class SpintorqueGalvanicConductivity_LG_DM(DensityMatrixResponse):
     """Dc electric-field-induced spin exchange torque from the LG DM kernel.
 
     ``sigma[fermi, field_direction, torque_direction]`` is the electronic
@@ -5191,17 +4128,20 @@ class SpintorqueGalvanicConductivity_LG_DM(CollisionPreparation, SpinExchangeTor
                  fullCovariantDerivative=True, **kwarg):
         currentProjectionList = [] if currentProjectionList is None else currentProjectionList
         spinTorqueProjectionList = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
-        super().__init__(velocityProjectionList=currentProjectionList,
+        super().__init__(electronic_stages=(SpinExchangeTorque,), velocityProjectionList=currentProjectionList,
                          spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
         observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list
-        _solve_dc_galvanic_lg_density_matrix(
-            self, observable_vertices, responseFermiIndexList,
+        result = _solve_dc_galvanic_lg_density_matrix(
+            self.inputs, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
             "mu_B*eV/(V/angstrom)/cell", collision=self.collision
         )
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.accept_first_order_result(result)
+        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B*eV/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin-torque galvanic conductivity finished")
 
-class SpintorqueGalvanicConductivity_VG_DM(CollisionPreparation, SpinExchangeTorque, Velocity):
+class SpintorqueGalvanicConductivity_VG_DM(DensityMatrixResponse):
     """Dc electric-field-induced exchange torque from the VG DM kernel.
 
     For nonlocal exchange, ``exchangeVelocity=True`` includes
@@ -5219,18 +4159,21 @@ class SpintorqueGalvanicConductivity_VG_DM(CollisionPreparation, SpinExchangeTor
         spinTorqueProjectionList = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
         if currentProjectionList:
             raise NotImplementedError("VG spin-torque galvanic conductivity requires the total drive current")
-        if kwarg['model'].overlap or kwarg.get('skip_low', False):
+        if response_requires_full_basis(kwarg):
             raise NotImplementedError("VG spin-torque galvanic conductivity requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(velocityProjectionList=[], spinTorqueProjectionList=spinTorqueProjectionList,
+        super().__init__(electronic_stages=(SpinExchangeTorque,), velocityProjectionList=[], spinTorqueProjectionList=spinTorqueProjectionList,
                          highOrderVelocity=False, exchangeVelocity=exchangeVelocity, **kwarg)
-        self.buildSpinTorqueVelocityCommutator()
+        self.prepare_torque_vertices("spin", "velocity")
         observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list
         contact_vertices = [self.spinTorqueA_K] + self.projected_spinTorqueA_K_list
-        _solve_dc_galvanic_vg_density_matrix(
-            self, observable_vertices, contact_vertices, responseFermiIndexList,
+        result = _solve_dc_galvanic_vg_density_matrix(
+            self.inputs, observable_vertices, contact_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
             "mu_B*eV/(V/angstrom)/cell", collision=self.collision)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.accept_first_order_result(result)
+        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B*eV/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix spin-torque galvanic conductivity finished")
 
 class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):

@@ -237,7 +237,7 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
                                        fermi=args.fermi,delta=args.epc_delta,
                                        adiabatic=args.tdse_collision=='static')
             owner = Opticalconductivity_LG_DM(**small)
-            gamma_floor = np.maximum(source.populationLinewidth(owner),args.tdse_min_linewidth)
+            gamma_floor = np.maximum(source.populationLinewidth(owner.preparedCollision.inputs),args.tdse_min_linewidth)
             tdse_collision = CollisionSpecification('serta',linewidthSource=gamma_floor)
             small['collisionSpecification'] = tdse_collision
         reference = Opticalconductivity_VG_DM(**small)

@@ -83,7 +83,7 @@ class ModelElectronSelfEnergy:
 
     def __init__(self, epc_model, kpoints, qgrid=None, qpoints=None, qweights=None,
                  temperature=0.0, fermi=0.0, delta=1e-3, adiabatic=False, energyList=None,
-                 bathStatistics="quantum", phononSelection=None):
+                 bathStatistics="quantum", phononSelection=None, electronic_states=None):
         self.epc_model = epc_model
         model = epc_model.electronic_model
         epc_model.validate()
@@ -118,7 +118,10 @@ class ModelElectronSelfEnergy:
         self.adiabatic = bool(adiabatic)
         self.on_shell = energyList is None
         self.model = model
-        self._prepare_electronic_states()
+        if electronic_states is None:
+            self._prepare_electronic_states()
+        else:
+            self._use_electronic_states(electronic_states)
         if self.on_shell:
             self.evaluation_energies = self.energies.copy()
         else:
@@ -184,6 +187,40 @@ class ModelElectronSelfEnergy:
                 hessian = epc.secondDisplacementVertices(self.kpoints, q, displacements)
                 hessian_band = (self.vectors.conj().swapaxes(-2, -1)[:, None] @ hessian @ self.vectors[:, None])
                 self.debye_waller_matrix += 0.5*weight*np.einsum("v,kvij->kij", 2*population, hessian_band, optimize=True)
+
+    def _use_electronic_states(self, states):
+        """Reuse external states and solve only intermediate points off their mesh."""
+        from .electronic import ElectronicStates
+        if not isinstance(states, ElectronicStates):
+            raise TypeError('electronic_states must be ElectronicStates')
+        if states.model is not self.model:
+            raise ValueError('Self-energy states must refer to the electronic model')
+        if (self.kpoints.shape != states.kpoints.shape or
+                not np.allclose(np.mod(self.kpoints-states.kpoints+.5, 1)-.5, 0, atol=1e-10, rtol=0)):
+            raise ValueError('Self-energy kpoints must match the supplied electronic mesh in order')
+        nk, nq, nb = len(self.kpoints), len(self.qpoints), self.model.norbs
+        if states.energies.shape[-1] != nb:
+            raise ValueError('Self-energy requires the complete electronic basis')
+        self.energies = states.energies.reshape(nk, nb)
+        self.vectors = states.vectors.reshape(nk, nb, nb)
+        points = self.kpoints[:, None] + self.qpoints[None]
+        coordinates = (points-states.kOffset)*np.asarray(states.kgrid)
+        on_mesh = np.all(np.isclose(coordinates, np.rint(coordinates), atol=1e-9, rtol=0), axis=-1)
+        indices = np.rint(coordinates).astype(int) % states.kgrid
+        indices = np.ravel_multi_index(indices.reshape(-1, 3).T, states.kgrid).reshape(nk, nq)
+        self.intermediate_energies = np.empty((nk, nq, nb))
+        self.intermediate_vectors = np.empty((nk, nq, nb, nb), complex)
+        self.intermediate_energies[on_mesh] = self.energies[indices[on_mesh]]
+        self.intermediate_vectors[on_mesh] = self.vectors[indices[on_mesh]]
+        self.energy_calculators = (states,)
+        if np.any(~on_mesh):
+            reduced = np.mod(points[~on_mesh], 1)
+            _, representatives, inverse = np.unique(np.round(reduced, 12) % 1,
+                axis=0, return_index=True, return_inverse=True)
+            intermediate = EnergyOnPath(model=self.model, kpath=reduced[representatives], syncModelVerbose=False)
+            self.intermediate_energies[~on_mesh] = intermediate.energies[inverse]
+            self.intermediate_vectors[~on_mesh] = intermediate.vectors[inverse]
+            self.energy_calculators += (intermediate,)
 
     def _prepare_electronic_states(self):
         """Index established calculator results; no separate eigensolver.
@@ -314,7 +351,7 @@ class ModelEPCLinewidth:
 
     The calculator's ``kOffset`` mesh is evaluated in one
     ``ModelElectronSelfEnergy`` call. Results are cached and reused by
-    LG, VG, and TDSE calculators for the same unchanged model and mesh. The source supplies
+    LG, VG, and TDSE calculators sharing the same ElectronicStates. The source supplies
     linewidths only: it does not add Re(Sigma), Debye-Waller shifts, or vertex
     corrections to optical matrix elements.
 
@@ -343,28 +380,26 @@ class ModelEPCLinewidth:
         self._cache_signature=None
         self._cache_linewidth=None
 
-    def populationLinewidth(self, owner):
+    def populationLinewidth(self, inputs):
         epc_model = self.epc_model
-        if owner.model is not epc_model.electronic_model:
+        if inputs.model is not epc_model.electronic_model:
             raise ValueError("Linewidth EPC model must refer to the calculator electronic model")
-        energies=np.asarray(owner.energies)
+        energies=np.asarray(inputs.energies)
         selection = (getattr(epc_model.phonon_model, 'modeSelection', None)
                      if self.phononSelection is None else self.phononSelection)
-        signature=(id(owner.model),tuple(owner.kgrid),tuple(np.asarray(owner.kOffset)),
+        signature=(id(inputs.states),
                    self.qgrid,self.temperature,self.fermi,self.delta,self.adiabatic,self.bathStatistics,
                    None if selection is None else selection.signature)
         if self._cache_signature == signature:
             return self._cache_linewidth.copy()
-        grid=tuple(owner.kgrid)
+        grid=tuple(inputs.kgrid)
         qgrid=grid if self.qgrid is None else self.qgrid
-        kpoints=np.mod(uniform_qmesh(grid)+owner.kOffset,1.)
+        kpoints=np.mod(inputs.states.kpoints,1.)
         result=ModelElectronSelfEnergy(epc_model,kpoints,qgrid=qgrid,
                                        temperature=self.temperature,fermi=self.fermi,
                                        delta=self.delta,adiabatic=self.adiabatic,
-                                       bathStatistics=self.bathStatistics, phononSelection=selection)
-        reference=result.energies.reshape(energies.shape)
-        if not np.allclose(reference,energies,atol=2e-10,rtol=1e-10):
-            raise ValueError("Model EPC linewidth states do not match the conductivity eigensystem")
+                                       bathStatistics=self.bathStatistics, phononSelection=selection,
+                                       electronic_states=inputs.states)
         linewidth=result.linewidths.reshape(energies.shape)
         if np.any(linewidth < -1e-10) or not np.all(np.isfinite(linewidth)):
             raise ValueError("Model EPC retarded self-energy produced invalid linewidths")

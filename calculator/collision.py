@@ -8,6 +8,7 @@ from scipy.sparse import bmat, csc_matrix, diags, eye
 from scipy.sparse.linalg import LinearOperator, gmres, splu
 from scipy.special import expit
 from auxiliary import uniform_qmesh
+from .electronic import ElectronicVertices
 
 def collision_mode(specification=None, prepared=None):
     """Read mode metadata from exactly one collision input, without building rates."""
@@ -23,68 +24,88 @@ def collision_mode(specification=None, prepared=None):
         raise TypeError("collisionSpecification must be a CollisionSpecification")
     return specification.mode
 
-def prepare_collision(owner, specification, *, epc_model=None):
+def prepare_collision(electronic, specification, *, kBT, epc_model=None):
     """Prepare after Velocity, then pass the result as preparedCollision=.
 
     specification must be a CollisionSpecification; no mode strings or eta
     defaults are translated here. This explicitly prepares fresh rates.
-    CollisionPreparation provides automatic preparation once per response.
+    DensityMatrixResponse composes this preparation once per response.
     Reuse assumes the model, providers and specification remain unchanged.
     epc_model explicitly pairs electronic and phonon models. It is never
-    inferred from owner. CRTA needs no EPC model.
+    inferred from inputs. CRTA needs no EPC model.
     """
-    return PreparedCollision(CollisionInputs.from_owner(owner, epc_model=epc_model), specification)
+    return PreparedCollision(CollisionInputs.from_electronic(electronic, kBT=kBT, epc_model=epc_model), specification)
 
-def resolve_collision(electronic, specification=None, *, prepared=None, epc_model=None):
+def resolve_collision(electronic, specification=None, *, kBT, prepared=None, epc_model=None):
     """Return preparation from explicit arguments, without modifying electronic."""
     collision_mode(specification, prepared)
     if prepared is None:
-        prepared = prepare_collision(electronic, specification, epc_model=epc_model)
+        prepared = prepare_collision(electronic, specification, kBT=kBT, epc_model=epc_model)
     else:
-        prepared.bind(electronic, epc_model=epc_model)
+        prepared.bind(electronic, kBT=kBT, epc_model=epc_model)
     return prepared
 
-def prepare_phonon_background(electronic, specification, *, epc_model):
+def prepare_phonon_background(electronic, specification, *, kBT, epc_model):
     """CRTA-only path for explicit/static phonons, independent of EPC rates."""
     if not isinstance(specification, CollisionSpecification):
         raise TypeError("Explicit/static phonon calculations require a CRTA CollisionSpecification")
     if specification.mode != "crta":
         raise ValueError("Explicit/static phonon calculations require CRTA background only; an EPC/SERTA collision would double count scattering")
-    return CollisionOperator_linewidth(specification, CollisionInputs.from_owner(electronic, epc_model=epc_model))
+    return CollisionOperator_linewidth(specification, CollisionInputs.from_electronic(electronic, kBT=kBT, epc_model=epc_model))
 
 @dataclass(frozen=True)
 class CollisionInputs:
     """Electronic state and optional EPC model, without response outputs.
 
     The EPC model explicitly identifies the electronic and phonon model pair;
-    electronic arrays are views, avoiding copies.
+    electronic arrays are shared with ElectronicVertices, avoiding copies.
 
     The model and arrays must stay unchanged during use; their contents are not
     monitored. Velocity supplies stationary-state response derivatives.
     """
-    model: object
-    kgrid: tuple
-    kOffset: np.ndarray
+    electronic: ElectronicVertices
     kBT: float
-    energies: np.ndarray
-    vectors: np.ndarray
-    phaseFactorR: np.ndarray
-    velocity_K: object = None
     epc_model: object = None
 
     @classmethod
-    def from_owner(cls, owner, *, epc_model=None):
-        def view(name):
-            value = getattr(owner, name, None)
-            if value is None:
-                return None
-            result = np.asarray(value).view()
-            result.setflags(write=False)
-            return result
-        if epc_model is not None and epc_model.electronic_model is not owner.model:
+    def from_electronic(cls, electronic, *, kBT, epc_model=None):
+        if not isinstance(electronic, ElectronicVertices):
+            raise TypeError('electronic must be ElectronicVertices')
+        if epc_model is not None and epc_model.electronic_model is not electronic.states.model:
             raise ValueError("epcModel must refer to the calculator electronic model")
-        return cls(owner.model, tuple(int(n) for n in owner.kgrid), view("kOffset"), float(owner.kBT),
-                   view("energies"), view("vectors"), view("phaseFactorR"), view("velocity_K"), epc_model)
+        return cls(electronic, float(kBT), epc_model)
+
+    @property
+    def states(self):
+        return self.electronic.states
+
+    @property
+    def model(self):
+        return self.states.model
+
+    @property
+    def kgrid(self):
+        return self.states.kgrid
+
+    @property
+    def kOffset(self):
+        return self.states.kOffset
+
+    @property
+    def energies(self):
+        return self.states.energies
+
+    @property
+    def vectors(self):
+        return self.states.vectors
+
+    @property
+    def phaseFactorR(self):
+        return self.states.phaseFactorR
+
+    @property
+    def velocity_K(self):
+        return self.electronic.velocity_K
 
 class CollisionSpecification:
     """Type of the collision model used by density-matrix kernels.
@@ -189,10 +210,10 @@ class CollisionSpecification:
             if self.bathStatistics not in ("quantum", "classical", "wigner"):
                 raise ValueError("bathStatistics must be 'quantum', 'classical', or 'wigner'")
 
-    def bind(self, owner):
+    def bind(self, inputs):
         if self.mode == "epc":
-            return CollisionOperator_full(self,owner)
-        return CollisionOperator_linewidth(self,owner)
+            return CollisionOperator_full(self,inputs)
+        return CollisionOperator_linewidth(self,inputs)
 
 class CollisionOperator:
     """Bound collision interface used by density-matrix kernels.
@@ -212,27 +233,27 @@ class CollisionOperator:
         Even-grid Nyquist derivatives are zero to preserve Hermiticity.
         The orbital connection is shared by linewidth and full collisions.
         """
-        owner = self.owner
-        if owner.model.overlap or owner.energies.shape[-1] != owner.model.norbs:
+        inputs = self.inputs
+        if inputs.model.overlap or inputs.energies.shape[-1] != inputs.model.norbs:
             raise NotImplementedError("Covariant collision derivatives require the complete orthogonal model basis")
         if not hasattr(self, "_mesh_connection"):
-            buffer = np.zeros(owner.kgrid + (3, owner.model.norbs, owner.model.norbs), complex)
-            for ir, rv in enumerate(owner.model.iRvec):
-                buffer[tuple(np.asarray(rv) % owner.kgrid)] += owner.model.AA_R_W[ir]*owner.phaseFactorR[ir]
-            connection = np.fft.ifftn(buffer, axes=(0, 1, 2))*np.prod(owner.kgrid)
+            buffer = np.zeros(inputs.kgrid + (3, inputs.model.norbs, inputs.model.norbs), complex)
+            for ir, rv in enumerate(inputs.model.iRvec):
+                buffer[tuple(np.asarray(rv) % inputs.kgrid)] += inputs.model.AA_R_W[ir]*inputs.phaseFactorR[ir]
+            connection = np.fft.ifftn(buffer, axes=(0, 1, 2))*np.prod(inputs.kgrid)
             self._mesh_connection = .5*(connection + connection.conj().swapaxes(-1, -2))
-        u = owner.vectors
+        u = inputs.vectors
         adj = u.conj().swapaxes(-1, -2)
         orbital = u @ matrix @ adj
         coefficients = np.fft.fftn(orbital, axes=(0, 1, 2))
-        moment = np.zeros(owner.kgrid)
-        for axis, n in enumerate(owner.kgrid):
+        moment = np.zeros(inputs.kgrid)
+        for axis, n in enumerate(inputs.kgrid):
             r = np.fft.fftfreq(n)*n
             if n % 2 == 0:
                 r[n//2] = 0.
             shape = [1, 1, 1]
             shape[axis] = n
-            moment += r.reshape(shape)*owner.model.lattice[axis, direction]
+            moment += r.reshape(shape)*inputs.model.lattice[axis, direction]
         derivative = np.fft.ifftn(1j*moment[..., None, None]*coefficients, axes=(0, 1, 2))
         connection = self._mesh_connection[..., direction, :, :]
         derivative -= 1j*(connection @ orbital - orbital @ connection)
@@ -257,14 +278,14 @@ class CollisionOperator_linewidth(CollisionOperator):
     It computes linewidths without scattering-in or k-to-k+q population coupling.
     """
 
-    def __init__(self, specification:CollisionSpecification, owner):
+    def __init__(self, specification:CollisionSpecification, inputs):
         self.specification = specification
-        self.owner = owner
+        self.inputs = inputs
         self.constant_eta = None
         # CASE crta, return the constant linewidth directly
         if specification.mode == "crta":
             self.constant_eta = specification.constantLinewidth
-            self.population_linewidth=np.full(owner.energies.shape,self.constant_eta,dtype=float)
+            self.population_linewidth=np.full(inputs.energies.shape,self.constant_eta,dtype=float)
         # CASE serta, the linewidths is to be computed further
         elif specification.mode == "serta":
             self.population_linewidth=self._sertaLinewidth()
@@ -276,16 +297,16 @@ class CollisionOperator_linewidth(CollisionOperator):
                                       + self.population_linewidth[..., None, :])
 
     def _sertaLinewidth(self):
-        model = self.owner.model
+        model = self.inputs.model
         source= self.specification.linewidthSource
         # CASE1, linewidth is set externally, e.g., using model EPC-linewidth
         #        So, it is assumed to be a quantity per band per k due to the serta-form.
         #        Or, it provides populationLinewidth method to compute the linewdith per band per k
         if source is not None:
-            linewidth = (source.populationLinewidth(self.owner) if hasattr(source, "populationLinewidth")
+            linewidth = (source.populationLinewidth(self.inputs) if hasattr(source, "populationLinewidth")
                          else np.asarray(source, dtype=float))
-            if linewidth.shape != self.owner.energies.shape:
-                raise ValueError(f"SERTA linewidth source has shape {linewidth.shape}, expected {self.owner.energies.shape}")
+            if linewidth.shape != self.inputs.energies.shape:
+                raise ValueError(f"SERTA linewidth source has shape {linewidth.shape}, expected {self.inputs.energies.shape}")
             if not np.all(np.isfinite(linewidth)) or np.any(linewidth < -1e-10):
                 raise ValueError("SERTA linewidth source must be finite and nonnegative")
             return np.maximum(linewidth, 0.0)
@@ -301,13 +322,13 @@ class CollisionOperator_linewidth(CollisionOperator):
         if model.overlap:
             raise NotImplementedError("SERTA linewidth interpolation is currently implemented for orthogonal Wannier models")
 
-        linewidth_sqrt_R = np.asarray(linewidth_sqrt_R) * self.owner.phaseFactorR[:,None,None]
-        linewidth_grid = np.zeros(self.owner.kgrid + (model.norbs, model.norbs), dtype=complex)
+        linewidth_sqrt_R = np.asarray(linewidth_sqrt_R) * self.inputs.phaseFactorR[:,None,None]
+        linewidth_grid = np.zeros(self.inputs.kgrid + (model.norbs, model.norbs), dtype=complex)
         for iR,Rvec in enumerate(model.iRvec):
-            linewidth_grid[tuple(np.asarray(Rvec) % self.owner.kgrid)] += linewidth_sqrt_R[iR]
-        linewidth_sqrt_W = np.fft.ifftn(linewidth_grid, axes=(0,1,2)) * np.prod(self.owner.kgrid)
+            linewidth_grid[tuple(np.asarray(Rvec) % self.inputs.kgrid)] += linewidth_sqrt_R[iR]
+        linewidth_sqrt_W = np.fft.ifftn(linewidth_grid, axes=(0,1,2)) * np.prod(self.inputs.kgrid)
         linewidth_W = linewidth_sqrt_W @ linewidth_sqrt_W.conj().swapaxes(-2,-1)
-        vectors = self.owner.vectors
+        vectors = self.inputs.vectors
         linewidth_H = vectors.conj().swapaxes(-2,-1) @ linewidth_W @ vectors
         linewidth = np.diagonal(linewidth_H, axis1=-2, axis2=-1).real
         return np.maximum(linewidth, 0.0)
@@ -372,19 +393,19 @@ class CollisionOperator_full(CollisionOperator):
 
     mesh_coupled=True
 
-    def __init__(self, specification, owner):
+    def __init__(self, specification, inputs):
         self.specification=specification
-        self.owner=owner
-        model=owner.model
-        self.epc_model = owner.epc_model
+        self.inputs=inputs
+        model=inputs.model
+        self.epc_model = inputs.epc_model
         if self.epc_model is None:
             raise ValueError("EPC collision requires an explicit epcModel")
         if model.overlap:
             raise NotImplementedError("mesh-global EPC collision currently requires an orthogonal model")
-        if owner.energies.shape[-1] != model.norbs:
+        if inputs.energies.shape[-1] != model.norbs:
             raise NotImplementedError("mesh-global EPC collision requires the complete model basis")
         self.epc_model.validate()
-        self.kgrid=np.asarray(owner.kgrid,dtype=int)
+        self.kgrid=np.asarray(inputs.kgrid,dtype=int)
         self.phononSelection = (getattr(self.epc_model.phonon_model, 'modeSelection', None)
                                 if specification.phononSelection is None else specification.phononSelection)
         qgrid=self.kgrid if specification.qgrid is None else np.asarray(specification.qgrid)
@@ -403,12 +424,12 @@ class CollisionOperator_full(CollisionOperator):
         if specification.enforceDetailedBalance:
             if bath_kBT <= 0:
                 raise ValueError("detailed-balance EPC rates require a positive phonon temperature")
-            if not np.isclose(owner.kBT,bath_kBT,rtol=2e-6,atol=1e-10):
+            if not np.isclose(inputs.kBT,bath_kBT,rtol=2e-6,atol=1e-10):
                 raise ValueError("detailed-balance EPC rates require electronic kBT to match phononTemperature")
         self.bath_kBT=bath_kBT
         self.qgrid=tuple(self.qgrid)
         self.nk=int(np.prod(self.kgrid))
-        self.nbands=owner.energies.shape[-1]
+        self.nbands=inputs.energies.shape[-1]
         self.size=self.nk*self.nbands
         self.transition_rates=self._transition_rates()
         self.reverse_rates=self.transition_rates.T.tocsr()
@@ -436,13 +457,13 @@ class CollisionOperator_full(CollisionOperator):
 
     def _transition_rates(self):
         """Return R[final,initial] in eV for all mesh-closed EPC processes."""
-        owner, model=self.owner, self.owner.model
+        inputs, model=self.inputs, self.inputs.model
         self.rate_balance_relative_change=0.
         grid=self.kgrid
         kindices=np.indices(tuple(grid)).reshape(3,-1).T
-        kpoints=uniform_qmesh(grid)+owner.kOffset
-        energies=owner.energies.reshape(self.nk,self.nbands)
-        vectors=owner.vectors.reshape(self.nk,self.nbands,self.nbands)
+        kpoints=uniform_qmesh(grid)+inputs.kOffset
+        energies=inputs.energies.reshape(self.nk,self.nbands)
+        vectors=inputs.vectors.reshape(self.nk,self.nbands,self.nbands)
         if self.phononSelection is None:
             qpoints=uniform_qmesh(self.qgrid)
             qshifts=np.indices(self.qgrid).reshape(3,-1).T*(grid//np.asarray(self.qgrid))
@@ -515,8 +536,8 @@ class CollisionOperator_full(CollisionOperator):
         :meth:`forFermi`.
         """
         values=np.asarray(occupations)
-        if values.shape != self.owner.energies.shape:
-            raise ValueError(f"occupations have shape {values.shape}, expected {self.owner.energies.shape}")
+        if values.shape != self.inputs.energies.shape:
+            raise ValueError(f"occupations have shape {values.shape}, expected {self.inputs.energies.shape}")
         flat=values.reshape(-1)
         gain=(1-flat)*(self.transition_rates@flat)
         loss=flat*(self.reverse_rates@(1-flat))
@@ -550,14 +571,14 @@ class _CollisionOperatorFullFermi(CollisionOperator):
     def __init__(self, parent, fermi):
         self.parent=parent
         self.specification=parent.specification
-        self.owner=parent.owner
+        self.inputs=parent.inputs
         self.fermi=fermi
-        energies=parent.owner.energies.reshape(-1)
-        kBT=parent.owner.kBT
+        energies=parent.inputs.energies.reshape(-1)
+        kBT=parent.inputs.kBT
         if kBT <= 0:
             raise ValueError("mesh-global EPC collision requires kBT > 0 for Pauli linearization")
         self._energies=energies
-        self.equilibrium_occupations=expit((fermi-energies)/kBT).reshape(self.owner.energies.shape)
+        self.equilibrium_occupations=expit((fermi-energies)/kBT).reshape(self.inputs.energies.shape)
         # Compatibility alias. This is a closed-system reference, not a reservoir.
         self.reservoir_occupations=self.equilibrium_occupations
         sensitivity=(self.equilibrium_occupations*(1-self.equilibrium_occupations)/kBT).reshape(-1)
@@ -572,11 +593,11 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         self.max_projected_source=0.
         self.stationary_occupations,self.stationary_info=self._stationary_state()
         self.population_damping=self._damping(self.stationary_occupations)
-        linewidth=np.asarray(self.population_damping.diagonal()).real.reshape(parent.owner.energies.shape)
+        linewidth=np.asarray(self.population_damping.diagonal()).real.reshape(parent.inputs.energies.shape)
         self.population_linewidth=np.maximum(linewidth,0.)
         p=self.stationary_occupations.reshape(-1)
         outgoing=(self.specification.constantLinewidth+self.parent.transition_rates@p
-                  +self.parent.reverse_rates@(1-p)).reshape(self.owner.energies.shape)
+                  +self.parent.reverse_rates@(1-p)).reshape(self.inputs.energies.shape)
         self.coherence_linewidth=.5*(outgoing[..., :, None]+outgoing[..., None, :])
         self.constant_eta=None
 
@@ -597,7 +618,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
             return np.zeros_like(self.equilibrium_occupations)
         if target >= self.parent.size:
             return np.ones_like(self.equilibrium_occupations)
-        kBT=self.owner.kBT
+        kBT=self.inputs.kBT
         low=self._energies.min()-64*kBT
         high=self._energies.max()+64*kBT
         for _ in range(80):
@@ -607,7 +628,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
                 low=chemical_potential
             else:
                 high=chemical_potential
-        return occupations.reshape(self.owner.energies.shape)
+        return occupations.reshape(self.inputs.energies.shape)
 
     def _linear_solve(self, operator, source, cache_key=None, constrained=True):
         source=np.asarray(source).reshape(-1)
@@ -735,19 +756,19 @@ class _CollisionOperatorFullFermi(CollisionOperator):
 
     def stationary_derivative(self, direction, drive_velocity=None):
         """D_k rho0, using exact Fermi derivatives plus a mesh correction."""
-        if drive_velocity is not None and not np.array_equal(drive_velocity,self.owner.velocity_K):
+        if drive_velocity is not None and not np.array_equal(drive_velocity,self.inputs.velocity_K):
             raise NotImplementedError("Stationary EPC response currently requires the total electric drive vertex")
         from .density_matrix import fermi_divided_difference, diagonal_matrix
-        e=self.owner.energies
-        result=fermi_divided_difference(e[..., :,None],e[...,None,:],self.fermi,self.owner.kBT)
-        result=result*self.owner.velocity_K[...,direction,:,:]
+        e=self.inputs.energies
+        result=fermi_divided_difference(e[..., :,None],e[...,None,:],self.fermi,self.inputs.kBT)
+        result=result*self.inputs.velocity_K[...,direction,:,:]
         correction=self.stationary_occupations-self.equilibrium_occupations
         if np.any(correction):
             result=result+self.mesh_derivative(diagonal_matrix(correction),direction)
         return result
 
     def apply_population(self, values):
-        shape=self.owner.energies.shape
+        shape=self.inputs.energies.shape
         array=np.asarray(values)
         if array.shape != shape:
             raise ValueError(f"population source has shape {array.shape}, expected {shape}")
@@ -757,7 +778,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         return np.asarray(result).reshape(shape)
 
     def solve_population(self, source, frequency=0.0):
-        shape=self.owner.energies.shape
+        shape=self.inputs.energies.shape
         array=np.asarray(source)
         if array.shape != shape:
             raise ValueError(f"population source has shape {array.shape}, expected {shape}")
@@ -768,7 +789,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         return (1j*self._linear_solve(operator,array.reshape(-1),frequency)).reshape(shape)
 
     def solve_steady_population(self, source):
-        shape=self.owner.energies.shape
+        shape=self.inputs.energies.shape
         array=np.asarray(source)
         if array.shape != shape:
             raise ValueError(f"population source has shape {array.shape}, expected {shape}")
@@ -783,11 +804,11 @@ class _CollisionOperatorFullFermi(CollisionOperator):
 
     def apply(self, matrix):
         array=np.asarray(matrix)
-        expected=self.owner.energies.shape+(self.owner.energies.shape[-1],)
+        expected=self.inputs.energies.shape+(self.inputs.energies.shape[-1],)
         if array.shape != expected:
             raise ValueError(f"density-matrix source has shape {array.shape}, expected {expected}")
         output=self.coherence_linewidth*array
-        indices=np.arange(self.owner.energies.shape[-1])
+        indices=np.arange(self.inputs.energies.shape[-1])
         diagonal=np.diagonal(array,axis1=-2,axis2=-1)
         output[...,indices,indices]=self.apply_population(diagonal)
         return output
@@ -801,7 +822,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
     def solve(self, source, delta_energy, frequency=0.0):
         array=np.asarray(source)
         result=array*self.resolvent(delta_energy,frequency)
-        indices=np.arange(self.owner.energies.shape[-1])
+        indices=np.arange(self.inputs.energies.shape[-1])
         diagonal=np.diagonal(array,axis1=-2,axis2=-1)
         result[...,indices,indices]=self.solve_population(diagonal,frequency)
         return result
@@ -827,18 +848,14 @@ class PreparedCollision:
     def mesh_coupled(self):
         return self.operator.mesh_coupled
 
-    def bind(self, owner, *, epc_model=None):
-        """Validate a consumer without rebinding the shared operator's owner."""
+    def bind(self, electronic, *, kBT, epc_model=None):
+        """Validate a consumer without rebinding the shared operator's inputs."""
         if epc_model is not None and epc_model is not self.inputs.epc_model:
             raise ValueError("Prepared collision conflicts with epcModel")
-        if owner.model is not self.inputs.model:
+        if electronic.states.model is not self.inputs.model:
             raise ValueError("Prepared collision requires the same model object")
-        if (tuple(owner.kgrid) != self.inputs.kgrid
-                or not np.array_equal(owner.kOffset, self.inputs.kOffset)
-                or owner.kBT != self.inputs.kBT):
-            raise ValueError("Prepared collision does not match the response mesh, offset or temperature")
-        if (owner.energies.shape != self.inputs.energies.shape
-                or owner.vectors.shape != self.inputs.vectors.shape
-                or np.shape(getattr(owner, "velocity_K", None)) != np.shape(self.inputs.velocity_K)):
-            raise ValueError("Prepared collision does not match the response eigensystem or velocity dimensions")
+        if electronic.states is not self.inputs.states:
+            raise ValueError("Prepared collision requires the same ElectronicStates and band basis")
+        if kBT != self.inputs.kBT:
+            raise ValueError("Prepared collision does not match the electronic temperature")
         return self.operator

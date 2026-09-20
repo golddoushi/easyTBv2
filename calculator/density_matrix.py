@@ -266,7 +266,7 @@ class FirstOrderDensityMatrixBlock:
 class LengthGaugeDCFirstOrderFermiState:
     def __init__(self, kernel, f, fp=None, fermi=None):
         self.kernel = kernel
-        self.owner = kernel.owner
+        self.inputs = kernel.inputs
         self.collision = kernel.collision.forFermi(fermi)
         self.f = self.collision.stationary_occupations if self.collision.mesh_coupled else f
         self.fp = fp
@@ -277,22 +277,22 @@ class LengthGaugeDCFirstOrderFermiState:
         """Return intraband and interband dc density matrices.
 
         ``drive_velocity`` may be a projected velocity tensor with the same
-        layout as ``owner.velocity_K``. Its diagonal defines the projected
+        layout as ``inputs.velocity_K``. Its diagonal defines the projected
         intraband drive, preserving the projection convention used by the
         Hall calculators.
         """
         kernel = self.kernel
-        velocity = self.owner.velocity_K if drive_velocity is None else drive_velocity
+        velocity = self.inputs.velocity_K if drive_velocity is None else drive_velocity
         velocity_direction = velocity[..., direction, :, :]
         if self.collision.mesh_coupled:
             derivative=self.collision.stationary_derivative(direction,drive_velocity)
-            rho=self.collision.solve(-1j*derivative,self.owner.deltaE)
+            rho=self.collision.solve(-1j*derivative,self.inputs.deltaE)
             return FirstOrderDensityMatrixBlock(self.rho0,
                 {"I":rho*kernel.diag if kernel.full_covariant_derivative else np.zeros_like(rho),
                  "E":rho*kernel.off_diag})
         rho_e = self.collision.solve(
             1j*self.f_nm*kernel.deltaE_inverse_pure*velocity_direction*kernel.off_diag,
-            self.owner.deltaE,
+            self.inputs.deltaE,
         )*kernel.off_diag
         rho_i = np.zeros_like(rho_e)
         if kernel.full_covariant_derivative:
@@ -323,23 +323,24 @@ class LengthGaugeDCFirstOrderDMKernel:
     channel_names = DC_CHANNEL_NAMES
     channel_descriptions = DC_CHANNEL_DESCRIPTIONS
 
-    def __init__(self, owner, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
-        self.owner = owner
+    def __init__(self, inputs, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
+        inputs.calcDeltaEInverse()
+        self.inputs = inputs
         self.full_covariant_derivative = bool(full_covariant_derivative)
         self.finite_temperature_occupations = bool(finite_temperature_occupations)
-        self.nbands = owner.energies.shape[-1]
+        self.nbands = inputs.energies.shape[-1]
         self.diag = np.eye(self.nbands)
         self.off_diag = 1.0 - self.diag
         self.indices = np.arange(self.nbands)
-        self.deltaE_inverse_pure = owner.deltaEInverse_pure
+        self.deltaE_inverse_pure = inputs.deltaEInverse_pure
         self.collision = collision
         self.g0_mn = (None if self.collision.mesh_coupled
-                      else self.collision.resolvent(owner.deltaE))
+                      else self.collision.resolvent(inputs.deltaE))
 
         if self.collision.mesh_coupled and not self.full_covariant_derivative:
             raise ValueError("Stationary EPC response requires fullCovariantDerivative=True")
 
-        if self.full_covariant_derivative and owner.kBT <= 0:
+        if self.full_covariant_derivative and inputs.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
         if (self.full_covariant_derivative and not self.collision.mesh_coupled
                 and not np.any(self.collision.population_linewidth > self.collision.specification.linewidthFloor)):
@@ -356,10 +357,10 @@ class LengthGaugeDCFirstOrderDMKernel:
         can be reduced to exact band-resolved response weights first.
         """
         if self.full_covariant_derivative or self.finite_temperature_occupations:
-            f = self.owner.fdOccupation(fermi)
+            f = self.inputs.fdOccupation(fermi)
         else:
-            f = np.int8(self.owner.energies < fermi)
-        fp = self.owner.fdEnergyDerivatives(f)[0] if self.full_covariant_derivative else None
+            f = np.int8(self.inputs.energies < fermi)
+        fp = self.inputs.fdEnergyDerivatives(f)[0] if self.full_covariant_derivative else None
         return f, fp
 
 class LengthGaugeFirstOrderDMKernel:
@@ -375,15 +376,16 @@ class LengthGaugeFirstOrderDMKernel:
     channel_names = DC_CHANNEL_NAMES
     channel_descriptions = DC_CHANNEL_DESCRIPTIONS
 
-    def __init__(self, owner, full_covariant_derivative=True, finite_temperature_occupations=True, *, collision):
-        self.owner = owner
+    def __init__(self, inputs, full_covariant_derivative=True, finite_temperature_occupations=True, *, collision):
+        inputs.calcDeltaEInverse()
+        self.inputs = inputs
         self.full_covariant_derivative = bool(full_covariant_derivative)
         self.finite_temperature_occupations = bool(finite_temperature_occupations)
         self.collision = collision
-        self.diag = np.eye(owner.energies.shape[-1], dtype=bool)
+        self.diag = np.eye(inputs.energies.shape[-1], dtype=bool)
         if self.collision.mesh_coupled and not self.full_covariant_derivative:
             raise ValueError("Stationary EPC response requires fullCovariantDerivative=True")
-        if self.full_covariant_derivative and owner.kBT <= 0:
+        if self.full_covariant_derivative and inputs.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
 
     def fermi_state(self, ifermi, fermi):
@@ -392,19 +394,19 @@ class LengthGaugeFirstOrderDMKernel:
 class FirstOrderFermiState:
     def __init__(self, kernel, fermi):
         self.kernel = kernel
-        owner = kernel.owner
+        inputs = kernel.inputs
         self.collision = kernel.collision.forFermi(fermi)
-        self.f = (owner.fdOccupation(fermi) if kernel.full_covariant_derivative
-                  or kernel.finite_temperature_occupations else (owner.energies < fermi).astype(float))
+        self.f = (inputs.fdOccupation(fermi) if kernel.full_covariant_derivative
+                  or kernel.finite_temperature_occupations else (inputs.energies < fermi).astype(float))
         if self.collision.mesh_coupled:
             self.f=self.collision.stationary_occupations
         self._rho0 = None
         if kernel.full_covariant_derivative:
-            e = owner.energies
+            e = inputs.energies
             self.divided_difference = fermi_divided_difference(
-                e[..., :, None], e[..., None, :], fermi, owner.kBT)
+                e[..., :, None], e[..., None, :], fermi, inputs.kBT)
         else:
-            self.divided_difference = (self.f[..., :, None]-self.f[..., None, :]) * owner.deltaEInverse_pure
+            self.divided_difference = (self.f[..., :, None]-self.f[..., None, :]) * inputs.deltaEInverse_pure
 
     @property
     def rho0(self):
@@ -416,7 +418,7 @@ class FirstOrderFermiState:
     def derivative(self, direction, drive_velocity=None):
         if self.collision.mesh_coupled:
             return self.collision.stationary_derivative(direction,drive_velocity)
-        velocity = self.kernel.owner.velocity_K if drive_velocity is None else drive_velocity
+        velocity = self.kernel.inputs.velocity_K if drive_velocity is None else drive_velocity
         return self.divided_difference * velocity[..., direction, :, :]
 
     def at_frequency(self, omega):
@@ -437,7 +439,7 @@ class FirstOrderFrequencyState:
 
     def block(self, direction, drive_velocity=None):
         rho = self.collision.solve(-1j*self.state.derivative(direction, drive_velocity),
-                                   self.kernel.owner.deltaE,self.omega)
+                                   self.kernel.inputs.deltaE,self.omega)
         return FirstOrderDensityMatrixBlock(self.state.rho0,
                                             {"I": rho*self.kernel.diag, "E": rho*~self.kernel.diag})
 
@@ -453,10 +455,10 @@ class VelocityGaugeFirstOrderDMKernel(LengthGaugeFirstOrderDMKernel):
     retains the residue so mesh/basis errors remain visible.
     """
 
-    def __init__(self, owner, full_covariant_derivative=True, finite_temperature_occupations=True, *, collision):
+    def __init__(self, inputs, full_covariant_derivative=True, finite_temperature_occupations=True, *, collision):
         if not full_covariant_derivative:
             raise ValueError("VG conductivity requires fullCovariantDerivative=True for covariant relaxation")
-        super().__init__(owner, full_covariant_derivative, finite_temperature_occupations, collision=collision)
+        super().__init__(inputs, full_covariant_derivative, finite_temperature_occupations, collision=collision)
 
     def fermi_state(self, ifermi, fermi):
         return VelocityGaugeFirstOrderFermiState(self, fermi)
@@ -472,11 +474,11 @@ class VelocityGaugeFirstOrderFrequencyState(FirstOrderFrequencyState):
         if self.collision.mesh_coupled:
             # Gauge transform of the LG response. This also transforms the
             # mesh-global collision and its nonthermal stationary reference.
-            rho=self.collision.solve(-1j*df,self.kernel.owner.deltaE,self.omega)
+            rho=self.collision.solve(-1j*df,self.kernel.inputs.deltaE,self.omega)
             return df+1j*self.omega*rho
-        source = -commutator(self.kernel.owner.velocity_K[..., direction, :, :], self.state.rho0)
+        source = -commutator(self.kernel.inputs.velocity_K[..., direction, :, :], self.state.rho0)
         source -= 1j*self.collision.apply(df)
-        return self.collision.solve(source,self.kernel.owner.deltaE,self.omega)
+        return self.collision.solve(source,self.kernel.inputs.deltaE,self.omega)
 
     def block(self, direction, drive_velocity=None):
         # (R(Omega)-R(0))/Omega = Df/(Delta-Omega-i*Gamma).
@@ -493,7 +495,7 @@ class _SecondOrderDMFermiState:
     '''Abstract of the 2nd order density matrix at specific Fermi energy'''
     def __init__(self, kernel, f, dfdk=None, d2fdk2=None, fermi=None):
         self.kernel = kernel
-        self.owner = kernel.owner
+        self.inputs = kernel.inputs
         self.collision = kernel.collision.forFermi(fermi)
         self.f = f
         self.dfdk = dfdk
@@ -508,15 +510,16 @@ class _SecondOrderDMKernel:
     channel_names = AC_CHANNEL_NAMES
     channel_descriptions = AC_CHANNEL_DESCRIPTIONS
 
-    def __init__(self, owner, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
-        self.owner = owner
+    def __init__(self, inputs, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
+        inputs.calcDeltaEInverse()
+        self.inputs = inputs
         self.full_covariant_derivative = bool(full_covariant_derivative)
         self.finite_temperature_occupations = bool(finite_temperature_occupations)
-        self.nbands = owner.energies.shape[-1]
+        self.nbands = inputs.energies.shape[-1]
         self.diag = np.eye(self.nbands)
         self.off_diag = 1.0 - self.diag
         self.indices = np.arange(self.nbands)
-        self.deltaE_mn = owner.deltaE
+        self.deltaE_mn = inputs.deltaE
         self.collision = collision
         self.covariant_linewidth = (
             not self.collision.mesh_coupled
@@ -526,11 +529,11 @@ class _SecondOrderDMKernel:
                 raise ValueError("Covariant linewidth derivatives require fullCovariantDerivative=True")
             self.intra_mask = self.diag.astype(bool)
             self.inter_mask = ~self.intra_mask
-            self.inter_inverse = owner.deltaEInverse_pure*self.off_diag
+            self.inter_inverse = inputs.deltaEInverse_pure*self.off_diag
         self.g0_mn = (None if self.collision.mesh_coupled
                       else self.collision.resolvent(self.deltaE_mn))
 
-        if self.full_covariant_derivative and owner.kBT <= 0:
+        if self.full_covariant_derivative and inputs.kBT <= 0:
             raise ValueError("fullCovariantDerivative requires kBT > 0")
         if (self.full_covariant_derivative and not self.collision.mesh_coupled
                 and not np.any(self.collision.population_linewidth > self.collision.specification.linewidthFloor)):
@@ -555,14 +558,14 @@ class _SecondOrderDMKernel:
         if self.full_covariant_derivative:     
             # the df/dk and d2f/dk2 are to be computed only for full covariant derivate case
             # NOTE: the \rho(0) becomes smoothed f-d, too. Because the df/dt and d2f/dk2 are only meaningful under finite temp.
-            f, dfdk, d2fdk2 = self.owner.fermiKDerivatives(ifermi)
+            f, dfdk, d2fdk2 = self.inputs.fermiKDerivatives(ifermi)
         elif self.finite_temperature_occupations:
             # switch on the finite temperature with smoothed f-d distribution
-            f = self.owner.fdOccupation(fermi)
+            f = self.inputs.fdOccupation(fermi)
             dfdk = d2fdk2 = None
         else:
             # step function, the 0K f-d distribution
-            f = np.int8(self.owner.energies < fermi)
+            f = np.int8(self.inputs.energies < fermi)
             dfdk = d2fdk2 = None
         return self.state_class(self, f, dfdk, d2fdk2, fermi=fermi)
 
@@ -571,14 +574,14 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
     def __init__(self, fermi_state, omega):
         self.fermi_state = fermi_state
         self.kernel = fermi_state.kernel
-        self.owner = self.kernel.owner
+        self.inputs = self.kernel.inputs
         self.omega = omega
         self.rho1_e = {}     # inter-band rho(1)
         self.rho1_i = {}     # intra-band rho(1)
         self.factor = {}
 
         for direction in range(3):
-            r_direction = self.owner.r_K[..., direction, :, :]
+            r_direction = self.inputs.r_K[..., direction, :, :]
             for sign in (-1, 1):
                 frequency = sign * omega
                 source=-fermi_state.f_nm*r_direction
@@ -588,10 +591,10 @@ class LengthGaugeFrequencyState(_SecondOrderDMFrequencyState):
 
     def block(self, a, b):
         kernel = self.kernel
-        owner = self.owner
+        inputs = self.inputs
         state = self.fermi_state
-        r_a = owner.r_K[..., a, :, :]
-        r_b = owner.r_K[..., b, :, :]
+        r_a = inputs.r_K[..., a, :, :]
+        r_b = inputs.r_K[..., b, :, :]
         rho1_e_a = self.rho1_e[(a, -1)]
         rho1_e_b = self.rho1_e[(b, 1)]
         comm_ba = commutator(r_b, rho1_e_a)
@@ -620,17 +623,17 @@ class DividedDifferenceLGFermiState(_SecondOrderDMFermiState):
     """Full LG equilibrium derivatives without band-connection denominators."""
 
     def __init__(self, kernel, fermi):
-        owner = kernel.owner
-        super().__init__(kernel, owner.fdOccupation(fermi), fermi=fermi)
-        energies = owner.energies
-        v = owner.velocity_K
-        self.f_div1 = fermi_divided_difference(energies[..., :, None], energies[..., None, :], fermi, owner.kBT)
+        inputs = kernel.inputs
+        super().__init__(kernel, inputs.fdOccupation(fermi), fermi=fermi)
+        energies = inputs.energies
+        v = inputs.velocity_K
+        self.f_div1 = fermi_divided_difference(energies[..., :, None], energies[..., None, :], fermi, inputs.kBT)
         self.df = self.f_div1[..., None, :, :] * v
         # w[a,b] = D_b V_a. Only an N x N intermediate is made for each band l.
-        self.d2f = self.f_div1[..., None, None, :, :] * owner.w_K
+        self.d2f = self.f_div1[..., None, None, :, :] * inputs.w_K
         for l in range(kernel.nbands):
             div2 = fermi_second_divided_difference(
-                energies[..., :, None], energies[..., l, None, None], energies[..., None, :], fermi, owner.kBT
+                energies[..., :, None], energies[..., l, None, None], energies[..., None, :], fermi, inputs.kBT
             )
             for a in range(3):
                 for b in range(a, 3):
@@ -661,7 +664,7 @@ class DividedDifferenceLGFrequencyState(_SecondOrderDMFrequencyState):
     def __init__(self, fermi_state, omega):
         self.fermi_state = fermi_state
         self.kernel = fermi_state.kernel
-        self.owner = self.kernel.owner
+        self.inputs = self.kernel.inputs
         self.omega = omega
         self.resolvent = {}
         self.rho1 = {}
@@ -680,7 +683,7 @@ class DividedDifferenceLGFrequencyState(_SecondOrderDMFrequencyState):
         source = np.zeros_like(self.rho1[(a, -1)])
         source_i = np.zeros_like(source)
         for drive, derivative, sign in ((a, b, -1), (b, a, 1)):
-            v = self.owner.velocity_K[..., derivative, :, :]
+            v = self.inputs.velocity_K[..., derivative, :, :]
             source += state.collision.solve(
                 -state.d2f[..., drive, derivative, :, :] + 1j*commutator(v,self.rho1[(drive,sign)]),
                 kernel.deltaE_mn,sign*self.omega)
@@ -710,19 +713,19 @@ class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
 
     state_class = LengthGaugeFermiState
 
-    def __init__(self, owner, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
-        super().__init__(owner, full_covariant_derivative, finite_temperature_occupations, collision=collision)
+    def __init__(self, inputs, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
+        super().__init__(inputs, full_covariant_derivative, finite_temperature_occupations, collision=collision)
         if self.full_covariant_derivative:
             sectors = {"I": "within-block", "E": "between-block"}
             self.channel_descriptions = {
                 name: f"second-order {sectors[name[0]]} from first-order {sectors[name[1]]}"
                 for name in self.channel_names
             }
-            if not hasattr(owner, "w_K"):
+            if not hasattr(inputs, "w_K"):
                 raise ValueError("Full LG requires w_K[a,b] = D_b velocity_K[a]")
-            energies = owner.energies
+            energies = inputs.energies
             scale = np.maximum(1.0, np.max(np.abs(energies), axis=-1, keepdims=True))
-            tolerance = np.maximum(abs(getattr(owner, "degen", 0.0)), 64 * np.finfo(float).eps * scale)
+            tolerance = np.maximum(abs(getattr(inputs, "degen", 0.0)), 64 * np.finfo(float).eps * scale)
             labels = np.concatenate((np.zeros_like(energies[..., :1], dtype=int),
                                      np.cumsum(np.diff(energies, axis=-1) > tolerance, axis=-1)), axis=-1)
             self.intra_mask = labels[..., :, None] == labels[..., None, :]
@@ -741,7 +744,7 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
     def __init__(self, fermi_state, omega):
         self.fermi_state = fermi_state
         self.kernel = fermi_state.kernel
-        self.owner = self.kernel.owner
+        self.inputs = self.kernel.inputs
         self.omega = omega
         if abs(omega) < 1e-15:
             raise ValueError("velocity-gauge response is singular at exactly Omega=0")
@@ -749,10 +752,10 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
         self.rho1_e = {}
         self.rho1_i = {}
         for direction in range(3):
-            source_e = self.owner.velocity_K[..., direction, :, :] * fermi_state.f_nm
+            source_e = self.inputs.velocity_K[..., direction, :, :] * fermi_state.f_nm
             if self.kernel.full_covariant_derivative:
                 source_e += fermi_state.collision.apply(
-                    self.owner.r_K[..., direction, :, :] * fermi_state.f_nm * self.kernel.off_diag
+                    self.inputs.r_K[..., direction, :, :] * fermi_state.f_nm * self.kernel.off_diag
                 )
             for sign in (-1, 1):
                 frequency = sign * omega
@@ -766,12 +769,12 @@ class VelocityGaugeFrequencyState(_SecondOrderDMFrequencyState):
 
     def block(self, a, b):
         kernel = self.kernel
-        owner = self.owner
+        inputs = self.inputs
         state = self.fermi_state
-        v_a = owner.velocity_K[..., a, :, :]
-        v_b = owner.velocity_K[..., b, :, :]
+        v_a = inputs.velocity_K[..., a, :, :]
+        v_b = inputs.velocity_K[..., b, :, :]
         w_ab = 0.5 * (
-            owner.w_K[..., a, b, :, :] + owner.w_K[..., b, a, :, :]
+            inputs.w_K[..., a, b, :, :] + inputs.w_K[..., b, a, :, :]
         )
         rho1_e_a = self.rho1_e[(a, -1)]
         rho1_e_b = self.rho1_e[(b, 1)]
@@ -815,10 +818,10 @@ class VelocityGaugeFermiState(_SecondOrderDMFermiState):
         if not kernel.full_covariant_derivative:
             return {name: zero.copy() for name in AC_CHANNEL_NAMES}
 
-        c2_ab = self.owner.fermiCovariantSecondDerivativeChannels(
+        c2_ab = self.inputs.fermiCovariantSecondDerivativeChannels(
             self.f, self.dfdk, self.d2fdk2, a, b
         )
-        c2_ba = c2_ab if a == b else self.owner.fermiCovariantSecondDerivativeChannels(
+        c2_ba = c2_ab if a == b else self.inputs.fermiCovariantSecondDerivativeChannels(
             self.f, self.dfdk, self.d2fdk2, b, a
         )
         result = {}
@@ -848,11 +851,11 @@ class MarkovSecondOrderFermiState(_SecondOrderDMFermiState):
         # Subtract an analytic CRTA reference before taking numerical mesh
         # derivatives. Thus the weak-EPC limit retains the established exact
         # Fermi derivatives even on a coarse mesh.
-        reference_kernel=SimpleNamespace(owner=self.owner,nbands=kernel.nbands,
+        reference_kernel=SimpleNamespace(inputs=self.inputs,nbands=kernel.nbands,
             collision=CollisionOperator_linewidth(CollisionSpecification('crta',
-                constantLinewidth=collision.specification.constantLinewidth),self.owner),
+                constantLinewidth=collision.specification.constantLinewidth),self.inputs),
             intra_mask=kernel.diag.astype(bool),inter_mask=kernel.off_diag.astype(bool),
-            inter_inverse=self.owner.deltaEInverse_pure*kernel.off_diag)
+            inter_inverse=self.inputs.deltaEInverse_pure*kernel.off_diag)
         self.reference=DividedDifferenceLGFermiState(reference_kernel,fermi)
         self.d2f=self.reference.d2f.copy()
         for a in range(3):
@@ -895,7 +898,7 @@ class MarkovSecondOrderFrequencyState(_SecondOrderDMFrequencyState):
             d2f=state.reference.d2f_i if intraband else state.reference.d2f
             analytic=state.reference.collision.solve(
                 -1j*d2f[...,drive,direction,:,:]
-                -commutator(state.owner.velocity_K[...,direction,:,:],reference),
+                -commutator(state.inputs.velocity_K[...,direction,:,:],reference),
                 kernel.deltaE_mn,sign*self.omega)
             correction=self.rho1[drive,sign]*mask-reference
             self.derivatives[key]=analytic+state.collision.mesh_derivative(correction,direction)
@@ -978,7 +981,7 @@ class CovariantLinewidthSecondOrderFrequencyState(MarkovSecondOrderFrequencyStat
             dg = state.damping_derivative[..., direction, :, :]
             # A=ad_H-Omega-i C: D rho=A^-1(-i D^2 f-[v,rho]+i (D C)[rho]).
             source = (-1j*d2f[..., drive, direction, :, :]
-                      - commutator(state.owner.velocity_K[..., direction, :, :], rho)
+                      - commutator(state.inputs.velocity_K[..., direction, :, :], rho)
                       + .5j*(dg @ rho + rho @ dg))
             self.derivatives[key] = state.collision.solve(source, kernel.deltaE_mn, sign*self.omega)
         return self.derivatives[key]

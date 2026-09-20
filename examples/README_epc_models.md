@@ -45,16 +45,16 @@ Hamiltonian when eigenvectors are omitted; response stages supply them.
 ```python
 from elph import SSHModelEPC
 from phonon import EinsteinPhonon
-from calculator import Velocity, CollisionSpecification, prepare_collision
+from calculator import compute_states, compute_vertices, CollisionSpecification, prepare_collision
 
 # model is an initialized electronic System with two atoms.
 phonons = EinsteinPhonon([12., 14.], .04, directions=(0,))
 epc = SSHModelEPC.from_files(model, phonons, alphaR="epc")
 # Alternatively: epc = SSHModelEPC(model, phonons, alpha_R, beta_R)
 
-vertices = Velocity(model=model, kgrid=(16, 1, 1), kBT=.025852)
+vertices = compute_vertices(compute_states(model, (16, 1, 1)))
 spec = CollisionSpecification("epc", qgrid=(4, 1, 1), phononTemperature=300)
-prepared = prepare_collision(vertices, spec, epc_model=epc)
+prepared = prepare_collision(vertices, spec, kBT=.025852, epc_model=epc)
 ```
 
 Full EPC responses accept `model=model, epcModel=epc` for automatic preparation,
@@ -93,3 +93,5 @@ The old `System` EPC/phonon attachment and evaluation methods have been removed.
 The chain and honeycomb `build_model()` examples now return `(model, epc)`.
 See [collision preparation](README_collision_preparation.md) for reuse and
 parallel scheduling.
+See [electronic preparation](README_electronic_preparation.md) for reusable
+electronic results and standalone response solvers.
