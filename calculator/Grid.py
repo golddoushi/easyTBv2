@@ -16,9 +16,12 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
                              LengthGaugeDCFirstOrderDMKernel,
                              LengthGaugeFirstOrderDMKernel,
                              VelocityGaugeFirstOrderDMKernel,
-                             CollisionSpecification, diagonal_matrix, fermi_divided_difference,
+                             diagonal_matrix, fermi_divided_difference,
                              LengthGaugeSecondOrderDMKernel,
                              VelocityGaugeSecondOrderDMKernel)
+
+from .collision import (CollisionSpecification, PreparedCollision, resolve_collision, collision_mode,
+                        prepare_phonon_background)
 
 def _normalize_response_index_list(index_list, axis_length):
     if index_list is None:
@@ -27,7 +30,7 @@ def _normalize_response_index_list(index_list, axis_length):
 
 def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_vertices,
                                             observable_component_shape, responseFermiIndexList,
-                                            finiteTemperatureOccupations, fullCovariantDerivative):
+                                            finiteTemperatureOccupations, fullCovariantDerivative, *, collision):
     """Evaluate Tr(rho O) through exact band-resolved response weights.
 
     The expensive band-pair algebra is independent of Fermi level. Reducing it
@@ -35,7 +38,8 @@ def _contract_dc_first_order_density_matrix(owner, drive_vertices, observable_ve
     result exactly while avoiding repeated ``(..., band, band)`` allocations.
     """
     owner.calcDeltaEInverse()
-    kernel = LengthGaugeDCFirstOrderDMKernel(owner, fullCovariantDerivative, finiteTemperatureOccupations)
+    kernel = LengthGaugeDCFirstOrderDMKernel(owner, fullCovariantDerivative, finiteTemperatureOccupations,
+                                           collision=collision)
     owner.density_matrix_kernel = kernel
     responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(owner.fermiList))
     owner.responseFermiIndexList = tuple(responseFermiIndexList)
@@ -159,7 +163,7 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
                                                    responseFermiIndexList,
                                                    responseOmegaIndexList,
                                                    finiteTemperatureOccupations,
-                                                   fullCovariantDerivative):
+                                                   fullCovariantDerivative, *, collision):
     """Gauge-independent contraction engine for a first-order DM kernel.
 
     Returned projected arrays contain raw BZ sums with axes
@@ -169,7 +173,8 @@ def _contract_first_order_density_matrix_response(owner, kernel_class, drive_ver
     to the consuming calculator.
     """
     owner.calcDeltaEInverse()
-    kernel = kernel_class(owner, fullCovariantDerivative, finiteTemperatureOccupations)
+    kernel = kernel_class(owner, fullCovariantDerivative, finiteTemperatureOccupations,
+                          collision=collision)
     owner.density_matrix_kernel = kernel
     frequencies = np.asarray(frequencies, dtype=float)
     if frequencies.ndim != 1 or not np.all(np.isfinite(frequencies)):
@@ -339,19 +344,19 @@ def _contract_first_order_lg_response(owner, drive_vertices, observable_vertices
                                       frequencies, responseFermiIndexList=None,
                                       responseOmegaIndexList=None,
                                       finiteTemperatureOccupations=True,
-                                      fullCovariantDerivative=True):
+                                      fullCovariantDerivative=True, *, collision):
     """Contract a length-gauge first-order density matrix with observables."""
     return _contract_first_order_density_matrix_response(
         owner, LengthGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
         frequencies, responseFermiIndexList, responseOmegaIndexList,
-        finiteTemperatureOccupations, fullCovariantDerivative)
+        finiteTemperatureOccupations, fullCovariantDerivative, collision=collision)
 
 def _contract_first_order_vg_response(owner, drive_vertices, observable_vertices,
                                       contact_vertices, frequencies,
                                       responseFermiIndexList=None,
                                       responseOmegaIndexList=None,
                                       finiteTemperatureOccupations=True,
-                                      fullCovariantDerivative=True):
+                                      fullCovariantDerivative=True, *, collision):
     """Contract the pole-subtracted VG response and its observable contact term.
 
     ``contact_vertices[idrive][iobservable]`` is ``dO/dA`` with shape
@@ -363,7 +368,7 @@ def _contract_first_order_vg_response(owner, drive_vertices, observable_vertices
     kernel, projected_channels, response_channels = _contract_first_order_density_matrix_response(
         owner, VelocityGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
         frequencies, responseFermiIndexList, responseOmegaIndexList,
-        finiteTemperatureOccupations, fullCovariantDerivative)
+        finiteTemperatureOccupations, fullCovariantDerivative, collision=collision)
     _, component_shape = _first_order_observable_shape(owner, observable_vertices)
     if len(contact_vertices) != len(drive_vertices) or any(
             len(values) != len(observable_vertices) for values in contact_vertices):
@@ -454,7 +459,7 @@ def _store_dc_galvanic_density_matrix(owner, kernel, projected_channels,
 def _solve_dc_galvanic_lg_density_matrix(owner, observable_vertices,
                                           responseFermiIndexList,
                                           finiteTemperatureOccupations,
-                                          fullCovariantDerivative, units):
+                                          fullCovariantDerivative, units, *, collision):
     """Contract the first-order LG kernel with a vector observable."""
     owner.fullCovariantDerivative = bool(fullCovariantDerivative)
     drive_vertices = [owner.velocity_K] + owner.projected_velocity_K_list
@@ -462,7 +467,7 @@ def _solve_dc_galvanic_lg_density_matrix(owner, observable_vertices,
         owner, drive_vertices, observable_vertices, np.array([0.]),
         responseFermiIndexList=responseFermiIndexList, responseOmegaIndexList=[0],
         finiteTemperatureOccupations=finiteTemperatureOccupations,
-        fullCovariantDerivative=owner.fullCovariantDerivative)
+        fullCovariantDerivative=owner.fullCovariantDerivative, collision=collision)
     _store_dc_galvanic_density_matrix(
         owner, kernel, projected_channels, response_channels, units)
 
@@ -470,7 +475,7 @@ def _solve_dc_galvanic_vg_density_matrix(owner, observable_vertices,
                                           observable_contact_vertices,
                                           responseFermiIndexList,
                                           finiteTemperatureOccupations,
-                                          fullCovariantDerivative, units):
+                                          fullCovariantDerivative, units, *, collision):
     """Contract the pole-subtracted first-order VG kernel at zero frequency."""
     owner.fullCovariantDerivative = bool(fullCovariantDerivative)
     if owner.projected_velocity_K_list:
@@ -479,7 +484,7 @@ def _solve_dc_galvanic_vg_density_matrix(owner, observable_vertices,
         owner, [owner.velocity_K], observable_vertices, [observable_contact_vertices],
         np.array([0.]), responseFermiIndexList=responseFermiIndexList,
         responseOmegaIndexList=[0], finiteTemperatureOccupations=finiteTemperatureOccupations,
-        fullCovariantDerivative=owner.fullCovariantDerivative)
+        fullCovariantDerivative=owner.fullCovariantDerivative, collision=collision)
     _store_dc_galvanic_density_matrix(
         owner, kernel, projected_channels, response_channels, units, pole_residual)
 
@@ -487,6 +492,34 @@ def _zero_vg_observable_contacts(observable_vertices):
     """Return dO/dA=0 vertices for field-independent local observables."""
     return [np.zeros(vertex.shape[:-2]+(3,)+vertex.shape[-2:], dtype=complex)
             for vertex in observable_vertices]
+
+class CollisionPreparation:
+    """Prepare collisions after the electronic stages and before the response.
+
+    collisionSpecification and preparedCollision are alternative inputs.
+    epcModel is passed explicitly to preparation; the prepared result retains
+    the physical model pair. Plain electronic calculators do not own these
+    settings. Cooperative initialization completes all electronic vertices
+    before constructing the collision operator.
+    """
+    def __init__(self, *, collisionSpecification=None, preparedCollision=None,
+                 epcModel=None, **kwarg):
+        collision_mode(collisionSpecification, preparedCollision)
+        super().__init__(**kwarg)
+        self.preparedCollision = resolve_collision(
+            self, collisionSpecification, prepared=preparedCollision, epc_model=epcModel)
+        self.collision = self.preparedCollision.operator
+
+class PhononPreparation:
+    """Explicit phonons with a CRTA background, separate from collision preparation."""
+    def __init__(self, *, collisionSpecification=None, preparedCollision=None,
+                 epcModel=None, **kwarg):
+        if preparedCollision is not None:
+            raise ValueError("Explicit/static phonon calculations do not accept preparedCollision; supply a CRTA background")
+        super().__init__(**kwarg)
+        self.epcModel = epcModel
+        self.collision = prepare_phonon_background(
+            self, collisionSpecification, epc_model=epcModel)
 
 class Calculator():
     Iodd = False  # inversion gives minus
@@ -503,7 +536,9 @@ class Calculator():
         - kgrid : tuple(3, dtype=int)
             Size of kmesh
         - eta   : float
-            The relaxation energy, in the same unit with energy, usually eV
+            Broadening for calculators using eta directly, usually eV. 
+            NOTE: It does not select or configure a collision operator for DM 
+            responses.
         - kBT  : float
             Kinetic energy of electron, in the same unit with energy usually eV
         - smr_type : str, "Lorentzian"|"Gaussian"
@@ -523,7 +558,6 @@ class Calculator():
             "model":None,
             "kgrid":(1,1,1),
             "eta":0.0,
-            "collisionSpecification":None,
             "kBT":0.026,
             "smr_type":"Lorentzian",
             "degen":1e-6,
@@ -545,7 +579,6 @@ class Calculator():
         self.kgrid:tuple=defaultSettings["kgrid"]
         assert type(self.kgrid)==tuple, f"expect tuple type of kgrid but {type(self.kgrid)=}"
         self.eta=defaultSettings["eta"]
-        self.collisionSpecification=defaultSettings["collisionSpecification"]
         self.kBT=defaultSettings["kBT"]
         self.smr_type=defaultSettings["smr_type"]
         self.degen=defaultSettings["degen"]
@@ -2036,7 +2069,7 @@ class AnormalousHallConductance_diag(VelocityVelocityCorrelation_diag):
         #self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Intra-band spin Galvanic conductance finished")
 
-class AnormalousHallConductance_LG_DM(Velocity):
+class AnormalousHallConductance_LG_DM(CollisionPreparation, Velocity):
 
     def __init__(self, currentProjectionList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
@@ -2058,7 +2091,7 @@ class AnormalousHallConductance_LG_DM(Velocity):
         current_vertices = [-vertex for vertex in velocity_vertices]  # j=-v in electron units
         kernel, projected_channels, response_channels = _contract_dc_first_order_density_matrix(
             self, velocity_vertices, current_vertices, (3,), responseFermiIndexList,
-            finiteTemperatureOccupations, self.fullCovariantDerivative
+            finiteTemperatureOccupations, self.fullCovariantDerivative, collision=self.collision
         )
         self.density_matrix_kernel = kernel
 
@@ -2082,7 +2115,7 @@ class AnormalousHallConductance_LG_DM(Velocity):
             setattr(self, f"sigma_{name}", self.sigma_channels[name])
         if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix AHE finished")
 
-class _LinearConductivityDM(Velocity):
+class _LinearConductivityDM(CollisionPreparation, Velocity):
     """Common storage/contraction for linear optical and dc conductivity."""
 
     gauge = "LG"
@@ -2110,7 +2143,7 @@ class _LinearConductivityDM(Velocity):
                 responseFermiIndexList=responseFermiIndexList,
                 responseOmegaIndexList=responseOmegaIndexList,
                 finiteTemperatureOccupations=finiteTemperatureOccupations,
-                fullCovariantDerivative=self.fullCovariantDerivative)
+                fullCovariantDerivative=self.fullCovariantDerivative, collision=self.collision)
             self.channel_names = ("I", "E", "C")
         else:
             kernel, sigma, response = _contract_first_order_lg_response(
@@ -2118,7 +2151,7 @@ class _LinearConductivityDM(Velocity):
                 responseFermiIndexList=responseFermiIndexList,
                 responseOmegaIndexList=responseOmegaIndexList,
                 finiteTemperatureOccupations=finiteTemperatureOccupations,
-                fullCovariantDerivative=self.fullCovariantDerivative)
+                fullCovariantDerivative=self.fullCovariantDerivative, collision=self.collision)
             pole_residual = None
             self.channel_names = kernel.channel_names
         self.density_matrix_kernel = kernel
@@ -2183,7 +2216,7 @@ class Opticalconductivity_VG_DM(_LinearConductivityDM):
     """
     gauge = "VG"
 
-class Opticalconductivity_VG_DM_StaticEPC(Velocity):
+class Opticalconductivity_VG_DM_StaticEPC(PhononPreparation, Velocity):
     """Complete static Gaussian EPC correction, second order in displacement.
 
     Linear electric response including Fan-type repeated linear vertices,
@@ -2207,23 +2240,18 @@ class Opticalconductivity_VG_DM_StaticEPC(Velocity):
             raise NotImplementedError('Static EPC VG DM requires total current and a complete orthogonal basis')
         if not fullCovariantDerivative or not finiteTemperatureOccupations:
             raise ValueError('Static EPC VG DM requires full covariant finite-temperature occupations')
-        requested = kwarg.get('collisionSpecification')
-        requested_mode = requested.lower() if isinstance(requested, str) else getattr(requested, 'mode', 'crta')
-        if requested_mode != 'crta':
-            raise ValueError('Static EPC expansion requires CRTA background only; adding SERTA/full collision would double count EPC')
         kwarg.pop('highOrderVelocity', None)
         super().__init__(highOrderVelocity=False, **kwarg)
         if np.any(~np.isfinite(self.omegaList)):
             raise ValueError('Optical frequencies must be finite')
-        self.collision = CollisionSpecification.fromOwner(self)
         self.Iodd, self.Todd = False, True
         self.conductivity_units = 'S/m'
         self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
         from .phonon_static import solve_static_epc_conductivity
         solve_static_epc_conductivity(self, phononTemperature, phononStatistics,
-            movingCenters, displacementFactors, kBatchSize)
+            movingCenters, displacementFactors, kBatchSize, epc_model=self.epcModel, collision=self.collision)
 
-class Opticalconductivity_VG_DM_Phonon(Velocity):
+class Opticalconductivity_VG_DM_Phonon(PhononPreparation, Velocity):
     """Frequency-domain VG DM for a prescribed periodic SSH phonon bath.
 
     Full conditional density matrices and phonon harmonics replace the
@@ -2255,7 +2283,6 @@ class Opticalconductivity_VG_DM_Phonon(Velocity):
         super().__init__(highOrderVelocity=False, **kwarg)
         if self.kBT <= 0 or np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
             raise ValueError("Phonon VG DM requires kBT > 0 and positive finite optical frequencies")
-        self.collision = CollisionSpecification.fromOwner(self)
         self.Iodd, self.Todd = False, True
         self.sigma = np.zeros((len(self.fermiList), len(self.omegaList), 3, 3), complex)
         self.projected_sigma = self.sigma[None, None]
@@ -2265,7 +2292,7 @@ class Opticalconductivity_VG_DM_Phonon(Velocity):
         solve_phonon_conductivity(self, phononTemperature, phononStatistics,
             nPhononTrajectories, phononSeed, phononPhasePoints,
             solverTolerance, solverMaxiter, solverRestart,
-            damping=phononDamping, bath_cycles=phononBathCycles)
+            damping=phononDamping, bath_cycles=phononBathCycles, epc_model=self.epcModel, collision=self.collision)
 
     def lockinConductivity(self, times, sample=0, ifermi=0, iomega=0):
         from .phonon_frequency import lockin_conductivity
@@ -2311,7 +2338,10 @@ class Opticalconductivity_TDSE(Velocity):
                  finiteTemperatureOccupations=True, phononDynamics=False,
                  phononTemperature=300., phononStatistics='classical',
                  nPhononTrajectories=4, phononSeed=2026, phononCycles=1.,
-                 phononDamping=0., phononBathCycles=8., phononPhasePoints=33, **kwarg):
+                 phononDamping=0., phononBathCycles=8., phononPhasePoints=33,
+                 collisionSpecification=None, preparedCollision=None, epcModel=None, **kwarg):
+        if phononDynamics and preparedCollision is not None:
+            raise ValueError("Explicit phonon dynamics does not accept preparedCollision")
         if currentProjectionList:
             raise NotImplementedError("TDSE currently supports total current only")
         if not fullCovariantDerivative or not finiteTemperatureOccupations:
@@ -2320,21 +2350,18 @@ class Opticalconductivity_TDSE(Velocity):
             raise NotImplementedError("TDSE requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
         super().__init__(highOrderVelocity=not phononDynamics, **kwarg)
-        if self.kBT <= 0:
-            raise ValueError("TDSE benchmark requires kBT > 0")
         if np.any(~np.isfinite(self.omegaList)) or np.any(np.asarray(self.omegaList) <= 0):
             raise ValueError("TDSE requires positive photon energies; use a DM calculator for dc")
         self.Iodd, self.Todd = False, True
-        specification = self.collisionSpecification
-        mode = (specification.mode if isinstance(specification, CollisionSpecification)
-                else "crta" if specification is None else str(specification).lower())
-        if mode in ("full", "epc_markov"):
-            mode = "epc"
-        if phononDynamics and mode != "crta":
-            raise ValueError("Explicit phonon trajectories require CRTA background only; an EPC/SERTA collision would double count scattering")
+        mode = collision_mode(collisionSpecification, preparedCollision)
         if not phononDynamics and mode == "epc":
             raise NotImplementedError("Opticalconductivity_TDSE does not propagate the mesh-global EPC collision operator")
-        self.collision = CollisionSpecification.fromOwner(self)
+        if phononDynamics:
+            self.collision = prepare_phonon_background(self, collisionSpecification, epc_model=epcModel)
+        else:
+            self.preparedCollision = resolve_collision(
+                self, collisionSpecification, prepared=preparedCollision, epc_model=epcModel)
+            self.collision = self.preparedCollision.operator
         gamma = self.collision.coherence_linewidth
         if np.min(gamma) <= self.collision.specification.linewidthFloor:
             raise ValueError("Steady-state TDSE requires strictly positive relaxation linewidths")
@@ -2355,7 +2382,7 @@ class Opticalconductivity_TDSE(Velocity):
                 statistics=phononStatistics, trajectories=nPhononTrajectories,
                 seed=phononSeed, phonon_cycles=phononCycles,
                 phonon_damping=phononDamping, bath_cycles=phononBathCycles,
-                phase_points=phononPhasePoints)
+                phase_points=phononPhasePoints, epc_model=epcModel, collision=self.collision)
             return
         h0 = diagonal_matrix(self.energies)
         scale = elementary_charge**2 / (hbar*angstrom*abs(self.model.Vcell))
@@ -2927,7 +2954,7 @@ class BulkPhotovoltaicEffect_VG(Velocity):
         #self.projected_responsibility = self.projected_sigma * factor_responsivity
         if self.verbose == 2: showElapsedTime(extraInfo=f"Full Velocity Gauge BPVE finished")
 
-class BulkPhotovoltaicEffect_VG_DM(Dipole):
+class BulkPhotovoltaicEffect_VG_DM(CollisionPreparation, Dipole):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -2965,7 +2992,8 @@ class BulkPhotovoltaicEffect_VG_DM(Dipole):
         }
 
         kernel = VelocityGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations
+            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            collision=self.collision
         )
         self.density_matrix_kernel = kernel
         velocity_observable = -self.velocity_K  # j(A)=-v-A*w-A*A*u/2
@@ -3148,7 +3176,7 @@ class BulkPhotovoltaicEffect_LG_Injection(Dipole):
 
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge Injection Current finished")
 
-class BulkPhotovoltaicEffect_LG_DM(Dipole):
+class BulkPhotovoltaicEffect_LG_DM(CollisionPreparation, Dipole):
     def __init__(self, velocityProjectionList=[], responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -3192,7 +3220,8 @@ class BulkPhotovoltaicEffect_LG_DM(Dipole):
         self.projected_response = np.zeros(projected_shape, dtype=complex)
 
         kernel = LengthGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations
+            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            collision=self.collision
         )
         self.density_matrix_kernel = kernel
         self.channel_descriptions = dict(kernel.channel_descriptions)
@@ -3516,7 +3545,7 @@ class InverseFaradayEffect_LG(Dipole, Spin, Orbital):
         self.projected_sigma = self.chi_IFE[None,None,None,...]
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE finished")
 
-class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
+class InverseFaradayEffect_LG_DM(CollisionPreparation, Dipole, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
                  responseFermiIndexList=None, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -3563,7 +3592,7 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
         self.chi_IFE = np.zeros(response_shape, dtype=complex)
         self.projected_response = np.zeros(projected_shape, dtype=complex)
 
-        kernel = LengthGaugeSecondOrderDMKernel(self, self.fullCovariantDerivative)
+        kernel = LengthGaugeSecondOrderDMKernel(self, self.fullCovariantDerivative, collision=self.collision)
         self.density_matrix_kernel = kernel
         self.channel_descriptions = dict(kernel.channel_descriptions)
         for ifermi, fermi in enumerate(self.fermiList):
@@ -3599,7 +3628,7 @@ class InverseFaradayEffect_LG_DM(Dipole, Spin, Orbital):
             setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE density matrix finished")
 
-class InverseFaradayEffect_VG_DM(Dipole, Spin, Orbital):
+class InverseFaradayEffect_VG_DM(CollisionPreparation, Dipole, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
                  responseFermiIndexList=None, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -3648,7 +3677,7 @@ class InverseFaradayEffect_VG_DM(Dipole, Spin, Orbital):
             name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
         }
 
-        kernel = VelocityGaugeSecondOrderDMKernel(self, self.fullCovariantDerivative)
+        kernel = VelocityGaugeSecondOrderDMKernel(self, self.fullCovariantDerivative, collision=self.collision)
         self.density_matrix_kernel = kernel
         for ifermi, fermi in enumerate(self.fermiList):
             fermi_state = kernel.fermi_state(ifermi, fermi)
@@ -4317,7 +4346,7 @@ class InverseFaradayTorque_TDSE(Dipole, SpinExchangeTorque, OrbitalTorque):
     _prepare_covariant_tdse_drive = InverseFaradayEffect_TDSE._prepare_covariant_tdse_drive
     _rk4_step_channels = InverseFaradayEffect_TDSE._rk4_step_channels
 
-class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_LG_DM(CollisionPreparation, Dipole, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
@@ -4395,7 +4424,8 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         self.projected_response = np.zeros(projected_response_shape, dtype=complex)
 
         kernel = LengthGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations
+            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            collision=self.collision
         )
         self.density_matrix_kernel = kernel
         self.channel_descriptions = dict(kernel.channel_descriptions)
@@ -4465,7 +4495,7 @@ class InverseFaradayTorque_LG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
             setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
         if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
 
-class InverseFaradayTorque_VG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
+class InverseFaradayTorque_VG_DM(CollisionPreparation, Dipole, SpinExchangeTorque, OrbitalTorque):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, exchangeVelocity=True,
@@ -4536,7 +4566,8 @@ class InverseFaradayTorque_VG_DM(Dipole, SpinExchangeTorque, OrbitalTorque):
         }
 
         kernel = VelocityGaugeSecondOrderDMKernel(
-            self, self.fullCovariantDerivative, finiteTemperatureOccupations
+            self, self.fullCovariantDerivative, finiteTemperatureOccupations,
+            collision=self.collision
         )
         self.density_matrix_kernel = kernel
         for ifermi, fermi in enumerate(self.fermiList):
@@ -4676,7 +4707,7 @@ class SpinHallConductance(SpinBerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Spin Hall conductance finished")
 
-class SpinHallConductance_LG_DM(SpinVelocity):
+class SpinHallConductance_LG_DM(CollisionPreparation, SpinVelocity):
     def __init__(self, currentProjectionList=[], spincurrentProjectionList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
@@ -4698,7 +4729,7 @@ class SpinHallConductance_LG_DM(SpinVelocity):
         observable_vertices = [self.spinVelocity_K] + self.projected_spinVelocity_K_list
         kernel, projected_channels, response_channels = _contract_dc_first_order_density_matrix(
             self, drive_vertices, observable_vertices, (3, 3), responseFermiIndexList,
-            finiteTemperatureOccupations, self.fullCovariantDerivative
+            finiteTemperatureOccupations, self.fullCovariantDerivative, collision=self.collision
         )
         self.density_matrix_kernel = kernel
 
@@ -4844,7 +4875,7 @@ class SpinVelocityCorrelation(Spin,Velocity):
         self.spinVelocityCorrelation=self.projected_spinVelocityCorrelation[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation functions <Spin \dot velocity> finished")
 
-class SpinGalvanicConductivity_LG_DM(Spin, Velocity):
+class SpinGalvanicConductivity_LG_DM(CollisionPreparation, Spin, Velocity):
     """Dc electric-field-induced spin magnetic moment from the LG DM kernel.
 
     ``sigma[fermi, field_direction, spin_direction]`` is measured in
@@ -4867,11 +4898,11 @@ class SpinGalvanicConductivity_LG_DM(Spin, Velocity):
         _solve_dc_galvanic_lg_density_matrix(
             self, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
-            "mu_B/(V/angstrom)/cell"
+            "mu_B/(V/angstrom)/cell", collision=self.collision
         )
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin galvanic conductivity finished")
 
-class SpinGalvanicConductivity_VG_DM(Spin, Velocity):
+class SpinGalvanicConductivity_VG_DM(CollisionPreparation, Spin, Velocity):
     """Dc electric-field-induced spin moment from the pole-subtracted VG DM kernel.
 
     The spin operator is field independent, so its explicit ``dO/dA`` contact
@@ -4897,7 +4928,7 @@ class SpinGalvanicConductivity_VG_DM(Spin, Velocity):
         _solve_dc_galvanic_vg_density_matrix(
             self, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
             responseFermiIndexList, finiteTemperatureOccupations,
-            fullCovariantDerivative, "mu_B/(V/angstrom)/cell")
+            fullCovariantDerivative, "mu_B/(V/angstrom)/cell", collision=self.collision)
         if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix spin galvanic conductivity finished")
 
 class SpinGalvanicConductance(SpinVelocityCorrelation):
@@ -4949,7 +4980,7 @@ class OrbitalVelocityCorrelation(Orbital,Velocity):
         self.orbitalVelocityCorrelation=self.projected_orbitalVelocityCorrelation[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation functions <L \dot velocity> finished")
 
-class OrbitalGalvanicConductivity_LG_DM(Orbital, Velocity):
+class OrbitalGalvanicConductivity_LG_DM(CollisionPreparation, Orbital, Velocity):
     """Dc electric-field-induced local orbital moment from the LG DM kernel.
 
     ``sigma[fermi, field_direction, orbital_direction]`` is measured in
@@ -4971,11 +5002,11 @@ class OrbitalGalvanicConductivity_LG_DM(Orbital, Velocity):
         _solve_dc_galvanic_lg_density_matrix(
             self, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
-            "mu_B/(V/angstrom)/cell"
+            "mu_B/(V/angstrom)/cell", collision=self.collision
         )
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix orbital galvanic conductivity finished")
 
-class OrbitalGalvanicConductivity_VG_DM(Orbital, Velocity):
+class OrbitalGalvanicConductivity_VG_DM(CollisionPreparation, Orbital, Velocity):
     """Dc local-orbital moment induced by an electric field in the VG DM kernel.
 
     This uses the same local-circulation orbital operator as the LG class and
@@ -5001,7 +5032,7 @@ class OrbitalGalvanicConductivity_VG_DM(Orbital, Velocity):
         _solve_dc_galvanic_vg_density_matrix(
             self, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
             responseFermiIndexList, finiteTemperatureOccupations,
-            fullCovariantDerivative, "mu_B/(V/angstrom)/cell")
+            fullCovariantDerivative, "mu_B/(V/angstrom)/cell", collision=self.collision)
         if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix orbital galvanic conductivity finished")
 
 class OrbitalGalvanicConductance(OrbitalVelocityCorrelation):
@@ -5144,7 +5175,7 @@ class SpintorqueVelocityCorrelation(SpinExchangeTorque,Velocity):
         
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation function <Torque_Spin velocity> finished")
 
-class SpintorqueGalvanicConductivity_LG_DM(SpinExchangeTorque, Velocity):
+class SpintorqueGalvanicConductivity_LG_DM(CollisionPreparation, SpinExchangeTorque, Velocity):
     """Dc electric-field-induced spin exchange torque from the LG DM kernel.
 
     ``sigma[fermi, field_direction, torque_direction]`` is the electronic
@@ -5166,11 +5197,11 @@ class SpintorqueGalvanicConductivity_LG_DM(SpinExchangeTorque, Velocity):
         _solve_dc_galvanic_lg_density_matrix(
             self, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
-            "mu_B*eV/(V/angstrom)/cell"
+            "mu_B*eV/(V/angstrom)/cell", collision=self.collision
         )
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin-torque galvanic conductivity finished")
 
-class SpintorqueGalvanicConductivity_VG_DM(SpinExchangeTorque, Velocity):
+class SpintorqueGalvanicConductivity_VG_DM(CollisionPreparation, SpinExchangeTorque, Velocity):
     """Dc electric-field-induced exchange torque from the VG DM kernel.
 
     For nonlocal exchange, ``exchangeVelocity=True`` includes
@@ -5199,7 +5230,7 @@ class SpintorqueGalvanicConductivity_VG_DM(SpinExchangeTorque, Velocity):
         _solve_dc_galvanic_vg_density_matrix(
             self, observable_vertices, contact_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
-            "mu_B*eV/(V/angstrom)/cell")
+            "mu_B*eV/(V/angstrom)/cell", collision=self.collision)
         if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix spin-torque galvanic conductivity finished")
 
 class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):

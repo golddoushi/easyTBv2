@@ -1,7 +1,7 @@
 # Model electron self-energies and frozen-supercell validation
 
 `calculator.ModelElectronSelfEnergy` computes the leading retarded Fan-Migdal
-(FM) and Debye-Waller (DW) contributions using `System.modelEPC` and the
+(FM) and Debye-Waller (DW) contributions using an explicit `SSHModelEPC` and its
 prescribed phonon model. It does not mutate the electronic Hamiltonian, add
 linewidths to a DM collision operator, or perform a self-consistent Dyson solve.
 
@@ -45,7 +45,7 @@ The first-order matrix g alone does not determine a nonzero DW contribution.
 For a nonzero DW benchmark, a separate quadratic coefficient can be supplied:
 
 ```python
-model.addModelEPC(directory, alphaR="epc", betaR="quadratic")
+epc = SSHModelEPC.from_files(model, phonons, alphaR="epc", betaR="quadratic")
 ```
 
 `quadratic_hr.dat` has the same scalar/spatial-index layout as `epc_hr.dat`,
@@ -100,7 +100,7 @@ H''_ij(k;q,nu;-q,nu) = sum_R exp(2*pi*i*k.R) beta_ij(R)
 ```
 
 Here e includes the zero-point displacement length (Angstrom), as returned by
-`model.modelPhonons.modeDisplacements(q)`. `secondDisplacementVertex` returns
+`epc.phonon_model.modeDisplacements(q)`. `secondDisplacementVertex` returns
 H'' without the thermal factor or 1/2. DW is frequency independent and
 Hermitian; its diagonal is real. This factor of 1/2 is checked against an
 independently averaged quadratic supercell Hamiltonian.
@@ -112,10 +112,10 @@ from calculator import ModelElectronSelfEnergy
 from calculator.model_self_energy import uniform_qmesh
 from examples.honeycomb_four_band import build_model
 
-model = build_model("tmp/my_model")
+model, epc = build_model("tmp/my_model")
 kpoints = uniform_qmesh((12, 12, 1))
 se = ModelElectronSelfEnergy(
-    model, kpoints, qgrid=(12, 12, 1),
+    epc, kpoints, qgrid=(12, 12, 1),
     temperature=300, fermi=0.0, delta=0.005, adiabatic=False)
 
 fan = se.fan_migdal                # complex (nk,nb), evaluated on shell
@@ -147,9 +147,9 @@ including a 1x1x1 grid. With explicit `qpoints`, `Path.EnergyOnPath` solves the
 unique k and k+q points together, identifying reciprocal-lattice duplicates.
 The underlying calculators are available as `se.energy_calculators`.
 
-The self-energy loop passes these eigenvectors to `getModelEPC`, preserving
+The self-energy loop passes these eigenvectors to `epc.matrixElements`, preserving
 the calculator's band gauge and avoiding repeated solves. A standalone call
-to `getModelEPC` without eigenvectors also uses `EnergyOnPath`. The current
+to `epc.matrixElements` without eigenvectors also uses `EnergyOnPath`. The current
 EPC model still requires an orthogonal basis; reusing these electronic
 solvers does not add overlap-derivative EPC terms.
 

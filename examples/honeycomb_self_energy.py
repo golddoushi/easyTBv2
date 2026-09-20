@@ -25,20 +25,21 @@ from examples.honeycomb_four_band import build_model, write_hr
 from system import SSHModelEPC
 
 
-def sample_gaps(sc, temperature, pairs, seed):
+def sample_gaps(sc_epc, temperature, pairs, seed):
     """Independent antithetic Gaussian pairs; return their gap shifts in eV."""
+    sc = sc_epc.electronic_model
     bare = np.linalg.eigvalsh(sc.ham_R.sum(axis=0))
     occupied = sc.norbs//2
     gap0 = bare[occupied]-bare[occupied-1]
     if gap0 <= 0:
         raise ValueError("The supercell must have a positive half-filling gap")
-    displacements = sc.sampleModelDisplacements(temperature, nSamples=pairs, seed=seed)
+    displacements = sc_epc.phonon_model.sampleDisplacements(temperature, nSamples=pairs, seed=seed)
     shifts = np.zeros(pairs)
     for sample, u in enumerate(displacements):
         for sign in (-1, 1):
             # Identical electronic Hamiltonian to makeDisplacedModel, without
             # copying/rebuilding position and velocity operators not used here.
-            h = sc.ham_R + sc.modelEPC.deltaHamiltonian(sc, sign*u)
+            h = sc.ham_R + sc_epc.deltaHamiltonian(sign*u)
             energies = np.linalg.eigvalsh(h.sum(axis=0))
             shifts[sample] += 0.5*(energies[occupied]-energies[occupied-1]-gap0)
     return gap0, shifts
@@ -68,16 +69,16 @@ def main():
         name = 'quadratic' if quadratic else 'linear'
         directory = output/name
         with contextlib.redirect_stdout(io.StringIO()):
-            model = build_model(directory, alpha=0.5*args.scale)
+            model, epc = build_model(directory, alpha=0.5*args.scale)
             if quadratic:
-                beta = np.where(model.modelEPC.alpha_R[:, :2, :2] != 0, args.beta*args.scale**2, 0)
+                beta = np.where(epc.alpha_R[:, :2, :2] != 0, args.beta*args.scale**2, 0)
                 write_hr(directory/'quadratic_hr.dat', model.iRvec, beta, 'd2H/d(projected stretch)^2; eV/Angstrom^2')
-                model.addModelEPC(SSHModelEPC, betaR='quadratic')
-            sc = copy.deepcopy(model)
-            sc.make_supercell(np.diag(grid))
+                epc = SSHModelEPC.from_files(model, epc.phonon_model, betaR='quadratic')
+            sc_epc = epc.supercell(np.diag(grid))
+            sc = sc_epc.electronic_model
         for it, temperature in enumerate(args.temperatures):
-            common = dict(model=model, kpoints=kpoints, qgrid=grid, temperature=temperature,
-                          fermi=0.0, eta=args.eta)
+            common = dict(epc_model=epc, kpoints=kpoints, qgrid=grid, temperature=temperature,
+                          fermi=0.0, delta=args.eta)
             static = ModelElectronSelfEnergy(adiabatic=True, **common)
             dynamic = ModelElectronSelfEnergy(adiabatic=False, **common)
             vbm = np.unravel_index(np.argmax(static.energies[:, :2]), (len(kpoints), 2))
@@ -85,7 +86,7 @@ def main():
             cbm = (cbm0[0], cbm0[1]+2)
             fan_shift = float((static.fan_migdal[cbm]-static.fan_migdal[vbm]).real)
             dw_shift = float(static.debye_waller[cbm]-static.debye_waller[vbm])
-            gap0, samples = sample_gaps(sc, temperature, args.pairs, args.seed+it)
+            gap0, samples = sample_gaps(sc_epc, temperature, args.pairs, args.seed+it)
             average = float(samples.mean())
             error = float(samples.std(ddof=1)/np.sqrt(args.pairs))
             prediction = static.bandGap(2)['gap_shift']

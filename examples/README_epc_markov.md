@@ -5,6 +5,9 @@ calculator's existing Energy eigensystem. It is a fixed-number secular Pauli
 approximation with population scattering-in, not a full non-Markov optical
 collision kernel. The name `full` remains an alias for compatibility.
 
+The `epc` object explicitly pairs the electronic and phonon models; see
+[model construction](README_epc_models.md).
+
 ```python
 collision = CollisionSpecification(
     'epc', qgrid=(4, 4, 1), bathStatistics='quantum',
@@ -13,7 +16,7 @@ collision = CollisionSpecification(
     stationaryTolerance=1e-12, enforceDetailedBalance=True,
 )
 calc = Opticalconductivity_VG_DM(
-    model=model, kgrid=(16, 16, 1), kBT=.025852,
+    model=model, epcModel=epc, kgrid=(16, 16, 1), kBT=.025852,
     fermiList=np.array([-.7]), omegaList=np.array([1.3]),
     fullCovariantDerivative=True, collisionSpecification=collision,
 )
@@ -25,7 +28,10 @@ The electronic `kBT` must match `phononTemperature` when detailed balance is
 enabled. The complete orthogonal model basis is required. Each q-grid dimension must
 divide the corresponding electronic k-grid dimension. Use the complete
 coupled k mesh in one calculator; independent shifted-grid task partitions do
-not reproduce a collision connecting states across those partitions. Projected
+not reproduce a collision connecting states across those partitions. `BZGridTask`
+now schedules EPC as one complete `BZGrid` task, even when more workers are
+requested. See [collision preparation and reuse](README_collision_preparation.md)
+for sharing rates across response calculators. Projected
 observables are supported where the existing calculator supports them, but
 the electric drive must use the total velocity vertex.
 

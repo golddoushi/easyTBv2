@@ -48,11 +48,11 @@ def propagate_phonon_conductivity(owner, *, n_steps_per_cycle, n_cycles_measure,
                                  transient_lifetimes, max_phase_step, recordCurrent,
                                  temperature, statistics, trajectories, seed,
                                  phonon_cycles, phonon_damping=0., bath_cycles=8.,
-                                 phase_points=33):
+                                 phase_points=33, epc_model, collision):
     """Populate the existing Opticalconductivity_TDSE output interface."""
-    if owner.collision.specification.mode != 'crta':
+    if collision.specification.mode != 'crta':
         raise ValueError("Explicit phonon trajectories require CRTA background only; EPC SERTA would double count scattering")
-    gamma = owner.collision.specification.constantLinewidth
+    gamma = collision.specification.constantLinewidth
     if (not np.isfinite(gamma) or gamma <= 0 or trajectories < 1 or int(trajectories) != trajectories
             or n_steps_per_cycle < 1 or int(n_steps_per_cycle) != n_steps_per_cycle
             or n_cycles_measure < 1 or int(n_cycles_measure) != n_cycles_measure
@@ -65,8 +65,8 @@ def propagate_phonon_conductivity(owner, *, n_steps_per_cycle, n_cycles_measure,
         raise ValueError("phononDamping must be nonnegative and finite, in eV")
     if not np.isfinite(bath_cycles) or bath_cycles <= 0:
         raise ValueError("phononBathCycles must be positive and finite")
-    operators = SSHTimeOperators(owner)
-    phonons = owner.model.modelPhonons
+    operators = SSHTimeOperators(owner, epc_model)
+    phonons = epc_model.phonon_model
     spawned_seeds = np.random.SeedSequence(seed).spawn(int(trajectories))
     if phonon_damping == 0:
         samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)

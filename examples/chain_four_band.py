@@ -17,7 +17,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from system import System_tb, SSHModelEPC
+from system import System_tb, SSHModelEPC, EinsteinPhonons
 
 
 def write_hr(path, iRvec, values, title):
@@ -42,7 +42,7 @@ def build_model(directory, latticeConstant=2.2, intracellDistance=.9,
                 rashba=(.16, .11), exchange=.24,
                 exchangeDirection=(.35, .25, np.sqrt(.815)), epc=(.45, .35),
                 masses=(12., 14.), phononEnergy=.04):
-    """Write model files and return a spinful four-band ``System_tb``.
+    """Write model files and return the electronic model and its separate EPC model.
 
     ``hopping=(intra, inter)`` and ``epc=(intra, inter)`` distinguish the two
     bonds. ``onsiteDifference`` is E_A-E_B. The unequal bonds plus this onsite
@@ -96,9 +96,9 @@ def build_model(directory, latticeConstant=2.2, intracellDistance=.9,
     model.addExchangeSplitting([(0, (0,)), (1, (0,))],
                                -exchange*direction/np.linalg.norm(direction))
     model.addRashbaSOC()
-    model.addModelEPC(SSHModelEPC)
-    model.setModelPhonons(masses=masses, phononEnergies=phononEnergy, directions=(0,))
-    return model
+    phonons = EinsteinPhonons(masses, phononEnergy, directions=(0,))
+    epc_model = SSHModelEPC.from_files(model, phonons)
+    return model, epc_model
 
 
 def main(argv=None):
@@ -108,10 +108,10 @@ def main(argv=None):
     parser.add_argument('--k-grid', type=int, default=128,
                         help='Number of points along the one-dimensional Brillouin zone')
     args = parser.parse_args(argv)
-    model = build_model(Path(args.output))
+    model, epc = build_model(Path(args.output))
     from calculator import Energy, Velocity
-    energy = Energy(model=model, kgrid=(args.k_grid, 1, 1))
-    velocity = Velocity(model=model, kgrid=(args.k_grid, 1, 1))
+    energy = Energy(model=model, epcModel=epc, kgrid=(args.k_grid, 1, 1))
+    velocity = Velocity(model=model, epcModel=epc, kgrid=(args.k_grid, 1, 1))
     bands = energy.energies.reshape(args.k_grid, model.norbs)
     occupied_max = float(np.max(bands[:, 1]))
     empty_min = float(np.min(bands[:, 2]))

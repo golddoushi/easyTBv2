@@ -25,8 +25,8 @@ class ModelElectronSelfEnergy:
 
     Parameters
     ----------
-    model : System
-        An equilibrium model with modelEPC and modelPhonons attached.
+    epc_model : SSHModelEPC
+        Coupling with explicit equilibrium electronic and phonon models.
     kpoints : array (nk,3), or one 3-vector
         Fractional reciprocal coordinates of the external electronic states.
     qgrid : tuple, optional
@@ -39,7 +39,7 @@ class ModelElectronSelfEnergy:
         For explicit quadrature, EnergyOnPath solves the unique electronic
         points together. The underlying solvers are in energy_calculators.
     phononSelection : PhononModeSelection, optional
-        Explicit q/branch/weight selection, also read from modelPhonons.modeSelection.
+        Explicit q/branch/weight selection, also read from epc_model.phonon_model.modeSelection.
         Supersedes qgrid and preserves absolute weights without renormalizing.
         Cannot be combined with the legacy explicit qpoints/qweights arguments.
     temperature : float
@@ -81,16 +81,14 @@ class ModelElectronSelfEnergy:
     Static Im(Sigma) depends on delta and is not a quantum EPC transport rate.
     """
 
-    def __init__(self, model, kpoints, qgrid=None, qpoints=None, qweights=None,
+    def __init__(self, epc_model, kpoints, qgrid=None, qpoints=None, qweights=None,
                  temperature=0.0, fermi=0.0, delta=1e-3, adiabatic=False, energyList=None,
                  bathStatistics="quantum", phononSelection=None):
-        if model.modelEPC is None or model.modelPhonons is None:
-            raise ValueError("Attach model EPC and model phonons before computing self-energy")
-        model.modelEPC.validate(model)
-        if len(model.modelPhonons.masses) != model.modelEPC.natoms:
-            raise ValueError("Phonon and EPC atom counts differ")
+        self.epc_model = epc_model
+        model = epc_model.electronic_model
+        epc_model.validate()
         self.kpoints = _points(kpoints, "kpoints")
-        self.phononSelection = (getattr(model.modelPhonons, 'modeSelection', None)
+        self.phononSelection = (getattr(epc_model.phonon_model, 'modeSelection', None)
                                 if phononSelection is None else phononSelection)
         if self.phononSelection is not None:
             if qpoints is not None or qweights is not None:
@@ -99,9 +97,9 @@ class ModelElectronSelfEnergy:
             qpoints = self.phononSelection.qpoints
             qweights = self.phononSelection.weights
             qgrid = None
-            if len(getattr(model.modelPhonons, '_cell_origins', [None])) != 1:
+            if len(getattr(epc_model.phonon_model, '_cell_origins', [None])) != 1:
                 raise ValueError('evaluate selected EPC rates on the primitive model; the selection uses primitive q and branch labels')
-            self.phononSelection.branch_indices(len(model.modelPhonons.modes(qpoints[0])[0]))
+            self.phononSelection.branch_indices(len(epc_model.phonon_model.modes(qpoints[0])[0]))
         if qpoints is not None and qgrid is not None:
             raise ValueError("Specify qgrid or qpoints, not both")
         self.qpoints = (uniform_qmesh((8, 8, 1) if qgrid is None else qgrid)
@@ -133,7 +131,7 @@ class ModelElectronSelfEnergy:
         self.fan_migdal_matrix = np.zeros((nk, ne, nb, nb), dtype=complex)
         self.debye_waller_matrix = np.zeros((nk, nb, nb), dtype=complex)
         kBT = Boltzmann * self.temperature / electron_volt
-        epc, phonons = model.modelEPC, model.modelPhonons
+        epc, phonons = epc_model, epc_model.phonon_model
         has_quadratic = np.any(epc.beta_R != 0)
 
         # q is the outer loop so all electronic k points share one vectorized
@@ -157,7 +155,7 @@ class ModelElectronSelfEnergy:
                 x = phonon_energies / kBT
                 bose = np.exp(-x) / (-np.expm1(-x))
                 occupation = expit((self.fermi-intermediate) / kBT)
-            g = model.getModelEPCBatch(
+            g = epc_model.matrixElementsBatch(
                 self.kpoints, q, self.vectors, vectors_kq)[:, branches]
             denominator = (self.evaluation_energies[:, :, None, None]
                            - intermediate[:, None, None, :] + 1j*self.delta)
@@ -185,10 +183,10 @@ class ModelElectronSelfEnergy:
                 displacements = phonons.modeDisplacements(q)[branches]
                 if hasattr(epc, "secondDisplacementVertices"):
                     hessian = epc.secondDisplacementVertices(
-                        model, self.kpoints, q, displacements)
+                        self.kpoints, q, displacements)
                 else:
                     hessian = np.array([
-                        [epc.secondDisplacementVertex(model, k, q, u)
+                        [epc.secondDisplacementVertex(k, q, u)
                          for u in displacements]
                         for k in self.kpoints])
                 hessian_band = (self.vectors.conj().swapaxes(-2, -1)[:, None]
@@ -314,6 +312,9 @@ class ModelElectronSelfEnergy:
 class ModelEPCLinewidth:
     """On-shell toy-EPC linewidth source for ``CollisionSpecification('serta')``.
 
+    epc_model supplies the electronic/phonon model pair and coupling. It must
+    refer to the same electronic model as each consuming calculator.
+
     ``adiabatic=False`` is the dynamical Fan-Migdal/SERTA rate with phonon
     absorption, emission, and Pauli factors. ``adiabatic=True`` is the elastic
     frozen-phonon Born rate obtained from the static Fan propagator. In that
@@ -322,7 +323,7 @@ class ModelEPCLinewidth:
 
     The calculator's ``kOffset`` mesh is evaluated in one
     ``ModelElectronSelfEnergy`` call. Results are cached and reused by
-    LG, VG, and TDSE calculators having identical energies. The source supplies
+    LG, VG, and TDSE calculators for the same unchanged model and mesh. The source supplies
     linewidths only: it does not add Re(Sigma), Debye-Waller shifts, or vertex
     corrections to optical matrix elements.
 
@@ -331,12 +332,13 @@ class ModelEPCLinewidth:
     trajectories. Applying either through CollisionSpecification('serta')
     selects the same diagonal RTA operator, not quantum bath statistics.
 
-    phononSelection (or modelPhonons.modeSelection) supplies a shared restricted
+    phononSelection (or epc_model.phonon_model.modeSelection) supplies a shared restricted
     quadrature with unnormalized weights and supersedes qgrid.
     """
 
-    def __init__(self, qgrid=None, temperature=300., fermi=0., delta=.02,
+    def __init__(self, epc_model, qgrid=None, temperature=300., fermi=0., delta=.02,
                  adiabatic=False, bathStatistics="quantum", phononSelection=None):
+        self.epc_model=epc_model
         self.qgrid=tuple(qgrid) if qgrid is not None else None
         self.phononSelection=phononSelection
         self.temperature=float(temperature)
@@ -348,24 +350,24 @@ class ModelEPCLinewidth:
         self.bathStatistics=bathStatistics
         self.last_self_energy=None
         self._cache_signature=None
-        self._cache_energies=None
         self._cache_linewidth=None
 
     def populationLinewidth(self, owner):
+        epc_model = self.epc_model
+        if owner.model is not epc_model.electronic_model:
+            raise ValueError("Linewidth EPC model must refer to the calculator electronic model")
         energies=np.asarray(owner.energies)
-        selection = (getattr(owner.model.modelPhonons, 'modeSelection', None)
+        selection = (getattr(epc_model.phonon_model, 'modeSelection', None)
                      if self.phononSelection is None else self.phononSelection)
         signature=(id(owner.model),tuple(owner.kgrid),tuple(np.asarray(owner.kOffset)),
                    self.qgrid,self.temperature,self.fermi,self.delta,self.adiabatic,self.bathStatistics,
                    None if selection is None else selection.signature)
-        if (self._cache_signature==signature and self._cache_energies is not None
-                and self._cache_energies.shape==energies.shape
-                and np.allclose(self._cache_energies,energies,atol=1e-12,rtol=1e-12)):
+        if self._cache_signature == signature:
             return self._cache_linewidth.copy()
         grid=tuple(owner.kgrid)
         qgrid=grid if self.qgrid is None else self.qgrid
         kpoints=np.mod(uniform_qmesh(grid)+owner.kOffset,1.)
-        result=ModelElectronSelfEnergy(owner.model,kpoints,qgrid=qgrid,
+        result=ModelElectronSelfEnergy(epc_model,kpoints,qgrid=qgrid,
                                        temperature=self.temperature,fermi=self.fermi,
                                        delta=self.delta,adiabatic=self.adiabatic,
                                        bathStatistics=self.bathStatistics, phononSelection=selection)
@@ -378,6 +380,5 @@ class ModelEPCLinewidth:
         linewidth=np.maximum(linewidth,0.)
         self.last_self_energy=result
         self._cache_signature=signature
-        self._cache_energies=energies.copy()
         self._cache_linewidth=linewidth.copy()
         return linewidth

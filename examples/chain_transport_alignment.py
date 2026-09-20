@@ -30,7 +30,7 @@ from auxiliary import uniform_qmesh
 from system.phonon_selection import PhononModeSelection
 
 
-def run_tdse_alignment(model, args, common, background, base, arrays, meta):
+def run_tdse_alignment(model, epc, args, common, background, base, arrays, meta):
     """Compare moving-phonon dynamics on the same folded electronic grid.
 
     Only positive frequencies are propagated; DC slots are explicitly NaN.
@@ -40,9 +40,9 @@ def run_tdse_alignment(model, args, common, background, base, arrays, meta):
     tick = time.perf_counter()
     indices = np.flatnonzero(np.asarray(args.omega) > 0)
     nw = len(args.omega)
-    sc = copy.deepcopy(model)
-    sc.make_supercell(np.diag([args.supercell, 1, 1]))
-    options = dict(common, model=sc, kgrid=(args.grid//args.supercell, 1, 1),
+    sc_epc = epc.supercell(np.diag([args.supercell, 1, 1]))
+    sc = sc_epc.electronic_model
+    options = dict(common, model=sc, epcModel=sc_epc, kgrid=(args.grid//args.supercell, 1, 1),
                    omegaList=np.asarray(args.omega)[indices], collisionSpecification=background)
     trajectory_statistics = 'classical' if args.phonon_statistics == 'classical' else 'wigner'
     bath = dict(phononTemperature=args.temperature, phononStatistics=trajectory_statistics,
@@ -70,29 +70,31 @@ def run_tdse_alignment(model, args, common, background, base, arrays, meta):
     for name in ('static_serta', 'dynamic_serta', 'balanced_rta'):
         rates = (arrays['balanced_rta_rates_with_background_eV'] if name == 'balanced_rta'
                  else arrays[name+'_rates_eV']+args.background)
-        calc = Opticalconductivity_VG_DM(**dict(common, model=model,
+        calc = Opticalconductivity_VG_DM(**dict(common, model=model, epcModel=epc,
             collisionSpecification=CollisionSpecification('serta', linewidthSource=rates)))
         arrays[name+'_vg'] = calc.sigma[0, :, 0, 0]
     # The explicit bath has the supercell q grid, even in an intentional
     # convergence scan with a different --qgrid for the other solvers.
     for kind, static in [('static', True), ('dynamic', False)]:
-        rates = ModelEPCLinewidth(qgrid=(args.supercell, 1, 1), temperature=args.temperature,
+        rates = ModelEPCLinewidth(epc, qgrid=(args.supercell, 1, 1), temperature=args.temperature,
             fermi=args.fermi, delta=args.delta, adiabatic=static,
             bathStatistics=trajectory_statistics).populationLinewidth(base)
-        calc = Opticalconductivity_VG_DM(**dict(common, model=model,
+        calc = Opticalconductivity_VG_DM(**dict(common, model=model, epcModel=epc,
             collisionSpecification=CollisionSpecification('serta', linewidthSource=rates+args.background)))
         arrays['tdse_bath_'+kind+'_rta'] = calc.sigma[0, :, 0, 0]
         arrays['tdse_bath_'+kind+'_rates_eV'] = rates
-    selection = getattr(model.modelPhonons, 'modeSelection', None)
+    selection = getattr(epc.phonon_model, 'modeSelection', None)
     if args.supercell != args.qgrid and selection is None:
         print('TDSE uses the supercell phonon grid; main SERTA/full qgrid differs.', flush=True)
     if args.tdse_phonon_damping > 0:
         print('Noise-RTA references use undamped phonon poles; only the frequency-check solver matches the damped trajectory spectrum.', flush=True)
 
-    clean_model = copy.deepcopy(sc)
-    clean_model.modelEPC.alpha_R[:] = 0.
-    clean_model.modelEPC.beta_R[:] = 0.
-    clean = Opticalconductivity_TDSE(**dict(options, model=clean_model),
+    clean_epc = copy.deepcopy(sc_epc)
+
+    clean_model = clean_epc.electronic_model
+    clean_epc.alpha_R[:] = 0.
+    clean_epc.beta_R[:] = 0.
+    clean = Opticalconductivity_TDSE(**dict(options, model=clean_model, epcModel=clean_epc),
         **dict(bath, nPhononTrajectories=1), **dict(controls, recordCurrent=False))
     arrays['tdse_clean'] = padded(clean.sigma[0, :, 0, 0])
     arrays['tdse_clean_minus_dm'] = arrays['tdse_clean']-arrays['tdse_clean_dm']
@@ -251,9 +253,9 @@ def main(argv=None):
                    * np.tanh(.04/(2*kbt))/np.tanh(a.phonon_energy/(2*kbt))
                    / a.scale**2)
     with contextlib.redirect_stdout(io.StringIO()):
-        model = build_model(out/'model', masses=np.array([12., 14.])*mass_factor,
+        model, epc = build_model(out/'model', masses=np.array([12., 14.])*mass_factor,
                             phononEnergy=a.phonon_energy)
-    model.modelPhonons.modeSelection = selection
+    epc.phonon_model.modeSelection = selection
     print('Phonon statistics:', a.phonon_statistics, flush=True)
     if selection is not None:
         print('Selected phonon bath:', json.dumps(selection.as_dict()), flush=True)
@@ -261,7 +263,7 @@ def main(argv=None):
                   omegaList=np.array(a.omega), fullCovariantDerivative=True)
     bg = CollisionSpecification('crta', constantLinewidth=a.background)
     def solve(m=model, spec=bg, grid=None, vg=False):
-        opts = dict(common, model=m, collisionSpecification=spec)
+        opts = dict(common, model=m, epcModel=epc if m is model else None, collisionSpecification=spec)
         if grid is not None:
             opts['kgrid'] = (grid, 1, 1)
         cls = Opticalconductivity_VG_DM if vg else Opticalconductivity_LG_DM
@@ -270,7 +272,7 @@ def main(argv=None):
     xx = lambda calc: calc.sigma[0, :, 0, 0]
     arrays = dict(omega_eV=np.array(a.omega), baseline=xx(base))
     meta = dict(parameters=vars(a), masses_amu=(np.array([12., 14.])*mass_factor).tolist(),
-                rms_displacements_A=np.sqrt(model.modelPhonons.meanSquareDisplacements(
+                rms_displacements_A=np.sqrt(epc.phonon_model.meanSquareDisplacements(
                     a.temperature, quantum=quantum_variance)[:, 0]).tolist())
     meta['phonon_statistics'] = dict(
         requested=a.phonon_statistics, collision=a.phonon_statistics,
@@ -284,12 +286,12 @@ def main(argv=None):
         arrays['phonon_qpoints'] = selection.qpoints
         arrays['phonon_qweights'] = selection.weights
         arrays['phonon_branches'] = selection.branch_indices(2)
-    bond_rms = np.sqrt(model.modelPhonons.meanSquareDisplacements(
+    bond_rms = np.sqrt(epc.phonon_model.meanSquareDisplacements(
         a.temperature, quantum=quantum_variance)[:, 0].sum())
     meta['rms_hopping_changes_eV'] = (bond_rms*np.array([.45, .35])).tolist()
     meta['rms_hopping_relative'] = (bond_rms*np.array([.45, .35])/np.array([1., .72])).tolist()
     for name, static in [('static_serta', True), ('dynamic_serta', False)]:
-        source = ModelEPCLinewidth(qgrid=(a.qgrid, 1, 1), temperature=a.temperature,
+        source = ModelEPCLinewidth(epc, qgrid=(a.qgrid, 1, 1), temperature=a.temperature,
             fermi=a.fermi, delta=a.delta, adiabatic=static, bathStatistics=a.phonon_statistics)
         rates = source.populationLinewidth(base)
         arrays[name+'_rates_eV'] = rates
@@ -309,14 +311,14 @@ def main(argv=None):
     arrays['baseline_vg_minus_lg'] = arrays['baseline_vg']-arrays['baseline']
     print('Frequency-domain solvers finished', round(time.perf_counter()-start, 2), flush=True)
     if a.tdse:
-        run_tdse_alignment(model, a, common, bg, base, arrays, meta)
+        run_tdse_alignment(model, epc, a, common, bg, base, arrays, meta)
     if a.pairs or a.curvature or a.static_epc_dm:
-        sc = copy.deepcopy(model)
-        sc.make_supercell(np.diag([a.supercell, 1, 1]))
+        sc_epc = epc.supercell(np.diag([a.supercell, 1, 1]))
+        sc = sc_epc.electronic_model
         scgrid = a.grid//a.supercell
         arrays['supercell_equilibrium'] = xx(solve(sc, grid=scgrid))
         if a.static_epc_dm:
-            opts = dict(common, model=sc, kgrid=(scgrid, 1, 1), collisionSpecification=bg)
+            opts = dict(common, model=sc, epcModel=sc_epc, kgrid=(scgrid, 1, 1), collisionSpecification=bg)
             for fixed in ([False, True] if a.fixed_centers else [False]):
                 result = Opticalconductivity_VG_DM_StaticEPC(**opts,
                     phononTemperature=a.temperature, phononStatistics=a.phonon_statistics, movingCenters=not fixed,
@@ -336,14 +338,14 @@ def main(argv=None):
             # covariance through real normal-coordinate directions, retaining
             # cross-atom/cell Hessian contributions instead of local variances.
             correction = np.zeros(len(a.omega), complex)
-            for factor in sc.modelPhonons.displacementFactors(a.temperature, quantum=quantum_variance):
+            for factor in sc_epc.phonon_model.displacementFactors(a.temperature, quantum=quantum_variance):
                 amplitude = np.max(np.abs(factor))
                 if amplitude == 0:
                     continue
                 pair = []
                 for sign in (1, -1):
                     u = sign*a.curvature_step*factor/amplitude
-                    pair.append(xx(solve(sc.makeDisplacedModel(u), grid=scgrid)))
+                    pair.append(xx(solve(sc_epc.makeDisplacedModel(u), grid=scgrid)))
                 correction += amplitude**2*(sum(pair)-2*arrays['supercell_equilibrium'])/(2*a.curvature_step**2)
             arrays['snapshot_second_order'] = arrays['supercell_equilibrium']+correction
             print('Selected-mode snapshot curvature finished', round(time.perf_counter()-start, 2), flush=True)
@@ -351,26 +353,26 @@ def main(argv=None):
             # Independent Einstein atoms: <sigma> = sigma0 + sum_i <u_i^2>
             # d_i^2 sigma/2 + O(u^4). Translation symmetry makes every cell's
             # derivative identical, leaving only two inequivalent atoms.
-            variance = sc.modelPhonons.meanSquareDisplacements(a.temperature, quantum=quantum_variance)[:, 0]
+            variance = sc_epc.phonon_model.meanSquareDisplacements(a.temperature, quantum=quantum_variance)[:, 0]
             correction = np.zeros(len(a.omega), complex)
             for atom in range(2):
                 pair = []
                 for sign in (1, -1):
-                    u = np.zeros((len(sc.modelPhonons.masses), 3))
+                    u = np.zeros((len(sc_epc.phonon_model.masses), 3))
                     u[atom, 0] = sign*a.curvature_step
-                    pair.append(xx(solve(sc.makeDisplacedModel(u), grid=scgrid)))
+                    pair.append(xx(solve(sc_epc.makeDisplacedModel(u), grid=scgrid)))
                 correction += a.supercell*variance[atom]*(sum(pair)-2*arrays['supercell_equilibrium'])/(2*a.curvature_step**2)
             arrays['snapshot_second_order'] = arrays['supercell_equilibrium']+correction
             print('Snapshot curvature finished', round(time.perf_counter()-start, 2), flush=True)
     if a.pairs:
-        displacements = sc.sampleModelDisplacements(a.temperature, nSamples=a.pairs, seed=a.seed,
+        displacements = sc_epc.phonon_model.sampleDisplacements(a.temperature, nSamples=a.pairs, seed=a.seed,
                                                    quantum=quantum_variance)
         arrays['snapshot_displacements_A'] = displacements
         samples, fixed = [], []
         for ip, u in enumerate(displacements):
             pair, fixed_pair = [], []
             for sign in (1, -1):
-                displaced = sc.makeDisplacedModel(sign*u)
+                displaced = sc_epc.makeDisplacedModel(sign*u)
                 pair.append(xx(solve(displaced, grid=scgrid)))
                 if a.fixed_centers:
                     displaced.rList = sc.rList.copy()

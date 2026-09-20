@@ -12,8 +12,8 @@ from system.model_epc import SSHTimeOperators
 
 
 def solve_static_epc_conductivity(owner, temperature, statistics, moving_centers,
-                                  factors, batch_size):
-    specification = owner.collision.specification
+                                  factors, batch_size, *, epc_model, collision):
+    specification = collision.specification
     if specification.mode != 'crta':
         raise ValueError('Static EPC expansion requires CRTA background only; adding SERTA/full collision would double count EPC')
     gamma = specification.constantLinewidth
@@ -25,8 +25,8 @@ def solve_static_epc_conductivity(owner, temperature, statistics, moving_centers
         raise ValueError('phononTemperature must be finite and nonnegative')
     if not isinstance(batch_size, (int, np.integer)) or batch_size < 1:
         raise ValueError('kBatchSize must be a positive integer')
-    operators = SSHTimeOperators(owner)
-    phonons = owner.model.modelPhonons
+    operators = SSHTimeOperators(owner, epc_model)
+    phonons = epc_model.phonon_model
     covariance_source = 'model phonons' if factors is None else 'provided covariance factors'
     factors = (phonons.displacementFactors(temperature, quantum=statistics != 'classical')
                if factors is None else np.asarray(factors))

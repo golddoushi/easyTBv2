@@ -28,6 +28,7 @@ from auxiliary import fermiDiracOccupations, solve_chemical_potential
 from auxiliary import getWholeSymmetryOperator, SYMPREC
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
+from calculator import CollisionSpecification
 from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
 
 _orientation_worker_model = None
@@ -176,6 +177,7 @@ def solve_ift_orientation(job):
                 "projected shells for detecting torque": job["torque_projection_specs"],
                 "finiteTemperatureOccupations": job["occupation_mode"] == "fermi-dirac",
                 "kBT": job["kBT"], "eta": job["eta"], "degen": job["degen"],
+                "collisionSpecification": CollisionSpecification("crta", constantLinewidth=job["eta"]),
             },
             BZGrid=job["bz_grid"], BZSymm=False, mode="run", ncores=job["bz_workers"])
         projected_chi_sample = collect_bz_response(calc)

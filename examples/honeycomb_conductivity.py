@@ -144,11 +144,11 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
         parser.error('phonon-supercell, supercell-k-grid, and phonon-trajectories must be positive')
     output = Path(args.output)
     with contextlib.redirect_stdout(io.StringIO()):
-        model = model_builder(output/'model')
+        model, epc = model_builder(output/'model')
     kBT = (Boltzmann*args.temperature/electron_volt
            if args.electronic_kbt is None else args.electronic_kbt)
     electronic_grid = periodic_grid(args.electronic_k_grid, periodic_dimensions)
-    options = dict(model=model, kgrid=electronic_grid, kBT=kBT,
+    options = dict(model=model, epcModel=epc, kgrid=electronic_grid, kBT=kBT,
                    collisionSpecification=CollisionSpecification(
                        mode="crta", constantLinewidth=args.background_linewidth),
                    fermiList=np.array([args.fermi]),omegaList=np.array(args.omega),fullCovariantDerivative=True)
@@ -174,7 +174,7 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
     serta_requested = (() if args.serta == 'none' else ('static','dynamic') if args.serta == 'both' else (args.serta,))
     serta_sources = {}
     for name in serta_requested:
-        source = ModelEPCLinewidth(qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions), temperature=args.temperature,
+        source = ModelEPCLinewidth(epc, qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions), temperature=args.temperature,
                                    fermi=args.fermi,delta=args.epc_delta,adiabatic=name=='static')
         # ModelEPCLinewidth is lazy.  Evaluate it against the already solved
         # electronic grid so this timing reports the actual one-time EPC cost.
@@ -232,7 +232,7 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
         tdse_collision = None
         gamma_floor = None
         if args.tdse_collision != 'crta':
-            source = ModelEPCLinewidth(qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions),
+            source = ModelEPCLinewidth(epc, qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions),
                                        temperature=args.temperature,
                                        fermi=args.fermi,delta=args.epc_delta,
                                        adiabatic=args.tdse_collision=='static')
@@ -257,8 +257,8 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
                        max_ac_TD_small_conductivity=np.max(abs(td.sigma)),
                    )
     if args.phonon_dynamics:
-        sc = copy.deepcopy(model)
-        sc.make_supercell(periodic_supercell(args.phonon_supercell, periodic_dimensions))
+        sc_epc = epc.supercell(periodic_supercell(args.phonon_supercell, periodic_dimensions))
+        sc = sc_epc.electronic_model
         qgrid = periodic_grid(args.phonon_supercell, periodic_dimensions)
         supercell_grid = periodic_grid(args.supercell_k_grid, periodic_dimensions)
         folded_grid = tuple(q*s for q, s in zip(qgrid, supercell_grid))
@@ -266,7 +266,7 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
         clean = Opticalconductivity_VG_DM(**matched_options)
         arrays['sigma_ac_VG_phonon_clean'] = clean.sigma
         for statistics in (args.phonon_statistics, 'quantum'):
-            source = ModelEPCLinewidth(
+            source = ModelEPCLinewidth(epc,
                 qgrid=qgrid, temperature=args.temperature, fermi=args.fermi,
                 delta=args.epc_delta, bathStatistics=statistics)
             linewidth = source.populationLinewidth(clean)
@@ -277,13 +277,13 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
             arrays[f'sigma_ac_VG_phonon_{statistics}_RTA'] = reference.sigma
         showElapsedTime(extraInfo='Matched phonon-mesh frequency-domain references finished')
         frequency_dm = Opticalconductivity_VG_DM_Phonon(
-            **dict(options, model=sc, kgrid=supercell_grid),
+            **dict(options, model=sc, epcModel=sc_epc, kgrid=supercell_grid),
             phononTemperature=args.temperature, phononStatistics=args.phonon_statistics,
             nPhononTrajectories=args.phonon_trajectories, phononSeed=args.phonon_seed,
             phononPhasePoints=args.phonon_phase_points, phononDamping=args.phonon_damping,
             phononBathCycles=args.phonon_bath_cycles, solverTolerance=args.phonon_solver_tolerance)
         showElapsedTime(extraInfo='Periodic-phonon VG density-matrix frequency solve finished')
-        td = Opticalconductivity_TDSE(**dict(options, model=sc, kgrid=supercell_grid),
+        td = Opticalconductivity_TDSE(**dict(options, model=sc, epcModel=sc_epc, kgrid=supercell_grid),
             phononDynamics=True, phononTemperature=args.temperature,
             phononStatistics=args.phonon_statistics, nPhononTrajectories=args.phonon_trajectories,
             phononSeed=args.phonon_seed, phononCycles=args.phonon_cycles,
@@ -354,21 +354,22 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
             summary['phonon_dynamics']['markov_statistics']=args.epc_markov
             summary['phonon_dynamics']['markov_energy_delta_eV']=args.epc_delta
     if args.snapshots:
-        sc = copy.deepcopy(model)
-        sc.make_supercell(periodic_supercell(args.phonon_supercell, periodic_dimensions))
+        sc_epc = epc.supercell(periodic_supercell(args.phonon_supercell, periodic_dimensions))
+        sc = sc_epc.electronic_model
         if args.electronic_k_grid % args.phonon_supercell:
             parser.error('--electronic-k-grid must be divisible by --phonon-supercell for snapshots')
         snapshot_grid = periodic_grid(
             args.electronic_k_grid//args.phonon_supercell, periodic_dimensions)
-        snapshot_options = dict(options, model=sc, kgrid=snapshot_grid)
+        snapshot_options = dict(options, model=sc, epcModel=sc_epc, kgrid=snapshot_grid)
         showElapsedTime(extraInfo=f"Supercell model prepared")
         arrays['sigma_supercell_equilibrium'] = Opticalconductivity_LG_DM(**snapshot_options).sigma
         showElapsedTime(extraInfo=f"Supercell AC conductivity finished")
         samples = []
-        displacements = sc.sampleModelDisplacements(args.temperature,nSamples=args.snapshots,seed=2026)
+        displacements = sc_epc.phonon_model.sampleDisplacements(args.temperature,nSamples=args.snapshots,seed=2026)
         showElapsedTime(extraInfo=f"Stochastic displacements generated")
         for u in displacements:
-            snapshot_options['model'] = sc.makeDisplacedModel(u)
+            snapshot_options['model'] = sc_epc.makeDisplacedModel(u)
+            snapshot_options['epcModel'] = None
             samples.append(Opticalconductivity_LG_DM(**snapshot_options).sigma)
         showElapsedTime(extraInfo=f"All random displaced supercell AC conductivity finished")
         samples = np.asarray(samples)

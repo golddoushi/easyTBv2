@@ -32,8 +32,6 @@ class System:
         self.exchangeProvenance:str=None
         # Explicit toy-model SOC, SSH bond derivatives, and prescribed phonons.
         self.rashba_R:np.ndarray=None
-        self.modelEPC=None
-        self.modelPhonons=None
         # real-space energy matrix produced by openmx
         self.energy_R:np.ndarray=None
         # position x overlap
@@ -1338,12 +1336,16 @@ class System:
 
         if self.verbose: showElapsedTime(extraInfo=f"--- canonical origined model constructed successfully ---\n")
 
-    def make_supercell(self, Tmatrix, omitRHam=False):
+    def make_supercell(self, Tmatrix, omitRHam=False, *, additional_operators=None):
         """
         Construct a supercell model directly from the primitive model.
         
         Parameters
         ----------
+        additional_operators : dict, optional
+            Extra arrays with the Hamiltonian shape to transform without
+            attaching them to this electronic model. Returns their mapped
+            arrays and the primitive cell origins in the supercell.
         Tmatrix : list or np.ndarray
             3x3 integer matrix defining the supercell lattice.
             The supercell lattice is defined as: lat_sc = T @ lat_pc
@@ -1352,18 +1354,15 @@ class System:
             the velocity related computations are then nonavailable.
             use this only for the computations on energy spectra, such as the surface states,
         """
-        model_epc = self.modelEPC
-        model_phonons = self.modelPhonons
-        if model_epc is not None:
-            model_epc.validate(self)
-        # These operators must follow the same orbital/cell map as H, notably
-        # the exchange vertex used by IFT and the scalar SSH bond derivatives.
+        # Additional orbital operators follow the same cell map as H.
         extra_arrays = {name: getattr(self, name) for name in
                         ("exchange_R", "exchange_R_reference", "nonexchange_R", "rashba_R")
                         if getattr(self, name) is not None}
-        if model_epc is not None:
-            extra_arrays["model_epc_alpha"] = model_epc.alpha_R
-            extra_arrays["model_epc_beta"] = model_epc.beta_R
+        electronic_names = tuple(extra_arrays)
+        if additional_operators is not None:
+            if extra_arrays.keys() & additional_operators.keys():
+                raise ValueError("Additional operator names conflict with electronic operators")
+            extra_arrays.update(additional_operators)
         for name, value in extra_arrays.items():
             if value.shape != self.ham_R.shape:
                 raise ValueError(f"{name} is inconsistent with the Hamiltonian before supercell construction")
@@ -1371,11 +1370,6 @@ class System:
         T = np.array(Tmatrix, dtype=int)
         invT = np.linalg.inv(T)
         Nsc = int(np.round(abs(np.linalg.det(T))))
-        selection = getattr(model_phonons, 'modeSelection', None)
-        if selection is not None:
-            selection.check_supercell(T)
-            if len(model_phonons._cell_origins) != 1:
-                raise NotImplementedError('build a selected-mode supercell directly from the primitive model')
         if self.verbose: print(f"Supercell volume ratio: {Nsc}")
         
         # 1. Find internal cells (primitive cell origins located inside the supercell)
@@ -1560,25 +1554,17 @@ class System:
         self.nRvec = new_nRvec
         self.mp_grid=new_mp_grid
 
-        for name in extra_arrays:
-            if name not in ("model_epc_alpha", "model_epc_beta"):
-                setattr(self, name, np.array([new_extra_dict[name][tuple(R)] for R in self.iRvec]))
-        if model_epc is not None:
-            from .model_epc import SSHModelEPC
-            self.modelEPC = SSHModelEPC(self, np.array([
-                new_extra_dict["model_epc_alpha"][tuple(R)] for R in self.iRvec]),
-                np.array([new_extra_dict["model_epc_beta"][tuple(R)] for R in self.iRvec]))
-        if model_phonons is not None:
-            if getattr(model_phonons, 'modeSelection', None) is not None:
-                self.modelPhonons = model_phonons.supercell(Nsc, internal_cells, T)
-            else:
-                self.modelPhonons = model_phonons.supercell(Nsc)
-        
+        mapped_operators = {name: np.array([new_extra_dict[name][tuple(R)] for R in self.iRvec])
+                            for name in extra_arrays}
+        for name in electronic_names:
+            setattr(self, name, mapped_operators.pop(name))
+
         # 6. Reconstruct dependent operators
         self._refreshExchangeDerivedMatrices()
         self._refreshHamiltonianDerivedMatrices(omitRHam=omitRHam)
         
         if self.verbose: showElapsedTime(extraInfo=f"--- Supercell {self.nRvec} lattice points constructed successfully ---\n")
+        return mapped_operators, np.asarray(internal_cells)
 
     def cutEdge(self, cutDir):
         """
@@ -1928,135 +1914,6 @@ class System:
             self.nonexchange_R = self.nonexchange_R + added
         self._refreshHamiltonianDerivedMatrices()
         return added
-
-    def setModelPhonons(self, masses, phononEnergies, directions=(0, 1, 2), mode="einstein"):
-        """Set independent pinned oscillators: masses in amu, hbar*Omega in eV.
-
-        masses is scalar or one value per atom. phononEnergies is scalar,
-        one value per atom, or (natom,len(directions)). Each active Cartesian
-        DOF gives a flat branch at EVERY q; no dispersion does not mean q=0.
-        This is a prescribed bath without electronic feedback or acoustic modes.
-        """
-        from .model_epc import EinsteinPhonons
-        if mode.lower() != "einstein":
-            raise NotImplementedError("Only Einstein model phonons are currently implemented")
-        natoms = len(self.atomicOrbInfoList)
-        masses = np.broadcast_to(np.asarray(masses, dtype=float), (natoms,)).copy()
-        self.modelPhonons = EinsteinPhonons(masses, phononEnergies, directions)
-        return self.modelPhonons
-
-    def addModelEPC(self, EPCModel, alphaR="epc", betaR=None):
-        """Attach SSH derivatives, optionally including quadratic bond curvature.
-        
-        ``alpha_R`` is dH_ij/d bond_length in eV/Angstrom. Thus for the usual
-        H_ij=-t_ij and t_ij=t0_ij-alpha_ij*stretch, the file stores +alpha_ij.
-        Delta H_ij = alpha_ij d_hat^0_ij.(u_j-u_i), using equilibrium unit
-        bond vectors and Cartesian displacements. The file layout matches
-        addRashbaSOC, with spatial indices and real reciprocal coefficients.
-        All R points must exist in iRvec, and nonzero coefficients must act on
-        existing Hamiltonian bonds. Atoms are assigned through iorb2iatomMap;
-        orbital positions come from rList, with any number of s orbitals per atom.
-        Rashba and exchange are held fixed when atoms are displaced.
-        betaR optionally names a second scalar file in eV/Angstrom^2, defining
-        Delta H = alpha*s + beta*s^2/2 with s=d_hat^0.(u_j-u_i). betaR=None
-        retains the original linear model and has exactly zero Debye-Waller
-        vertex. beta is independent information; it cannot be inferred from g.
-        """
-        iRvec, strengths, _ = self.read_scalar_bonds(alphaR)
-        quadratic = None if betaR is None else self.read_scalar_bonds(betaR)
-        n = self.norbs // 2
-        alpha = np.zeros_like(self.ham_R.real)
-        beta = np.zeros_like(alpha)
-        coupling_sets = [(iRvec, strengths)]
-        if quadratic is not None:
-            coupling_sets.append(quadratic[:2])
-        for vectors, coefficients in coupling_sets:
-            for R, value in zip(vectors, coefficients):
-                block = self.ham_R[self.iRvecIndex[tuple(R)]].reshape(2, n, 2, n)
-                existing = np.any(block != 0, axis=(0, 2))
-                if np.any((value != 0) & ~existing):
-                    raise ValueError(f"EPC coefficients at R={tuple(R)} must couple existing Hamiltonian bonds")
-        for R, value in zip(iRvec, strengths):
-            ir = self.iRvecIndex[tuple(R)]
-            alpha[ir, :n, :n] = value
-            alpha[ir, n:, n:] = value
-        if quadratic is not None:
-            for R, value in zip(quadratic[0], quadratic[1]):
-                ir = self.iRvecIndex[tuple(R)]
-                beta[ir, :n, :n] = beta[ir, n:, n:] = value
-        self.modelEPC = EPCModel(self, alpha, beta)
-        return self.modelEPC
-
-    def getModelEPC(self, k, q, bandBasis=True, vectors_k=None, vectors_kq=None):
-        """Return g[nu,m,n](k,q) in eV, with fractional reciprocal k and q.
-
-        m is at k+q, n at k. No Bose factors or 1/sqrt(Ncells) are included.
-        bandBasis=False returns localized-orbital vertices. Optional eigenvector
-        matrices (columns) match a calculator's band gauge, including degeneracies.
-        """
-        if self.modelEPC is None:
-            raise ValueError("Call addModelEPC before computing model EPC")
-        return self.modelEPC.matrixElements(self, k, q, bandBasis, vectors_k, vectors_kq)
-
-    def getModelEPCBatch(self, kpoints, q, vectors_k, vectors_kq):
-        """Return band-basis EPC matrices for many k points at one q.
-
-        EPC models can provide ``matrixElementsBatch`` for an efficient native
-        implementation.  The scalar fallback preserves compatibility with
-        simpler model EPC implementations.
-        """
-        if self.modelEPC is None:
-            raise ValueError("Call addModelEPC before computing model EPC")
-        if hasattr(self.modelEPC, "matrixElementsBatch"):
-            return self.modelEPC.matrixElementsBatch(
-                self, kpoints, q, vectors_k, vectors_kq)
-        return np.array([
-            self.modelEPC.matrixElements(self, k, q, True, vk, vkq)
-            for k, vk, vkq in zip(kpoints, vectors_k, vectors_kq)])
-
-    def sampleModelDisplacements(self, temperature, nSamples=None, seed=None, quantum=True):
-        """Sample Cartesian ionic displacements in Angstrom at temperature K.
-
-        Returns (natom,3), or (nSamples,natom,3). quantum=True includes the
-        zero-point position variance; it does not simulate quantum dynamics.
-        """
-        if self.modelPhonons is None:
-            raise ValueError("Call setModelPhonons before sampling displacements")
-        return self.modelPhonons.sampleDisplacements(temperature, nSamples, seed, quantum)
-
-    def makeDisplacedModel(self, displacements):
-        """Return an independent frozen snapshot of an equilibrium SSH model.
-
-        Build the desired supercell FIRST, then provide one real displacement
-        (Angstrom) per supercell atom. Scalar hopping and orbital centers move;
-        Rashba/exchange matrices remain fixed. The equilibrium SSH reference is not
-        updated or accumulated. The returned snapshot has no attached model EPC
-        or phonon bath: sample each new snapshot from the equilibrium model.
-        """
-        if self.modelEPC is None:
-            raise ValueError("Call addModelEPC before constructing a displaced model")
-        delta = self.modelEPC.deltaHamiltonian(self, displacements)
-        orbital_u = np.asarray(displacements)[self.iorb2iatomMap].T
-        # A point-orbital position operator is needed to move centers consistently.
-        iR0 = self.iRvecIndex.get((0, 0, 0))
-        indices = np.arange(self.norbs)
-        if iR0 is None or self.AA_R_W is None:
-            raise ValueError("Displaced model requires an onsite point-orbital position operator")
-        expected = np.zeros_like(self.AA_R_W)
-        expected[iR0][:, indices, indices] = self.rList
-        if not np.allclose(self.AA_R_W, expected, atol=1e-10, rtol=0):
-            raise NotImplementedError("Displacements currently require a diagonal point-orbital position operator")
-        result = copy.deepcopy(self)
-        result.ham_R = result.ham_R + delta
-        if result.nonexchange_R is not None:
-            result.nonexchange_R = result.nonexchange_R + delta
-        result.rList = result.rList + orbital_u
-        result.posinfo['pos ions (cart.)'] = np.asarray(result.posinfo['pos ions (cart.)']) + displacements
-        result.posinfo['pos ions (frac.)'] = result.posinfo['pos ions (cart.)'] @ np.linalg.inv(result.lattice)
-        result.AA_R_W[iR0][:, indices, indices] += orbital_u
-        result.modelEPC = result.modelPhonons = None
-        result._refreshHamiltonianDerivedMatrices()
-        return result
 
     def addExchangeSplitting(self, projection, exchange_vector):
         """
@@ -2498,5 +2355,6 @@ class System:
 from .system_w90 import System_w90
 from .system_omx import System_omx
 from .system_tb import System_tb
-from .model_epc import SSHModelEPC, EinsteinPhonons
+from .model_epc import SSHModelEPC
+from .phonons import EinsteinPhonons
 from .phonon_selection import PhononModeSelection

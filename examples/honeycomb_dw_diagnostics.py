@@ -27,14 +27,14 @@ from examples.honeycomb_four_band import build_model, write_hr
 from system import SSHModelEPC
 
 
-def gaussian_mean_quadratic_hamiltonian(model, temperature):
+def gaussian_mean_quadratic_hamiltonian(epc, temperature):
     """Independent Cartesian-covariance contraction for the Einstein bath.
 
     This deliberately uses orbital positions and ionic variances directly,
     without calling the second-displacement vertex used by the DW calculator.
     """
-    epc = model.modelEPC
-    variance = model.modelPhonons.meanSquareDisplacements(temperature)
+    model = epc.electronic_model
+    variance = epc.phonon_model.meanSquareDisplacements(temperature)
     atoms = epc.orbital_atoms
     bonds = ((model.iRvec @ model.lattice)[:, :, None, None]
              + model.rList[None, :, None, :] - model.rList[None, :, :, None])
@@ -69,29 +69,29 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     grid, scale0 = tuple(args.qgrid), max(args.scales)
     with contextlib.redirect_stdout(io.StringIO()):
-        model = build_model(out/'model', alpha=0.5*scale0)
-        beta = np.zeros_like(model.modelEPC.alpha_R[:, :2, :2])
+        model, epc = build_model(out/'model', alpha=0.5*scale0)
+        beta = np.zeros_like(epc.alpha_R[:, :2, :2])
         for R, factor in zip(((0, 0, 0), (-1, 0, 0), (0, -1, 0)), args.beta_bond_factors):
             value = args.beta*scale0**2*factor
             beta[model.iRvecIndex[R], 0, 1] = value
             beta[model.iRvecIndex[tuple(-np.array(R))], 1, 0] = value
         write_hr(out/'model'/'quadratic_hr.dat', model.iRvec, beta, 'quadratic diagnostic coefficients')
-        model.addModelEPC(SSHModelEPC, betaR='quadratic')
-        sc = copy.deepcopy(model)
-        sc.make_supercell(np.diag(grid))
+        epc = SSHModelEPC.from_files(model, epc.phonon_model, betaR='quadratic')
+        sc_epc = epc.supercell(np.diag(grid))
+        sc = sc_epc.electronic_model
     ks = uniform_qmesh(grid)
-    se = ModelElectronSelfEnergy(model, ks, qgrid=grid, temperature=args.temperature,
+    se = ModelElectronSelfEnergy(epc, ks, qgrid=grid, temperature=args.temperature,
                                  adiabatic=True, delta=1e-7)
     vb = np.unravel_index(np.argmax(se.energies[:, :2]), (len(ks), 2))
     cb0 = np.unravel_index(np.argmin(se.energies[:, 2:]), (len(ks), 2))
     cb = cb0[0], cb0[1]+2
     fan0 = float((se.fan_migdal[cb]-se.fan_migdal[vb]).real)
     dw0 = float(se.debye_waller[cb]-se.debye_waller[vb])
-    mean_R = gaussian_mean_quadratic_hamiltonian(model, args.temperature)
+    mean_R = gaussian_mean_quadratic_hamiltonian(epc, args.temperature)
     mean_K = np.einsum('kr,rij->kij', np.exp(2j*np.pi*(ks @ model.iRvec.T)), mean_R)
     covariance_dw = se.vectors.conj().swapaxes(-1, -2) @ mean_K @ se.vectors
 
-    solver = Energy(model=sc, kgrid=(1, 1, 1))
+    solver = Energy(model=sc, epcModel=sc_epc, kgrid=(1, 1, 1))
     energies = solver.energies.reshape(-1)
     vectors = solver.vectors.reshape(sc.norbs, sc.norbs)
     occupied = sc.norbs//2
@@ -114,14 +114,14 @@ def main():
         return shifts[1]-shifts[0]
 
     h0 = solver.ham_K.reshape(sc.norbs, sc.norbs)
-    displacements = sc.sampleModelDisplacements(args.temperature, nSamples=args.pairs, seed=args.seed)
+    displacements = sc_epc.phonon_model.sampleDisplacements(args.temperature, nSamples=args.pairs, seed=args.seed)
     residual = np.zeros((len(args.scales), args.pairs))
     beta_residual = np.zeros_like(residual)
     beta_fourth = np.zeros(args.pairs)
     exact_shifts = np.zeros_like(residual)
     for sample, u in enumerate(displacements):
-        plus = sc.modelEPC.deltaHamiltonian(sc, u).sum(axis=0)
-        minus = sc.modelEPC.deltaHamiltonian(sc, -u).sum(axis=0)
+        plus = sc_epc.deltaHamiltonian(u).sum(axis=0)
+        minus = sc_epc.deltaHamiltonian(-u).sum(axis=0)
         h1, h2 = (plus-minus)/2, (plus+minus)/2
         dw_sample = diagonal_gap(h2)
         second_order_sample = dw_sample+mixing_gap(h1)

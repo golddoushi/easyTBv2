@@ -10,6 +10,7 @@ from time import perf_counter
 import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
+from calculator.collision import CollisionSpecification, PreparedCollision, collision_mode
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
 from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
@@ -99,6 +100,8 @@ class BZGridTask:
             "run" to run the tasks directly, ortherwise, only show the grid info.
         - ncores : int
             maximum number of FFT-submesh workers (capped by the number of tasks)
+            Mesh-coupled EPC uses one complete BZGrid task instead of independent
+            submeshes. Local CRTA/SERTA retain the ordinary worker decomposition.
         - parallelBackend : "process" | "thread"
             processes avoid the Python GIL; threads retain the shared-memory legacy backend
         - workerThreads : int
@@ -113,19 +116,27 @@ class BZGridTask:
         if processStartMethod is not None and processStartMethod not in mp.get_all_start_methods():
             raise ValueError(f"Unavailable processStartMethod: {processStartMethod}")
         ncores, workerThreads = int(ncores), int(workerThreads)
-        FastGrid=np.zeros(3,dtype=int)
-        for icomp, comp in enumerate(model.mp_grid):
-            if comp>1: 
-                FastGrid[icomp]=comp+1
-            elif comp==1:
-                FastGrid[icomp]=1
-            else:
-                raise RuntimeError(f"FFT grid is zero {FastGrid=}")
-
-        for icomp in range(3):
-            for extra_size in range(BZGrid[icomp]-FastGrid[icomp]+1):
-                if BZGrid[icomp]%FastGrid[icomp]==0: break
-                FastGrid[icomp]+=1
+        BZGrid = np.asarray(BZGrid).astype(int)
+        # Markov populations and covariant mesh derivatives are coupled over
+        # the complete electronic mesh. Independent offset solves are invalid.
+        has_collision = "collisionSpecification" in args or "preparedCollision" in args
+        if has_collision and collision_mode(args.get('collisionSpecification'), args.get('preparedCollision')) == "epc":
+            FastGrid = BZGrid.copy()
+            if ncores > 1:
+                print("Mesh-coupled EPC: using one complete BZ mesh; independent offset workers are disabled")
+        else:
+            FastGrid=np.zeros(3,dtype=int)
+            for icomp, comp in enumerate(model.mp_grid):
+                if comp>1:
+                    FastGrid[icomp]=comp+1
+                elif comp==1:
+                    FastGrid[icomp]=1
+                else:
+                    raise RuntimeError(f"FFT grid is zero {FastGrid=}")
+            for icomp in range(3):
+                for extra_size in range(BZGrid[icomp]-FastGrid[icomp]+1):
+                    if BZGrid[icomp]%FastGrid[icomp]==0: break
+                    FastGrid[icomp]+=1
 
         self.QGrid=np.array([max([x,1]) for x in np.array(BZGrid)//FastGrid])
 
@@ -169,7 +180,20 @@ class BZGridTask:
                         tasks.append(newTask)
 
         showElapsedTime(extraInfo=f"find {len(tasks)} irreducible q, {len(tasks)/np.prod(self.QGrid)*100:.3f}% the whole BZ")
-    
+
+        # k-point parallel should build the collision operator during the parallel,
+        # rather than prepared before the parallel, because the kOffset should be
+        # matched between the electronic parts and EPC parts.
+        if args.get('preparedCollision') is not None:
+            if len(tasks) != 1:
+                raise ValueError("preparedCollision belongs to one exact mesh; use a direct calculator or one BZ task")
+            # Only for mesh-coupled collision, the collision can be prepared outside.
+            prepared = args['preparedCollision']
+            if (model is not prepared.inputs.model
+                    or tuple(FastGrid) != prepared.inputs.kgrid
+                    or not np.array_equal(tasks[0]['kOffset'], prepared.inputs.kOffset)):
+                raise ValueError("preparedCollision does not match the BZ task model, mesh or offset")
+
         self.nworkers = min(ncores, len(tasks))
         self.parallelBackend = "serial" if self.nworkers == 1 else parallelBackend
         self.processStartMethod = None
@@ -423,7 +447,7 @@ def solveStGC(param):
 def solveAHC_LG_DM(param):
     calc=AnormalousHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                 eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                collisionSpecification=param.get('collisionSpecification',None),
+                                **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                                 degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                                 fermiList=param['fermi'],
                                 currentProjectionList    =param['projected shells for applying current'],
@@ -444,7 +468,7 @@ def _solveLinearConductivity(param, calculatorClass):
     """BZGridTask adapter preserving complex optical tensors and record axes."""
     options = dict(model=param['model'], kgrid=param['FFT grid'], kOffset=param['kOffset'],
                    eta=param.get('eta', .06582), kBT=param.get('kBT', .026),
-                   collisionSpecification=param.get('collisionSpecification'),
+                   **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                    degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                    fermiList=param['fermi'], omegaList=param.get('omega', np.array([0.])),
                    currentProjectionList=param.get('projected shells for applying current', []),
@@ -509,7 +533,7 @@ def solveOpticalconductivity_VG_DM_Phonon(param):
 def solveSHC_LG_DM(param):
     calc=SpinHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                               eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                              collisionSpecification=param.get('collisionSpecification',None),
+                              **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                               degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                               fermiList=param['fermi'],
                               currentProjectionList=param['projected shells for applying current'],
@@ -566,7 +590,7 @@ def solveBPVE_VG(param):
 def solveBPVE_VG_DM(param):
     calc=BulkPhotovoltaicEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionSpecification=param.get('collisionSpecification',None),
+                                   **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
@@ -608,7 +632,7 @@ def solveBPVE_LG_Inject(param):
 def solveBPVE_LG_DM(param):
     calc=BulkPhotovoltaicEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionSpecification=param.get('collisionSpecification',None),
+                                   **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    responseOmegaIndexList=param.get('record frequency ids', []),
@@ -654,7 +678,7 @@ def solveIFE_VG(param):
 def solveIFE_VG_DM(param):
     calc = InverseFaradayEffect_VG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionSpecification=param.get('collisionSpecification',None),
+                                   **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
@@ -683,7 +707,7 @@ def solveIFE_LG(param):
 def solveIFE_LG_DM(param):
     calc = InverseFaradayEffect_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
                                    eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
-                                   collisionSpecification=param.get('collisionSpecification',None),
+                                   **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                                    degen=param.get('degen', 1e-6), skip_low=False,
                                    fermiList=param['fermi'],omegaList=param['omega'],
                                    ife_type=param['mag type'],
@@ -750,7 +774,7 @@ def solveIFTorque_VG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_VG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
-                                     collisionSpecification=param.get('collisionSpecification',None),
+                                     **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                                      degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
@@ -773,7 +797,7 @@ def solveIFTorque_LG_DM(param):
                                      param.get('projected shells for detecting spin accumulation', []))
     calc = InverseFaradayTorque_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=False,
                                      eta=param.get('eta', 0.06582),
-                                     collisionSpecification=param.get('collisionSpecification',None),
+                                     **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                                      degen=param.get('degen', 1e-6),
                                      fermiList=param['fermi'],omegaList=param['omega'],
                                      torqueProjectionList=torqueProjectionList,ife_type=param['mag type'],
@@ -844,7 +868,7 @@ def _solveGalvanicConductivity_DM(param, calculatorClass, projectionArgument,
             break
     options = dict(model=param['model'], kgrid=param['FFT grid'], kOffset=param['kOffset'],
                    eta=param.get('eta', .06582), kBT=param.get('kBT', .026),
-                   collisionSpecification=param.get('collisionSpecification'),
+                   **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel") if key in param},
                    degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                    fermiList=param['fermi'],
                    currentProjectionList=param.get('projected shells for applying current', []),

@@ -1,5 +1,8 @@
 # Linear conductivity: LG, VG, and real time
 
+See [collision preparation and reuse](README_collision_preparation.md) for the
+explicit collision stage, shared LG/VG rates, and coupled-mesh task scheduling.
+
 The new calculators exported by `calculator` are:
 
 | Calculator | Output `sigma` axes | Method |
@@ -22,9 +25,11 @@ S/m by the cell height in metres for sheet conductance.
 
 ```python
 import numpy as np
-from calculator import Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE
+from calculator import (Opticalconductivity_LG_DM, Opticalconductivity_VG_DM,
+                        Opticalconductivity_TDSE, CollisionSpecification)
 
-options = dict(model=model, kgrid=(24,24,1), eta=0.2, kBT=0.15,
+options = dict(model=model, kgrid=(24,24,1), kBT=0.15,
+               collisionSpecification=CollisionSpecification('crta', constantLinewidth=.2),
                fermiList=np.array([-0.7]), omegaList=np.array([0.6,1.3]),
                fullCovariantDerivative=True)
 lg = Opticalconductivity_LG_DM(**options)
@@ -163,14 +168,14 @@ a sampled linewidth source:
 ```python
 from calculator import CollisionSpecification, ModelEPCLinewidth
 
-source = ModelEPCLinewidth(qgrid=(12,12,1), temperature=300,
+source = ModelEPCLinewidth(epc, qgrid=(12,12,1), temperature=300,
                            fermi=-0.7, delta=0.02, adiabatic=False)
 collision = CollisionSpecification("serta", linewidthSource=source)
-sigma = Opticalconductivity_LG_DM(collisionSpecification=collision, **options).sigma
+sigma = Opticalconductivity_LG_DM(**dict(options, collisionSpecification=collision)).sigma
 ```
 
 It evaluates the calculator's k mesh and caches the result for LG, VG, and TDSE
-instances with identical eigenenergies. A shifted `BZGridTask` supplies its
+instances using the same unchanged electronic/EPC model pair and mesh. A shifted `BZGridTask` supplies its
 `kOffset`. `adiabatic=False` is standard dynamical SERTA: the linewidth is
 `-2 Im Sigma_Fan(epsilon_nk)` with phonon emission/absorption energies and Pauli
 factors, as in the [VASP SERTA definition](https://vasp.at/wiki/ELPH_SCATTERING_APPROX).

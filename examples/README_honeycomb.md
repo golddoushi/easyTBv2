@@ -125,38 +125,35 @@ model; orbital-dependent angular hopping laws are not implemented.
 ```python
 import copy
 import numpy as np
-from system import System_tb
+from system import System_tb, SSHModelEPC, EinsteinPhonons
 
 directory = "tmp/honeycomb_four_band"  # generate inputs with the example first
 model = System_tb(directory, hamR="honeycomb", ispin=2,
                   projections={"A": [0], "B": [0]})
 model.addExchangeSplitting([(0, (0,)), (1, (0,))], [-0.105, -0.14, -0.3031088913])
-model.addRashbaSOC(directory, rashbaR="rashba", normal=(0, 0, 1))
-model.addModelEPC(directory, alphaR="epc")
-model.setModelPhonons(masses=[12.0, 12.0], phononEnergies=0.02,
-                      directions=(0, 1), mode="einstein")
+model.addRashbaSOC(seed="rashba", normal=(0, 0, 1))
+phonons = EinsteinPhonons([12.0, 12.0], .02, directions=(0, 1))
+epc = SSHModelEPC.from_files(model, phonons, alphaR="epc")
 
 k, q = np.array([0.17, 0.23, 0]), np.array([1/3, 0, 0])
-energies, polarizations = model.modelPhonons.modes(q)
-g = model.getModelEPC(k, q)                  # shape (4 modes, 4 bands, 4 bands)
-g_orbital = model.getModelEPC(k, q, bandBasis=False)
+energies, polarizations = epc.phonon_model.modes(q)
+g = epc.matrixElements(k, q)                  # shape (4 modes, 4 bands, 4 bands)
+g_orbital = epc.matrixElements(k, q, bandBasis=False)
 
-sc = copy.deepcopy(model)
-sc.make_supercell(np.diag([3, 3, 1]))
-u = sc.sampleModelDisplacements(temperature=300, seed=2026)
-snapshot = sc.makeDisplacedModel(u)
+sc_epc = epc.supercell(np.diag([3, 3, 1]))
+u = sc_epc.phonon_model.sampleDisplacements(temperature=300, seed=2026)
+snapshot = sc_epc.makeDisplacedModel(u)
 ```
 
 `addRashbaSOC` adds a Hamiltonian contribution on each call and retains the
 accumulated contribution in `model.rashba_R`.
-`addModelEPC` replaces the attached EPC specification without changing the
-equilibrium hopping. Its optional `betaR` argument uses the same file layout
+`SSHModelEPC.from_files` constructs a separate coupling object without changing
+the equilibrium electronic model. Its optional `betaR` argument uses the same file layout
 for quadratic coefficients; omitting it sets beta to zero.
-`setModelPhonons` replaces the phonon specification.
-Both atom masses and phonon energies may be scalars; phonon energies may
-also have shape `(natom,)` or `(natom,len(directions))`.
+`EinsteinPhonons` takes one mass per atom. Phonon energies may be scalar or
+have shape `(natom,)` or `(natom,len(directions))`.
 
-The supercell builder carries exchange, its rigid-rotation reference, Rashba,
+`epc.supercell()` carries exchange, its rigid-rotation reference, Rashba,
 SSH derivatives, and phonon parameters into the enlarged cell. It also
 translates the onsite position vertices with the orbital centers. Form the
 supercell **before** sampling, so each supercell atom has an independent
@@ -196,13 +193,13 @@ V_ij(k,q) = sum_R exp(2*pi*i*k.R) alpha_ij(R) d_hat_ij(R)
                    . [e_j exp(2*pi*i*q.R) - e_i].
 ```
 
-This is implemented by `model.modelEPC.displacementVertex(model,k,q,e)`;
+This is implemented by `epc.displacementVertex(k,q,e)`;
 `e` can be any complex `(natom,3)` displacement in Angstrom. Uniform q=0
 translation gives zero, while relative A/B q=0 displacement can couple.
 At finite q even equal A/B polarization usually couples. A single q therefore
 does not determine all EPC scattering, despite the dispersionless frequencies.
 
-`getModelEPC` inserts the zero-point displacement
+`epc.matrixElements` inserts the zero-point displacement
 `sqrt(hbar/(2 M_kappa Omega_nu))*polarization`, and optionally rotates the
 vertex using `U(k+q).conj().T @ V @ U(k)`. It returns complex
 `g[nu,m,n]` in eV, where m is the final band at k+q and n is the initial band

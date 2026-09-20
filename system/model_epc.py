@@ -1,253 +1,16 @@
-"""
-Phonon system and model electron-phonon-couplings
-By now, only Einstein phonon model is implemented, in which the phonon frequency is constant
+"""Electron-phonon coupling between explicit electronic and phonon models."""
 
-The SSH-EPC is implemented for EPC model.
-Only the hopping amplitude t_0 is coupled to the bond length and direction
-"""
-
-from dataclasses import dataclass
+import copy
 import numpy as np
-from scipy.constants import atomic_mass, Boltzmann, electron_volt, hbar
 from auxiliary import uniform_qmesh
-
-def _wavevector(value, name):
-    value = np.asarray(value, dtype=float)
-    if value.shape != (3,) or not np.all(np.isfinite(value)):
-        raise ValueError(f"{name} must contain three finite fractional coordinates")
-    return value
-
-@dataclass
-class EinsteinPhonons:
-    """Independent pinned ionic oscillators, with a flat branch for each DOF.
-
-    Degenerate branches use real atom/Cartesian unit polarizations. The mode
-    energies are independent of q, but the physical displacement still carries
-    exp(2 pi i q.L). No electronic backreaction or acoustic sum rule is imposed
-    on this prescribed bath. The SSH interaction itself is translation invariant.
-    """
-
-    masses: np.ndarray
-    energies: np.ndarray
-    directions: tuple = (0, 1, 2)
-    modeSelection: object = None
-
-    def __post_init__(self):
-        self.masses = np.atleast_1d(np.asarray(self.masses, dtype=float)).copy()
-        self.directions = tuple(self.directions)
-        if (self.masses.ndim != 1 or not len(self.masses)
-                or np.any(self.masses <= 0) or not np.all(np.isfinite(self.masses))):
-            raise ValueError("masses must be a positive finite array in amu")
-        if (not self.directions or len(set(self.directions)) != len(self.directions)
-                or any(d not in (0, 1, 2) for d in self.directions)):
-            raise ValueError("directions must be distinct Cartesian indices from (0,1,2)")
-        values = np.asarray(self.energies, dtype=float)
-        if values.shape == (len(self.masses),):
-            values = values[:, None]
-        self.energies = np.broadcast_to(values, (len(self.masses), len(self.directions))).copy()
-        if np.any(self.energies <= 0) or not np.all(np.isfinite(self.energies)):
-            raise ValueError("phonon energies hbar*Omega must be positive and finite, in eV")
-        self._primitive_natoms = len(self.masses)
-        self._cell_origins = np.zeros((1, 3), int)
-        self._supercell_matrix = np.eye(3, dtype=int)
-
-    def modes(self, q=(0, 0, 0)):
-        """Return (energies[nu], polarizations[nu,atom,xyz]); no 1/sqrt(N)."""
-        _wavevector(q, "q")
-        vectors = np.zeros((self.energies.size, len(self.masses), 3))
-        for nu, (atom, direction) in enumerate(
-                (a, d) for a in range(len(self.masses)) for d in self.directions):
-            vectors[nu, atom, direction] = 1.0
-        return self.energies.ravel().copy(), vectors
-
-    def modeDisplacements(self, q=(0, 0, 0)):
-        """Zero-point length times polarization, in Angstrom (not thermal RMS)."""
-        energies, vectors = self.modes(q)
-        lengths = np.sqrt(hbar**2 / (2 * self.masses[None, :, None] * atomic_mass
-                                    * energies[:, None, None] * electron_volt)) * 1e10
-        return vectors * lengths
-
-    def _bareMeanSquareDisplacements(self, temperature, quantum=True):
-        """Return <u_atom,xyz^2> in Angstrom^2; inactive directions are zero."""
-        temperature = float(temperature)
-        if not np.isfinite(temperature) or temperature < 0:
-            raise ValueError("temperature must be finite and nonnegative, in kelvin")
-        zero_point = (hbar**2 * 1e20 / (2 * self.masses[:, None] * atomic_mass
-                                      * self.energies * electron_volt))
-        kBT = Boltzmann * temperature / electron_volt
-        if quantum:
-            factor = 1.0 if temperature == 0 else 1 / np.tanh(self.energies / (2*kBT))
-        else:
-            factor = 2*kBT / self.energies
-        result = np.zeros((len(self.masses), 3))
-        result[:, self.directions] = zero_point * factor
-        return result
-
-    def displacementFactors(self, temperature, quantum=True):
-        """Gaussian covariance factors, including correlations of selected modes."""
-        variance = self._bareMeanSquareDisplacements(temperature, quantum)
-        if self.modeSelection is None:
-            active = np.flatnonzero(variance.ravel())
-            factors = np.zeros((len(active), variance.size))
-            factors[np.arange(len(active)), active] = np.sqrt(variance.ravel()[active])
-            return factors.reshape((-1,)+variance.shape)
-        self.modeSelection.check_supercell(self._supercell_matrix)
-        return self.modeSelection.real_basis(self._cell_origins, self._primitive_natoms,
-                                              self.directions)*np.sqrt(variance)[None]
-
-    def meanSquareDisplacements(self, temperature, quantum=True):
-        if self.modeSelection is None:
-            return self._bareMeanSquareDisplacements(temperature, quantum)
-        # The diagonal covariance is translation invariant, including on the
-        # primitive model where the selected finite-q field cannot be sampled.
-        variance = self._bareMeanSquareDisplacements(temperature, quantum)
-        mask = np.zeros((self._primitive_natoms, 3))
-        for branch in self.modeSelection.branch_indices(self._primitive_natoms*len(self.directions)):
-            atom, axis = divmod(branch, len(self.directions))
-            mask[atom, self.directions[axis]] = self.modeSelection.weights.sum()
-        return variance*np.tile(mask, (len(self._cell_origins), 1))
-
-    def _projectSelection(self, values):
-        if self.modeSelection is None:
-            return values
-        self.modeSelection.check_supercell(self._supercell_matrix)
-        return self.modeSelection.project(values, self._cell_origins,
-                                          self._primitive_natoms, self.directions)
-
-    def sampleDisplacements(self, temperature, nSamples=None, seed=None, quantum=True):
-        """Independent Gaussian snapshots; quantum=True samples the position marginal.
-
-        Quantum zero-point snapshots are static disorder, not an inelastic quantum
-        phonon bath. nSamples=None returns one (natom,3) configuration.
-        """
-        variance = self._bareMeanSquareDisplacements(temperature, quantum=quantum)
-        if nSamples is not None and (not isinstance(nSamples, (int, np.integer)) or nSamples < 1):
-            raise ValueError("nSamples must be a positive integer or None")
-        shape = variance.shape if nSamples is None else (nSamples,) + variance.shape
-        return self._projectSelection(np.random.default_rng(seed).normal(size=shape) * np.sqrt(variance))
-
-    def supercell(self, ncells, internal_cells=None, matrix=None):
-        result = EinsteinPhonons(np.tile(self.masses, ncells),
-                                 np.tile(self.energies, (ncells, 1)), self.directions,
-                                 self.modeSelection)
-        if self.modeSelection is not None:
-            if internal_cells is None or matrix is None:
-                raise ValueError('selected phonons require supercell origins and matrix')
-            if len(self._cell_origins) != 1:
-                raise NotImplementedError('build a selected-mode supercell directly from the primitive model')
-            self.modeSelection.check_supercell(matrix)
-            result._primitive_natoms = self._primitive_natoms
-            result._cell_origins = np.asarray(internal_cells, int).copy()
-            result._supercell_matrix = np.asarray(matrix, int).copy()
-        return result
-
-    def sampleTrajectory(self, temperature, seed=None, statistics="classical"):
-        """Stationary harmonic trajectory with sampled positions AND momenta.
-
-        Time is in hbar/eV. Classical statistics obey equipartition; Wigner
-        statistics reproduce the symmetrized quantum harmonic correlator,
-        but neither gives the asymmetric quantum emission/absorption noise.
-        The bath is prescribed: no electronic force or thermostat is applied.
-        """
-        if statistics not in ("classical", "wigner"):
-            raise ValueError("trajectory statistics must be classical or wigner")
-        variance = self._bareMeanSquareDisplacements(temperature, quantum=statistics == "wigner")
-        rng = np.random.default_rng(seed)
-        quadratures = rng.normal(size=(2,) + variance.shape)*np.sqrt(variance)
-        quadratures = self._projectSelection(quadratures)
-        frequencies = np.zeros_like(variance)
-        frequencies[:, self.directions] = self.energies
-        return HarmonicTrajectory(quadratures[0], quadratures[1], frequencies)
-
-    def sampleDampedTrajectory(self, temperature, damping, period, phase_points,
-                                seed=None, statistics="classical"):
-        """Sample a stationary periodic approximation to a damped Langevin bath.
-
-        ``damping`` is the amplitude-decay rate in eV for
-        u''+2*damping*u'+omega**2*u=noise.  The Fourier coefficients sample the
-        corresponding classical displacement spectrum and are normalized to
-        the requested classical or Wigner equal-time variance.  The Wigner
-        option remains symmetrized noise, not a quantum detailed-balance bath.
-        """
-        if statistics not in ("classical", "wigner"):
-            raise ValueError("trajectory statistics must be classical or wigner")
-        damping, period = float(damping), float(period)
-        if not np.isfinite(damping) or damping <= 0:
-            raise ValueError("damping must be positive and finite, in eV")
-        if not np.isfinite(period) or period <= 0:
-            raise ValueError("period must be positive and finite, in hbar/eV")
-        if (not isinstance(phase_points, (int, np.integer)) or phase_points < 5
-                or phase_points % 2 == 0):
-            raise ValueError("phase_points must be an odd integer >= 5")
-
-        base_energy = 2*np.pi/period
-        harmonics = np.arange((phase_points-1)//2+1, dtype=float)
-        sampled_energies = harmonics[:, None, None]*base_energy
-        mode_energies = self.energies[None]
-        denominator = ((mode_energies**2-sampled_energies**2)**2
-                       +(2*damping*sampled_energies)**2)
-        weights = 1/denominator
-        weights[1:] *= 2
-        weights /= np.sum(weights, axis=0, keepdims=True)
-
-        variance = self._bareMeanSquareDisplacements(temperature, quantum=statistics == "wigner")
-        rng = np.random.default_rng(seed)
-        shape = (len(harmonics), len(self.masses), 3)
-        cosine, sine = np.zeros(shape), np.zeros(shape)
-        active_variance = variance[:, self.directions]
-        coefficient_scale = np.sqrt(weights*active_variance[None])
-        cosine[:, :, self.directions] = rng.normal(size=weights.shape)*coefficient_scale
-        sine[1:, :, self.directions] = rng.normal(size=weights[1:].shape)*coefficient_scale[1:]
-        cosine, sine = self._projectSelection(cosine), self._projectSelection(sine)
-        mode_energy_grid = np.zeros_like(variance)
-        mode_energy_grid[:, self.directions] = self.energies
-        return DampedPeriodicTrajectory(cosine, sine, base_energy, mode_energy_grid,
-                                        damping, period, weights)
-
-@dataclass
-class HarmonicTrajectory:
-    """u(t)=cosine*cos(energy*t)+sine*sin(energy*t), in Angstrom.
-
-    ``sine*energies`` is the initial velocity in Angstrom/(hbar/eV).
-    """
-    cosine: np.ndarray
-    sine: np.ndarray
-    energies: np.ndarray
-
-    def displacements(self, time):
-        phase = self.energies*float(time)
-        return self.cosine*np.cos(phase) + self.sine*np.sin(phase)
-
-    def velocities(self, time):
-        phase = self.energies*float(time)
-        return self.energies*(-self.cosine*np.sin(phase) + self.sine*np.cos(phase))
-
-
-@dataclass
-class DampedPeriodicTrajectory:
-    """Stationary Gaussian damped-oscillator path represented by a Fourier series."""
-    cosine: np.ndarray
-    sine: np.ndarray
-    base_energy: float
-    energies: np.ndarray
-    damping: float
-    period: float
-    spectrum_weights: np.ndarray
-
-    def displacements(self, time):
-        harmonics = np.arange(len(self.cosine))*self.base_energy
-        phase = harmonics*float(time)
-        return np.einsum('n,nac->ac', np.cos(phase), self.cosine)+np.einsum(
-            'n,nac->ac', np.sin(phase), self.sine)
-
-    def velocities(self, time):
-        harmonics = np.arange(len(self.cosine))*self.base_energy
-        phase = harmonics*float(time)
-        return np.einsum('n,nac->ac', -harmonics*np.sin(phase), self.cosine)+np.einsum(
-            'n,nac->ac', harmonics*np.cos(phase), self.sine)
+from .phonons import EinsteinPhonons, _wavevector
 
 class SSHModelEPC:
     """Scalar bond coupling with frozen equilibrium Rashba/exchange.
+
+    electronic_model and phonon_model are explicit, independent physical
+    models. This object holds their coupling; neither model owns the other.
+    Electronic response state and collision settings are supplied separately.
 
     alpha_R = d H(R)/d bond_length, in eV/Angstrom, duplicated in the two spin
     blocks. For H_ij=-t_ij and t=t0-alpha*stretch this is the usual positive alpha.
@@ -257,7 +20,11 @@ class SSHModelEPC:
     not the geometrical transverse curvature of an exact bond-length model.
     """
 
-    def __init__(self, model, alpha_R, beta_R=None):
+    def __init__(self, electronic_model, phonon_model, alpha_R, beta_R=None):
+        self.electronic_model = model = electronic_model
+        self.phonon_model = phonon_model
+        if len(phonon_model.masses) != len(model.atomicOrbInfoList):
+            raise ValueError("Phonon and electronic atom counts differ")
         if model.overlap:
             raise NotImplementedError("Model EPC currently requires an orthogonal basis")
         mapping = np.asarray(model.iorb2iatomMap)
@@ -281,17 +48,18 @@ class SSHModelEPC:
         if np.any((lengths <= 1e-12) & ((self.alpha_R != 0) | (self.beta_R != 0))):
             raise ValueError("SSH coefficients on zero-length bonds must be zero")
 
-    def validate(self, model):
+    def validate(self):
+        model = self.electronic_model
         if (model.ham_R.shape != self.alpha_R.shape
                 or not np.array_equal(model.iRvec, self.iRvec)
                 or not np.array_equal(model.iorb2iatomMap, self.orbital_atoms)
                 or not np.allclose(model.lattice, self.lattice, rtol=0, atol=1e-10)
                 or not np.allclose(model.rList, self.centers, rtol=0, atol=1e-10)):
-            raise ValueError("SSH reference geometry/grid/atom mapping changed; attach EPC to the equilibrium model again")
+            raise ValueError("SSH reference geometry/grid/atom mapping changed; construct EPC from the equilibrium models again")
 
-    def deltaHamiltonian(self, model, displacements):
+    def deltaHamiltonian(self, displacements):
         """Delta H(R) for a real periodic displacement of this model's atoms."""
-        self.validate(model)
+        self.validate()
         u = np.asarray(displacements)
         if u.shape != (self.natoms, 3) or np.iscomplexobj(u) or not np.all(np.isfinite(u)):
             raise ValueError(f"displacements must be a real finite ({self.natoms},3) array in Angstrom")
@@ -300,7 +68,7 @@ class SSHModelEPC:
         stretch = np.sum(self.unit_bonds * difference, axis=1)
         return self.alpha_R * stretch + 0.5*self.beta_R * stretch**2
 
-    def secondDisplacementVertex(self, model, k, q, displacement):
+    def secondDisplacementVertex(self, k, q, displacement):
         """Return H''(k;q,-q) in eV for a mode displacement in Angstrom.
 
         The second derivative is beta_R * |d_hat.(e_j exp(iq.R)-e_i)|^2.
@@ -312,16 +80,16 @@ class SSHModelEPC:
         u = np.asarray(displacement, dtype=complex)
         if u.shape != (self.natoms, 3) or not np.all(np.isfinite(u)):
             raise ValueError(f"displacement must have shape ({self.natoms},3) and finite entries")
-        return self.secondDisplacementVertices(model, k[None], q, u[None])[0, 0]
+        return self.secondDisplacementVertices(k[None], q, u[None])[0, 0]
 
-    def secondDisplacementVertices(self, model, kpoints, q, displacements):
+    def secondDisplacementVertices(self, kpoints, q, displacements):
         """Batched ``H''(k;q,-q)`` for many k points and phonon modes.
 
         The result has shape ``(nk, nmodes, norbs, norbs)``.  Geometry and
         array consistency are checked once per batch instead of once per
         ``(k,q,mode)`` tuple.
         """
-        self.validate(model)
+        self.validate()
         q = _wavevector(q, "q")
         kpoints = np.asarray(kpoints, dtype=float)
         if (kpoints.ndim != 2 or kpoints.shape[1] != 3
@@ -341,7 +109,7 @@ class SSHModelEPC:
         phase_k = np.exp(2j*np.pi*(kpoints @ self.iRvec.T))
         return np.einsum("kr,vrij->kvij", phase_k, vertex_R, optimize=True)
 
-    def displacementVertex(self, model, k, q, displacement):
+    def displacementVertex(self, k, q, displacement):
         """<k+q|delta H|k> for u_La = displacement[a] exp(2 pi i q.L).
 
         displacement may be complex and has shape (natom,3), in Angstrom.
@@ -352,14 +120,14 @@ class SSHModelEPC:
         u = np.asarray(displacement, dtype=complex)
         if u.shape != (self.natoms, 3) or not np.all(np.isfinite(u)):
             raise ValueError(f"displacement must have shape ({self.natoms},3) and finite entries")
-        return self.displacementVertices(model, k[None], q, u[None])[0, 0]
+        return self.displacementVertices(k[None], q, u[None])[0, 0]
 
-    def displacementVertices(self, model, kpoints, q, displacements):
+    def displacementVertices(self, kpoints, q, displacements):
         """Batched localized-orbital vertices for many k points and modes.
 
         Returns ``vertices[k, mode, orbital_i, orbital_j]`` in eV.
         """
-        self.validate(model)
+        self.validate()
         q = _wavevector(q, "q")
         kpoints = np.asarray(kpoints, dtype=float)
         if (kpoints.ndim != 2 or kpoints.shape[1] != 3
@@ -379,21 +147,22 @@ class SSHModelEPC:
         phase_k = np.exp(2j*np.pi*(kpoints @ self.iRvec.T))
         return np.einsum("kr,vrij->kvij", phase_k, vertex_R, optimize=True)
 
-    def matrixElements(self, model, k, q, bandBasis=True, vectors_k=None, vectors_kq=None):
+    def matrixElements(self, k, q, bandBasis=True, vectors_k=None, vectors_kq=None):
         """Complex g[nu,m,n](k,q), in eV; final m at k+q, initial n at k.
 
         H_ep = Ncells^(-1/2) sum g c^dagger_(k+q) c_k (b_q + b^dagger_(-q)).
         Thermal Bose factors belong in the collision kernel, not in g.
         """
+        model = self.electronic_model
         k, q = _wavevector(k, "k"), _wavevector(q, "q")
-        phonons = getattr(model, "modelPhonons", None)
+        phonons = self.phonon_model
         if phonons is None or len(phonons.masses) != self.natoms:
-            raise ValueError("Call setModelPhonons with one mass per atom before computing g")
+            raise ValueError("The phonon model must have one mass per electronic atom")
         if not bandBasis:
             if vectors_k is not None or vectors_kq is not None:
                 raise ValueError("Eigenvectors require bandBasis=True")
             return self.displacementVertices(
-                model, k[None], q, phonons.modeDisplacements(q))[0]
+                k[None], q, phonons.modeDisplacements(q))[0]
         if vectors_k is None or vectors_kq is None:
             from calculator.Path import EnergyOnPath
             points = [point for point, vectors in ((k, vectors_k), (k+q, vectors_kq)) if vectors is None]
@@ -407,27 +176,117 @@ class SSHModelEPC:
         if vectors_k.shape != expected or vectors_kq.shape != expected:
             raise ValueError(f"Eigenvector matrices must have shape {expected}, with eigenvectors in columns")
         return self.matrixElementsBatch(
-            model, k[None], q, vectors_k[None], vectors_kq[None])[0]
+            k[None], q, vectors_k[None], vectors_kq[None])[0]
 
-    def matrixElementsBatch(self, model, kpoints, q, vectors_k, vectors_kq):
+    def matrixElementsBatch(self, kpoints, q, vectors_k, vectors_kq):
         """Band-basis ``g`` for a batch of k points at one q point.
 
         ``vectors_k`` and ``vectors_kq`` contain eigenvectors in columns and
         both have shape ``(nk,norbs,norbs)``.  The returned axes are
         ``(k, mode, final_band, initial_band)``.
         """
-        phonons = getattr(model, "modelPhonons", None)
+        model = self.electronic_model
+        phonons = self.phonon_model
         if phonons is None or len(phonons.masses) != self.natoms:
-            raise ValueError("Call setModelPhonons with one mass per atom before computing g")
+            raise ValueError("The phonon model must have one mass per electronic atom")
         kpoints = np.asarray(kpoints, dtype=float)
         vectors_k, vectors_kq = np.asarray(vectors_k), np.asarray(vectors_kq)
         expected = (len(kpoints), model.norbs, model.norbs)
         if vectors_k.shape != expected or vectors_kq.shape != expected:
             raise ValueError(f"batched eigenvector matrices must have shape {expected}")
         vertices = self.displacementVertices(
-            model, kpoints, q, phonons.modeDisplacements(q))
+            kpoints, q, phonons.modeDisplacements(q))
         return (vectors_kq.conj().swapaxes(-2, -1)[:, None]
                 @ vertices @ vectors_k[:, None])
+
+    @classmethod
+    def from_files(cls, electronic_model, phonon_model, alphaR="epc", betaR=None):
+        """Read SSH derivatives, optionally including quadratic bond curvature.
+
+        ``alpha_R`` is dH_ij/d bond_length in eV/Angstrom. Thus for the usual
+        H_ij=-t_ij and t_ij=t0_ij-alpha_ij*stretch, the file stores +alpha_ij.
+        Delta H_ij = alpha_ij d_hat^0_ij.(u_j-u_i), using equilibrium unit
+        bond vectors and Cartesian displacements. The file layout matches
+        addRashbaSOC, with spatial indices and real reciprocal coefficients.
+        All R points must exist in iRvec, and nonzero coefficients must act on
+        existing Hamiltonian bonds. Atoms are assigned through iorb2iatomMap;
+        orbital positions come from rList, with any number of s orbitals per atom.
+        Rashba and exchange are held fixed when atoms are displaced.
+        betaR optionally names a second scalar file in eV/Angstrom^2, defining
+        Delta H = alpha*s + beta*s^2/2 with s=d_hat^0.(u_j-u_i). betaR=None
+        retains the original linear model and has exactly zero Debye-Waller
+        vertex. beta is independent information; it cannot be inferred from g.
+        """
+        model = electronic_model
+        iRvec, strengths, _ = model.read_scalar_bonds(alphaR)
+        quadratic = None if betaR is None else model.read_scalar_bonds(betaR)
+        n = model.norbs // 2
+        alpha = np.zeros_like(model.ham_R.real)
+        beta = np.zeros_like(alpha)
+        coupling_sets = [(iRvec, strengths)]
+        if quadratic is not None:
+            coupling_sets.append(quadratic[:2])
+        for vectors, coefficients in coupling_sets:
+            for R, value in zip(vectors, coefficients):
+                block = model.ham_R[model.iRvecIndex[tuple(R)]].reshape(2, n, 2, n)
+                existing = np.any(block != 0, axis=(0, 2))
+                if np.any((value != 0) & ~existing):
+                    raise ValueError(f"EPC coefficients at R={tuple(R)} must couple existing Hamiltonian bonds")
+        for R, value in zip(iRvec, strengths):
+            ir = model.iRvecIndex[tuple(R)]
+            alpha[ir, :n, :n] = value
+            alpha[ir, n:, n:] = value
+        if quadratic is not None:
+            for R, value in zip(quadratic[0], quadratic[1]):
+                ir = model.iRvecIndex[tuple(R)]
+                beta[ir, :n, :n] = beta[ir, n:, n:] = value
+        return cls(model, phonon_model, alpha, beta)
+
+    def makeDisplacedModel(self, displacements):
+        """Return an independent frozen snapshot of an equilibrium SSH model.
+
+        Build the desired supercell FIRST, then provide one real displacement
+        (Angstrom) per supercell atom. Scalar hopping and orbital centers move;
+        Rashba/exchange matrices remain fixed. The equilibrium SSH reference is not
+        updated or accumulated. The returned snapshot is an electronic model; sample each new
+        snapshot from this equilibrium EPC model.
+        """
+        model = self.electronic_model
+        delta = self.deltaHamiltonian(displacements)
+        orbital_u = np.asarray(displacements)[model.iorb2iatomMap].T
+        # A point-orbital position operator is needed to move centers consistently.
+        iR0 = model.iRvecIndex.get((0, 0, 0))
+        indices = np.arange(model.norbs)
+        if iR0 is None or model.AA_R_W is None:
+            raise ValueError("Displaced model requires an onsite point-orbital position operator")
+        expected = np.zeros_like(model.AA_R_W)
+        expected[iR0][:, indices, indices] = model.rList
+        if not np.allclose(model.AA_R_W, expected, atol=1e-10, rtol=0):
+            raise NotImplementedError("Displacements currently require a diagonal point-orbital position operator")
+        result = copy.deepcopy(model)
+        result.ham_R = result.ham_R + delta
+        if result.nonexchange_R is not None:
+            result.nonexchange_R = result.nonexchange_R + delta
+        result.rList = result.rList + orbital_u
+        result.posinfo['pos ions (cart.)'] = np.asarray(result.posinfo['pos ions (cart.)']) + displacements
+        result.posinfo['pos ions (frac.)'] = result.posinfo['pos ions (cart.)'] @ np.linalg.inv(result.lattice)
+        result.AA_R_W[iR0][:, indices, indices] += orbital_u
+        result._refreshHamiltonianDerivedMatrices()
+        return result
+
+    def supercell(self, matrix, omitRHam=False):
+        """Return an independent EPC model with both physical models expanded.
+
+        Coupling derivatives use exactly the electronic orbital/cell mapping.
+        The primitive models and this coupling are left unchanged.
+        """
+        self.validate()
+        electronic = copy.deepcopy(self.electronic_model)
+        arrays, origins = electronic.make_supercell(
+            matrix, omitRHam=omitRHam,
+            additional_operators={"alpha": self.alpha_R, "beta": self.beta_R})
+        phonons = self.phonon_model.supercell(len(origins), origins, np.asarray(matrix, int))
+        return type(self)(electronic, phonons, arrays["alpha"], arrays["beta"])
 
 class SSHTimeOperators:
     """H[u(t)], dH/dA and d2H/dA2 with equilibrium point-orbital centers.
@@ -436,12 +295,14 @@ class SSHTimeOperators:
     as the primitive-cell perturbation calculation. Translating orbital
     centers would require extra moving-basis and convective-current terms.
     """
-    def __init__(self, owner):
+    def __init__(self, owner, epc_model):
         model = owner.model
-        if not isinstance(model.modelEPC, SSHModelEPC) or not isinstance(model.modelPhonons, EinsteinPhonons):
+        epc = epc_model
+        if not isinstance(epc, SSHModelEPC) or not isinstance(epc.phonon_model, EinsteinPhonons):
             raise NotImplementedError("Phonon TDSE currently requires SSHModelEPC and EinsteinPhonons")
-        epc = model.modelEPC
-        epc.validate(model)
+        if epc.electronic_model is not model:
+            raise ValueError("epcModel must refer to the calculator electronic model")
+        epc.validate()
         expected = np.zeros_like(model.AA_R_W)
         indices = np.arange(model.norbs)
         expected[model.iRvecIndex[(0, 0, 0)]][:, indices, indices] = model.rList

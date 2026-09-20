@@ -65,10 +65,10 @@ class HarmonicPhononLiouvillian:
 
 def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed,
                              phase_points, tolerance, maxiter, restart,
-                             damping=0., bath_cycles=8.):
-    if owner.collision.specification.mode != 'crta':
+                             damping=0., bath_cycles=8., *, epc_model, collision):
+    if collision.specification.mode != 'crta':
         raise ValueError("Explicit harmonic Liouville dynamics requires CRTA background; adding SERTA would double count EPC")
-    gamma = owner.collision.specification.constantLinewidth
+    gamma = collision.specification.constantLinewidth
     if (not np.isfinite(gamma) or gamma <= 0 or not np.isfinite(tolerance) or tolerance <= 0
             or not np.isfinite(temperature) or temperature < 0):
         raise ValueError("Require positive finite background linewidth/tolerance and nonnegative temperature")
@@ -83,8 +83,8 @@ def solve_phonon_conductivity(owner, temperature, statistics, trajectories, seed
         raise ValueError("phononDamping must be nonnegative and finite, in eV")
     if not np.isfinite(bath_cycles) or bath_cycles <= 0:
         raise ValueError("phononBathCycles must be positive and finite")
-    operators = SSHTimeOperators(owner)
-    phonons = owner.model.modelPhonons
+    operators = SSHTimeOperators(owner, epc_model)
+    phonons = epc_model.phonon_model
     mode_energy = float(phonons.energies.flat[0])
     spawned_seeds = np.random.SeedSequence(seed).spawn(trajectories)
     if damping == 0:

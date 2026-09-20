@@ -36,7 +36,7 @@ def write_hr(path, iRvec, values, title):
 def build_model(directory, hopping=(1.0, 0.9, 1.1), delta=0.45, rashba=0.2,
                 exchange=0.35, direction=(0.3, 0.4, np.sqrt(0.75)), alpha=0.5,
                 bondLength=1.0, mass=12.0, phononEnergy=0.02):
-    """Write inputs and return System_tb. Energy/length units: eV/Angstrom.
+    """Write inputs and return (System_tb, SSHModelEPC). Energy/length units: eV/Angstrom.
 
     H_hop=-t, H_staggered=(Delta,-Delta), H_XC=-J*n.sigma. Only scalar
     nearest-neighbor hopping is displaced; Rashba and exchange stay fixed.
@@ -78,18 +78,19 @@ def build_model(directory, hopping=(1.0, 0.9, 1.1), delta=0.45, rashba=0.2,
         raise ValueError("Exchange direction must be a finite nonzero three-vector")
     model.addExchangeSplitting([(0, (0,)), (1, (0,))], -exchange*n/np.linalg.norm(n))
     model.addRashbaSOC()
-    model.addModelEPC(SSHModelEPC)
-    model.setModelPhonons(masses=mass, phononEnergies=phononEnergy, directions=(0, 1))
-    return model
+    phonons = EinsteinPhonons(np.full(2, mass), phononEnergy, directions=(0, 1))
+    epc_model = SSHModelEPC.from_files(model, phonons)
+    return model, epc_model
 
 
 def response_arrays(model, grid=18):
     """Nonzero clean-model responses and LG/VG comparisons at finite CRTA eta."""
-    from calculator import (AnormalousHallConductance_LG_DM,
+    from calculator import (AnormalousHallConductance_LG_DM, CollisionSpecification,
                             BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_VG_DM,
                             InverseFaradayEffect_LG_DM, InverseFaradayEffect_VG_DM,
                             InverseFaradayTorque_LG_DM, InverseFaradayTorque_VG_DM)
-    args = dict(model=model, kgrid=(grid, grid, 1), eta=0.05, kBT=0.025,
+    args = dict(model=model, epcModel=epc, kgrid=(grid, grid, 1), eta=0.05, kBT=0.025,
+                collisionSpecification=CollisionSpecification("crta", constantLinewidth=.05),
                 fermiList=np.array([-0.8, 0.0]), omegaList=np.array([0.5, 1.0, 1.5, 2.0]),
                 fullCovariantDerivative=True, verbose=0)
     arrays = {"fermi_eV": args["fermiList"], "photon_energy_eV": args["omegaList"]}
@@ -110,14 +111,14 @@ def main():
     parser.add_argument("--grid", type=int, default=18)
     args = parser.parse_args()
     output = Path(args.output)
-    model = build_model(output)
+    model, epc = build_model(output)
     k, q = np.array([0.17, 0.23, 0]), np.array([1/3, 0, 0])
-    g = model.getModelEPC(k, q)
-    supercell = copy.deepcopy(model)
-    supercell.make_supercell(np.diag([3, 3, 1]))
-    displacements = supercell.sampleModelDisplacements(300, seed=2026)
-    snapshot = supercell.makeDisplacedModel(displacements)
-    arrays = dict(k=k, q=q, g_eV=g, phonon_energy_eV=model.modelPhonons.modes(q)[0],
+    g = epc.matrixElements(k, q)
+    supercell_epc = epc.supercell(np.diag([3, 3, 1]))
+    supercell = supercell_epc.electronic_model
+    displacements = supercell_epc.phonon_model.sampleDisplacements(300, seed=2026)
+    snapshot = supercell_epc.makeDisplacedModel(displacements)
+    arrays = dict(k=k, q=q, g_eV=g, phonon_energy_eV=epc.phonon_model.modes(q)[0],
                   displacements_A=displacements, snapshot_ham_R=snapshot.ham_R,
                   snapshot_iRvec=snapshot.iRvec, snapshot_lattice=snapshot.lattice,
                   snapshot_positions_A=snapshot.posinfo['pos ions (cart.)'])
