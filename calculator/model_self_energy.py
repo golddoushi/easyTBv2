@@ -10,7 +10,8 @@ import numpy as np
 from scipy.constants import Boltzmann, electron_volt
 from scipy.special import expit
 
-from .Grid import Energy
+from phonon import PhononBath
+from .electronic_stages import Energy
 from .Path import EnergyOnPath
 from auxiliary import uniform_qmesh
 
@@ -29,21 +30,16 @@ class ModelElectronSelfEnergy:
         Coupling with explicit equilibrium electronic and phonon models.
     kpoints : array (nk,3), or one 3-vector
         Fractional reciprocal coordinates of the external electronic states.
-    qgrid : tuple, optional
-        Full mesh, default (8,8,1). Mutually exclusive with qpoints.
-        Electronic states are computed by Energy once per distinct shifted
-        mesh, then reused for all equivalent k and k+q points.
+    phononBath : PhononBath
+        Shared temperature (kelvin), statistics, qgrid and mode selection.
+        The default is a zero-temperature quantum bath. A uniform qgrid
+        defaults to (8,8,1). Explicit selection weights are not normalized.
+        Here the electronic Fermi factors use the same temperature as the bath.
     qpoints, qweights : arrays, optional
-        Explicit phonon quadrature; weights must be nonnegative and are
-        normalized to sum to one. Uniform weights are used if omitted.
-        For explicit quadrature, EnergyOnPath solves the unique electronic
-        points together. The underlying solvers are in energy_calculators.
-    phononSelection : PhononModeSelection, optional
-        Explicit q/branch/weight selection, also read from epc_model.phonon_model.modeSelection.
-        Supersedes qgrid and preserves absolute weights without renormalizing.
-        Cannot be combined with the legacy explicit qpoints/qweights arguments.
-    temperature : float
-        Common electron/phonon temperature in kelvin, including exactly zero.
+        An explicit self-energy integration quadrature, mutually exclusive
+        with the bath's qgrid or selection. Weights are normalized to sum to
+        one; omitted weights are uniform. Off-mesh electronic intermediate
+        points are solved with EnergyOnPath.
     fermi : float
         Chemical potential in eV. It sets intermediate-state Fermi factors.
     delta : float
@@ -56,7 +52,7 @@ class ModelElectronSelfEnergy:
         Common real evaluation energies in eV. None evaluates each band's
         on-shell energy. Full matrices are stored even for on-shell evaluation,
         so a degenerate subspace can be treated at a common energy explicitly.
-    bathStatistics : 'quantum' | 'classical' | 'wigner'
+    Phonon statistics (phononBath.statistics)
         Quantum (default) is the usual Fan-Migdal expression with Pauli
         factors. Classical and Wigner instead describe prescribed real
         harmonic noise with equal emission/absorption weights C=kBT/Ephonon
@@ -81,18 +77,19 @@ class ModelElectronSelfEnergy:
     Static Im(Sigma) depends on delta and is not a quantum EPC transport rate.
     """
 
-    def __init__(self, epc_model, kpoints, qgrid=None, qpoints=None, qweights=None,
-                 temperature=0.0, fermi=0.0, delta=1e-3, adiabatic=False, energyList=None,
-                 bathStatistics="quantum", phononSelection=None, electronic_states=None):
+    def __init__(self, epc_model, kpoints, qpoints=None, qweights=None,
+                 fermi=0.0, delta=1e-3, adiabatic=False, energyList=None,
+                 phononBath=PhononBath(temperature=0.), electronic_states=None):
         self.epc_model = epc_model
+        self.phononBath = phononBath
+        temperature, bathStatistics, qgrid = phononBath.temperature, phononBath.statistics, phononBath.qgrid
         model = epc_model.electronic_model
         epc_model.validate()
         self.kpoints = _points(kpoints, "kpoints")
-        self.phononSelection = (getattr(epc_model.phonon_model, 'modeSelection', None)
-                                if phononSelection is None else phononSelection)
+        self.phononSelection = phononBath.selection
         if self.phononSelection is not None:
             if qpoints is not None or qweights is not None:
-                raise ValueError('phononSelection cannot be combined with explicit qpoints/qweights')
+                raise ValueError('phononBath.selection cannot be combined with explicit qpoints/qweights')
             # An explicit selected bath supersedes the auxiliary uniform grid.
             qpoints = self.phononSelection.qpoints
             qweights = self.phononSelection.weights
@@ -101,7 +98,7 @@ class ModelElectronSelfEnergy:
                 raise ValueError('evaluate selected EPC rates on the primitive model; the selection uses primitive q and branch labels')
             self.phononSelection.branch_indices(len(epc_model.phonon_model.modes(qpoints[0])[0]))
         if qpoints is not None and qgrid is not None:
-            raise ValueError("Specify qgrid or qpoints, not both")
+            raise ValueError("Specify phononBath.qgrid or qpoints, not both")
         self.qpoints = (uniform_qmesh((8, 8, 1) if qgrid is None else qgrid)
                         if qpoints is None else _points(qpoints, "qpoints"))
         self.qgrid = (tuple(int(n) for n in ((8, 8, 1) if qgrid is None else qgrid))
@@ -112,8 +109,6 @@ class ModelElectronSelfEnergy:
             raise ValueError("qweights must be finite, nonnegative, and have positive sum")
         self.qweights = weights.copy() if self.phononSelection is not None else weights / weights.sum()
         self.temperature, self.fermi, self.delta = float(temperature), float(fermi), float(delta)
-        if bathStatistics not in ("quantum", "classical", "wigner"):
-            raise NotImplementedError(f"{bathStatistics=} is not supported now. Available choice: 'quantum' | 'classical' | 'wigner'")
         self.bathStatistics = bathStatistics
         self.adiabatic = bool(adiabatic)
         self.on_shell = energyList is None
@@ -355,27 +350,21 @@ class ModelEPCLinewidth:
     linewidths only: it does not add Re(Sigma), Debye-Waller shifts, or vertex
     corrections to optical matrix elements.
 
-    bathStatistics defaults to 'quantum' (SERTA). 'classical' and 'wigner'
+    phononBath.statistics defaults to 'quantum' (SERTA). 'classical' and 'wigner'
     use the corresponding symmetric-noise Born linewidth of the harmonic
     trajectories. Applying either through CollisionSpecification('serta')
     selects the same diagonal RTA operator, not quantum bath statistics.
 
-    phononSelection (or epc_model.phonon_model.modeSelection) supplies a shared restricted
-    quadrature with unnormalized weights and supersedes qgrid.
+    phononBath.selection supplies a shared restricted quadrature with absolute
+    weights and supersedes phononBath.qgrid. The physical models carry no selection.
     """
 
-    def __init__(self, epc_model, qgrid=None, temperature=300., fermi=0., delta=.02,
-                 adiabatic=False, bathStatistics="quantum", phononSelection=None):
+    def __init__(self, epc_model, fermi=0., delta=.02, adiabatic=False, *, phononBath=PhononBath()):
         self.epc_model=epc_model
-        self.qgrid=tuple(qgrid) if qgrid is not None else None
-        self.phononSelection=phononSelection
-        self.temperature=float(temperature)
+        self.phononBath=phononBath
         self.fermi=float(fermi)
         self.delta=float(delta)
         self.adiabatic=bool(adiabatic)
-        if bathStatistics not in ("quantum", "classical", "wigner"):
-            raise NotImplementedError(f"{bathStatistics=} is not supported by now. available choices: 'quantum' | 'classical' | 'wigner'")
-        self.bathStatistics=bathStatistics
         self.last_self_energy=None
         self._cache_signature=None
         self._cache_linewidth=None
@@ -385,20 +374,17 @@ class ModelEPCLinewidth:
         if inputs.model is not epc_model.electronic_model:
             raise ValueError("Linewidth EPC model must refer to the calculator electronic model")
         energies=np.asarray(inputs.energies)
-        selection = (getattr(epc_model.phonon_model, 'modeSelection', None)
-                     if self.phononSelection is None else self.phononSelection)
-        signature=(id(inputs.states),
-                   self.qgrid,self.temperature,self.fermi,self.delta,self.adiabatic,self.bathStatistics,
-                   None if selection is None else selection.signature)
+        bath = self.phononBath
+        signature=(id(inputs.states), bath.qgrid, bath.temperature, self.fermi,
+                   self.delta, self.adiabatic, bath.statistics,
+                   None if bath.selection is None else bath.selection.signature)
         if self._cache_signature == signature:
             return self._cache_linewidth.copy()
-        grid=tuple(inputs.kgrid)
-        qgrid=grid if self.qgrid is None else self.qgrid
+        from dataclasses import replace
+        resolved_bath = bath if bath.qgrid is not None else replace(bath, qgrid=tuple(inputs.kgrid))
         kpoints=np.mod(inputs.states.kpoints,1.)
-        result=ModelElectronSelfEnergy(epc_model,kpoints,qgrid=qgrid,
-                                       temperature=self.temperature,fermi=self.fermi,
-                                       delta=self.delta,adiabatic=self.adiabatic,
-                                       bathStatistics=self.bathStatistics, phononSelection=selection,
+        result=ModelElectronSelfEnergy(epc_model,kpoints, phononBath=resolved_bath,
+                                       fermi=self.fermi, delta=self.delta,adiabatic=self.adiabatic,
                                        electronic_states=inputs.states)
         linewidth=result.linewidths.reshape(energies.shape)
         if np.any(linewidth < -1e-10) or not np.all(np.isfinite(linewidth)):

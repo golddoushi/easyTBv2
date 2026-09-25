@@ -8,6 +8,7 @@ sample's second-order gap expansion isolates the higher-order remainder with
 much less noise than subtracting two independently averaged results. This
 diagnostic requires nondegenerate, isolated finite-supercell band edges.
 """
+from phonon import PhononBath
 
 import argparse
 import contextlib
@@ -80,8 +81,13 @@ def main():
         sc_epc = epc.supercell(np.diag(grid))
         sc = sc_epc.electronic_model
     ks = uniform_qmesh(grid)
-    se = ModelElectronSelfEnergy(epc, ks, qgrid=grid, temperature=args.temperature,
-                                 adiabatic=True, delta=1e-7)
+    se = ModelElectronSelfEnergy(
+        epc,
+        ks,
+        adiabatic=True,
+        delta=1e-07,
+        phononBath=PhononBath(qgrid=grid, temperature=args.temperature),
+    )
     vb = np.unravel_index(np.argmax(se.energies[:, :2]), (len(ks), 2))
     cb0 = np.unravel_index(np.argmin(se.energies[:, 2:]), (len(ks), 2))
     cb = cb0[0], cb0[1]+2

@@ -11,6 +11,7 @@ For explicit phonons, a supercell of S and supercell k grid K represent a
 primitive electronic mesh S*K and a primitive phonon mesh S along every
 periodic direction. Deprecated short grid names remain accepted but hidden.
 """
+from phonon import PhononBath
 import argparse
 import contextlib
 import copy
@@ -174,8 +175,16 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
     serta_requested = (() if args.serta == 'none' else ('static','dynamic') if args.serta == 'both' else (args.serta,))
     serta_sources = {}
     for name in serta_requested:
-        source = ModelEPCLinewidth(epc, qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions), temperature=args.temperature,
-                                   fermi=args.fermi,delta=args.epc_delta,adiabatic=name=='static')
+        source = ModelEPCLinewidth(
+            epc,
+            fermi=args.fermi,
+            delta=args.epc_delta,
+            adiabatic=name == 'static',
+            phononBath=PhononBath(
+                qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions),
+                temperature=args.temperature,
+            ),
+        )
         # ModelEPCLinewidth is lazy.  Evaluate it against the already solved
         # electronic grid so this timing reports the actual one-time EPC cost.
         source.populationLinewidth(lgdc)
@@ -204,11 +213,18 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
                                           )
     markov_vg = None
     if args.epc_markov != 'none':
-        markov_specification=CollisionSpecification('epc',
-            qgrid=periodic_grid(args.markov_q_grid, periodic_dimensions),
-            phononTemperature=args.temperature,bathStatistics=args.epc_markov,delta=args.epc_delta,
-            constantLinewidth=args.background_linewidth, populationSolver=args.epc_population_solver,
-            enforceDetailedBalance=not args.epc_raw_rates)
+        markov_specification=CollisionSpecification(
+            'epc',
+            delta=args.epc_delta,
+            constantLinewidth=args.background_linewidth,
+            populationSolver=args.epc_population_solver,
+            enforceDetailedBalance=not args.epc_raw_rates,
+            phononBath=PhononBath(
+                qgrid=periodic_grid(args.markov_q_grid, periodic_dimensions),
+                temperature=args.temperature,
+                statistics=args.epc_markov,
+            ),
+        )
         markov_options=dict(options,collisionSpecification=markov_specification)
         markov_dc_lg=AnormalousHallConductance_LG_DM(**markov_options)
         markov_dc_vg=AnormalousHallConductance_VG_DM(**markov_options)
@@ -232,10 +248,16 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
         tdse_collision = None
         gamma_floor = None
         if args.tdse_collision != 'crta':
-            source = ModelEPCLinewidth(epc, qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions),
-                                       temperature=args.temperature,
-                                       fermi=args.fermi,delta=args.epc_delta,
-                                       adiabatic=args.tdse_collision=='static')
+            source = ModelEPCLinewidth(
+                epc,
+                fermi=args.fermi,
+                delta=args.epc_delta,
+                adiabatic=args.tdse_collision == 'static',
+                phononBath=PhononBath(
+                    qgrid=periodic_grid(args.serta_q_grid, periodic_dimensions),
+                    temperature=args.temperature,
+                ),
+            )
             owner = Opticalconductivity_LG_DM(**small)
             gamma_floor = np.maximum(source.populationLinewidth(owner.preparedCollision.inputs),args.tdse_min_linewidth)
             tdse_collision = CollisionSpecification('serta',linewidthSource=gamma_floor)
@@ -266,9 +288,12 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
         clean = Opticalconductivity_VG_DM(**matched_options)
         arrays['sigma_ac_VG_phonon_clean'] = clean.sigma
         for statistics in (args.phonon_statistics, 'quantum'):
-            source = ModelEPCLinewidth(epc,
-                qgrid=qgrid, temperature=args.temperature, fermi=args.fermi,
-                delta=args.epc_delta, bathStatistics=statistics)
+            source = ModelEPCLinewidth(
+                epc,
+                fermi=args.fermi,
+                delta=args.epc_delta,
+                phononBath=PhononBath(qgrid=qgrid, temperature=args.temperature, statistics=statistics),
+            )
             linewidth = source.populationLinewidth(clean)
             reference = Opticalconductivity_VG_DM(**dict(
                 matched_options, collisionSpecification=CollisionSpecification(
@@ -278,20 +303,31 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
         showElapsedTime(extraInfo='Matched phonon-mesh frequency-domain references finished')
         frequency_dm = Opticalconductivity_VG_DM_Phonon(
             **dict(options, model=sc, epcModel=sc_epc, kgrid=supercell_grid),
-            phononTemperature=args.temperature, phononStatistics=args.phonon_statistics,
-            nPhononTrajectories=args.phonon_trajectories, phononSeed=args.phonon_seed,
-            phononPhasePoints=args.phonon_phase_points, phononDamping=args.phonon_damping,
-            phononBathCycles=args.phonon_bath_cycles, solverTolerance=args.phonon_solver_tolerance)
-        showElapsedTime(extraInfo='Periodic-phonon VG density-matrix frequency solve finished')
-        td = Opticalconductivity_TDSE(**dict(options, model=sc, epcModel=sc_epc, kgrid=supercell_grid),
-            phononDynamics=True, phononTemperature=args.temperature,
-            phononStatistics=args.phonon_statistics, nPhononTrajectories=args.phonon_trajectories,
-            phononSeed=args.phonon_seed, phononCycles=args.phonon_cycles,
-            phononDamping=args.phonon_damping, phononBathCycles=args.phonon_bath_cycles,
+            nPhononTrajectories=args.phonon_trajectories,
+            phononSeed=args.phonon_seed,
             phononPhasePoints=args.phonon_phase_points,
-            E0=args.optical_field, n_steps_per_cycle=args.tdse_steps_per_cycle,
-            n_cycles_measure=args.measure_cycles, transient_lifetimes=args.transient_lifetimes,
-            recordCurrent=True)
+            phononDamping=args.phonon_damping,
+            phononBathCycles=args.phonon_bath_cycles,
+            solverTolerance=args.phonon_solver_tolerance,
+            phononBath=PhononBath(temperature=args.temperature, statistics=args.phonon_statistics),
+        )
+        showElapsedTime(extraInfo='Periodic-phonon VG density-matrix frequency solve finished')
+        td = Opticalconductivity_TDSE(
+            **dict(options, model=sc, epcModel=sc_epc, kgrid=supercell_grid),
+            phononDynamics=True,
+            nPhononTrajectories=args.phonon_trajectories,
+            phononSeed=args.phonon_seed,
+            phononCycles=args.phonon_cycles,
+            phononDamping=args.phonon_damping,
+            phononBathCycles=args.phonon_bath_cycles,
+            phononPhasePoints=args.phonon_phase_points,
+            E0=args.optical_field,
+            n_steps_per_cycle=args.tdse_steps_per_cycle,
+            n_cycles_measure=args.measure_cycles,
+            transient_lifetimes=args.transient_lifetimes,
+            recordCurrent=True,
+            phononBath=PhononBath(temperature=args.temperature, statistics=args.phonon_statistics),
+        )
         showElapsedTime(extraInfo='Moving-phonon supercell TDSE conductivity finished')
         # Apply the same finite real-drive measurement to the stationary
         # spectral current. This exposes sideband leakage separately from
@@ -341,11 +377,14 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
         if args.epc_markov != 'none':
             if options['kgrid'] != folded_grid or markov_specification.qgrid != qgrid:
                 markov_vg=Opticalconductivity_VG_DM(**dict(matched_options,
-                    collisionSpecification=CollisionSpecification('epc',qgrid=qgrid,
-                        phononTemperature=args.temperature,bathStatistics=args.epc_markov,
-                        delta=args.epc_delta, constantLinewidth=args.background_linewidth,
+                    collisionSpecification=CollisionSpecification(
+                        'epc',
+                        delta=args.epc_delta,
+                        constantLinewidth=args.background_linewidth,
                         populationSolver=args.epc_population_solver,
-                        enforceDetailedBalance=not args.epc_raw_rates)))
+                        enforceDetailedBalance=not args.epc_raw_rates,
+                        phononBath=PhononBath(qgrid=qgrid, temperature=args.temperature, statistics=args.epc_markov),
+                    )))
             showElapsedTime(extraInfo='Markov full collision incorporated VG DM conductivity finished')
             arrays['sigma_ac_VG_phonon_Markov']=markov_vg.sigma
             summary['phonon_dynamics']['markov_relative_difference']=relative_error(markov_vg.sigma,td.sigma)

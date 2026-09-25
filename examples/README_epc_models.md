@@ -43,6 +43,7 @@ single-point convenience method can still diagonalize the electronic
 Hamiltonian when eigenvectors are omitted; response stages supply them.
 
 ```python
+from phonon import PhononBath
 from elph import SSHModelEPC
 from phonon import EinsteinPhonon
 from calculator import compute_states, compute_vertices, CollisionSpecification, prepare_collision
@@ -53,7 +54,7 @@ epc = SSHModelEPC.from_files(model, phonons, alphaR="epc")
 # Alternatively: epc = SSHModelEPC(model, phonons, alpha_R, beta_R)
 
 vertices = compute_vertices(compute_states(model, (16, 1, 1)))
-spec = CollisionSpecification("epc", qgrid=(4, 1, 1), phononTemperature=300)
+spec = CollisionSpecification('epc', phononBath=PhononBath(qgrid=(4, 1, 1), temperature=300))
 prepared = prepare_collision(vertices, spec, kBT=.025852, epc_model=epc)
 ```
 

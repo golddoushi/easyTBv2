@@ -24,6 +24,7 @@ the keyword argument `collision=operator`; they never prepare one implicitly.
 Explicit preparation makes the expensive rates reusable:
 
 ```python
+from phonon import PhononBath
 import numpy as np
 from scipy.constants import Boltzmann, electron_volt
 from calculator import (
@@ -37,8 +38,10 @@ kBT = 300 * Boltzmann / electron_volt
 states = compute_states(model, (16, 16, 1))
 electronic = compute_vertices(states, highOrderVelocity=True)
 specification = CollisionSpecification(
-    "epc", qgrid=(4, 4, 1), phononTemperature=300,
-    constantLinewidth=.2, delta=.03,
+    'epc',
+    constantLinewidth=0.2,
+    delta=0.03,
+    phononBath=PhononBath(qgrid=(4, 4, 1), temperature=300),
 )
 prepared = prepare_collision(electronic, specification, kBT=kBT, epc_model=epc)
 

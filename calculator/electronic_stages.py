@@ -8,7 +8,7 @@ from system import System
 from auxiliary import showElapsedTime, projectionOperator, PauliBlock, fermiDiracOccupations
 from scipy.constants import elementary_charge, electron_mass, hbar, angstrom
 from .electronic_algebra import ElectronicAlgebra
-from .electronic import resolve_states, states_from_stage, vertices_from_stage
+from .electronic import resolve_states, states_from_stage, vertices_from_stage, restore_states, restore_vertices
 
 class Calculator():
     Iodd = False  # inversion gives minus
@@ -101,7 +101,7 @@ class Energy(Calculator, ElectronicAlgebra):
         super().__init__(**resolve_states(states, kwarg))
         if states is not None:
             self.states = states
-            self.__dict__.update(states.arrays())
+            restore_states(self, states)
             return
         self.phaseFactorR=np.exp(2j*np.pi*(self.model.iRvec @ self.kOffset))
         self.ibmin=0             # ignore low-lying bands
@@ -587,7 +587,7 @@ class Velocity(Energy):
                 and (not exchangeVelocity or electronic.exchangeVelocity)
                 and tuple(velocityProjectionList) == electronic.velocityProjectionList):
             self.electronic = electronic
-            self.__dict__.update(electronic.arrays())
+            restore_vertices(self, electronic)
             return
         
         RH_R_W=self.model.RHam_R*self.phaseFactorR[:,None,None,None]

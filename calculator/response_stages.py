@@ -1,7 +1,7 @@
 """Composition of electronic preparation, collision preparation and responses."""
 
 from dataclasses import replace
-from .electronic import ElectronicVertices, compute_states, resolve_states
+from .electronic import ElectronicVertices, ElectronicTensorView, restore_vertices, compute_states, resolve_states
 from .electronic_algebra import ElectronicAlgebra
 from .response_inputs import ResponseInputs
 from .collision import resolve_collision, collision_mode, prepare_phonon_background
@@ -27,7 +27,7 @@ def response_requires_full_basis(settings):
     return response_model(settings).overlap or truncated
 
 
-class ElectronicResponse(ElectronicAlgebra):
+class ElectronicResponse(ElectronicTensorView, ElectronicAlgebra):
     """Response entry point composing explicitly named electronic stages."""
     Iodd = False
     Todd = False
@@ -67,12 +67,11 @@ class ElectronicResponse(ElectronicAlgebra):
             from .stage_fields import ELECTRONIC_STAGE_FIELDS
             tensors = {name:getattr(stage, name) for name in ELECTRONIC_STAGE_FIELDS[stage_class.__name__]
                        if hasattr(stage, name)}
-            electronic = replace(electronic, additional={**electronic.additional, **tensors})
+            electronic = replace(electronic, **tensors)
         self.electronic = electronic
         self.states = states
         self.inputs = ResponseInputs(electronic, kBT=self.kBT, fermiList=self.fermiList,
             omegaList=self.omegaList, degen=self.degen, eta=self.eta, smr_type=self.smr_type)
-        self.__dict__.update(electronic.arrays())
 
     def accept_first_order_result(self, result):
         self.result = result
@@ -92,14 +91,13 @@ class ElectronicResponse(ElectronicAlgebra):
         from .stage_fields import ELECTRONIC_STAGE_FIELDS
         stage_class = SpinExchangeTorque if kind == 'spin' else OrbitalTorque
         stage = stage_class(states=self.states, **self._electronic_stage_options)
-        stage.__dict__.update(self.electronic.arrays())
+        restore_vertices(stage, self.electronic)
         method = ('buildSpinTorque' if kind == 'spin' else 'buildOrbitalTorque')
         method += 'VelocityCommutator' if derivative == 'velocity' else 'DipoleCommutator'
         getattr(stage, method)()
         tensors = {name:getattr(stage, name) for name in ELECTRONIC_STAGE_FIELDS[stage_class.__name__]
                    if hasattr(stage, name)}
-        self.electronic = replace(self.electronic, additional={**self.electronic.additional, **tensors})
-        self.__dict__.update(tensors)
+        self.electronic = replace(self.electronic, **tensors)
         self.inputs = ResponseInputs(self.electronic, kBT=self.kBT, fermiList=self.fermiList,
             omegaList=self.omegaList, degen=self.degen, eta=self.eta, smr_type=self.smr_type)
         self.calcDeltaEInverse()

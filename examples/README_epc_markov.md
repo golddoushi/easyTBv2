@@ -9,11 +9,16 @@ The `epc` object explicitly pairs the electronic and phonon models; see
 [model construction](README_epc_models.md).
 
 ```python
+from phonon import PhononBath
 collision = CollisionSpecification(
-    'epc', qgrid=(4, 4, 1), bathStatistics='quantum',
-    phononTemperature=300., delta=.03, constantLinewidth=.2,
-    populationSolver='auto', solverTolerance=1e-10,
-    stationaryTolerance=1e-12, enforceDetailedBalance=True,
+    'epc',
+    delta=0.03,
+    constantLinewidth=0.2,
+    populationSolver='auto',
+    solverTolerance=1e-10,
+    stationaryTolerance=1e-12,
+    enforceDetailedBalance=True,
+    phononBath=PhononBath(qgrid=(4, 4, 1), statistics='quantum', temperature=300.0),
 )
 calc = Opticalconductivity_VG_DM(
     model=model, epcModel=epc, kgrid=(16, 16, 1), kBT=.025852,
@@ -24,7 +29,7 @@ state = calc.density_matrix_kernel.collision.forFermi(-.7)
 print(state.stationary_info)
 ```
 
-The electronic `kBT` must match `phononTemperature` when detailed balance is
+The electronic `kBT` must match `phononBath.temperature` when detailed balance is
 enabled. The complete orthogonal model basis is required. Each q-grid dimension must
 divide the corresponding electronic k-grid dimension. Use the complete
 coupled k mesh in one calculator; independent shifted-grid task partitions do

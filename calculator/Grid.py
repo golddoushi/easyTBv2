@@ -1,6 +1,7 @@
 #
 # The module is for calculations on energy, berry curv., and several types of conductances
 #
+from phonon import PhononBath
 from system import System
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
@@ -25,13 +26,11 @@ from .collision import (CollisionSpecification, PreparedCollision, resolve_colli
 from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbital,
                                 SpinTorque, SpinExchangeTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity)
 from .response_inputs import ResponseInputs
-from .response_results import publish_conductivity, FirstOrderResponseResult
+from .response_results import publish_conductivity, publish_second_order, FirstOrderResponseResult
+from .response_contractions import (
+    _normalize_response_index_list, _contract_second_order_observable, _sum_density_matrix_channels, solve_bpve_lg, solve_bpve_vg, solve_ife_lg, solve_ife_vg, solve_torque_lg, solve_torque_vg)
 from .response_stages import ElectronicResponse, DensityMatrixResponse, PhononResponse, response_requires_full_basis
 
-def _normalize_response_index_list(index_list, axis_length):
-    if index_list is None:
-        return []
-    return [int(index) for index in index_list if 0 <= int(index) < axis_length]
 
 def _contract_dc_first_order_density_matrix(inputs, drive_vertices, observable_vertices,
                                             observable_component_shape, responseFermiIndexList,
@@ -129,17 +128,7 @@ def _contract_dc_first_order_density_matrix(inputs, drive_vertices, observable_v
     return FirstOrderResponseResult(kernel, projected_channels, response_channels, fermi_indices)
 
 
-def _contract_second_order_observable(rho, observable):
-    """Contract one density matrix with every component of an observable."""
-    return np.einsum("...mn,...cmn->...c", rho, observable.swapaxes(-1, -2), optimize=True)
 
-def _sum_density_matrix_channels(channels):
-    """Sum channel arrays in place to avoid large intermediate responses."""
-    values = iter(channels.values())
-    total = np.array(next(values), copy=True)
-    for value in values:
-        np.add(total, value, out=total)
-    return total
 
 def _first_order_observable_shape(inputs, observable_vertices):
     """Validate first-order vertices and return the observable component axes."""
@@ -1192,7 +1181,7 @@ class Opticalconductivity_VG_DM_StaticEPC(PhononResponse):
     is used. At nonzero omega the contact residue is retained and reported.
     Only first electric-field order is implemented; this is not a BPVE kernel.
     """
-    def __init__(self, phononTemperature=300., phononStatistics='quantum',
+    def __init__(self, phononBath=PhononBath(),
                  movingCenters=True, displacementFactors=None, kBatchSize=4,
                  currentProjectionList=None, fullCovariantDerivative=True,
                  finiteTemperatureOccupations=True, **kwarg):
@@ -1208,7 +1197,7 @@ class Opticalconductivity_VG_DM_StaticEPC(PhononResponse):
         self.conductivity_units = 'S/m'
         self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
         from .phonon_static import solve_static_epc_conductivity
-        result = solve_static_epc_conductivity(self.inputs, phononTemperature, phononStatistics,
+        result = solve_static_epc_conductivity(self.inputs, phononBath,
             movingCenters, displacementFactors, kBatchSize, epc_model=self.epcModel, collision=self.collision)
         publish_conductivity(self, result)
 
@@ -1230,7 +1219,7 @@ class Opticalconductivity_VG_DM_Phonon(PhononResponse):
     TDSE's real-drive measurement window to the stationary spectral solution,
     separating finite-window effects from timestep/solver discrepancies.
     """
-    def __init__(self, phononTemperature=300., phononStatistics='classical',
+    def __init__(self, phononBath=PhononBath(statistics='classical'),
                  nPhononTrajectories=4, phononSeed=2026, phononPhasePoints=33,
                  phononDamping=0., phononBathCycles=8.,
                  solverTolerance=1e-9, solverMaxiter=100, solverRestart=30,
@@ -1250,7 +1239,7 @@ class Opticalconductivity_VG_DM_Phonon(PhononResponse):
         self.conductivity_units = 'S/m'
         self.fourier_convention = 'exp(-i*Omega*t), Omega in eV, t in hbar/eV'
         from .phonon_frequency import solve_phonon_conductivity
-        result = solve_phonon_conductivity(self.inputs, phononTemperature, phononStatistics,
+        result = solve_phonon_conductivity(self.inputs, phononBath,
             nPhononTrajectories, phononSeed, phononPhasePoints,
             solverTolerance, solverMaxiter, solverRestart,
             damping=phononDamping, bath_cycles=phononBathCycles, epc_model=self.epcModel, collision=self.collision)
@@ -1277,7 +1266,7 @@ class Opticalconductivity_TDSE(ElectronicResponse):
 
     phononDynamics=True instead propagates electrons in prescribed SSH
     trajectories on the supplied (usually supercell) model. Positions
-    and velocities are sampled at phononTemperature; phononStatistics is
+    and velocities are sampled from phononBath; its statistics is
     'classical' or 'wigner'. The latter gives symmetrized quantum noise, not
     quantum detailed balance. ``phononDamping > 0`` uses a stationary periodic
     damped-Langevin spectrum, including the noise required to retain the chosen
@@ -1298,7 +1287,7 @@ class Opticalconductivity_TDSE(ElectronicResponse):
                  transient_lifetimes=12., max_phase_step=0.3, recordCurrent=False,
                  currentProjectionList=None, fullCovariantDerivative=True,
                  finiteTemperatureOccupations=True, phononDynamics=False,
-                 phononTemperature=300., phononStatistics='classical',
+                 phononBath=PhononBath(statistics='classical'),
                  nPhononTrajectories=4, phononSeed=2026, phononCycles=1.,
                  phononDamping=0., phononBathCycles=8., phononPhasePoints=33,
                  collisionSpecification=None, preparedCollision=None, epcModel=None, **kwarg):
@@ -1340,8 +1329,7 @@ class Opticalconductivity_TDSE(ElectronicResponse):
             result = propagate_phonon_conductivity(
                 self.inputs, n_steps_per_cycle=n_steps_per_cycle, n_cycles_measure=n_cycles_measure,
                 transient_lifetimes=transient_lifetimes, max_phase_step=max_phase_step,
-                recordCurrent=recordCurrent, temperature=phononTemperature,
-                statistics=phononStatistics, trajectories=nPhononTrajectories,
+                recordCurrent=recordCurrent, phononBath=phononBath, trajectories=nPhononTrajectories,
                 seed=phononSeed, phonon_cycles=phononCycles,
                 phonon_damping=phononDamping, bath_cycles=phononBathCycles,
                 phase_points=phononPhasePoints, E0=E0, epc_model=epcModel, collision=self.collision)
@@ -1892,100 +1880,9 @@ class BulkPhotovoltaicEffect_VG_DM(DensityMatrixResponse):
         super().__init__(electronic_stages=(Dipole,), velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          highOrderDipole=fullCovariantDerivative, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
-
-        self.channel_names = AC_DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
-        self.channel_descriptions["II"] += ", including current contact vertices"
-        response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.sigma_VG_DM_channels = {
-            name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
-        }
-
-        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
-        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
-            responseFermiIndexList = range(len(self.fermiList))
-        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
-        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
-        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        nproj = len(velocityProjectionList) + 1
-        projected_shape = ((nproj, nproj, nproj) + self.kgrid
-                           + (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
-        self.projected_response_channels = {
-            name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
-        }
-
-        kernel = VelocityGaugeSecondOrderDMKernel(
-            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
-            collision=self.collision
-        )
-        self.density_matrix_kernel = kernel
-        velocity_observable = -self.velocity_K  # j(A)=-v-A*w-A*A*u/2
-        for ifermi, fermi in enumerate(self.fermiList):
-            fermi_state = kernel.fermi_state(ifermi, fermi)
-            relaxation_response_k = {
-                name: np.zeros(self.kgrid + (3, 3, 3), dtype=complex) for name in self.channel_names
-            }
-            if self.fullCovariantDerivative:
-                for a in range(3):
-                    for b in range(3):
-                        rho2_relaxation = fermi_state.relaxation(a, b)
-                        for name in self.channel_names:
-                            relaxation_response_k[name][..., a, b, :] = _contract_second_order_observable(
-                                rho2_relaxation[name], velocity_observable
-                            )
-                        del rho2_relaxation
-
-            for iomega, Omega in enumerate(self.omegaList):
-                frequency_state = fermi_state.at_frequency(Omega)
-                irecord_fermi = responseFermiRecord.get(ifermi)
-                irecord_omega = responseOmegaRecord.get(iomega)
-                for a in range(3):
-                    for b in range(3):
-                        block = frequency_state.block(a, b)
-                        response_k = {
-                            name: relaxation_response_k[name][..., a, b, :].copy()
-                            for name in self.channel_names
-                        }
-                        for name in kernel.active_rho2_channels:
-                            response_k[name] += _contract_second_order_observable(
-                                block.rho2[name], velocity_observable
-                            )
-                        response_k["EE"] -= (
-                            _contract_second_order_observable(block.rho1_minus["E"], self.w_K[..., :, b, :, :])
-                            + _contract_second_order_observable(block.rho1_plus["E"], self.w_K[..., :, a, :, :])
-                        )
-                        u_cab = 0.5 * (self.u_K[..., :, a, b, :, :] + self.u_K[..., :, b, a, :, :])
-                        response_k["II"] -= np.einsum(
-                            "...n,...cn->...c", fermi_state.f,
-                            np.diagonal(u_cab, axis1=-2, axis2=-1), optimize=True
-                        )
-                        if self.fullCovariantDerivative:
-                            response_k["II"] -= (
-                                _contract_second_order_observable(block.rho1_minus["I"], self.w_K[..., :, b, :, :])
-                                + _contract_second_order_observable(block.rho1_plus["I"], self.w_K[..., :, a, :, :])
-                            )
-                        for name in self.channel_names:
-                            sigma_k = response_k[name] / Omega**2
-                            self.sigma_VG_DM_channels[name][ifermi, iomega, a, b, :] = (
-                                np.sum(sigma_k, axis=tuple(range(len(self.kgrid)))) / np.prod(self.kgrid)
-                            )
-                            if irecord_fermi is not None and irecord_omega is not None:
-                                self.projected_response_channels[name][
-                                    0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :
-                                ] = sigma_k
-
-        self.sigma_VG_DM = _sum_density_matrix_channels(self.sigma_VG_DM_channels)
-        self.sigma_channels = self.sigma_VG_DM_channels
-        self.projected_response = _sum_density_matrix_channels(self.projected_response_channels)
-        self.projected_sigma = self.sigma_VG_DM[None, None, None, ...]
-        self.projected_sigma_channels = {
-            name: sigma[None, None, None, ...] for name, sigma in self.sigma_VG_DM_channels.items()
-        }
-        for name in self.channel_names:
-            setattr(self, f"sigma_VG_DM_{name}", self.sigma_VG_DM_channels[name])
-            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
-            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge BPVE density matrix finished")
+        result = solve_bpve_vg(self.inputs, collision=self.collision,
+            responseOmegaIndexList=responseOmegaIndexList, responseFermiIndexList=responseFermiIndexList, fullCovariantDerivative=fullCovariantDerivative, finiteTemperatureOccupations=finiteTemperatureOccupations, velocityProjectionList=velocityProjectionList)
+        publish_second_order(self, result, "sigma_VG_DM")
 
 class BulkPhotovoltaicEffect_LG_Shift(Dipole):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
@@ -2119,69 +2016,9 @@ class BulkPhotovoltaicEffect_LG_DM(DensityMatrixResponse):
         kwarg.pop("highOrderVelocity", None)
         super().__init__(electronic_stages=(Dipole,), velocityProjectionList=velocityProjectionList, highOrderVelocity=True, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
-
-        self.channel_names = AC_DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
-        response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.sigma_LG_DM_channels = {
-            name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
-        }
-
-        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
-        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
-            responseFermiIndexList = range(len(self.fermiList))
-        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
-        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
-        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        nproj = len(velocityProjectionList) + 1
-        projected_shape = ((nproj, nproj, nproj) + self.kgrid
-                           + (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
-        self.projected_response_channels = {
-            name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
-        }
-        self.sigma_LG_DM = np.zeros(response_shape, dtype=complex)
-        self.projected_response = np.zeros(projected_shape, dtype=complex)
-
-        kernel = LengthGaugeSecondOrderDMKernel(
-            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
-            collision=self.collision
-        )
-        self.density_matrix_kernel = kernel
-        self.channel_descriptions = dict(kernel.channel_descriptions)
-        velocity_observable = -self.velocity_K  # physical electron current
-        for ifermi, fermi in enumerate(self.fermiList):
-            fermi_state = kernel.fermi_state(ifermi, fermi)
-            for iomega, Omega in enumerate(self.omegaList):
-                frequency_state = fermi_state.at_frequency(Omega)
-                irecord_fermi = responseFermiRecord.get(ifermi)
-                irecord_omega = responseOmegaRecord.get(iomega)
-                for a in range(3):
-                    for b in range(3):
-                        block = frequency_state.block(a, b)
-                        sigma_total_k = _contract_second_order_observable(block.total_second_order, velocity_observable)
-                        self.sigma_LG_DM[ifermi, iomega, a, b, :] = sigma_total_k.mean(axis=(0, 1, 2))
-                        if irecord_fermi is not None and irecord_omega is not None:
-                            self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :] = sigma_total_k
-                        for name in kernel.active_rho2_channels:
-                            sigma_k = _contract_second_order_observable(block.rho2[name], velocity_observable)
-                            self.sigma_LG_DM_channels[name][ifermi, iomega, a, b, :] = (
-                                np.sum(sigma_k, axis=tuple(range(len(self.kgrid)))) / np.prod(self.kgrid)
-                            )
-                            if irecord_fermi is not None and irecord_omega is not None:
-                                self.projected_response_channels[name][
-                                    0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :
-                                ] = sigma_k
-
-        self.sigma_channels = self.sigma_LG_DM_channels
-        self.projected_sigma = self.sigma_LG_DM[None, None, None, ...]
-        self.projected_sigma_channels = {
-            name: sigma[None, None, None, ...] for name, sigma in self.sigma_LG_DM_channels.items()
-        }
-        for name in self.channel_names:
-            setattr(self, f"sigma_LG_DM_{name}", self.sigma_LG_DM_channels[name])
-            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
-            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge BPVE density matrix finished")
+        result = solve_bpve_lg(self.inputs, collision=self.collision,
+            responseOmegaIndexList=responseOmegaIndexList, responseFermiIndexList=responseFermiIndexList, fullCovariantDerivative=fullCovariantDerivative, finiteTemperatureOccupations=finiteTemperatureOccupations, velocityProjectionList=velocityProjectionList)
+        publish_second_order(self, result, "sigma_LG_DM")
 
 class BulkPhotovoltaicEffect_TDSE(Velocity):
     def __init__(self, velocityProjectionList=[], E0=0.001, n_steps_per_cycle=100,
@@ -2488,68 +2325,9 @@ class InverseFaradayEffect_LG_DM(DensityMatrixResponse):
         highOrderVelocity = bool(kwarg.pop("highOrderVelocity", False) or fullCovariantDerivative)
         super().__init__(electronic_stages=(Dipole, Spin, Orbital,), velocityProjectionList=velocityProjectionList, highOrderVelocity=highOrderVelocity, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
-        if self.fullCovariantDerivative and self.kBT <= 0:
-            raise ValueError("fullCovariantDerivative requires kBT > 0")
-
-        nbasis = self.energies.shape[-1]
-        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: M_K += self.spin_K
-        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
-
-        response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = AC_DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
-        self.chi_IFE_channels = {name: np.zeros(response_shape, dtype=complex) for name in self.channel_names}
-
-        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
-        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
-            responseFermiIndexList = range(len(self.fermiList))
-        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
-        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
-        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        projected_shape = ((1, 1, 1) + self.kgrid +
-                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
-        self.projected_response_channels = {
-            name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
-        }
-        self.chi_IFE = np.zeros(response_shape, dtype=complex)
-        self.projected_response = np.zeros(projected_shape, dtype=complex)
-
-        kernel = LengthGaugeSecondOrderDMKernel(self.inputs, self.fullCovariantDerivative, collision=self.collision)
-        self.density_matrix_kernel = kernel
-        self.channel_descriptions = dict(kernel.channel_descriptions)
-        for ifermi, fermi in enumerate(self.fermiList):
-            fermi_state = kernel.fermi_state(ifermi, fermi)
-            for iomega, Omega in enumerate(self.omegaList):
-                irecord_fermi = responseFermiRecord.get(ifermi)
-                irecord_omega = responseOmegaRecord.get(iomega)
-                frequency_state = fermi_state.at_frequency(Omega)
-                for a in range(3):
-                    for b in range(3):
-                        block = frequency_state.block(a, b)
-                        chi_total_k = _contract_second_order_observable(block.total_second_order, M_K)
-                        self.chi_IFE[ifermi, iomega, a, b, :] = chi_total_k.mean(axis=(0, 1, 2))
-                        if irecord_fermi is not None and irecord_omega is not None:
-                            self.projected_response[0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :] = chi_total_k
-                        for name in kernel.active_rho2_channels:
-                            chi_k = _contract_second_order_observable(block.rho2[name], M_K)
-                            self.chi_IFE_channels[name][ifermi, iomega, a, b, :] = (
-                                np.sum(chi_k, axis=tuple(range(len(self.kgrid)))) / np.prod(self.kgrid)
-                            )
-                            if irecord_fermi is not None and irecord_omega is not None:
-                                self.projected_response_channels[name][
-                                    0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :
-                                ] = chi_k
-
-        self.projected_sigma = self.chi_IFE[None, None, None, ...]
-        self.projected_sigma_channels = {
-            name: response[None, None, None, ...] for name, response in self.chi_IFE_channels.items()
-        }
-        for name in self.channel_names:
-            setattr(self, f"chi_IFE_{name}", self.chi_IFE_channels[name])
-            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
-            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFE density matrix finished")
+        result = solve_ife_lg(self.inputs, collision=self.collision,
+            responseOmegaIndexList=responseOmegaIndexList, responseFermiIndexList=responseFermiIndexList, fullCovariantDerivative=fullCovariantDerivative, ife_type=ife_type)
+        publish_second_order(self, result, "chi_IFE")
 
 class InverseFaradayEffect_VG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
@@ -2574,81 +2352,9 @@ class InverseFaradayEffect_VG_DM(DensityMatrixResponse):
         super().__init__(electronic_stages=(Dipole, Spin, Orbital,), velocityProjectionList=velocityProjectionList, highOrderVelocity=True,
                          highOrderDipole=fullCovariantDerivative, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
-        if self.fullCovariantDerivative and self.kBT <= 0:
-            raise ValueError("fullCovariantDerivative requires kBT > 0")
-
-        nbasis = self.energies.shape[-1]
-        M_K = np.zeros(self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: M_K += self.spin_K
-        if ife_type in ["total", "orbital"]: M_K += self.orbital_K
-
-        response_shape = (len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = AC_DM_CHANNEL_NAMES
-        self.channel_descriptions = dict(AC_DM_CHANNEL_DESCRIPTIONS)
-        self.channel_descriptions["EE"] += " and the contact vertex"
-        self.chi_IFE_channels = {name: np.zeros(response_shape, dtype=complex) for name in self.channel_names}
-
-        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
-        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
-            responseFermiIndexList = range(len(self.fermiList))
-        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
-        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
-        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        projected_shape = ((1, 1, 1) + self.kgrid +
-                           (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
-        self.projected_response_channels = {
-            name: np.zeros(projected_shape, dtype=complex) for name in self.channel_names
-        }
-
-        kernel = VelocityGaugeSecondOrderDMKernel(self.inputs, self.fullCovariantDerivative, collision=self.collision)
-        self.density_matrix_kernel = kernel
-        for ifermi, fermi in enumerate(self.fermiList):
-            fermi_state = kernel.fermi_state(ifermi, fermi)
-
-            relaxation_response_k = {
-                name: np.zeros(self.kgrid + (3, 3, 3), dtype=complex) for name in self.channel_names
-            }
-            if self.fullCovariantDerivative:
-                for a in range(3):
-                    for b in range(3):
-                        rho2_relaxation = fermi_state.relaxation(a, b)
-                        for name in self.channel_names:
-                            relaxation_response_k[name][..., a, b, :] = _contract_second_order_observable(
-                                rho2_relaxation[name], M_K
-                            )
-                        del rho2_relaxation
-
-            for iomega, Omega in enumerate(self.omegaList):
-                irecord_fermi = responseFermiRecord.get(ifermi)
-                irecord_omega = responseOmegaRecord.get(iomega)
-                frequency_state = fermi_state.at_frequency(Omega)
-                for a in range(3):
-                    for b in range(3):
-                        block = frequency_state.block(a, b)
-                        for name in kernel.active_rho2_channels:
-                            sigma_k = (
-                                _contract_second_order_observable(block.rho2[name], M_K)
-                                + relaxation_response_k[name][..., a, b, :]
-                            ) / Omega**2
-                            self.chi_IFE_channels[name][ifermi, iomega, a, b, :] = (
-                                np.sum(sigma_k, axis=tuple(range(len(self.kgrid)))) / np.prod(self.kgrid)
-                            )
-                            if irecord_fermi is not None and irecord_omega is not None:
-                                self.projected_response_channels[name][
-                                    0, 0, 0, :, :, :, irecord_fermi, irecord_omega, a, b, :
-                                ] = sigma_k
-
-        self.chi_IFE = _sum_density_matrix_channels(self.chi_IFE_channels)
-        self.projected_response = _sum_density_matrix_channels(self.projected_response_channels)
-        self.projected_sigma = self.chi_IFE[None, None, None, ...]
-        self.projected_sigma_channels = {
-            name: response[None, None, None, ...] for name, response in self.chi_IFE_channels.items()
-        }
-        for name in self.channel_names:
-            setattr(self, f"chi_IFE_{name}", self.chi_IFE_channels[name])
-            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
-            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Velocity Gauge IFE density matrix finished")
+        result = solve_ife_vg(self.inputs, collision=self.collision,
+            responseOmegaIndexList=responseOmegaIndexList, responseFermiIndexList=responseFermiIndexList, fullCovariantDerivative=fullCovariantDerivative, ife_type=ife_type)
+        publish_second_order(self, result, "chi_IFE")
 
 class InverseFaradayEffect_VG(Velocity, Spin, Orbital):
     def __init__(self, ife_type="total", velocityProjectionList=[], responseOmegaIndexList=[],
@@ -3295,128 +3001,13 @@ class InverseFaradayTorque_LG_DM(DensityMatrixResponse):
                          spinTorqueProjectionList=torqueProjectionList,
                          orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
-        if self.fullCovariantDerivative and self.kBT <= 0:
-            raise ValueError("fullCovariantDerivative requires kBT > 0")
-
-        nbasis = self.energies.shape[-1]
-        # Slot 0 is the full torque; following slots are projected torque operators.
-        proj_T_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]: proj_T_K[0] += self.spinTorque_K
-        if ife_type in ["total", "orbital"]: proj_T_K[0] += self.orbitalTorque_K
-        for iproj in range(len(torqueProjectionList)):
-            if ife_type in ["total", "spin"]: proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
-
-        # H_LG(t) = H0 + E_a(t) r_a, hence the full torque contains
-        # T_c(E) = -i[mu_c,H_LG] = T_c(0) - i E_a [mu_c,r_a].
-        proj_torqueE_K = np.zeros((len(torqueProjectionList)+1,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]:
+        if ife_type in ("total", "spin"):
             self.prepare_torque_vertices("spin", "dipole")
-            proj_torqueE_K[0] += self.spinTorqueE_K
-        if ife_type in ["total", "orbital"]:
+        if ife_type in ("total", "orbital"):
             self.prepare_torque_vertices("orbital", "dipole")
-            proj_torqueE_K[0] += self.orbitalTorqueE_K
-        for iproj in range(len(torqueProjectionList)):
-            if ife_type in ["total", "spin"]: proj_torqueE_K[iproj+1] += self.projected_spinTorqueE_K_list[iproj]
-            if ife_type in ["total", "orbital"]: proj_torqueE_K[iproj+1] += self.projected_orbitalTorqueE_K_list[iproj]
-
-        response_shape = (1, 1, len(torqueProjectionList)+1,
-                          len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = AC_DM_CHANNEL_NAMES
-        self.channel_descriptions = {
-            "II": "intraband channel, including torqueE*rho1_I",
-            "EI": "second-order interband from first-order intraband",
-            "IE": "second-order intraband from first-order interband",
-            "EE": "interband channel, including torqueE*rho1_E",
-        }
-        self.projected_chi_IFT_channels = {
-            name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
-        }
-        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
-        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
-            responseFermiIndexList = range(len(self.fermiList))
-        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
-        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
-        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        projected_response_shape = ((1, 1, len(torqueProjectionList)+1) + self.kgrid +
-                                    (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
-        self.projected_response_channels = {
-            name: np.zeros(projected_response_shape, dtype=complex) for name in self.channel_names
-        }
-        self.projected_chi_IFT = np.zeros(response_shape, dtype=complex)
-        self.projected_response = np.zeros(projected_response_shape, dtype=complex)
-
-        kernel = LengthGaugeSecondOrderDMKernel(
-            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
-            collision=self.collision
-        )
-        self.density_matrix_kernel = kernel
-        self.channel_descriptions = dict(kernel.channel_descriptions)
-        self.channel_descriptions["II"] += ", including torqueE*rho1_I"
-        self.channel_descriptions["EE"] += ", including torqueE*rho1_E"
-        for ifermi, fermi in enumerate(self.fermiList):
-            fermi_state = kernel.fermi_state(ifermi, fermi)
-            for iomega, Omega in enumerate(self.omegaList):
-                irecord_omega = responseOmegaRecord.get(iomega)
-                frequency_state = fermi_state.at_frequency(Omega)
-                for a in range(3):
-                    for b in range(3):
-                        block = frequency_state.block(a, b)
-                        for iproj_T, T_K in enumerate(proj_T_K):
-                            total_k = _contract_second_order_observable(block.total_second_order, T_K)
-                            response_k = {
-                                name: np.zeros(self.kgrid + (3,), dtype=complex)
-                                for name in self.channel_names
-                            }
-                            for name in kernel.active_rho2_channels:
-                                response_k[name] = _contract_second_order_observable(block.rho2[name], T_K)
-                            contact_e = (
-                                _contract_second_order_observable(
-                                    block.rho1_minus["E"], proj_torqueE_K[iproj_T, ..., :, b, :, :]
-                                )
-                                + _contract_second_order_observable(
-                                    block.rho1_plus["E"], proj_torqueE_K[iproj_T, ..., :, a, :, :]
-                                )
-                            )
-                            response_k["EE"] += contact_e
-                            total_k += contact_e
-                            if self.fullCovariantDerivative:
-                                contact_i = (
-                                    _contract_second_order_observable(
-                                        block.rho1_minus["I"], proj_torqueE_K[iproj_T, ..., :, b, :, :]
-                                    )
-                                    + _contract_second_order_observable(
-                                        block.rho1_plus["I"], proj_torqueE_K[iproj_T, ..., :, a, :, :]
-                                    )
-                                )
-                                response_k["II"] += contact_i
-                                total_k += contact_i
-                            irecord_fermi = responseFermiRecord.get(ifermi)
-                            self.projected_chi_IFT[0, 0, iproj_T, ifermi, iomega, a, b, :] = total_k.mean(axis=(0, 1, 2))
-                            if irecord_fermi is not None and irecord_omega is not None:
-                                self.projected_response[0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, :] = total_k
-                            for name in self.channel_names:
-                                self.projected_chi_IFT_channels[name][
-                                    0, 0, iproj_T, ifermi, iomega, a, b, :
-                                ] = np.sum(
-                                    response_k[name], axis=tuple(range(len(self.kgrid)))
-                                ) / np.prod(self.kgrid)
-                                if irecord_fermi is not None and irecord_omega is not None:
-                                    self.projected_response_channels[name][
-                                        0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, :
-                                    ] = response_k[name]
-
-        self.chi_IFT_channels = {
-            name: response[0, 0, 0] for name, response in self.projected_chi_IFT_channels.items()
-        }
-        self.chi_IFT = self.projected_chi_IFT[0, 0, 0]
-        self.projected_sigma = self.projected_chi_IFT
-        self.projected_sigma_channels = self.projected_chi_IFT_channels
-        for name in self.channel_names:
-            setattr(self, f"chi_IFT_{name}", self.chi_IFT_channels[name])
-            setattr(self, f"projected_chi_IFT_{name}", self.projected_chi_IFT_channels[name])
-            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
-        if self.verbose == 2: showElapsedTime(extraInfo=f"Length Gauge IFT density matrix finished")
+        result = solve_torque_lg(self.inputs, collision=self.collision,
+            responseOmegaIndexList=responseOmegaIndexList, responseFermiIndexList=responseFermiIndexList, fullCovariantDerivative=fullCovariantDerivative, finiteTemperatureOccupations=finiteTemperatureOccupations, ife_type=ife_type, torqueProjectionList=torqueProjectionList)
+        publish_second_order(self, result, "chi_IFT")
 
 class InverseFaradayTorque_VG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
@@ -3437,148 +3028,13 @@ class InverseFaradayTorque_VG_DM(DensityMatrixResponse):
                          spinTorqueProjectionList=torqueProjectionList,
                          orbitalTorqueProjectionList=torqueProjectionList, **kwarg)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
-        if self.fullCovariantDerivative and self.kBT <= 0:
-            raise ValueError("fullCovariantDerivative requires kBT > 0")
-
-        nbasis = self.energies.shape[-1]
-        nproj = len(torqueProjectionList) + 1
-        proj_T_K = np.zeros((nproj,) + self.kgrid + (3, nbasis, nbasis), dtype=complex)
-        proj_TA_K = np.zeros((nproj,) + self.kgrid + (3, 3, nbasis, nbasis), dtype=complex)
-        proj_TAA_K = np.zeros((nproj,) + self.kgrid + (3, 3, 3, nbasis, nbasis), dtype=complex)
-        if ife_type in ["total", "spin"]:
+        if ife_type in ("total", "spin"):
             self.prepare_torque_vertices("spin", "velocity")
-            proj_T_K[0] += self.spinTorque_K
-            proj_TA_K[0] += self.spinTorqueA_K
-            proj_TAA_K[0] += self.spinTorqueAA_K
-        if ife_type in ["total", "orbital"]:
+        if ife_type in ("total", "orbital"):
             self.prepare_torque_vertices("orbital", "velocity")
-            proj_T_K[0] += self.orbitalTorque_K
-            proj_TA_K[0] += self.orbitalTorqueA_K
-            proj_TAA_K[0] += self.orbitalTorqueAA_K
-        for iproj in range(len(torqueProjectionList)):
-            if ife_type in ["total", "spin"]:
-                proj_T_K[iproj+1] += self.projected_spinTorque_K_list[iproj]
-                proj_TA_K[iproj+1] += self.projected_spinTorqueA_K_list[iproj]
-                proj_TAA_K[iproj+1] += self.projected_spinTorqueAA_K_list[iproj]
-            if ife_type in ["total", "orbital"]:
-                proj_T_K[iproj+1] += self.projected_orbitalTorque_K_list[iproj]
-                proj_TA_K[iproj+1] += self.projected_orbitalTorqueA_K_list[iproj]
-                proj_TAA_K[iproj+1] += self.projected_orbitalTorqueAA_K_list[iproj]
-
-        response_shape = (1, 1, nproj, len(self.fermiList), len(self.omegaList), 3, 3, 3)
-        self.channel_names = AC_DM_CHANNEL_NAMES
-        self.channel_descriptions = {
-            "II": "intraband channel, including T1*rho1_I and T2*rho0",
-            "EI": "second-order interband from first-order intraband",
-            "IE": "second-order intraband from first-order interband",
-            "EE": "interband channel, including T1*rho1_E and the contact Hamiltonian vertex",
-        }
-        self.projected_chi_IFT_channels = {
-            name: np.zeros(response_shape, dtype=complex) for name in self.channel_names
-        }
-        responseOmegaIndexList = _normalize_response_index_list(responseOmegaIndexList, len(self.omegaList))
-        if responseFermiIndexList is None and len(responseOmegaIndexList) > 0:
-            responseFermiIndexList = range(len(self.fermiList))
-        responseFermiIndexList = _normalize_response_index_list(responseFermiIndexList, len(self.fermiList))
-        responseOmegaRecord = {iomega: irecord for irecord, iomega in enumerate(responseOmegaIndexList)}
-        responseFermiRecord = {ifermi: irecord for irecord, ifermi in enumerate(responseFermiIndexList)}
-        projected_response_shape = ((1, 1, nproj) + self.kgrid +
-                                    (len(responseFermiIndexList), len(responseOmegaIndexList), 3, 3, 3))
-        self.projected_response_channels = {
-            name: np.zeros(projected_response_shape, dtype=complex) for name in self.channel_names
-        }
-
-        kernel = VelocityGaugeSecondOrderDMKernel(
-            self.inputs, self.fullCovariantDerivative, finiteTemperatureOccupations,
-            collision=self.collision
-        )
-        self.density_matrix_kernel = kernel
-        for ifermi, fermi in enumerate(self.fermiList):
-            fermi_state = kernel.fermi_state(ifermi, fermi)
-
-            relaxation_response_k = {
-                name: np.zeros((nproj,) + self.kgrid + (3, 3, 3), dtype=complex)
-                for name in self.channel_names
-            }
-            if self.fullCovariantDerivative:
-                for a in range(3):
-                    for b in range(3):
-                        rho2_relaxation = fermi_state.relaxation(a, b)
-                        for name in self.channel_names:
-                            for iproj_T in range(nproj):
-                                relaxation_response_k[name][iproj_T, ..., a, b, :] = (
-                                    _contract_second_order_observable(
-                                        rho2_relaxation[name], proj_T_K[iproj_T]
-                                    )
-                                )
-                        del rho2_relaxation
-
-            for iomega, Omega in enumerate(self.omegaList):
-                irecord_fermi = responseFermiRecord.get(ifermi)
-                irecord_omega = responseOmegaRecord.get(iomega)
-                frequency_state = fermi_state.at_frequency(Omega)
-                for a in range(3):
-                    for b in range(3):
-                        block = frequency_state.block(a, b)
-                        for iproj_T in range(nproj):
-                            response_k = {
-                                name: relaxation_response_k[name][iproj_T, ..., a, b, :].copy()
-                                for name in self.channel_names
-                            }
-                            for name in kernel.active_rho2_channels:
-                                response_k[name] += _contract_second_order_observable(
-                                    block.rho2[name], proj_T_K[iproj_T]
-                                )
-                            response_k["EE"] += (
-                                _contract_second_order_observable(
-                                    block.rho1_minus["E"], proj_TA_K[iproj_T, ..., :, b, :, :]
-                                )
-                                + _contract_second_order_observable(
-                                    block.rho1_plus["E"], proj_TA_K[iproj_T, ..., :, a, :, :]
-                                )
-                            )
-                            T2_ab = 0.5 * (
-                                proj_TAA_K[iproj_T, ..., :, a, b, :, :]
-                                + proj_TAA_K[iproj_T, ..., :, b, a, :, :]
-                            )
-                            response_k["II"] += np.einsum(
-                                "...n,...cn->...c", fermi_state.f,
-                                np.diagonal(T2_ab, axis1=-2, axis2=-1), optimize=True
-                            )
-                            if self.fullCovariantDerivative:
-                                response_k["II"] += (
-                                    _contract_second_order_observable(
-                                        block.rho1_minus["I"], proj_TA_K[iproj_T, ..., :, b, :, :]
-                                    )
-                                    + _contract_second_order_observable(
-                                        block.rho1_plus["I"], proj_TA_K[iproj_T, ..., :, a, :, :]
-                                    )
-                                )
-                            for name in self.channel_names:
-                                sigma_k = response_k[name] / Omega**2
-                                self.projected_chi_IFT_channels[name][
-                                    0, 0, iproj_T, ifermi, iomega, a, b, :
-                                ] = np.sum(
-                                    sigma_k, axis=tuple(range(len(self.kgrid)))
-                                ) / np.prod(self.kgrid)
-                                if irecord_fermi is not None and irecord_omega is not None:
-                                    self.projected_response_channels[name][
-                                        0, 0, iproj_T, :, :, :, irecord_fermi, irecord_omega, a, b, :
-                                    ] = sigma_k
-
-        self.projected_chi_IFT = _sum_density_matrix_channels(self.projected_chi_IFT_channels)
-        self.projected_response = _sum_density_matrix_channels(self.projected_response_channels)
-        self.chi_IFT_channels = {
-            name: response[0, 0, 0] for name, response in self.projected_chi_IFT_channels.items()
-        }
-        self.chi_IFT = _sum_density_matrix_channels(self.chi_IFT_channels)
-        self.projected_sigma = self.projected_chi_IFT
-        self.projected_sigma_channels = self.projected_chi_IFT_channels
-        for name in self.channel_names:
-            setattr(self, f"chi_IFT_{name}", self.chi_IFT_channels[name])
-            setattr(self, f"projected_chi_IFT_{name}", self.projected_chi_IFT_channels[name])
-            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
-        if self.verbose == 2: showElapsedTime(extraInfo="Velocity Gauge IFT density matrix finished")
+        result = solve_torque_vg(self.inputs, collision=self.collision,
+            responseOmegaIndexList=responseOmegaIndexList, responseFermiIndexList=responseFermiIndexList, fullCovariantDerivative=fullCovariantDerivative, finiteTemperatureOccupations=finiteTemperatureOccupations, ife_type=ife_type, torqueProjectionList=torqueProjectionList)
+        publish_second_order(self, result, "chi_IFT")
 
 class SpinBerryCurv(SpinVelocity):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:

@@ -1,11 +1,11 @@
 """Electronic tensors and numerical settings consumed by response kernels."""
 
 import numpy as np
-from .electronic import ElectronicVertices
+from .electronic import ElectronicVertices, ElectronicTensorView
 from .electronic_algebra import ElectronicAlgebra
 
 
-class ResponseInputs(ElectronicAlgebra):
+class ResponseInputs(ElectronicTensorView, ElectronicAlgebra):
     """One response's inputs and derived electronic algebra, without outputs.
 
     Electronic arrays retain the prepared band basis. Fermi scans, photon
@@ -25,7 +25,6 @@ class ResponseInputs(ElectronicAlgebra):
         self.fermiList = np.asarray(fermiList)
         self.omegaList = np.asarray(omegaList)
         self.degen, self.eta, self.smr_type = degen, eta, smr_type
-        self.__dict__.update(electronic.arrays())
 
     def calcDeltaEInverse(self):
         """Prepare band-pair algebra once when a DM kernel needs it.

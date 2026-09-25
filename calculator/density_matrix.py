@@ -324,6 +324,7 @@ class LengthGaugeDCFirstOrderDMKernel:
     channel_descriptions = DC_CHANNEL_DESCRIPTIONS
 
     def __init__(self, inputs, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
+        inputs.electronic.require('velocity_K')
         inputs.calcDeltaEInverse()
         self.inputs = inputs
         self.full_covariant_derivative = bool(full_covariant_derivative)
@@ -377,6 +378,7 @@ class LengthGaugeFirstOrderDMKernel:
     channel_descriptions = DC_CHANNEL_DESCRIPTIONS
 
     def __init__(self, inputs, full_covariant_derivative=True, finite_temperature_occupations=True, *, collision):
+        inputs.electronic.require('velocity_K')
         inputs.calcDeltaEInverse()
         self.inputs = inputs
         self.full_covariant_derivative = bool(full_covariant_derivative)
@@ -511,6 +513,9 @@ class _SecondOrderDMKernel:
     channel_descriptions = AC_CHANNEL_DESCRIPTIONS
 
     def __init__(self, inputs, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
+        inputs.electronic.require('velocity_K', 'r_K')
+        if full_covariant_derivative:
+            inputs.electronic.require('w_K')
         inputs.calcDeltaEInverse()
         self.inputs = inputs
         self.full_covariant_derivative = bool(full_covariant_derivative)
@@ -721,7 +726,7 @@ class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
                 name: f"second-order {sectors[name[0]]} from first-order {sectors[name[1]]}"
                 for name in self.channel_names
             }
-            if not hasattr(inputs, "w_K"):
+            if inputs.w_K is None:
                 raise ValueError("Full LG requires w_K[a,b] = D_b velocity_K[a]")
             energies = inputs.energies
             scale = np.maximum(1.0, np.max(np.abs(energies), axis=-1, keepdims=True))
@@ -835,6 +840,12 @@ class VelocityGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
     """Velocity-gauge Liouville kernel with optional covariant relaxation."""
 
     state_class = VelocityGaugeFermiState
+
+    def __init__(self, inputs, full_covariant_derivative=False, finite_temperature_occupations=False, *, collision):
+        inputs.electronic.require('w_K')
+        super().__init__(inputs, full_covariant_derivative, finite_temperature_occupations, collision=collision)
+        if self.full_covariant_derivative and not (self.collision.mesh_coupled or self.covariant_linewidth):
+            inputs.electronic.require('r_deriv_K')
 
 class MarkovSecondOrderFermiState(_SecondOrderDMFermiState):
     """Stationary nonlinear Markov response with a covariant mesh derivative.

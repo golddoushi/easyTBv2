@@ -21,7 +21,10 @@ from .collision import (CollisionSpecification, CollisionOperator,
 from .model_self_energy import ModelElectronSelfEnergy, ModelEPCLinewidth
 from .electronic import ElectronicStates, ElectronicVertices, compute_states, compute_vertices
 from .response_inputs import ResponseInputs
-from .response_results import ConductivityResult, FirstOrderResponseResult
+from .requirements import ComputationRequirements
+from .response_results import ConductivityResult, FirstOrderResponseResult, SecondOrderResponseResult
+from .response_contractions import (solve_bpve_lg, solve_bpve_vg, solve_ife_lg,
+                                    solve_ife_vg, solve_torque_lg, solve_torque_vg)
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath

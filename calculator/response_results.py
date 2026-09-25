@@ -54,3 +54,46 @@ def publish_conductivity(calculator, result):
         if value is not None:
             setattr(calculator, item.name, value)
     calculator.projected_sigma = result.projected_sigma
+
+
+@dataclass
+class SecondOrderResponseResult:
+    """BZ responses and selected k integrands from a nonlinear contraction."""
+    value: np.ndarray | None = None
+    channels: dict = field(default_factory=dict)
+    projected_value: np.ndarray | None = None
+    projected_channels: dict = field(default_factory=dict)
+    integrands: np.ndarray | None = None
+    integrand_channels: dict = field(default_factory=dict)
+    kernel: object = None
+    channel_names: tuple = ()
+    channel_descriptions: dict = field(default_factory=dict)
+    fermi_indices: tuple = ()
+    omega_indices: tuple = ()
+
+
+def publish_second_order(calculator, result, observable):
+    """Publish named observables only at the Grid entry-point boundary."""
+    calculator.result = result
+    calculator.density_matrix_kernel = result.kernel
+    calculator.channel_names = result.channel_names
+    calculator.channel_descriptions = result.channel_descriptions
+    calculator.responseFermiIndexList = result.fermi_indices
+    calculator.responseOmegaIndexList = result.omega_indices
+    calculator.projected_response = result.integrands
+    calculator.projected_response_channels = result.integrand_channels
+    calculator.projected_sigma = result.projected_value
+    calculator.projected_sigma_channels = result.projected_channels
+    setattr(calculator, observable, result.value)
+    setattr(calculator, observable + '_channels', result.channels)
+    if observable.startswith('sigma'):
+        calculator.sigma_channels = result.channels
+    if observable == 'chi_IFT':
+        calculator.projected_chi_IFT = result.projected_value
+        calculator.projected_chi_IFT_channels = result.projected_channels
+    for name in result.channel_names:
+        setattr(calculator, observable + '_' + name, result.channels[name])
+        setattr(calculator, 'projected_response_' + name, result.integrand_channels[name])
+        setattr(calculator, 'projected_sigma_' + name, result.projected_channels[name])
+        if observable == 'chi_IFT':
+            setattr(calculator, 'projected_chi_IFT_' + name, result.projected_channels[name])

@@ -59,12 +59,13 @@ also applies to every temporal Fourier coefficient of the damped trajectory.
 ## Shared normalization and implementation
 
 `phonon.PhononModeSelection` stores fractional 3D q vectors,
-branches and absolute weights. The example attaches it to
-`epc.phonon_model.modeSelection`. Self-energy and full collision consumers
-read that selection automatically; they also accept an explicit
-`phononSelection` argument. `ModelEPCLinewidth` includes selection contents in
-its cache key. Existing explicit `qpoints/qweights` self-energy calls without
-a selection retain their historical normalized-quadrature semantics.
+branches and absolute weights. The example passes it in `PhononBath.selection`,
+together with temperature, statistics and the auxiliary uniform qgrid.
+Self-energy, full collision, static covariance and trajectories receive the
+same explicit bath. The physical phonon model carries no selection.
+`ModelEPCLinewidth` includes the bath settings in its cache key. Explicit
+`qpoints/qweights` self-energy integration without a selection normalizes
+the quadrature weights to one.
 
 The selector contains only quadrature and selection metadata, branch-range
 checks, and mesh/supercell compatibility checks. It does not interpret branches

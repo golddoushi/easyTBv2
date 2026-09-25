@@ -15,21 +15,20 @@ from phonon import EinsteinPhonon
 from auxiliary import uniform_qmesh
 
 
-def solve_static_epc_conductivity(inputs: ResponseInputs, temperature, statistics, moving_centers,
+def solve_static_epc_conductivity(inputs: ResponseInputs, phononBath, moving_centers,
                                   factors, batch_size, *, epc_model, collision):
+    temperature, statistics = phononBath.temperature, phononBath.statistics
     result = ConductivityResult(np.zeros((len(inputs.fermiList), len(inputs.omegaList), 3, 3), complex))
     specification = collision.specification
     if specification.mode != 'crta':
         raise ValueError('Static EPC expansion requires CRTA background only; adding SERTA/full collision would double count EPC')
     gamma = specification.constantLinewidth
-    if statistics not in ('quantum', 'classical', 'wigner'):
-        raise ValueError('static phononStatistics must be quantum, wigner or classical')
     phonons = epc_model.phonon_model
     if not isinstance(phonons, EinsteinPhonon):
         raise NotImplementedError("This displacement solver currently requires EinsteinPhonon")
     operators = SSHTimeOperators(epc_model, uniform_qmesh(inputs.kgrid) + inputs.kOffset)
     covariance_source = 'model phonons' if factors is None else 'provided covariance factors'
-    factors = (phonons.displacementFactors(temperature, quantum=statistics != 'classical')
+    factors = (phononBath.displacementFactors(phonons)
                if factors is None else np.asarray(factors))
     if np.iscomplexobj(factors) and np.any(factors.imag != 0):
         raise ValueError('displacementFactors must be real')
@@ -112,6 +111,6 @@ def solve_static_epc_conductivity(inputs: ResponseInputs, temperature, statistic
         background_linewidth_eV=float(gamma),
         additional_epc_linewidth=False, displacement_finite_differences=False,
         displaced_eigensolves=False, electronic_backreaction=False,
-        k_batch_size=batch_size, primitive_phonon_selection=(None if phonons.modeSelection is None
-                                                           else phonons.modeSelection.as_dict()))
+        k_batch_size=batch_size, primitive_phonon_selection=(None if phononBath.selection is None
+                                                           else phononBath.selection.as_dict()))
     return result

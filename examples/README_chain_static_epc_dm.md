@@ -115,15 +115,21 @@ separately gauge-invariant observable or a uniquely isolated Fan self-energy.
 ## API and outputs
 
 ```python
+from phonon import PhononBath
 import numpy as np
 from calculator import Opticalconductivity_VG_DM_StaticEPC, CollisionSpecification
 
 # model is already the commensurate supercell, carrying its phonon covariance.
 response = Opticalconductivity_VG_DM_StaticEPC(
-    model=model, kgrid=(512, 1, 1), kBT=0.025851999786435,
-    fermiList=np.array([-0.7]), omegaList=np.array([0., 0.8]),
+    model=model,
+    kgrid=(512, 1, 1),
+    kBT=0.025851999786435,
+    fermiList=np.array([-0.7]),
+    omegaList=np.array([0.0, 0.8]),
     collisionSpecification=CollisionSpecification('crta', constantLinewidth=0.026),
-    phononTemperature=300., phononStatistics='quantum', movingCenters=True)
+    movingCenters=True,
+    phononBath=PhononBath(temperature=300.0, statistics='quantum'),
+)
 ```
 
 `sigma_bare`, `sigma_correction` and `sigma` have axes

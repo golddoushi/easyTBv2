@@ -166,10 +166,16 @@ changes.
 a sampled linewidth source:
 
 ```python
+from phonon import PhononBath
 from calculator import CollisionSpecification, ModelEPCLinewidth
 
-source = ModelEPCLinewidth(epc, qgrid=(12,12,1), temperature=300,
-                           fermi=-0.7, delta=0.02, adiabatic=False)
+source = ModelEPCLinewidth(
+    epc,
+    fermi=-0.7,
+    delta=0.02,
+    adiabatic=False,
+    phononBath=PhononBath(qgrid=(12, 12, 1), temperature=300),
+)
 collision = CollisionSpecification("serta", linewidthSource=source)
 sigma = Opticalconductivity_LG_DM(**dict(options, collisionSpecification=collision)).sigma
 ```

@@ -50,10 +50,10 @@ def linear_tdse_step(rho, response, hamiltonian, velocity, vector_potential,
 
 def propagate_phonon_conductivity(inputs: ResponseInputs, *, n_steps_per_cycle, n_cycles_measure,
                                  transient_lifetimes, max_phase_step, recordCurrent,
-                                 temperature, statistics, trajectories, seed,
+                                 phononBath, trajectories, seed,
                                  phonon_cycles, phonon_damping=0., bath_cycles=8.,
                                  phase_points=33, E0=1e-4, epc_model, collision):
-    """Populate the existing Opticalconductivity_TDSE output interface."""
+    """Return the conductivity and diagnostics for a prescribed phonon bath."""
     result = ConductivityResult(np.zeros((len(inputs.fermiList), len(inputs.omegaList), 3, 3), complex))
     if collision.specification.mode != 'crta':
         raise ValueError("Explicit phonon trajectories require CRTA background only; EPC SERTA would double count scattering")
@@ -66,13 +66,14 @@ def propagate_phonon_conductivity(inputs: ResponseInputs, *, n_steps_per_cycle, 
             or not np.isfinite(phonon_cycles) or phonon_cycles < 0):
         raise ValueError("Require positive background linewidth, integer steps/cycles/trajectories, and valid time controls")
     phonon_damping, bath_cycles = float(phonon_damping), float(bath_cycles)
+    temperature, statistics = phononBath.temperature, phononBath.statistics
     phonons = epc_model.phonon_model
     if not isinstance(phonons, EinsteinPhonon):
         raise NotImplementedError("This displacement solver currently requires EinsteinPhonon")
     operators = SSHTimeOperators(epc_model, uniform_qmesh(inputs.kgrid) + inputs.kOffset)
     spawned_seeds = np.random.SeedSequence(seed).spawn(int(trajectories))
     if phonon_damping == 0:
-        samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)
+        samples = [phononBath.sampleTrajectory(phonons, seed=s)
                    for s in spawned_seeds]
         bath_period = 2*np.pi/np.min(phonons.energies)
         base_energy = np.min(phonons.energies)
@@ -87,8 +88,8 @@ def propagate_phonon_conductivity(inputs: ResponseInputs, *, n_steps_per_cycle, 
         if max_resolved < np.max(phonons.energies):
             required = 2*int(np.ceil(np.max(phonons.energies)/base_energy))+1
             raise ValueError(f"phononPhasePoints must be at least {required} for the damped bath spectrum")
-        samples = [phonons.sampleDampedTrajectory(
-            temperature, phonon_damping, bath_period, phase_points, seed=s, statistics=statistics)
+        samples = [phononBath.sampleDampedTrajectory(
+            phonons, phonon_damping, bath_period, phase_points, seed=s)
             for s in spawned_seeds]
         bath_name = 'stationary periodic damped-Langevin spectrum'
     result.phonon_initial_positions = np.array([s.displacements(0) for s in samples])

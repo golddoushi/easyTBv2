@@ -5,7 +5,11 @@ collision preparation, and response solving. Response classes in `Grid.py` selec
 their electronic stages explicitly; they do not inherit Energy, Velocity, or a
 collision-preparation mixin.
 
+See [the main workflow](README_main_workflow.md) for the shared phonon bath,
+scheduling requirements and standalone nonlinear contractions.
+
 ```python
+from phonon import PhononBath
 from calculator import (
     compute_states, compute_vertices, prepare_collision, CollisionSpecification,
     Opticalconductivity_LG_DM, Opticalconductivity_VG_DM,
@@ -14,8 +18,12 @@ from calculator import (
 # model and epc are the independent physical models described in README_epc_models.md.
 states = compute_states(model, (16, 16, 1), kOffset=(0., 0., 0.))
 electronic = compute_vertices(states, highOrderVelocity=True)
-spec = CollisionSpecification('epc', qgrid=(4, 4, 1),
-    phononTemperature=300., constantLinewidth=.2, delta=.03)
+spec = CollisionSpecification(
+    'epc',
+    constantLinewidth=0.2,
+    delta=0.03,
+    phononBath=PhononBath(qgrid=(4, 4, 1), temperature=300.0),
+)
 prepared = prepare_collision(electronic, spec, kBT=.0258519998, epc_model=epc)
 
 lg = Opticalconductivity_LG_DM(preparedCollision=prepared,
@@ -74,6 +82,7 @@ sampling uncertainty and solver diagnostics. They do not modify the supplied
 `ResponseInputs`. For example:
 
 ```python
+from phonon import PhononBath
 from calculator import ResponseInputs
 from calculator.collision import prepare_phonon_background
 from calculator.phonon_static import solve_static_epc_conductivity
@@ -83,7 +92,7 @@ inputs = ResponseInputs(electronic, kBT=.0258519998,
 background = prepare_phonon_background(electronic,
     CollisionSpecification('crta', constantLinewidth=.2),
     kBT=inputs.kBT, epc_model=epc)
-result = solve_static_epc_conductivity(inputs, 300., 'quantum', True,
+result = solve_static_epc_conductivity(inputs, PhononBath(temperature=300.), True,
     None, 4, epc_model=epc, collision=background)
 sigma = result.sigma
 ```
@@ -108,9 +117,13 @@ Implementation boundaries:
 | `response_results.py` | Returned solver results |
 | `collision.py` | Collision preparation and operators |
 | `phonon_*.py`, `tdse_response.py` | Independent response solvers |
-| `Grid.py` | Response entry points and observable contractions |
+| `response_contractions.py` | Result-returning BPVE, IFE and torque contractions |
+| `requirements.py` | Numerical mesh requirements for scheduling |
+| `Grid.py` | Response entry points and result publication |
 
 Prepared electronic data, like prepared collisions, belongs to one exact mesh.
 `BZGridTask` accepts it only for a single matching task. Independent shifted
-submeshes prepare their own states within each worker. Full EPC still uses one
-complete coupled mesh; this refactor does not change the parallel algorithm.
+submeshes prepare their own states within each worker. Full EPC and covariant
+linewidth derivatives declare a complete-mesh requirement before preparation.
+`ComputationRequirements(requires_full_mesh=True)` also lets a caller explicitly
+request one full mesh, including when supplying a local prepared collision.

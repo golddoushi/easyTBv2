@@ -5,6 +5,7 @@ Outputs are xxx BPVE in the calculators' raw units, normalized per primitive
 cell (not SI conductivity). Both frozen and covariant linewidth derivatives
 are evaluated. This tests approximations; agreement is not imposed.
 """
+from phonon import PhononBath
 import argparse
 import contextlib
 import copy
@@ -113,17 +114,19 @@ def main(argv=None):
            secondOrderLinewidthDerivative='covariant'))
     for name, static in [('static_serta', True), ('dynamic_serta', False)]:
         tick = time.perf_counter()
-        rates = ModelEPCLinewidth(epc, qgrid=(a.qgrid, 1, 1), temperature=a.temperature,
-            fermi=a.fermi, delta=a.delta, adiabatic=static).populationLinewidth(base)
+        rates = ModelEPCLinewidth(epc, fermi=a.fermi, delta=a.delta, adiabatic=static, phononBath=PhononBath(qgrid=(a.qgrid, 1, 1), temperature=a.temperature)).populationLinewidth(
+            base,
+        )
         meta['timings_seconds'][name+'_rates'] = time.perf_counter()-tick
         arrays[name+'_rates_eV'] = rates
         for derivative in ('frozen', 'covariant'):
             spec = CollisionSpecification('serta', linewidthSource=rates+a.background,
                                          secondOrderLinewidthDerivative=derivative)
             record(name+'_'+derivative, spec)
-    full = record('full', CollisionSpecification('epc', qgrid=(a.qgrid, 1, 1),
-        phononTemperature=a.temperature, delta=a.delta, constantLinewidth=a.background,
-        bathStatistics='quantum'))
+    full = record(
+        'full',
+        CollisionSpecification('epc', delta=a.delta, constantLinewidth=a.background, phononBath=PhononBath(qgrid=(a.qgrid, 1, 1), temperature=a.temperature, statistics='quantum')),
+    )
     view = full.density_matrix_kernel.collision.forFermi(a.fermi)
     arrays['balanced_rta_rates_with_background_eV'] = view.population_linewidth
     meta['full_stationary'] = view.stationary_info

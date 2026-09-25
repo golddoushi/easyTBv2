@@ -20,7 +20,6 @@ class EinsteinPhonon(Phonon):
     masses: np.ndarray
     energies: np.ndarray
     directions: tuple = (0, 1, 2)
-    modeSelection: object = None
 
     def __post_init__(self):
         super().__init__(self.masses)
@@ -63,7 +62,7 @@ class EinsteinPhonon(Phonon):
         result[:, self.directions] = zero_point * factor
         return result
 
-    def _selectionBasis(self):
+    def _selectionBasis(self, selection):
         """Einstein-mode covariance factors B, with C = B.T B for unit local variance.
 
         Branches are local atom/Cartesian oscillators, not general phonon
@@ -72,7 +71,6 @@ class EinsteinPhonon(Phonon):
         point has one.
         Multiplying B by local thermal RMS gives physical displacement factors.
         """
-        selection = self.modeSelection
         cells, natoms, directions = self._cell_origins, self._primitive_natoms, self.directions
         branches = selection.branch_indices(natoms*len(directions))
         factors, visited = [], set()
@@ -93,38 +91,37 @@ class EinsteinPhonon(Phonon):
                     factors.append(factor.reshape(-1, 3))
         return np.array(factors)
 
-    def displacementFactors(self, temperature, quantum=True):
+    def displacementFactors(self, temperature, quantum=True, *, selection=None):
         """Gaussian covariance factors, including correlations of selected modes."""
         variance = self._bareMeanSquareDisplacements(temperature, quantum)
-        if self.modeSelection is None:
+        if selection is None:
             active = np.flatnonzero(variance.ravel())
             factors = np.zeros((len(active), variance.size))
             factors[np.arange(len(active)), active] = np.sqrt(variance.ravel()[active])
             return factors.reshape((-1,)+variance.shape)
-        self.modeSelection.check_supercell(self._supercell_matrix)
-        return self._selectionBasis()*np.sqrt(variance)[None]
+        selection.check_supercell(self._supercell_matrix)
+        return self._selectionBasis(selection)*np.sqrt(variance)[None]
 
-    def meanSquareDisplacements(self, temperature, quantum=True):
-        if self.modeSelection is None:
+    def meanSquareDisplacements(self, temperature, quantum=True, *, selection=None):
+        if selection is None:
             return self._bareMeanSquareDisplacements(temperature, quantum)
         # The diagonal covariance is translation invariant, including on the
         # primitive model where the selected finite-q field cannot be sampled.
         variance = self._bareMeanSquareDisplacements(temperature, quantum)
         mask = np.zeros((self._primitive_natoms, 3))
-        for branch in self.modeSelection.branch_indices(self._primitive_natoms*len(self.directions)):
+        for branch in selection.branch_indices(self._primitive_natoms*len(self.directions)):
             atom, axis = divmod(branch, len(self.directions))
-            mask[atom, self.directions[axis]] = self.modeSelection.weights.sum()
+            mask[atom, self.directions[axis]] = selection.weights.sum()
         return variance*np.tile(mask, (len(self._cell_origins), 1))
 
-    def _projectSelection(self, values):
+    def _projectSelection(self, values, selection=None):
         """Filter independent local Gaussian fields, scaling by sqrt(N*w_q).
 
         Supports arbitrary leading sample/time-Fourier axes. Since Einstein
         energies are cell independent, projection commutes with propagation.
         """
-        if self.modeSelection is None:
+        if selection is None:
             return values
-        selection = self.modeSelection
         selection.check_supercell(self._supercell_matrix)
         cells, natoms, directions = self._cell_origins, self._primitive_natoms, self.directions
         values = np.asarray(values)
@@ -143,7 +140,7 @@ class EinsteinPhonon(Phonon):
             raise ValueError('selected displacement failed the realness check')
         return result.real.reshape(values.shape)
 
-    def sampleDisplacements(self, temperature, nSamples=None, seed=None, quantum=True):
+    def sampleDisplacements(self, temperature, nSamples=None, seed=None, quantum=True, *, selection=None):
         """Independent Gaussian snapshots; quantum=True samples the position marginal.
 
         Quantum zero-point snapshots are static disorder, not an inelastic quantum
@@ -153,24 +150,19 @@ class EinsteinPhonon(Phonon):
         if nSamples is not None and (not isinstance(nSamples, (int, np.integer)) or nSamples < 1):
             raise ValueError("nSamples must be a positive integer or None")
         shape = variance.shape if nSamples is None else (nSamples,) + variance.shape
-        return self._projectSelection(np.random.default_rng(seed).normal(size=shape) * np.sqrt(variance))
+        return self._projectSelection(np.random.default_rng(seed).normal(size=shape) * np.sqrt(variance), selection)
 
     def supercell(self, ncells, internal_cells=None, matrix=None):
         result = EinsteinPhonon(np.tile(self.masses, ncells),
-                                 np.tile(self.energies, (ncells, 1)), self.directions,
-                                 self.modeSelection)
-        if self.modeSelection is not None:
-            if internal_cells is None or matrix is None:
-                raise ValueError('selected phonons require supercell origins and matrix')
-            if len(self._cell_origins) != 1:
-                raise NotImplementedError('build a selected-mode supercell directly from the primitive model')
-            self.modeSelection.check_supercell(matrix)
-            result._primitive_natoms = self._primitive_natoms
+                                 np.tile(self.energies, (ncells, 1)), self.directions)
+        if internal_cells is not None and matrix is not None:
+            # Selection labels refer to the input cell of this construction.
+            result._primitive_natoms = len(self.masses)
             result._cell_origins = np.asarray(internal_cells, int).copy()
             result._supercell_matrix = np.asarray(matrix, int).copy()
         return result
 
-    def sampleTrajectory(self, temperature, seed=None, statistics="classical"):
+    def sampleTrajectory(self, temperature, seed=None, statistics="classical", *, selection=None):
         """Stationary harmonic trajectory with sampled positions AND momenta.
 
         Time is in hbar/eV. Classical statistics obey equipartition; Wigner
@@ -183,13 +175,13 @@ class EinsteinPhonon(Phonon):
         variance = self._bareMeanSquareDisplacements(temperature, quantum=statistics == "wigner")
         rng = np.random.default_rng(seed)
         quadratures = rng.normal(size=(2,) + variance.shape)*np.sqrt(variance)
-        quadratures = self._projectSelection(quadratures)
+        quadratures = self._projectSelection(quadratures, selection)
         frequencies = np.zeros_like(variance)
         frequencies[:, self.directions] = self.energies
         return HarmonicTrajectory(quadratures[0], quadratures[1], frequencies)
 
     def sampleDampedTrajectory(self, temperature, damping, period, phase_points,
-                                seed=None, statistics="classical"):
+                                seed=None, statistics="classical", *, selection=None):
         """Sample a stationary periodic approximation to a damped Langevin bath.
 
         ``damping`` is the amplitude-decay rate in eV for
@@ -227,7 +219,7 @@ class EinsteinPhonon(Phonon):
         coefficient_scale = np.sqrt(weights*active_variance[None])
         cosine[:, :, self.directions] = rng.normal(size=weights.shape)*coefficient_scale
         sine[1:, :, self.directions] = rng.normal(size=weights[1:].shape)*coefficient_scale[1:]
-        cosine, sine = self._projectSelection(cosine), self._projectSelection(sine)
+        cosine, sine = self._projectSelection(cosine, selection), self._projectSelection(sine, selection)
         mode_energy_grid = np.zeros_like(variance)
         mode_energy_grid[:, self.directions] = self.energies
         return DampedPeriodicTrajectory(cosine, sine, base_energy, mode_energy_grid,

@@ -10,10 +10,11 @@ from time import perf_counter
 import numpy as np
 from auxiliary import showElapsedTime, SYMPREC
 from system import System
-from calculator.collision import CollisionSpecification, PreparedCollision, collision_mode
+from calculator.requirements import ComputationRequirements, collision_requirements
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
 from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
-from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
+from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM
+from calculator import BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
 from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag, OrbitalHallConductance
@@ -79,7 +80,8 @@ class BZGridTask:
                  ncores:int=1,
                  parallelBackend="process",
                  workerThreads:int=1,
-                 processStartMethod=None) -> None:
+                 processStartMethod=None,
+                 requirements=ComputationRequirements()) -> None:
         '''
         Conduct tasks that calculate quantity on the regular grids of Brillouin zone, using mixed FFT algorithm
         
@@ -91,6 +93,10 @@ class BZGridTask:
             the function used to do the task (at FFT grid)
         - args : dict
             extra args passing to the task Func
+        - requirements : ComputationRequirements
+            Numerical requirements of the response. Combined with collision
+            requirements before preparation. requires_full_mesh preserves the
+            complete BZGrid, including for local collisions with mesh derivatives.
         - BZGrid : np.ndarray(3) | tuple(3) | list(3), int
             size of BZ sampling.
             Every generated task passes its own ``q / BZGrid`` as ``kOffset`` to
@@ -117,13 +123,15 @@ class BZGridTask:
             raise ValueError(f"Unavailable processStartMethod: {processStartMethod}")
         ncores, workerThreads = int(ncores), int(workerThreads)
         BZGrid = np.asarray(BZGrid).astype(int)
-        # Markov populations and covariant mesh derivatives are coupled over
-        # the complete electronic mesh. Independent offset solves are invalid.
-        has_collision = "collisionSpecification" in args or "preparedCollision" in args
-        if has_collision and collision_mode(args.get('collisionSpecification'), args.get('preparedCollision')) == "epc":
+        # Numerical coupling and prepared-array ownership are separate constraints.
+        self.requirements = requirements
+        if 'collisionSpecification' in args or 'preparedCollision' in args:
+            self.requirements = requirements.combined(collision_requirements(
+                args.get('collisionSpecification'), args.get('preparedCollision')))
+        if self.requirements.requires_full_mesh:
             FastGrid = BZGrid.copy()
             if ncores > 1:
-                print("Mesh-coupled EPC: using one complete BZ mesh; independent offset workers are disabled")
+                print("Calculation requires one complete BZ mesh; independent offset workers are disabled")
         else:
             FastGrid=np.zeros(3,dtype=int)
             for icomp, comp in enumerate(model.mp_grid):
@@ -181,9 +189,8 @@ class BZGridTask:
 
         showElapsedTime(extraInfo=f"find {len(tasks)} irreducible q, {len(tasks)/np.prod(self.QGrid)*100:.3f}% the whole BZ")
 
-        # k-point parallel should build the collision operator during the parallel,
-        # rather than prepared before the parallel, because the kOffset should be
-        # matched between the electronic parts and EPC parts.
+        # Prepared arrays belong to an exact mesh/basis, even for a local collision.
+        # Independent submesh workers must prepare their own arrays.
         if args.get('preparedCollision') is not None:
             if len(tasks) != 1:
                 raise ValueError("preparedCollision belongs to one exact mesh; use a direct calculator or one BZ task")
@@ -485,13 +492,13 @@ def _solveLinearConductivity(param, calculatorClass):
                    verbose=param.get('verbose', 0))
     if calculatorClass is Opticalconductivity_TDSE:
         for key in ('E0', 'n_steps_per_cycle', 'n_cycles_measure', 'transient_lifetimes', 'max_phase_step', 'recordCurrent',
-                    'phononDynamics', 'phononTemperature', 'phononStatistics',
+                    'phononDynamics', 'phononBath',
                     'nPhononTrajectories', 'phononSeed', 'phononCycles',
                     'phononDamping', 'phononBathCycles', 'phononPhasePoints'):
             if key in param:
                 options[key] = param[key]
     elif calculatorClass is Opticalconductivity_VG_DM_Phonon:
-        for key in ('phononTemperature', 'phononStatistics', 'nPhononTrajectories',
+        for key in ('phononBath', 'nPhononTrajectories',
                     'phononSeed', 'phononPhasePoints', 'phononDamping', 'phononBathCycles',
                     'solverTolerance', 'solverMaxiter', 'solverRestart'):
             if key in param:
@@ -915,29 +922,25 @@ def solveSGC_VG_DM(param):
 def solveOGC_LG_DM(param):
     return _solveGalvanicConductivity_DM(
         param, OrbitalGalvanicConductivity_LG_DM, 'orbitalProjectionList',
-        ('projected shells for detecting orbital accumulation',
-         'projected shells for detecting spin accumulation')
+        ('projected shells for detecting orbital accumulation',)
     )
 
 def solveOGC_VG_DM(param):
     return _solveGalvanicConductivity_DM(
         param, OrbitalGalvanicConductivity_VG_DM, 'orbitalProjectionList',
-        ('projected shells for detecting orbital accumulation',
-         'projected shells for detecting spin accumulation')
+        ('projected shells for detecting orbital accumulation',)
     )
 
 def solveStGC_LG_DM(param):
     return _solveGalvanicConductivity_DM(
         param, SpintorqueGalvanicConductivity_LG_DM, 'spinTorqueProjectionList',
-        ('projected shells for detecting torque',
-         'projected shells for detecting spin accumulation')
+        ('projected shells for detecting torque',)
     )
 
 def solveStGC_VG_DM(param):
     return _solveGalvanicConductivity_DM(
         param, SpintorqueGalvanicConductivity_VG_DM, 'spinTorqueProjectionList',
-        ('projected shells for detecting torque',
-         'projected shells for detecting spin accumulation'),
+        ('projected shells for detecting torque',),
         {'exchangeVelocity': param.get('exchange velocity', True)}
     )
 

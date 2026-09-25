@@ -1,5 +1,7 @@
 """Collision models and explicit, reusable preparation for response calculations."""
 
+from phonon import PhononBath
+from .requirements import ComputationRequirements
 from collections import OrderedDict
 from dataclasses import dataclass
 import numpy as np
@@ -139,23 +141,18 @@ class CollisionSpecification:
         matrix in the complete orthogonal orbital basis, including its band
         projectors, and uses the same kinetic equation in LG and VG. Requires
         fullCovariantDerivative=True and a converged electronic mesh.
-    qgrid : tuple(3), optional
-        Uniform phonon mesh for ``epc``.  It defaults to the calculator k mesh
-        and each q-grid dimension must divide the corresponding k-grid one.
-    phononSelection : PhononModeSelection, optional
-        Restricted q/branch quadrature for ``epc``, also read from
-        epc_model.phonon_model.modeSelection. Supersedes qgrid, preserves absolute weights
-        and requires the selected q shifts to close on the electronic mesh.
-    phononTemperature : float
-        Bath temperature in kelvin used by ``epc``.
+    phononBath : PhononBath
+        Shared phonon temperature (kelvin), statistics and q/branch selection.
+        Its uniform qgrid defaults to the electronic mesh; each dimension
+        must divide the corresponding electronic dimension. A selection
+        supersedes that grid, preserves absolute weights and must close on
+        the electronic mesh. Nothing is read from the physical phonon model
+        except its modes and displacement patterns.
     delta : float
         Positive Lorentzian energy-conservation broadening in eV used while
-        building the ``epc`` transition rates.  It is not a relaxation time.
-    bathStatistics : ``'quantum'`` | ``'classical'`` | ``'wigner'``
-        Phonon population used by ``epc``.  The latter two reproduce the real
-        harmonic-noise conventions used by the explicit phonon benchmarks.
+        building EPC transition rates. It is not a relaxation time.
     enforceDetailedBalance : bool
-        Pair-balance the broadened transition rates at ``phononTemperature``.
+        Pair-balance the broadened transition rates at ``phononBath.temperature``.
         This makes the finite-temperature Fermi distribution an exact
         stationary state even at finite ``delta``. With classical or Wigner
         activities this is a thermally balanced surrogate, not the spectrum
@@ -173,11 +170,10 @@ class CollisionSpecification:
 
     def __init__(self, mode:str,
                  constantLinewidth:float=0.06582, linewidthFloor:float=1e-12,
-                 linewidthSource=None, qgrid=None, phononTemperature=300.,
-                 delta=.03, bathStatistics="quantum", populationSolver="auto",
+                 linewidthSource=None, phononBath=PhononBath(),
+                 delta=.03, populationSolver="auto",
                  solverTolerance=1e-10, stationaryTolerance=1e-12,
-                 enforceDetailedBalance=True, secondOrderLinewidthDerivative="frozen",
-                 phononSelection=None):
+                 enforceDetailedBalance=True, secondOrderLinewidthDerivative="frozen"):
         mode=str(mode).lower()
         if mode in ("full", "epc_markov"):
             mode="epc"
@@ -187,11 +183,10 @@ class CollisionSpecification:
         self.constantLinewidth= float(constantLinewidth)
         self.linewidthFloor=float(linewidthFloor)
         self.linewidthSource=linewidthSource
-        self.qgrid=None if qgrid is None else tuple(qgrid)
-        self.phononSelection=phononSelection
-        self.phononTemperature=float(phononTemperature)
+        if not isinstance(phononBath, PhononBath):
+            raise TypeError('phononBath must be PhononBath')
+        self.phononBath = phononBath
         self.delta=float(delta)
-        self.bathStatistics=str(bathStatistics).lower()
         self.populationSolver=str(populationSolver).lower()
         self.solverTolerance=float(solverTolerance)
         self.stationaryTolerance=float(stationaryTolerance)
@@ -207,8 +202,11 @@ class CollisionSpecification:
         if self.mode == "epc":
             if self.populationSolver not in ("auto", "direct", "iterative"):
                 raise ValueError("populationSolver must be auto, direct, or iterative")
-            if self.bathStatistics not in ("quantum", "classical", "wigner"):
-                raise ValueError("bathStatistics must be 'quantum', 'classical', or 'wigner'")
+
+    @property
+    def requirements(self):
+        return ComputationRequirements(
+            requires_full_mesh=self.mode == 'epc' or self.secondOrderLinewidthDerivative == 'covariant')
 
     def bind(self, inputs):
         if self.mode == "epc":
@@ -406,9 +404,8 @@ class CollisionOperator_full(CollisionOperator):
             raise NotImplementedError("mesh-global EPC collision requires the complete model basis")
         self.epc_model.validate()
         self.kgrid=np.asarray(inputs.kgrid,dtype=int)
-        self.phononSelection = (getattr(self.epc_model.phonon_model, 'modeSelection', None)
-                                if specification.phononSelection is None else specification.phononSelection)
-        qgrid=self.kgrid if specification.qgrid is None else np.asarray(specification.qgrid)
+        self.phononSelection = specification.phononBath.selection
+        qgrid=self.kgrid if specification.phononBath.qgrid is None else np.asarray(specification.phononBath.qgrid)
         if (qgrid.shape != (3,) or not np.all(np.isfinite(qgrid))
                 or np.any(qgrid < 1) or not np.all(qgrid == qgrid.astype(int))):
             raise ValueError("EPC qgrid must contain three positive integers")
@@ -420,12 +417,12 @@ class CollisionOperator_full(CollisionOperator):
             self.phononSelection.branch_indices(len(self.epc_model.phonon_model.modes(self.phononSelection.qpoints[0])[0]))
         elif np.any(self.kgrid % self.qgrid):
             raise ValueError("each EPC qgrid dimension must divide the calculator kgrid")
-        bath_kBT=Boltzmann*specification.phononTemperature/electron_volt
+        bath_kBT=Boltzmann*specification.phononBath.temperature/electron_volt
         if specification.enforceDetailedBalance:
             if bath_kBT <= 0:
                 raise ValueError("detailed-balance EPC rates require a positive phonon temperature")
             if not np.isclose(inputs.kBT,bath_kBT,rtol=2e-6,atol=1e-10):
-                raise ValueError("detailed-balance EPC rates require electronic kBT to match phononTemperature")
+                raise ValueError("detailed-balance EPC rates require electronic kBT to match phononBath.temperature")
         self.bath_kBT=bath_kBT
         self.qgrid=tuple(self.qgrid)
         self.nk=int(np.prod(self.kgrid))
@@ -443,10 +440,10 @@ class CollisionOperator_full(CollisionOperator):
 
     def _phonon_population(self, energies):
         specification=self.specification
-        kBT=Boltzmann*specification.phononTemperature/electron_volt
-        if specification.bathStatistics == "classical":
+        kBT=Boltzmann*specification.phononBath.temperature/electron_volt
+        if specification.phononBath.statistics == "classical":
             return np.zeros_like(energies) if kBT == 0 else kBT/energies
-        if specification.bathStatistics == "wigner":
+        if specification.phononBath.statistics == "wigner":
             if kBT == 0:
                 return np.full_like(energies,.5)
             return .5/np.tanh(energies/(2*kBT))
@@ -497,7 +494,7 @@ class CollisionOperator_full(CollisionOperator):
             difference=initial-final
             emission=self._lorentzian(difference-phonon_energies[None,:,None,None],self.specification.delta)
             absorption=self._lorentzian(difference+phonon_energies[None,:,None,None],self.specification.delta)
-            if self.specification.bathStatistics == "quantum":
+            if self.specification.phononBath.statistics == "quantum":
                 weight=(population[None,:,None,None]+1)*emission+population[None,:,None,None]*absorption
             else:
                 weight=population[None,:,None,None]*(emission+absorption)

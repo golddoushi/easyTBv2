@@ -108,6 +108,7 @@ independently averaged quadratic supercell Hamiltonian.
 ## Usage and output shapes
 
 ```python
+from phonon import PhononBath
 from calculator import ModelElectronSelfEnergy
 from calculator.model_self_energy import uniform_qmesh
 from examples.honeycomb_four_band import build_model
@@ -115,8 +116,13 @@ from examples.honeycomb_four_band import build_model
 model, epc = build_model("tmp/my_model")
 kpoints = uniform_qmesh((12, 12, 1))
 se = ModelElectronSelfEnergy(
-    epc, kpoints, qgrid=(12, 12, 1),
-    temperature=300, fermi=0.0, delta=0.005, adiabatic=False)
+    epc,
+    kpoints,
+    fermi=0.0,
+    delta=0.005,
+    adiabatic=False,
+    phononBath=PhononBath(qgrid=(12, 12, 1), temperature=300),
+)
 
 fan = se.fan_migdal                # complex (nk,nb), evaluated on shell
 dw = se.debye_waller               # real (nk,nb)

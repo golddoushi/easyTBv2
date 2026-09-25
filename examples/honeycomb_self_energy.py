@@ -7,6 +7,7 @@ This does not claim thermodynamic-limit convergence or validate dynamical
 phonon lifetimes by static disorder. Each independent MC sample is paired
 with its negative to remove odd displacement contributions.
 """
+from phonon import PhononBath
 
 import argparse
 import contextlib
@@ -77,8 +78,13 @@ def main():
             sc_epc = epc.supercell(np.diag(grid))
             sc = sc_epc.electronic_model
         for it, temperature in enumerate(args.temperatures):
-            common = dict(epc_model=epc, kpoints=kpoints, qgrid=grid, temperature=temperature,
-                          fermi=0.0, delta=args.eta)
+            common = dict(
+                epc_model=epc,
+                kpoints=kpoints,
+                fermi=0.0,
+                delta=args.eta,
+                phononBath=PhononBath(qgrid=grid, temperature=temperature),
+            )
             static = ModelElectronSelfEnergy(adiabatic=True, **common)
             dynamic = ModelElectronSelfEnergy(adiabatic=False, **common)
             vbm = np.unravel_index(np.argmax(static.energies[:, :2]), (len(kpoints), 2))

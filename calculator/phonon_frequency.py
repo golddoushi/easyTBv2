@@ -67,9 +67,10 @@ class HarmonicPhononLiouvillian:
         return solution, dict(omega_eV=float(omega), iterations=len(iterations), relative_residual=residual)
 
 
-def solve_phonon_conductivity(inputs: ResponseInputs, temperature, statistics, trajectories, seed,
+def solve_phonon_conductivity(inputs: ResponseInputs, phononBath, trajectories, seed,
                              phase_points, tolerance, maxiter, restart,
                              damping=0., bath_cycles=8., *, epc_model, collision):
+    temperature, statistics = phononBath.temperature, phononBath.statistics
     result = ConductivityResult(np.zeros((len(inputs.fermiList), len(inputs.omegaList), 3, 3), complex))
     if collision.specification.mode != 'crta':
         raise ValueError("Explicit harmonic Liouville dynamics requires CRTA background; adding SERTA would double count EPC")
@@ -91,7 +92,7 @@ def solve_phonon_conductivity(inputs: ResponseInputs, temperature, statistics, t
         if not np.allclose(phonons.energies, mode_energy, rtol=1e-12, atol=0):
             raise NotImplementedError("Undamped one-phase Liouville solver requires equal Einstein mode energies")
         base_energy, bath_period = mode_energy, 2*np.pi/mode_energy
-        samples = [phonons.sampleTrajectory(temperature, seed=s, statistics=statistics)
+        samples = [phononBath.sampleTrajectory(phonons, seed=s)
                    for s in spawned_seeds]
         bath_name = 'prescribed harmonic'
     else:
@@ -101,8 +102,8 @@ def solve_phonon_conductivity(inputs: ResponseInputs, temperature, statistics, t
         if max_resolved < np.max(phonons.energies):
             required = 2*int(np.ceil(np.max(phonons.energies)/base_energy))+1
             raise ValueError(f"phononPhasePoints must be at least {required} for the damped bath spectrum")
-        samples = [phonons.sampleDampedTrajectory(
-            temperature, damping, bath_period, phase_points, seed=s, statistics=statistics)
+        samples = [phononBath.sampleDampedTrajectory(
+            phonons, damping, bath_period, phase_points, seed=s)
             for s in spawned_seeds]
         bath_name = 'stationary periodic damped-Langevin spectrum'
     result.phonon_initial_positions = np.array([s.displacements(0) for s in samples])
