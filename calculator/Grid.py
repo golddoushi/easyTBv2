@@ -3166,18 +3166,21 @@ class OrbitalHallConductance(OrbitalBerryCurv):
         '''
         super().__init__(velocityProjectionList=currentProjectionList, orbitalvelocityProjectionList=orbitalcurrentProjectionList, **kwarg)
 
-        sigma=np.zeros((len(fermiList),3,3,3))
-
+        nProjections=self.projected_orbitalBerryCurv.shape[:2]
+        projected_sigma=np.zeros(nProjections+(len(fermiList),3,3,3))
         for ifermi, fermi in enumerate(fermiList):
             occupy=self.energies<fermi
-            for ialpha in range(3):
-                for ibeta in range(3):
-                    for igamma in range(3):
-                        sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.orbitalBerryCurv[...,ialpha,ibeta,igamma,:][occupy])
+            for ivelocity in range(nProjections[0]):
+                for iorbitalvelocity in range(nProjections[1]):
+                    for ialpha in range(3):
+                        for ibeta in range(3):
+                            for igamma in range(3):
+                                #print(f"{ifermi=}{ivelocity=}{iorbitalvelocity=}{ialpha=}{ibeta=}{igamma=},{projected_sigma.shape=}{self.projected_orbitalBerryCurv.shape=}")
+                                projected_sigma[ivelocity,iorbitalvelocity,ifermi,ialpha,ibeta,igamma]=np.sum(self.projected_orbitalBerryCurv[ivelocity,iorbitalvelocity,...,ialpha,ibeta,igamma,:][occupy])
             #exit()
         
-        #self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        #self.projected_sigma=projected_sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Orbital Hall conductance finished")
 
 class OrbitalHallConductance_LG_DM(DensityMatrixResponse):

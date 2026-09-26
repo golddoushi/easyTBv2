@@ -233,7 +233,7 @@ def run():
     ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
     Pt1,Pt2,Pt3,Pt4=[(0,(0,1,2,)),],[(1,(0,1,2,)),],[(2,(0,1,2,)),],[(3,(0,1,2,)),]
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
-    calc=BZGridTask(model, solveOHC,
+    calc=BZGridTask(model, solveOHC_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               {"source":Pt1+Pt2+Pt3+Pt4, "target":Pt1+Pt2+Pt3+Pt4},
@@ -271,12 +271,12 @@ def run():
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
-        if 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
+        if False and 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
             if responseFunction is None:
                 local_response = result_q['projected response']
                 responseFunction = np.zeros(local_response.shape[:3] + tuple(BZGrid) + local_response.shape[6:],
                                             dtype=local_response.dtype)
-            responseFunction[:, :, :,
+            responseFunction[:, :, #:,
                              result_q['iq'][0]::calc.QGrid[0],
                              result_q['iq'][1]::calc.QGrid[1],
                              result_q['iq'][2]::calc.QGrid[2],
@@ -287,6 +287,7 @@ def run():
             sigma += result_q['sigma']
         #else:
         #    sigma += model.pointGroup.symmetrize_tensor(result_q['sigma'],Iodd=SpinHallConductance.Iodd,TRodd=SpinHallConductance.Todd,rank=3)
+    #print(projected_sigma.shape)
     '''
     pdos/=len(irreducibleTask)
     with open("%s/pdos.txt"%mainDir,"w") as fout:
@@ -305,21 +306,25 @@ def run():
     
     #'''
     # output (possibly symmetrized) 3-rank conductance
-    sigma/=len(calc.results)
-    with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
+    projected_sigma_average = projected_sigma/len(calc.results)
+    with open("%s/angularmomentHallConductance.txt"%mainDir,"w") as fout:
         fout.write("Fermi(eV)")
         directionName=['x','y','z']
-        for alpha in range(3):
-            for beta in range(3):
-                for gamma in range(3):
-                    fout.write(f"            {directionName[alpha]}{directionName[beta]}{directionName[gamma]}")
+        for iproj1 in range(projected_sigma_average.shape[0]):
+            for iproj2 in range(projected_sigma_average.shape[1]):
+                for alpha in range(3):
+                    for beta in range(3):
+                        for gamma in range(3):
+                            fout.write(f"            {directionName[alpha]}{directionName[beta]}{directionName[gamma]}")
         fout.write("\n")
-        for f, s in zip(fermiAxis,sigma):
-            fout.write(f"{f-fermi:9.6f}")
-            for alpha in range(3):
-                for beta in range(3):
-                    for gamma in range(3):
-                        fout.write(f"{s[alpha,beta,gamma]:15.6E}")
+        for ifermi, fsample in enumerate(fermiAxis):
+            fout.write(f"{fsample-fermi:9.6f}")
+            for iproj1 in range(projected_sigma_average.shape[0]):
+                for iproj2 in range(projected_sigma_average.shape[1]):
+                    for alpha in range(3):
+                        for beta in range(3):
+                            for gamma in range(3):
+                                fout.write(f"{projected_sigma_average[iproj1,iproj2,ifermi,alpha,beta,gamma]:15.6E}")
             fout.write("\n")
     exit()#'''
 

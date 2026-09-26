@@ -450,7 +450,7 @@ def solveOHC(param):
     return {"energies":calc.energies,
             #"velocities":calc.velocity_K,
             "orbital Berry curv":calc.orbitalBerryCurv,
-            "sigma":calc.sigma,"iq":param["iq"]}
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],"iq":param["iq"]}
 
 def solveStGC(param):
     calc=SpintorqueGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,
