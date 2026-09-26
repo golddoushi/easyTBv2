@@ -3145,9 +3145,8 @@ class OrbitalBerryCurv(OrbitalVelocity):
 
         Indexing: orbitalBerryCurv[ik1, ik2, ik3, ialpha, igamma, ieig]
         '''
-        super().__init__(velocityProjectionList=velocityProjectionList, spinvelocityProjectionList=orbitalvelocityProjectionList, **kwarg)
+        super().__init__(velocityProjectionList=velocityProjectionList, orbitalvelocityProjectionList=orbitalvelocityProjectionList, **kwarg)
         self.calcDeltaEInverse()
-        dEInverse2 = self.deltaEInverse**2
 
         self.projected_orbitalBerryCurv=np.zeros((len(velocityProjectionList)+1,len(orbitalvelocityProjectionList)+1)+self.kgrid+(3,3,3,self.model.norbs-self.ibmin))
         for ivelocity, proj_velocity_K in enumerate([self.velocity_K]+self.projected_velocity_K_list):
@@ -3155,7 +3154,7 @@ class OrbitalBerryCurv(OrbitalVelocity):
                 for ialpha in range(3):
                     for ibeta in range(3):
                         for igamma in range(3):
-                            self.projected_orbitalBerryCurv[ivelocity,iorbitalvelocty,...,ialpha,ibeta,igamma,:]=-2*np.diagonal(proj_orbitalVelocity_K[...,ibeta,igamma,:,:] @ (dEInverse2*proj_velocity_K[...,ialpha,:,:]),0,-2,-1).imag
+                            self.projected_orbitalBerryCurv[ivelocity,iorbitalvelocty,...,ialpha,ibeta,igamma,:]=-2*np.diagonal(proj_orbitalVelocity_K[...,ibeta,igamma,:,:] @ (self.deltaEInverse2*proj_velocity_K[...,ialpha,:,:]),0,-2,-1).imag
         
         self.orbitalBerryCurv=self.projected_orbitalBerryCurv[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"Orbital Berry curvature finished")
@@ -3177,9 +3176,57 @@ class OrbitalHallConductance(OrbitalBerryCurv):
                         sigma[ifermi,ialpha,ibeta,igamma]=np.sum(self.orbitalBerryCurv[...,ialpha,ibeta,igamma,:][occupy])
             #exit()
         
-        self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
-        #self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
+        #self.sigma=sigma/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        self.sigma=sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Orbital Hall conductance finished")
+
+class OrbitalHallConductance_LG_DM(DensityMatrixResponse):
+    def __init__(self, currentProjectionList=[], orbitalcurrentProjectionList=[], responseFermiIndexList=None,
+                 finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
+        '''
+        Calculate the dc orbital magnetic-moment current response from the common first-order
+        length-gauge density-matrix kernel. Tensor axes are electric-field
+        direction, orbital-current flow direction and orbital polarization. The
+        observable is {mu_L,v}/2, with mu_L/mu_B=-gL*L/hbar; there is no
+        charge-current minus. The historical 2D normalization below is retained.
+        '''
+        super().__init__(electronic_stages=(OrbitalVelocity,), velocityProjectionList=currentProjectionList,
+                         orbitalvelocityProjectionList=orbitalcurrentProjectionList, **kwarg)
+        self.Iodd = False
+        self.Todd = False
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.channel_names = DC_DM_CHANNEL_NAMES
+        self.channel_descriptions = dict(DC_DM_CHANNEL_DESCRIPTIONS)
+
+        drive_vertices = [self.velocity_K] + self.projected_velocity_K_list
+        observable_vertices = [self.orbitalVelocity_K] + self.projected_orbitalVelocity_K_list
+        result = _contract_dc_first_order_density_matrix(
+            self.inputs, drive_vertices, observable_vertices, (3, 3), responseFermiIndexList,
+            finiteTemperatureOccupations, self.fullCovariantDerivative, collision=self.collision
+        )
+        (kernel, projected_channels, response_channels) = result.kernel, result.projected_channels, result.response_channels
+        self.accept_first_order_result(result)
+        self.density_matrix_kernel = kernel
+
+        # unit conversion
+        #scale=1/np.prod(self.kgrid)*(elementary_charge**2/hbar/angstrom/2)/self.model.Vcell
+        scale = 2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))
+
+        self.projected_sigma_channels = {
+            name: response * scale for name, response in projected_channels.items()
+        }
+        self.projected_response_channels = response_channels
+        self.projected_sigma = _sum_density_matrix_channels(self.projected_sigma_channels)
+        self.projected_response = _sum_density_matrix_channels(self.projected_response_channels)
+        self.sigma_channels = {
+            name: response[0, 0] for name, response in self.projected_sigma_channels.items()
+        }
+        self.sigma = _sum_density_matrix_channels(self.sigma_channels)
+        for name in self.channel_names:
+            setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
+            setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
+            setattr(self, f"sigma_{name}", self.sigma_channels[name])
+        if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix SHC finished")
 
 class SpinvelocityVelocityCorrelation_diag(SpinVelocity_diag, Velocity_diag):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:

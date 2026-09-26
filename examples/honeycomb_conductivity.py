@@ -49,10 +49,6 @@ def periodic_grid(points, dimensions):
 def periodic_supercell(cells, dimensions):
     return np.diag(periodic_grid(cells, dimensions))
 
-def _hidden_alias(parser, option, destination, value_type=int):
-    parser.add_argument(option, dest=destination, type=value_type,
-                        default=argparse.SUPPRESS, help=argparse.SUPPRESS)
-
 def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
                                default_output='tmp/honeycomb_conductivity',
                                default_electronic_k_grid=32, description=__doc__, argv=None):
@@ -118,16 +114,7 @@ def run_conductivity_benchmark(model_builder=build_model, periodic_dimensions=2,
     parser.add_argument('--tdse-collision', choices=('crta','static','dynamic'), default='crta')
     parser.add_argument('--tdse-min-linewidth', type=float, default=.02,
                         help='Floor in eV for optional SERTA TDSE only; set 0 for unmodified rates')
-    _hidden_alias(parser, '--grid', 'electronic_k_grid')
-    _hidden_alias(parser, '--tdse-grid', 'clamped_tdse_k_grid')
-    _hidden_alias(parser, '--supercell', 'phonon_supercell')
-    _hidden_alias(parser, '--phonon-grid', 'supercell_k_grid')
-    _hidden_alias(parser, '--serta-qgrid', 'serta_q_grid')
-    _hidden_alias(parser, '--epc-qgrid', 'markov_q_grid')
-    _hidden_alias(parser, '--constantLinewidth', 'background_linewidth', float)
-    _hidden_alias(parser, '--kBT', 'electronic_kbt', float)
-    _hidden_alias(parser, '--field', 'optical_field', float)
-    _hidden_alias(parser, '--steps', 'tdse_steps_per_cycle')
+
     args = parser.parse_args(argv)
     if periodic_dimensions not in (1, 2, 3):
         raise ValueError('periodic_dimensions must be 1, 2, or 3')

@@ -48,11 +48,13 @@ class ElectronicVertices:
     orbitalTorqueE_K: np.ndarray | None = None
     orbitalTorqueProjectionList: list | tuple | None = None
     orbitalTorque_K: np.ndarray | None = None
+    orbitalVelocity_K: np.ndarray | None = None
     orbital_K: np.ndarray | None = None
     projected_orbitalTorqueAA_K_list: list | tuple | None = None
     projected_orbitalTorqueA_K_list: list | tuple | None = None
     projected_orbitalTorqueE_K_list: list | tuple | None = None
     projected_orbitalTorque_K_list: list | tuple | None = None
+    projected_orbitalVelocity_K_list: list | tuple | None = None
     projected_orbital_K_list: list | tuple | None = None
     projected_spinExchangeTorqueAA_K_list: list | tuple | None = None
     projected_spinExchangeTorqueA_K_list: list | tuple | None = None
@@ -233,6 +235,10 @@ class ElectronicTensorView:
         return self.electronic.orbitalTorque_K
 
     @property
+    def orbitalVelocity_K(self):
+        return self.electronic.orbitalVelocity_K
+
+    @property
     def orbital_K(self):
         return self.electronic.orbital_K
 
@@ -252,6 +258,10 @@ class ElectronicTensorView:
     def projected_orbitalTorque_K_list(self):
         return self.electronic.projected_orbitalTorque_K_list
 
+    @property
+    def projected_orbitalVelocity_K_list(self):
+        return self.electronic.projected_orbitalVelocity_K_list
+    
     @property
     def projected_orbital_K_list(self):
         return self.electronic.projected_orbital_K_list

@@ -17,7 +17,8 @@ from calculator import AnormalousHallConductance, AnormalousHallConductance_diag
 from calculator import BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
-from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag, OrbitalHallConductance
+from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag
+from calculator import OrbitalHallConductance, OrbitalHallConductance_LG_DM
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from calculator import (SpinGalvanicConductivity_LG_DM, SpinGalvanicConductivity_VG_DM,
                         OrbitalGalvanicConductivity_LG_DM, OrbitalGalvanicConductivity_VG_DM)
@@ -439,11 +440,13 @@ def solveSHC_diag(param):
             "iq":param["iq"]}
 
 def solveOHC(param):
-    calc=OrbitalHallConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,
-                             fermiList=param['fermi'],
-                             currentProjectionList    =param['projected shells for applying current'],
-                             orbitalcurrentProjectionList=param['projected shells for detecting spincurrent'],
-                             )
+    calc=OrbitalHallConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
+                            eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                            degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
+                            fermiList=param['fermi'],
+                            currentProjectionList=param.get('projected shells for applying current',[]),
+                            orbitalcurrentProjectionList=param.get('projected shells for detecting orbitalcurrent',[]),
+                            )
     return {"energies":calc.energies,
             #"velocities":calc.velocity_K,
             "orbital Berry curv":calc.orbitalBerryCurv,
@@ -551,8 +554,28 @@ def solveSHC_LG_DM(param):
                               **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel", "electronic", "states") if key in param},
                               degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
                               fermiList=param['fermi'],
-                              currentProjectionList=param['projected shells for applying current'],
-                              spincurrentProjectionList=param['projected shells for detecting spincurrent'],
+                              currentProjectionList=param.get('projected shells for applying current',[]),
+                              spincurrentProjectionList=param.get('projected shells for detecting spincurrent',[]),
+                              responseFermiIndexList=param.get('record fermi ids', None),
+                              finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
+                              fullCovariantDerivative=param.get('full covariant derivative', False),
+                              verbose=param.get('verbose', 0),)
+    return {"energies":calc.energies,
+            "projected sigma":calc.projected_sigma,"sigma":calc.projected_sigma[0,0],
+            "projected response":calc.projected_response,
+            "projected sigma channels":calc.projected_sigma_channels,
+            "projected response channels":calc.projected_response_channels,
+            "response fermi ids":calc.responseFermiIndexList,
+            "iq":param["iq"]}
+
+def solveOHC_LG_DM(param):
+    calc=OrbitalHallConductance_LG_DM(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
+                              eta=param.get('eta', 0.06582), kBT=param.get('kBT', 0.026),
+                              **{key: param[key] for key in ("collisionSpecification", "preparedCollision", "epcModel", "electronic", "states") if key in param},
+                              degen=param.get('degen', 1e-6), skip_low=param.get('skip low', False),
+                              fermiList=param['fermi'],
+                              currentProjectionList=param.get('projected shells for applying current',[]),
+                              orbitalcurrentProjectionList=param.get('projected shells for detecting orbitalcurrent',[]),
                               responseFermiIndexList=param.get('record fermi ids', None),
                               finiteTemperatureOccupations=param.get('finiteTemperatureOccupations', False),
                               fullCovariantDerivative=param.get('full covariant derivative', False),

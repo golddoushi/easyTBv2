@@ -12,7 +12,7 @@ from task import BZGridTask, BZLineTask
 #| Bulk tasks |
 #+------------+
 from task import solvePDOS, solveVelocity, solveVelocity_diag
-from task import solveSHC, solveSHC_LG_DM, solveSHC_diag, solveOHC, solveStGC, solveAHC, solveAHC_LG_DM
+from task import solveSHC, solveSHC_LG_DM, solveSHC_diag, solveOHC, solveOHC_LG_DM, solveStGC, solveAHC, solveAHC_LG_DM
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
 from task import solveSGC_LG_DM, solveOGC_LG_DM, solveStGC_LG_DM, solveSGC_VG_DM, solveOGC_VG_DM, solveStGC_VG_DM
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
@@ -81,7 +81,7 @@ def run():
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = 90/180*np.pi, 90/180*np.pi
+    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0/180*np.pi
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -231,28 +231,32 @@ def run():
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
     ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
+    Pt1,Pt2,Pt3,Pt4=[(0,(0,1,2,)),],[(1,(0,1,2,)),],[(2,(0,1,2,)),],[(3,(0,1,2,)),]
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
-    calc=BZGridTask(model, solveSGC_VG_DM,
+    calc=BZGridTask(model, solveOHC,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
-                              #{"source":bulkRegion, "target":bulkRegion},
+                              {"source":Pt1+Pt2+Pt3+Pt4, "target":Pt1+Pt2+Pt3+Pt4},
                            ],
                           'projected shells for detecting spincurrent':[],
+                          'projected shells for detecting orbitalcurrent':[
+                              {"source":Co1+Co2+Co3, "target":Co1+Co2+Co3},
+                          ],
                           'projected shells for detecting spin accumulation':[
-                              {"source":Co1, "target":Co1},
-                              {"source":Co2, "target":Co2},
-                              {"source":Co3, "target":Co3},
+                              #{"source":Co1, "target":Co1},
+                              #{"source":Co2, "target":Co2},
+                              #{"source":Co3, "target":Co3},
                           ],
                           'omega':omegaAxis,
                           'record frequency ids':recordOmegaIndexList,
                           'record fermi ids':recordFermiIndexList,
 
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
-                          "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
+                          "full covariant derivative": False, # include full covariant formalism for LG 2nd order density-matrix
 
-                          "finiteTemperatureOccupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
+                          "finiteTemperatureOccupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
                           "collisionSpecification": CollisionSpecification(mode="crta", constantLinewidth=0.06582), # collision model, currently only for DM based calculators
-                          "degen":1e-1,
+                          "degen":1e-6,
                     }, 
                     BZGrid=BZGrid,BZSymm=BZSymm,
                     mode='run',
@@ -267,7 +271,7 @@ def run():
     for result_q in calc.results:
         #pdos+=result_q['PDOS']
         #energies[result_q['iq'][0]::calc.QGrid[0],result_q['iq'][1]::calc.QGrid[1],result_q['iq'][2]::calc.QGrid[2]]=result_q['energies']
-        if False and 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
+        if 'projected response' in result_q and np.prod(result_q['projected response'].shape[6:8]) > 0:
             if responseFunction is None:
                 local_response = result_q['projected response']
                 responseFunction = np.zeros(local_response.shape[:3] + tuple(BZGrid) + local_response.shape[6:],
@@ -299,7 +303,7 @@ def run():
             fout.write("\n")
     exit()'''
     
-    '''
+    #'''
     # output (possibly symmetrized) 3-rank conductance
     sigma/=len(calc.results)
     with open("%s/spinHallConductance.txt"%mainDir,"w") as fout:
@@ -319,7 +323,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    #'''
+    '''
     # output projected 2-rank conductance
     projected_sigma/=len(calc.results)
     with open("%s/secondOrderTensor.txt"%mainDir,"w") as fout:
