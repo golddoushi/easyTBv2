@@ -10,6 +10,8 @@ import io
 import json
 from pathlib import Path
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
 
 import numpy as np
 from threadpoolctl import threadpool_limits
@@ -18,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from examples.orbital_torque.orbital_hall_source import build_model
 from calculator import (CollisionSpecification, OrbitalGalvanicConductivity_LG_DM,
                         SpinGalvanicConductivity_LG_DM)
+from calculator.response_stages import DensityMatrixResponse
+from calculator.density_matrix import LengthGaugeFirstOrderDMKernel
 
 
 def build_ribbon(directory, width=12, tsp=0.7):
@@ -38,7 +42,7 @@ def build_ribbon(directory, width=12, tsp=0.7):
     return model
 
 
-def calculate_profile(model, grid, fermi, kbt=0.05, linewidth=0.05, batch_size=2):
+def calculate_profile_projected(model, grid, fermi, kbt=0.05, linewidth=0.05, batch_size=2):
     """Small batches limit projector memory; all batches reuse the same band states.
 
     Returned local axes: layer (in increasing y), Fermi, field, moment.
@@ -71,6 +75,88 @@ def calculate_profile(model, grid, fermi, kbt=0.05, linewidth=0.05, batch_size=2
     return result
 
 
+def _density_profile(model, grid, fermi, kbt, linewidth, offset=0.):
+    """Use the established first-order kernel once, then trace all local moments.
+
+    Tr(rho_band U^dagger O U) = Tr((U rho_band U^dagger) O).
+    Onsite operators are k independent, so the AO density can be averaged
+    before selecting rows. No spin symmetry or mirror cancellation is imposed.
+    """
+    if model.overlap or not np.all(model.iRvec[:, 1:] == 0):
+        raise ValueError('This example requires an orthogonal, x-periodic ribbon')
+    prepared = DensityMatrixResponse(model=model, kgrid=(grid, 1, 1),
+        kOffset=(offset, 0., 0.), fermiList=np.asarray(fermi), kBT=kbt,
+        collisionSpecification=CollisionSpecification('crta', constantLinewidth=linewidth))
+    kernel = LengthGaugeFirstOrderDMKernel(prepared.inputs,
+        full_covariant_derivative=True, finite_temperature_occupations=True,
+        collision=prepared.collision)
+    vectors = prepared.states.vectors
+    positions = np.asarray(model.posinfo['pos ions (cart.)'])
+    order = np.argsort(positions[:, 1])
+    result = dict(y_A=positions[order, 1].copy())
+    operators = {'orbital': -model.orbital, 'spin': -model.spin}  # gL=1, gS=2
+    # Require onsite operators; the optimization is not for nonlocal currents.
+    atom_map = model.iorb2iatomMap
+    different_atoms = atom_map[:, None] != atom_map[None, :]
+    for operator in operators.values():
+        if np.any(np.abs(operator[:, different_atoms]) > 1e-14):
+            raise ValueError('Local-density tracing requires onsite moment operators')
+    for name in operators:
+        for channel in ('I', 'E'):
+            result[f'{name}_{channel}'] = np.zeros((len(order), len(fermi), 3, 3))
+        result[f'{name}_total'] = np.zeros((len(fermi), 3, 3))
+    for fi, mu in enumerate(fermi):
+        state = kernel.fermi_state(fi, mu).at_frequency(0.)
+        for direction in range(3):
+            block = state.block(direction)
+            for channel, rho in block.rho1.items():
+                density = (vectors @ rho @ vectors.conj().swapaxes(-1, -2)).mean(axis=(0, 1, 2))
+                for name, operator in operators.items():
+                    result[f'{name}_total'][fi, direction] += np.einsum('ij,cji->c', density, operator).real
+                    for layer, atom in enumerate(order):
+                        ids = np.flatnonzero(atom_map == atom)
+                        local_rho = density[np.ix_(ids, ids)]
+                        local_op = operator[:, ids][:, :, ids]
+                        result[f'{name}_{channel}'][layer, fi, direction] = np.einsum('ij,cji->c', local_rho, local_op).real
+    for name in operators:
+        result[name] = result[f'{name}_I'] + result[f'{name}_E']
+    return result
+
+
+def effective_workers(grid, workers):
+    """Equal interleaved submeshes, each with at least three k points."""
+    return max(n for n in range(1, min(workers, grid // 3) + 1) if grid % n == 0)
+
+
+def calculate_profile(model, grid, fermi, kbt=0.05, linewidth=0.05,
+                      batch_size=2, workers=1, engine='density'):
+    """Same tensors as the projected reference, with optional parallel k meshes.
+
+    Only scalar CRTA is used here. This decomposition must not be applied to
+    a collision operator coupling different k points. BLAS stays single-threaded
+    to avoid workers x BLAS-thread oversubscription. Returned means are equally
+    weighted because submeshes have identical sizes.
+    """
+    if grid < 3 or workers < 1:
+        raise ValueError('grid >= 3 and workers >= 1 required')
+    with threadpool_limits(limits=1):
+        if engine == 'projected':
+            if workers != 1:
+                raise ValueError('The projected reference uses workers=1')
+            return calculate_profile_projected(model, grid, fermi, kbt, linewidth, batch_size)
+        if engine != 'density':
+            raise ValueError('engine must be density or projected')
+        count = effective_workers(grid, workers)
+        if count == 1:
+            return _density_profile(model, grid, fermi, kbt, linewidth)
+        def shard(index):
+            return _density_profile(model, grid // count, fermi, kbt, linewidth, index / grid)
+        with ThreadPoolExecutor(max_workers=count) as pool:
+            parts = list(pool.map(shard, range(count)))
+        return {key: parts[0][key] if key == 'y_A' else
+                sum(part[key] for part in parts) / count for key in parts[0]}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=Path('tmp/orbital_torque/ribbon'))
@@ -79,9 +165,14 @@ def main(argv=None):
     parser.add_argument('--fermi', type=float, nargs='+', default=[0.8])
     parser.add_argument('--kbt', type=float, default=0.05)
     parser.add_argument('--linewidth', type=float, default=0.05)
+    parser.add_argument('--workers', type=int, default=1, help='Parallel interleaved k meshes; BLAS threads fixed at one')
+    parser.add_argument('--engine', choices=['density', 'projected'], default='density',
+                        help='Reusable density kernel (fast) or original projected calculator reference')
     args = parser.parse_args(argv)
-    if args.width < 2 or min(args.grids) < 3:
+    if args.width < 2 or min(args.grids) < 3 or args.workers < 1:
         parser.error('width >= 2 and grids >= 3 required')
+    if args.engine == 'projected' and args.workers != 1:
+        parser.error('projected reference requires --workers 1')
     if not np.all(np.isfinite([args.kbt, args.linewidth, *args.fermi])) or min(args.kbt, args.linewidth) <= 0:
         parser.error('finite Fermi energies and positive finite kbt/linewidth required')
     args.output.mkdir(parents=True, exist_ok=True)
@@ -97,16 +188,21 @@ def main(argv=None):
     rows = []
     with threadpool_limits(limits=1):
         for grid in grids:
-            profile = calculate_profile(model, grid, args.fermi, args.kbt, args.linewidth)
+            start = perf_counter()
+            profile = calculate_profile(model, grid, args.fermi, args.kbt, args.linewidth,
+                                        workers=args.workers, engine=args.engine)
             arrays.update({f'{key}_n{grid}': value for key, value in profile.items()})
             chi = profile['orbital'][:, :, 0, 2]
-            row = dict(grid=grid, max_abs_orbital_Ex_z=float(np.max(np.abs(chi))),
+            row = dict(grid=grid, seconds=perf_counter()-start,
+                       effective_workers=effective_workers(grid, args.workers),
+                       max_abs_orbital_Ex_z=float(np.max(np.abs(chi))),
                        max_abs_spin=float(np.max(np.abs(profile['spin']))),
                        mirror_odd_residual=float(np.max(np.abs(chi + chi[::-1]))),
                        projection_sum_residual=float(np.max(np.abs(profile['orbital'].sum(axis=0)-profile['orbital_total']))))
             rows.append(row)
             print(json.dumps(row), flush=True)
-        baseline = calculate_profile(control, grids[-1], args.fermi, args.kbt, args.linewidth)
+        baseline = calculate_profile(control, grids[-1], args.fermi, args.kbt, args.linewidth,
+                                     workers=args.workers, engine=args.engine)
     arrays.update({f'control_{key}': value for key, value in baseline.items()})
     tolerance = 1e-9
     checks = dict(finite_orbital_response=bool(np.max(np.abs(chi)) > 1e-5),
@@ -116,7 +212,8 @@ def main(argv=None):
                   zero_net_orbital_Ex_z=bool(np.max(np.abs(profile['orbital_total'][:, 0, 2])) < tolerance),
                   no_mixing_zero_orbital=bool(np.max(np.abs(baseline['orbital'])) < tolerance),
                   no_mixing_zero_spin=bool(np.max(np.abs(baseline['spin'])) < tolerance))
-    summary = dict(width=args.width, bands=model.norbs, periodic_direction='x', open_direction='y',
+    summary = dict(width=args.width, bands=model.norbs, engine=args.engine, requested_workers=args.workers,
+                   periodic_direction='x', open_direction='y',
                    fermi_eV=args.fermi, kBT_eV=args.kbt, linewidth_eV=args.linewidth,
                    units='mu_B/(V/Angstrom) per atomic row per longitudinal unit cell',
                    local_tensor_axes=['layer_in_increasing_y', 'fermi', 'field', 'moment'],

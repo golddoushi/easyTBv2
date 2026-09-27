@@ -24,6 +24,8 @@ python examples/orbital_torque/orbital_ribbon.py
 
 ## Common experimental logic
 
+The ribbon supports reusable density evaluation and parallel k meshes.
+
 Use an unpolarized spinful s+p model without SOC as the source. Turn on atomic
 SOC only in the converter and explicit exchange only in the magnet when those
 stages are introduced. Keep interface hopping spin independent initially.

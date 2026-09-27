@@ -8,6 +8,8 @@ Defaults: 12 atomic rows along y, periodic x, Fermi energy 0.8 eV,
 `kBT=0.05 eV`, scalar CRTA linewidth `0.05 eV`, and k meshes `(64,1,1)`
 and `(128,1,1)`. The Hamiltonian has 8 bands per row. Specify `--width`,
 `--grids`, `--fermi`, `--kbt`, `--linewidth`, or `--output` to vary these.
+The default `--engine density` reuses one response density for all rows.
+`--workers 4` enables parallel k submeshes; the default is one worker.
 
 ## Construction and measured response
 
@@ -17,7 +19,7 @@ y bonds, removes only inter-supercell y bonds, and leaves x periodic. The
 atomic row spacing and x repeat length are both 3 Angstrom. Neither SOC nor
 exchange is present. The electric field is uniform and points along x.
 
-For each row i, the existing `OrbitalGalvanicConductivity_LG_DM` calculates
+For each row i, the response agrees with `OrbitalGalvanicConductivity_LG_DM`:
 
 ```text
 chi_i = d <mu_L,z(i)> / d E_x
@@ -27,9 +29,12 @@ mu_L(i) = {P_i, mu_L}/2,  mu_L/mu_B = -L/hbar
 `P_i` selects both s and p shells of that atom, including both spins.
 Identical source and target projectors implement the local observable.
 Since the atomic orbital operator is onsite, this is simply its block on row i.
-The model is diagonalized once per mesh and band states are reused between
-small projector batches, limiting memory usage. The spin counterpart uses
-`SpinGalvanicConductivity_LG_DM` with the same projectors.
+The original projected calculators remain available with `--engine projected`.
+The default path uses their established `LengthGaugeFirstOrderDMKernel`,
+transforms each I/E density to the local orbital basis once, averages over k,
+and traces all onsite orbital and spin moments. This avoids repeating density
+preparation and dense projectors for every pair of rows. No response formula,
+spin cancellation, or mirror symmetry is imposed by the optimization.
 
 Both intraband and interband density channels are included. The stored local
 tensor axes are `[layer,fermi,field,moment]`, so `[:, :, 0, 2]` is the requested
