@@ -3,13 +3,13 @@
 Run from the repository root:
 
 ```text
-python examples/orbital_hall_source.py
+python examples/orbital_torque/orbital_hall_source.py
 ```
 
 For a quick calculation at one metallic filling:
 
 ```text
-python examples/orbital_hall_source.py --grids 48 96 --fermi 0.8 --output tmp/orbital_hall_source_quick
+python examples/orbital_torque/orbital_hall_source.py --grids 24 48 --fermi 0.8 --output tmp/orbital_torque/source_quick
 ```
 
 The example uses `OrbitalHallConductance_LG_DM` and
@@ -89,7 +89,7 @@ all orbital hybridization in this model. A failed check raises an error after
 saving the diagnostic results. Custom Fermi lists outside the active bands
 can legitimately fail the finite-OHC check.
 
-The default run gives, at Fermi energy 0.8 eV:
+The reference run with `--grids 48 96 192` gives, at Fermi energy 0.8 eV:
 
 | Mesh | OHC, Ex to Jy with z polarization (native) | Maximum absolute SHC, all fillings/components |
 | --- | ---: | ---: |
@@ -103,7 +103,8 @@ linewidth, not a claim about their zero limits. Exact floating-point zero
 SHC occurred in this run; other BLAS/eigensolver implementations may leave
 roundoff residuals. The analytic symmetry establishes the strict zero.
 
-Outputs in `tmp/orbital_hall_source/`:
+Outputs in `tmp/orbital_torque/source/` (the earlier run remains in
+`tmp/orbital_hall_source/`):
 
 - `model/` and `no_hybridization/`: reproducible POSCAR and hr model inputs.
 - `responses.npz`: full tensors and I/E channels for every mesh and control.

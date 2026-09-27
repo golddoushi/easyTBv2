@@ -1,6 +1,6 @@
 """Spin-independent square-lattice s+p source: finite OHC and zero SHC.
 
-Run from any directory: python examples/orbital_hall_source.py
+From the repository root: python examples/orbital_torque/orbital_hall_source.py
 Uses the established LG dc density-matrix calculators, without SOC, exchange,
 post-processing cancellation, or a spinless substitute for the spinful model.
 See README_orbital_hall_source.md for conventions and interpretation.
@@ -15,7 +15,7 @@ import sys
 import numpy as np
 from threadpoolctl import threadpool_limits
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from system import System_tb
 from calculator import (CollisionSpecification, OrbitalHallConductance_LG_DM,
                         SpinHallConductance_LG_DM)
@@ -79,8 +79,8 @@ def calculate(model, grid, fermi, kbt=0.05, linewidth=0.05):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path, default=Path('tmp/orbital_hall_source'))
-    parser.add_argument('--grids', type=int, nargs='+', default=[12, 24, 48,])
+    parser.add_argument('--output', type=Path, default=Path('tmp/orbital_torque/source'))
+    parser.add_argument('--grids', type=int, nargs='+', default=[48, 96, 192,])
     parser.add_argument('--fermi', type=float, nargs='+', default=np.linspace(-3.5, 2.0, 56).tolist())
     parser.add_argument('--kbt', type=float, default=0.05)
     parser.add_argument('--linewidth', type=float, default=0.05)
