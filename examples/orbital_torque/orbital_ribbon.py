@@ -42,7 +42,7 @@ def build_ribbon(directory, width=12, tsp=0.7):
     return model
 
 
-def calculate_profile_projected(model, grid, fermi, kbt=0.05, linewidth=0.05, batch_size=2):
+def calculate_profile_projected(model, grid, fermi, kbt=0.05, linewidth=0.05, batch_size=2, drive_atoms=None):
     """Small batches limit projector memory; all batches reuse the same band states.
 
     Returned local axes: layer (in increasing y), Fermi, field, moment.
@@ -54,6 +54,8 @@ def calculate_profile_projected(model, grid, fermi, kbt=0.05, linewidth=0.05, ba
                    collisionSpecification=CollisionSpecification('crta', constantLinewidth=linewidth),
                    fullCovariantDerivative=True, finiteTemperatureOccupations=True)
     result = dict(y_A=positions[order, 1])
+    drive_projections = _drive_projections(model, drive_atoms)
+    drive_index = 1 if drive_projections else 0
     states = None
     for name, cls, key in [('orbital', OrbitalGalvanicConductivity_LG_DM, 'orbitalProjectionList'),
                            ('spin', SpinGalvanicConductivity_LG_DM, 'spinProjectionList')]:
@@ -64,18 +66,29 @@ def calculate_profile_projected(model, grid, fermi, kbt=0.05, linewidth=0.05, ba
                 # P_i O + O P_i over two: identical source/target projectors.
                 selection = [(int(atom), (0, 1))]
                 projections.append(dict(source=selection, target=selection))
-            calc = cls(states=states, **{key: projections}, **options)
+            calc = cls(states=states, currentProjectionList=drive_projections, **{key: projections}, **options)
             states = calc.states
-            chunks.setdefault(name, []).append(calc.projected_sigma[0, 1:].copy())
-            result[f'{name}_total'] = calc.sigma.copy()
+            chunks.setdefault(name, []).append(calc.projected_sigma[drive_index, 1:].copy())
+            result[f'{name}_total'] = calc.projected_sigma[drive_index, 0].copy()
             for channel, values in calc.projected_sigma_channels.items():
-                chunks.setdefault(f'{name}_{channel}', []).append(values[0, 1:].copy())
+                chunks.setdefault(f'{name}_{channel}', []).append(values[drive_index, 1:].copy())
             del calc
         result.update({key: np.concatenate(value, axis=0) for key, value in chunks.items()})
     return result
 
 
-def _density_profile(model, grid, fermi, kbt, linewidth, offset=0.):
+def _drive_projections(model, drive_atoms):
+    """Regional drive P v P, matching the established projected-current API."""
+    if drive_atoms is None:
+        return []
+    atoms = list(drive_atoms)
+    if not atoms or len(set(atoms)) != len(atoms) or any(a < 0 or a >= len(model.atomicOrbInfoList) for a in atoms):
+        raise ValueError('drive_atoms must be a nonempty set of valid atom indices')
+    selection = [(int(a), tuple(range(len(model.atomicOrbInfoList[a]['orbital index'])))) for a in atoms]
+    return [dict(source=selection, target=selection)]
+
+
+def _density_profile(model, grid, fermi, kbt, linewidth, offset=0., drive_atoms=None):
     """Use the established first-order kernel once, then trace all local moments.
 
     Tr(rho_band U^dagger O U) = Tr((U rho_band U^dagger) O).
@@ -86,7 +99,9 @@ def _density_profile(model, grid, fermi, kbt, linewidth, offset=0.):
         raise ValueError('This example requires an orthogonal, x-periodic ribbon')
     prepared = DensityMatrixResponse(model=model, kgrid=(grid, 1, 1),
         kOffset=(offset, 0., 0.), fermiList=np.asarray(fermi), kBT=kbt,
+        velocityProjectionList=_drive_projections(model, drive_atoms),
         collisionSpecification=CollisionSpecification('crta', constantLinewidth=linewidth))
+    drive_velocity = prepared.projected_velocity_K_list[0] if drive_atoms is not None else None
     kernel = LengthGaugeFirstOrderDMKernel(prepared.inputs,
         full_covariant_derivative=True, finite_temperature_occupations=True,
         collision=prepared.collision)
@@ -108,7 +123,7 @@ def _density_profile(model, grid, fermi, kbt, linewidth, offset=0.):
     for fi, mu in enumerate(fermi):
         state = kernel.fermi_state(fi, mu).at_frequency(0.)
         for direction in range(3):
-            block = state.block(direction)
+            block = state.block(direction, drive_velocity=drive_velocity)
             for channel, rho in block.rho1.items():
                 density = (vectors @ rho @ vectors.conj().swapaxes(-1, -2)).mean(axis=(0, 1, 2))
                 for name, operator in operators.items():
@@ -129,7 +144,7 @@ def effective_workers(grid, workers):
 
 
 def calculate_profile(model, grid, fermi, kbt=0.05, linewidth=0.05,
-                      batch_size=2, workers=1, engine='density'):
+                      batch_size=2, workers=1, engine='density', drive_atoms=None):
     """Same tensors as the projected reference, with optional parallel k meshes.
 
     Only scalar CRTA is used here. This decomposition must not be applied to
@@ -143,14 +158,14 @@ def calculate_profile(model, grid, fermi, kbt=0.05, linewidth=0.05,
         if engine == 'projected':
             if workers != 1:
                 raise ValueError('The projected reference uses workers=1')
-            return calculate_profile_projected(model, grid, fermi, kbt, linewidth, batch_size)
+            return calculate_profile_projected(model, grid, fermi, kbt, linewidth, batch_size, drive_atoms)
         if engine != 'density':
             raise ValueError('engine must be density or projected')
         count = effective_workers(grid, workers)
         if count == 1:
-            return _density_profile(model, grid, fermi, kbt, linewidth)
+            return _density_profile(model, grid, fermi, kbt, linewidth, drive_atoms=drive_atoms)
         def shard(index):
-            return _density_profile(model, grid // count, fermi, kbt, linewidth, index / grid)
+            return _density_profile(model, grid // count, fermi, kbt, linewidth, index / grid, drive_atoms)
         with ThreadPoolExecutor(max_workers=count) as pool:
             parts = list(pool.map(shard, range(count)))
         return {key: parts[0][key] if key == 'y_A' else

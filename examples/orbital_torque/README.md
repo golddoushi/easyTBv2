@@ -9,17 +9,18 @@ under `tmp/orbital_torque/`; model inputs and response data are regenerated ther
 | --- | --- | --- |
 | 1 | Periodic spin-independent square s+p source: finite OHC, zero SHC? | [orbital_hall_source.py](orbital_hall_source.py), [notes](README_orbital_hall_source.md) |
 | 2 | Finite source ribbon: does a longitudinal field induce opposite edge orbital moments? | [orbital_ribbon.py](orbital_ribbon.py), [notes](README_orbital_ribbon.md) |
-| 3 (planned) | Source plus SOC converter: distinguish transmitted orbital current and local spin conversion | Not implemented |
+| 3 | N-C ribbon: orbital/spin accumulation with mixing, SOC, disconnected-interface and N-only-drive controls | [orbital_nc_ribbon.py](orbital_nc_ribbon.py), [notes](README_nc_ribbon.md) |
 | 4 (planned) | Source, converter, and exchange-only magnet: measure exchange torque and spin balance | Not implemented |
 
-The ribbon is an intermediate step inserted before the original two-zone SOC
-junction. It contains no converter or magnetic region yet. Stages 1 and 2 share
+The step-2 ribbon is an intermediate step before the two-zone SOC junction.
+It contains no converter or magnetic region. Stages 1 and 2 share
 the same model builder and parameters; the ribbon is a transverse supercell of
 the source with its transverse boundary hoppings removed.
 
 ```text
 python examples/orbital_torque/orbital_hall_source.py
 python examples/orbital_torque/orbital_ribbon.py
+python examples/orbital_torque/orbital_nc_ribbon.py --workers 8
 ```
 
 ## Common experimental logic
