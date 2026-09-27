@@ -136,26 +136,39 @@ def main(argv=None):
     np.savetxt(args.output / 'profile.csv', records, delimiter=',',
                header='layer,y_A,fermi_eV,orbital_Ex_z,orbital_I_Ex_z,orbital_E_Ex_z,max_abs_spin,control_orbital_Ex_z', comments='')
     (args.output / 'summary.json').write_text(json.dumps(summary, indent=2)+'\n', encoding='utf-8')
+    plot_profile(profile, baseline, args.fermi, grids[-1], args.output)
+    print(json.dumps(summary, indent=2))
+    if not all(checks.values()):
+        raise RuntimeError('Ribbon validation failed; inspect summary.json')
+
+
+def plot_profile(profile, baseline, fermi_list, grid, output):
+    """Show raw control values on the same axes; never round them to zero."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(2, 1, figsize=(7, 6), sharex=True, constrained_layout=True)
-    for fi, fermi in enumerate(args.fermi):
-        ax[0].plot(np.arange(args.width), chi[:, fi], 'o-', label=f'EF={fermi:g} eV')
-        ax[1].plot(np.arange(args.width), np.max(np.abs(profile['spin'][:, fi]), axis=(1, 2)), 'o-')
-    ax[0].axhline(0, color='k', lw=0.7)
+    width = profile['orbital'].shape[0]
+    layers = np.arange(width)
+    for fi, fermi in enumerate(fermi_list):
+        line, = ax[0].plot(layers, profile['orbital'][:, fi, 0, 2], 'o-', label=f'Mixing on, EF={fermi:g} eV')
+        ax[0].plot(layers, baseline['orbital'][:, fi, 0, 2], 's--', color=line.get_color(),
+                   markerfacecolor='white', label=f'Mixing off (control), EF={fermi:g} eV')
+        ax[1].plot(layers, np.max(np.abs(profile['spin'][:, fi]), axis=(1, 2)), 'o-',
+                   color=line.get_color(), label=f'Mixing on, EF={fermi:g} eV')
+        ax[1].plot(layers, np.max(np.abs(baseline['spin'][:, fi]), axis=(1, 2)), 's--',
+                   color=line.get_color(), markerfacecolor='white', label=f'Mixing off, EF={fermi:g} eV')
     ax[0].set_ylabel(r'$\delta\mu_{L,z}/E_x$ [$\mu_B$ / (V/$\AA$)]')
-    ax[0].set_title(f'Orbital accumulation: {args.width} rows, Nk={grids[-1]}')
+    ax[0].set_title(f'Orbital accumulation: {width} rows, Nk={grid}')
     ax[0].legend()
     ax[1].set_ylabel(r'Max spin response [$\mu_B$ / (V/$\AA$)]')
     ax[1].set_xlabel('Atomic row (increasing y)')
+    ax[1].legend(fontsize=8)
+    ax[1].set_title('Spin response: numerical roundoff', fontsize=10)
     for axis in ax:
         axis.grid(alpha=0.25)
-    fig.savefig(args.output / 'profile.png', dpi=160)
+    fig.savefig(Path(output) / 'profile.png', dpi=160)
     plt.close(fig)
-    print(json.dumps(summary, indent=2))
-    if not all(checks.values()):
-        raise RuntimeError('Ribbon validation failed; inspect summary.json')
 
 
 if __name__ == '__main__':
