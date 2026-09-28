@@ -214,6 +214,252 @@ class Energy(Calculator, ElectronicAlgebra):
         if self.verbose: print(f"Low-lying bands skipped, {self.ibmin=}")
 
 
+class Velocity(Energy):
+    def __init__(self, velocityProjectionList=(), highOrderVelocity=False, exchangeVelocity=False,
+                 *, electronic=None, **kwarg) -> None:
+        '''
+        Compute velocity matrix in original basis and eigen-basis
+        And the velocity projected in specific basis
+
+        Indexing:
+        self.RHam_K[ik1, ik2, ik3, idirection, iorb, jorb] gives velocity matrix in original basis,
+        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
+
+        self.velocity_K[ik1, ik2, ik3, idirection, ieig, jeig] gives velocity matrix in eigen-basis.
+        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
+
+        self.projected_velocity_K_list[iproj] gives each projected velocity matrix
+        '''
+        self.exchangeVelocity=exchangeVelocity
+        highOrderVelocity=bool(highOrderVelocity or exchangeVelocity)
+        if electronic is not None:
+            kwarg['states'] = electronic.states
+        super().__init__(**kwarg)
+        if (electronic is not None and (not highOrderVelocity or electronic.w_K is not None)
+                and (not exchangeVelocity or electronic.exchangeVelocity)
+                and tuple(velocityProjectionList) == electronic.velocityProjectionList):
+            self.electronic = electronic
+            restore_vertices(self, electronic)
+            return
+
+        RH_R_W=self.model.RHam_R*self.phaseFactorR[:,None,None,None]
+        self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+        AA_R_W=self.model.AA_R_W*self.phaseFactorR[:,None,None,None] # Berry connection in local gauge
+        AA_R_W_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+        for iR, Rvec in enumerate(self.model.iRvec):
+            index = tuple(np.asarray(Rvec) % self.kgrid)
+            self.RHam_R_intepolated[index]+=RH_R_W[iR]
+            AA_R_W_intepolated[index]+=AA_R_W[iR]
+        self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+        if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
+        vectors=self.vectors[:,:,:,None,:,:]
+        velocity_bare_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
+
+        # ==========================================================
+        # Gauge-Covariant Geometric Corrections for velocity
+        # ==========================================================
+        # v_a = H^(1)_a - i[r_a, H^(0)]
+        AA_K_W        =  np.fft.ifftn(AA_R_W_intepolated,axes=(0,1,2,))*np.prod(self.kgrid) # Berry connection in Bloch gauge
+        AA_K_H = vectors.conj().swapaxes(-2,-1) @ AA_K_W @ vectors # Berry connection in Hamiltonian gauge
+        # The position/Berry-connection operator is Hermitian. Small violations
+        # from the finite Wannier interpolation are strongly amplified by its
+        # k derivatives and would otherwise make the contact vertices acausal.
+        AA_K_H = (AA_K_H + AA_K_H.conj().swapaxes(-2,-1)) / 2
+        AA_K_H_dot_H = AA_K_H * self.energies[...,None,None,:]            # gauge correction term, the commutator [AA_K, Ham.]
+        self.velocity_K = velocity_bare_K - 1j*(AA_K_H_dot_H - AA_K_H_dot_H.conj().swapaxes(-2,-1)) # gauge-covariant velocity
+
+        if exchangeVelocity:
+            assert self.model.exchange_R is not None, "exchangeVelocity requires model.exchange_R; call model.getExchangeR first"
+            assert self.model.RExchange_R is not None, "RExchange_R is required; call model.getRExchange_R first"
+            assert self.model.RRExchange_R is not None, "RRExchange_R is required; call model.getRRExchange_R first"
+
+            exchange_R_W=self.model.exchange_R*self.phaseFactorR[:,None,None]
+            RExchange_R_W=self.model.RExchange_R*self.phaseFactorR[:,None,None,None]
+            RRExchange_R_W=self.model.RRExchange_R*self.phaseFactorR[:,None,None,None,None]
+
+            exchange_R_interpolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+            RExchange_R_interpolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+            RRExchange_R_interpolated=np.zeros(self.kgrid+(3,3,self.model.norbs,self.model.norbs),dtype=complex)
+            for iR,Rvec in enumerate(self.model.iRvec):
+                exchange_R_interpolated[tuple(Rvec)]=exchange_R_W[iR]
+                RExchange_R_interpolated[tuple(Rvec)]=RExchange_R_W[iR]
+                RRExchange_R_interpolated[tuple(Rvec)]=RRExchange_R_W[iR]
+
+            fft_scale=np.prod(self.kgrid)
+            self.exchange_K_AO=np.fft.ifftn(exchange_R_interpolated,axes=(0,1,2))*fft_scale
+            self.RExchange_K=1j*np.fft.ifftn(RExchange_R_interpolated,axes=(0,1,2))*fft_scale
+            self.RRExchange_K=-np.fft.ifftn(RRExchange_R_interpolated,axes=(0,1,2))*fft_scale
+            del exchange_R_interpolated,RExchange_R_interpolated,RRExchange_R_interpolated
+
+            vectors0=self.vectors
+            self.exchange_K=vectors0.conj().swapaxes(-2,-1) @ self.exchange_K_AO @ vectors0
+            vectors1=self.vectors[...,None,:,:]
+            self.velocity_xc_bare_K=vectors1.conj().swapaxes(-2,-1) @ self.RExchange_K @ vectors1
+            self.velocity_xc_K=self.velocity_xc_bare_K-1j*(AA_K_H@self.exchange_K[...,None,:,:]
+                -self.exchange_K[...,None,:,:]@AA_K_H)
+            vectors2=self.vectors[...,None,None,:,:]
+            self.w_xc_bare_K=vectors2.conj().swapaxes(-2,-1) @ self.RRExchange_K @ vectors2
+            del vectors0,vectors1,vectors2
+            if self.verbose==2: showElapsedTime(extraInfo=f"bare and first-order exchange velocity finished")
+
+        if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
+        # check hermity
+        #dconj=np.sum(abs(self.velocity_K.transpose((0,1,2,3,5,4)).conj()-self.velocity_K))
+        #assert dconj<1e-4, f"Hermity of velocity is not satisfied {dconj=}"
+
+        '''
+        # extra modifications to velocity due to orbital overlaps
+        # according to Gemini, this part is not necessary since the effect is automatically included in the dipole correction
+        if self.model.overlap:
+            RO_R_W=self.model.RO_R
+            self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
+            RO_R_W=RO_R_W*self.phaseFactorR[:,None,None,None]
+            for iR, Rvec in enumerate(self.model.iRvec):
+                self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
+            self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
+            __UdOkU = (vectors.conj().swapaxes(-2,-1) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
+            self.velocity_K -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
+        #'''
+
+        self.projected_velocity_K_list=[]
+        for velocityProjection in velocityProjectionList:
+            proj1=projectionOperator(velocityProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
+            proj2=projectionOperator(velocityProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
+
+            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
+            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
+            self.projected_velocity_K_list.append((proj1_K@self.velocity_K@proj2_K + proj2_K@self.velocity_K@proj1_K)/2)
+
+        if highOrderVelocity:
+            RRH_R_W  = getattr(self.model, "RRHam_R", None)
+            RRRH_R_W = getattr(self.model, "RRRHam_R", None)
+            assert RRH_R_W is not None,  "RRHam_R is required for high order velocity,  execute getRRHam_R first"
+            assert RRRH_R_W is not None, "RRRHam_R is required for high order velocity, execute getRRRHam_R first"
+
+            RRH_R_intepolated  = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
+            RRRH_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
+
+            RRH_R_W  = RRH_R_W  * self.phaseFactorR[:, None, None, None, None]
+            RRRH_R_W = RRRH_R_W * self.phaseFactorR[:, None, None, None, None, None]
+
+            for iR, Rvec in enumerate(self.model.iRvec):
+                index = tuple(np.asarray(Rvec) % self.kgrid)
+                RRH_R_intepolated[index] += RRH_R_W[iR]
+                RRRH_R_intepolated[index] += RRRH_R_W[iR]
+
+            # w_K = d^2H/dk^2
+            RRHam_K  = -1 * np.fft.ifftn(RRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
+            vectors=self.vectors[:,:,:,None,None,:,:]
+            self.w_K = vectors.conj().swapaxes(-2,-1) @ RRHam_K @ vectors
+
+            # u_K = d^3H/dk^3
+            RRRHam_K = -1j * np.fft.ifftn(RRRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
+            vectors=self.vectors[:,:,:,None,None,None,:,:]
+            self.u_K = vectors.conj().swapaxes(-2,-1) @ RRRHam_K @ vectors
+
+            # ==============================================================
+            # Gauge-Covariant Geometric Corrections for high order velocity
+            # ==============================================================
+            def comm(A, B):
+                # Helper to compute commutator [A, B] broadcasting over k-grid
+                return A @ B - B @ A
+
+            # Ordinary k derivatives of the Wannier-gauge connection.
+            # These terms vanish in the diagonal tight-binding limit, but are
+            # required when the off-diagonal position matrix depends on k.
+            r1_R_intepolated = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
+            for iR, Rvec in enumerate(self.model.iRvec):
+                R_cart = Rvec @ self.model.lattice
+                r1_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += 1j * R_cart[:, None, None, None] * AA_R_W[iR][None, :, :, :]
+
+            r1_K_AO = np.fft.ifftn(r1_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
+            vectors1 = self.vectors[..., None, None, :, :]
+            connectionDerivative1 = vectors1.conj().swapaxes(-2, -1) @ r1_K_AO @ vectors1
+            connectionDerivative1 = (
+                connectionDerivative1 + connectionDerivative1.conj().swapaxes(-2,-1)
+            ) / 2
+            del r1_R_intepolated, r1_K_AO, vectors1
+
+            # Construct the larger second-derivative tensor only after the
+            # first-derivative FFT buffers have been released.
+            r2_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
+            for iR, Rvec in enumerate(self.model.iRvec):
+                R_cart = Rvec @ self.model.lattice
+                r2_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += (
+                    -R_cart[:, None, None, None, None] * R_cart[None, :, None, None, None] * AA_R_W[iR][None, None, :, :, :]
+                )
+            r2_K_AO = np.fft.ifftn(r2_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
+            vectors2 = self.vectors[..., None, None, None, :, :]
+            connectionDerivative2 = vectors2.conj().swapaxes(-2, -1) @ r2_K_AO @ vectors2
+            connectionDerivative2 = (
+                connectionDerivative2 + connectionDerivative2.conj().swapaxes(-2,-1)
+            ) / 2
+            del r2_R_intepolated, r2_K_AO, vectors2
+
+            # Store the bare spatial moments and H in the eigenbasis.
+            H0 = self.energies[..., :, None] * np.eye(self.energies.shape[-1], dtype=complex)
+            H1 = velocity_bare_K
+            H2 = self.w_K.copy()
+
+            # partialV_ab = partial_b v_a
+            partialV = np.zeros_like(self.w_K)
+            for a in range(3):
+                for b in range(3):
+                    partialV[..., a, b, :, :] = (
+                        H2[..., a, b, :, :]
+                        - 1j * comm(connectionDerivative1[..., b, a, :, :], H0)
+                        - 1j * comm(AA_K_H[..., a, :, :], H1[..., b, :, :])
+                    )
+                    # w_ab = D_b v_a
+                    self.w_K[..., a, b, :, :] = (partialV[..., a, b, :, :]
+                        - 1j * comm(AA_K_H[..., b, :, :], self.velocity_K[..., a, :, :])
+                    )
+
+            # w_ab multiplies the commuting product A_a A_b and is the
+            # Hessian/contact-current vertex. Enforce its exact Hermiticity
+            # and Cartesian symmetry after the covariant construction.
+            self.w_K = (self.w_K + self.w_K.conj().swapaxes(-2,-1)) / 2
+            self.w_K = (self.w_K + self.w_K.swapaxes(-4,-3)) / 2
+
+            if exchangeVelocity:
+                exchange0=self.exchange_K
+                exchange1=self.velocity_xc_bare_K
+                exchange2=self.w_xc_bare_K
+                self.w_xc_K=np.zeros_like(exchange2)
+                for a in range(3):
+                    for b in range(3):
+                        partialVxc=(exchange2[...,a,b,:,:]
+                            -1j*comm(connectionDerivative1[...,b,a,:,:],exchange0)
+                            -1j*comm(AA_K_H[...,a,:,:],exchange1[...,b,:,:]))
+                        self.w_xc_K[...,a,b,:,:]=(partialVxc
+                            -1j*comm(AA_K_H[...,b,:,:],self.velocity_xc_K[...,a,:,:]))
+                if self.verbose==2: showElapsedTime(extraInfo=f"second-order exchange velocity finished")
+
+            # u_abc = D_c w_ab.  connectionDerivative1[..., b, a]
+            # is partial_b A_a, and connectionDerivative2[..., c, b, a]
+            # is partial_c partial_b A_a.
+            H3 = self.u_K.copy()
+            for a in range(3):
+                for b in range(3):
+                    for c in range(3):
+                        partial2V = (H3[..., a, b, c, :, :]
+                            - 1j * comm(connectionDerivative2[..., c, b, a, :, :], H0)
+                            - 1j * comm(connectionDerivative1[..., b, a, :, :], H1[..., c, :, :])
+                            - 1j * comm(connectionDerivative1[..., c, a, :, :], H1[..., b, :, :])
+                            - 1j * comm(AA_K_H[..., a, :, :], H2[..., b, c, :, :])
+                        )
+                        partialW = (partial2V
+                            - 1j * comm(connectionDerivative1[..., c, b, :, :], self.velocity_K[..., a, :, :])
+                            - 1j * comm(AA_K_H[..., b, :, :], partialV[..., a, c, :, :])
+                        )
+                        self.u_K[..., a, b, c, :, :] = (partialW
+                            - 1j * comm(AA_K_H[..., c, :, :], self.w_K[..., a, b, :, :])
+                        )
+            del connectionDerivative1, connectionDerivative2, partialV
+            if self.verbose==2: showElapsedTime(extraInfo=f"higer order velocity modification with position operators finished")
+
+        self.electronic = vertices_from_stage(self, velocityProjectionList)
+
 class Spin(Energy):
     def __init__(self, spinProjectionList=[], gS:float=2.0, _computeSpin=True, **kwarg,):
         '''
@@ -243,7 +489,6 @@ class Spin(Energy):
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_spin_K_list.append((proj1_K@self.spin_K + self.spin_K@proj2_K)/2)
 
-
 class Orbital(Energy):
     def __init__(self, orbitalProjectionList=[], gL:float=1.0, **kwarg):
         '''
@@ -272,6 +517,77 @@ class Orbital(Energy):
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_orbital_K_list.append((proj1_K@self.orbital_K + self.orbital_K@proj2_K)/2)
 
+class Orbital_BlochSelfRotate(Velocity):
+    def __init__(self, orbitalProjectionList=[], _computeOrbitalBlochSelfRotate=True, **kwarg,):
+        '''
+        Compute the Bloch-state self-rotation
+        orbital magnetic-moment matrix from Eq. S9 of PRL 136, 236302
+        (2026).
+
+        The velocity matrices used by this code are dH/dk = hbar*v_phys in
+        eV*angstrom. ``orbital_K`` is returned in units of mu_B:
+
+        orbital_K[ik1, ik2, ik3, idirection, iband, jband].
+        '''
+        super().__init__(**kwarg)
+        if not _computeOrbitalBlochSelfRotate:
+            return
+
+        nbands = self.energies.shape[-1]
+        moment_sum = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
+        cross_pairs = ((1, 2), (2, 0), (0, 1))
+
+        for p in range(nbands):
+            gap_p_band = self.energies[..., p, None] - self.energies
+            valid_gap = np.abs(gap_p_band) > self.degen
+            inverse_gap = np.zeros_like(gap_p_band)
+            inverse_gap[valid_gap] = 1.0 / gap_p_band[valid_gap]
+
+            weight = inverse_gap[..., :, None] + inverse_gap[..., None, :]
+            weight *= valid_gap[..., :, None] & valid_gap[..., None, :]
+
+            for component, (a, b) in enumerate(cross_pairs):
+                v_a_lp = self.velocity_K[..., a, :, p]
+                v_b_lp = self.velocity_K[..., b, :, p]
+                v_a_pn = self.velocity_K[..., a, p, :]
+                v_b_pn = self.velocity_K[..., b, p, :]
+                velocity_cross = (
+                    v_a_lp[..., :, None] * v_b_pn[..., None, :]
+                    - v_b_lp[..., :, None] * v_a_pn[..., None, :]
+                )
+                moment_sum[..., component, :, :] += weight * velocity_cross
+
+        # hbar^2/(2*m_e), expressed in eV*angstrom^2.  With velocity_K=dH/dk,
+        # Eq. S9 divided by mu_B has the prefactor 1/(4*i*constant).
+        hbar2_over_2me = hbar**2 / (2 * electron_mass * elementary_charge * angstrom**2)
+        self.orbital_K = moment_sum / (4j * hbar2_over_2me)
+        self.orbital_K = (
+            self.orbital_K +
+            self.orbital_K.conj().swapaxes(-2, -1)
+        ) / 2
+
+        self.projected_orbital_K_list = []
+        for orbitalProjection in orbitalProjectionList:
+            proj1 = projectionOperator(
+                orbitalProjection['source'],
+                self.model.atomicOrbInfoList,
+                self.model.norbs,
+            )
+            proj2 = projectionOperator(
+                orbitalProjection['target'],
+                self.model.atomicOrbInfoList,
+                self.model.norbs,
+            )
+            proj1_K = self.projectorInEigenBasis(proj1)[..., None, :, :]
+            proj2_K = self.projectorInEigenBasis(proj2)[..., None, :, :]
+            projected_orbital_K = (
+                proj1_K @ self.orbital_K
+                + self.orbital_K @ proj2_K
+            ) / 2
+            self.projected_orbital_K_list.append(projected_orbital_K)
+
+        if self.verbose == 2:
+            showElapsedTime(extraInfo="Bloch self-rotation magnetic moment in eig.-basis finished")
 
 class SpinTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
@@ -360,7 +676,6 @@ class SpinTorque(Spin):
             proj2_K = self.projectorInEigenBasis(proj2)[..., None, None, :, :]
             self.projected_spinTorqueE_K_list.append((proj1_K @ self.spinTorqueE_K + self.spinTorqueE_K @ proj2_K) / 2)
         if self.verbose==2: showElapsedTime(extraInfo="Dipole corrected spin torque in eig.-basis finished")
-
 
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
@@ -477,7 +792,6 @@ class SpinExchangeTorque(Spin):
         self.projected_spinTorqueE_K_list=self.projected_spinExchangeTorqueE_K_list
         if self.verbose==2: showElapsedTime(extraInfo="zero dipole corrected spin exchange torque finished")
 
-
 class OrbitalTorque(Orbital):
     def __init__(self, orbitalTorqueProjectionList=[], **kwarg):
         '''
@@ -561,254 +875,6 @@ class OrbitalTorque(Orbital):
             self.projected_orbitalTorqueE_K_list.append((proj1_K @ self.orbitalTorqueE_K + self.orbitalTorqueE_K @ proj2_K) / 2)
         if self.verbose==2: showElapsedTime(extraInfo="dipole corrected orbital torque in eig.-basis finished")
 
-
-class Velocity(Energy):
-    def __init__(self, velocityProjectionList=(), highOrderVelocity=False, exchangeVelocity=False,
-                 *, electronic=None, **kwarg) -> None:
-        '''
-        Compute velocity matrix in original basis and eigen-basis
-        And the velocity projected in specific basis
-
-        Indexing:
-        self.RHam_K[ik1, ik2, ik3, idirection, iorb, jorb] gives velocity matrix in original basis,
-        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
-
-        self.velocity_K[ik1, ik2, ik3, idirection, ieig, jeig] gives velocity matrix in eigen-basis.
-        idirection can be 0 | 1 | 2 corresponding to x | y | z direction.
-
-        self.projected_velocity_K_list[iproj] gives each projected velocity matrix
-        '''
-        self.exchangeVelocity=exchangeVelocity
-        highOrderVelocity=bool(highOrderVelocity or exchangeVelocity)
-        if electronic is not None:
-            kwarg['states'] = electronic.states
-        super().__init__(**kwarg)
-        if (electronic is not None and (not highOrderVelocity or electronic.w_K is not None)
-                and (not exchangeVelocity or electronic.exchangeVelocity)
-                and tuple(velocityProjectionList) == electronic.velocityProjectionList):
-            self.electronic = electronic
-            restore_vertices(self, electronic)
-            return
-        
-        RH_R_W=self.model.RHam_R*self.phaseFactorR[:,None,None,None]
-        self.RHam_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        AA_R_W=self.model.AA_R_W*self.phaseFactorR[:,None,None,None] # Berry connection in local gauge
-        AA_R_W_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-        for iR, Rvec in enumerate(self.model.iRvec):
-            index = tuple(np.asarray(Rvec) % self.kgrid)
-            self.RHam_R_intepolated[index]+=RH_R_W[iR]
-            AA_R_W_intepolated[index]+=AA_R_W[iR]
-        self.RHam_K= 1j*np.fft.ifftn(self.RHam_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-        if self.verbose==2: showElapsedTime(extraInfo=f"FFT RHam_R to RHam_K to calc. velocity in ao-basis finished")
-        vectors=self.vectors[:,:,:,None,:,:]
-        velocity_bare_K=vectors.conj().swapaxes(-2,-1) @ self.RHam_K @ vectors
-
-        # ==========================================================
-        # Gauge-Covariant Geometric Corrections for velocity
-        # ==========================================================
-        # v_a = H^(1)_a - i[r_a, H^(0)]
-        AA_K_W        =  np.fft.ifftn(AA_R_W_intepolated,axes=(0,1,2,))*np.prod(self.kgrid) # Berry connection in Bloch gauge
-        AA_K_H = vectors.conj().swapaxes(-2,-1) @ AA_K_W @ vectors # Berry connection in Hamiltonian gauge
-        # The position/Berry-connection operator is Hermitian. Small violations
-        # from the finite Wannier interpolation are strongly amplified by its
-        # k derivatives and would otherwise make the contact vertices acausal.
-        AA_K_H = (AA_K_H + AA_K_H.conj().swapaxes(-2,-1)) / 2
-        AA_K_H_dot_H = AA_K_H * self.energies[...,None,None,:]            # gauge correction term, the commutator [AA_K, Ham.]
-        self.velocity_K = velocity_bare_K - 1j*(AA_K_H_dot_H - AA_K_H_dot_H.conj().swapaxes(-2,-1)) # gauge-covariant velocity
-
-        if exchangeVelocity:
-            assert self.model.exchange_R is not None, "exchangeVelocity requires model.exchange_R; call model.getExchangeR first"
-            assert self.model.RExchange_R is not None, "RExchange_R is required; call model.getRExchange_R first"
-            assert self.model.RRExchange_R is not None, "RRExchange_R is required; call model.getRRExchange_R first"
-
-            exchange_R_W=self.model.exchange_R*self.phaseFactorR[:,None,None]
-            RExchange_R_W=self.model.RExchange_R*self.phaseFactorR[:,None,None,None]
-            RRExchange_R_W=self.model.RRExchange_R*self.phaseFactorR[:,None,None,None,None]
-
-            exchange_R_interpolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
-            RExchange_R_interpolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-            RRExchange_R_interpolated=np.zeros(self.kgrid+(3,3,self.model.norbs,self.model.norbs),dtype=complex)
-            for iR,Rvec in enumerate(self.model.iRvec):
-                exchange_R_interpolated[tuple(Rvec)]=exchange_R_W[iR]
-                RExchange_R_interpolated[tuple(Rvec)]=RExchange_R_W[iR]
-                RRExchange_R_interpolated[tuple(Rvec)]=RRExchange_R_W[iR]
-
-            fft_scale=np.prod(self.kgrid)
-            self.exchange_K_AO=np.fft.ifftn(exchange_R_interpolated,axes=(0,1,2))*fft_scale
-            self.RExchange_K=1j*np.fft.ifftn(RExchange_R_interpolated,axes=(0,1,2))*fft_scale
-            self.RRExchange_K=-np.fft.ifftn(RRExchange_R_interpolated,axes=(0,1,2))*fft_scale
-            del exchange_R_interpolated,RExchange_R_interpolated,RRExchange_R_interpolated
-
-            vectors0=self.vectors
-            self.exchange_K=vectors0.conj().swapaxes(-2,-1) @ self.exchange_K_AO @ vectors0
-            vectors1=self.vectors[...,None,:,:]
-            self.velocity_xc_bare_K=vectors1.conj().swapaxes(-2,-1) @ self.RExchange_K @ vectors1
-            self.velocity_xc_K=self.velocity_xc_bare_K-1j*(AA_K_H@self.exchange_K[...,None,:,:]
-                -self.exchange_K[...,None,:,:]@AA_K_H)
-            vectors2=self.vectors[...,None,None,:,:]
-            self.w_xc_bare_K=vectors2.conj().swapaxes(-2,-1) @ self.RRExchange_K @ vectors2
-            del vectors0,vectors1,vectors2
-            if self.verbose==2: showElapsedTime(extraInfo=f"bare and first-order exchange velocity finished")
-
-        if self.verbose==2: showElapsedTime(extraInfo=f"velocity modification with position operators finished")
-        # check hermity
-        #dconj=np.sum(abs(self.velocity_K.transpose((0,1,2,3,5,4)).conj()-self.velocity_K))
-        #assert dconj<1e-4, f"Hermity of velocity is not satisfied {dconj=}"
-
-        '''
-        # extra modifications to velocity due to orbital overlaps
-        # according to Gemini, this part is not necessary since the effect is automatically included in the dipole correction
-        if self.model.overlap:
-            RO_R_W=self.model.RO_R
-            self.RO_R_intepolated=np.zeros(self.kgrid+(3,self.model.norbs,self.model.norbs),dtype=complex)
-            RO_R_W=RO_R_W*self.phaseFactorR[:,None,None,None]
-            for iR, Rvec in enumerate(self.model.iRvec):
-                self.RO_R_intepolated[tuple(Rvec)]=RO_R_W[iR]
-            self.RO_K= 1j*np.fft.ifftn(self.RO_R_intepolated,axes=(0,1,2,))*np.prod(self.kgrid)
-            __UdOkU = (vectors.conj().swapaxes(-2,-1) @ self.RO_K @ vectors)*self.energies[...,None,:,None]
-            self.velocity_K -= (__UdOkU + __UdOkU.conj().swapaxes(-2,-1))/2
-        #'''
-
-        self.projected_velocity_K_list=[]
-        for velocityProjection in velocityProjectionList:
-            proj1=projectionOperator(velocityProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
-            proj2=projectionOperator(velocityProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
-
-            proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
-            proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            self.projected_velocity_K_list.append((proj1_K@self.velocity_K@proj2_K + proj2_K@self.velocity_K@proj1_K)/2)
-
-        if highOrderVelocity:
-            RRH_R_W  = getattr(self.model, "RRHam_R", None)
-            RRRH_R_W = getattr(self.model, "RRRHam_R", None)
-            assert RRH_R_W is not None,  "RRHam_R is required for high order velocity,  execute getRRHam_R first"
-            assert RRRH_R_W is not None, "RRRHam_R is required for high order velocity, execute getRRRHam_R first"
-        
-            RRH_R_intepolated  = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-            RRRH_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-        
-            RRH_R_W  = RRH_R_W  * self.phaseFactorR[:, None, None, None, None]
-            RRRH_R_W = RRRH_R_W * self.phaseFactorR[:, None, None, None, None, None]
-                
-            for iR, Rvec in enumerate(self.model.iRvec):
-                index = tuple(np.asarray(Rvec) % self.kgrid)
-                RRH_R_intepolated[index] += RRH_R_W[iR]
-                RRRH_R_intepolated[index] += RRRH_R_W[iR]
-                
-            # w_K = d^2H/dk^2
-            RRHam_K  = -1 * np.fft.ifftn(RRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
-            vectors=self.vectors[:,:,:,None,None,:,:]
-            self.w_K = vectors.conj().swapaxes(-2,-1) @ RRHam_K @ vectors
-        
-            # u_K = d^3H/dk^3
-            RRRHam_K = -1j * np.fft.ifftn(RRRH_R_intepolated, axes=(0,1,2,)) * np.prod(self.kgrid)
-            vectors=self.vectors[:,:,:,None,None,None,:,:]
-            self.u_K = vectors.conj().swapaxes(-2,-1) @ RRRHam_K @ vectors
-
-            # ==============================================================
-            # Gauge-Covariant Geometric Corrections for high order velocity
-            # ==============================================================
-            def comm(A, B):
-                # Helper to compute commutator [A, B] broadcasting over k-grid
-                return A @ B - B @ A
-
-            # Ordinary k derivatives of the Wannier-gauge connection.
-            # These terms vanish in the diagonal tight-binding limit, but are
-            # required when the off-diagonal position matrix depends on k.
-            r1_R_intepolated = np.zeros(self.kgrid + (3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-            for iR, Rvec in enumerate(self.model.iRvec):
-                R_cart = Rvec @ self.model.lattice
-                r1_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += 1j * R_cart[:, None, None, None] * AA_R_W[iR][None, :, :, :]
-
-            r1_K_AO = np.fft.ifftn(r1_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
-            vectors1 = self.vectors[..., None, None, :, :]
-            connectionDerivative1 = vectors1.conj().swapaxes(-2, -1) @ r1_K_AO @ vectors1
-            connectionDerivative1 = (
-                connectionDerivative1 + connectionDerivative1.conj().swapaxes(-2,-1)
-            ) / 2
-            del r1_R_intepolated, r1_K_AO, vectors1
-
-            # Construct the larger second-derivative tensor only after the
-            # first-derivative FFT buffers have been released.
-            r2_R_intepolated = np.zeros(self.kgrid + (3, 3, 3, self.model.norbs, self.model.norbs), dtype=complex)
-            for iR, Rvec in enumerate(self.model.iRvec):
-                R_cart = Rvec @ self.model.lattice
-                r2_R_intepolated[tuple(np.asarray(Rvec) % self.kgrid)] += (
-                    -R_cart[:, None, None, None, None] * R_cart[None, :, None, None, None] * AA_R_W[iR][None, None, :, :, :]
-                )
-            r2_K_AO = np.fft.ifftn(r2_R_intepolated, axes=(0, 1, 2)) * np.prod(self.kgrid)
-            vectors2 = self.vectors[..., None, None, None, :, :]
-            connectionDerivative2 = vectors2.conj().swapaxes(-2, -1) @ r2_K_AO @ vectors2
-            connectionDerivative2 = (
-                connectionDerivative2 + connectionDerivative2.conj().swapaxes(-2,-1)
-            ) / 2
-            del r2_R_intepolated, r2_K_AO, vectors2
-
-            # Store the bare spatial moments and H in the eigenbasis.
-            H0 = self.energies[..., :, None] * np.eye(self.energies.shape[-1], dtype=complex)
-            H1 = velocity_bare_K
-            H2 = self.w_K.copy()
-
-            # partialV_ab = partial_b v_a
-            partialV = np.zeros_like(self.w_K)
-            for a in range(3):
-                for b in range(3):
-                    partialV[..., a, b, :, :] = (
-                        H2[..., a, b, :, :]
-                        - 1j * comm(connectionDerivative1[..., b, a, :, :], H0)
-                        - 1j * comm(AA_K_H[..., a, :, :], H1[..., b, :, :])
-                    )
-                    # w_ab = D_b v_a
-                    self.w_K[..., a, b, :, :] = (partialV[..., a, b, :, :] 
-                        - 1j * comm(AA_K_H[..., b, :, :], self.velocity_K[..., a, :, :])
-                    )
-
-            # w_ab multiplies the commuting product A_a A_b and is the
-            # Hessian/contact-current vertex. Enforce its exact Hermiticity
-            # and Cartesian symmetry after the covariant construction.
-            self.w_K = (self.w_K + self.w_K.conj().swapaxes(-2,-1)) / 2
-            self.w_K = (self.w_K + self.w_K.swapaxes(-4,-3)) / 2
-
-            if exchangeVelocity:
-                exchange0=self.exchange_K
-                exchange1=self.velocity_xc_bare_K
-                exchange2=self.w_xc_bare_K
-                self.w_xc_K=np.zeros_like(exchange2)
-                for a in range(3):
-                    for b in range(3):
-                        partialVxc=(exchange2[...,a,b,:,:]
-                            -1j*comm(connectionDerivative1[...,b,a,:,:],exchange0)
-                            -1j*comm(AA_K_H[...,a,:,:],exchange1[...,b,:,:]))
-                        self.w_xc_K[...,a,b,:,:]=(partialVxc
-                            -1j*comm(AA_K_H[...,b,:,:],self.velocity_xc_K[...,a,:,:]))
-                if self.verbose==2: showElapsedTime(extraInfo=f"second-order exchange velocity finished")
-
-            # u_abc = D_c w_ab.  connectionDerivative1[..., b, a]
-            # is partial_b A_a, and connectionDerivative2[..., c, b, a]
-            # is partial_c partial_b A_a.
-            H3 = self.u_K.copy()
-            for a in range(3):
-                for b in range(3):
-                    for c in range(3):
-                        partial2V = (H3[..., a, b, c, :, :]  
-                            - 1j * comm(connectionDerivative2[..., c, b, a, :, :], H0)
-                            - 1j * comm(connectionDerivative1[..., b, a, :, :], H1[..., c, :, :])
-                            - 1j * comm(connectionDerivative1[..., c, a, :, :], H1[..., b, :, :])
-                            - 1j * comm(AA_K_H[..., a, :, :], H2[..., b, c, :, :])
-                        )
-                        partialW = (partial2V
-                            - 1j * comm(connectionDerivative1[..., c, b, :, :], self.velocity_K[..., a, :, :])
-                            - 1j * comm(AA_K_H[..., b, :, :], partialV[..., a, c, :, :])
-                        )
-                        self.u_K[..., a, b, c, :, :] = (partialW
-                            - 1j * comm(AA_K_H[..., c, :, :], self.w_K[..., a, b, :, :])
-                        )
-            del connectionDerivative1, connectionDerivative2, partialV
-            if self.verbose==2: showElapsedTime(extraInfo=f"higer order velocity modification with position operators finished")
-
-        self.electronic = vertices_from_stage(self, velocityProjectionList)
-
-
 class Dipole(Velocity):
     def __init__(self, highOrderDipole=False, **kwarg) -> None:
         '''
@@ -852,7 +918,6 @@ class Dipole(Velocity):
                     ) * self.deltaEInverse_pure / 1j * off_diag
             if self.verbose==2: showElapsedTime(extraInfo=f"generalized k-derivatives of dipole operators finished")
 
-
 class SpinVelocity(Velocity, Spin):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
         '''
@@ -894,36 +959,21 @@ class SpinVelocity(Velocity, Spin):
         
         if self.verbose==2: showElapsedTime(extraInfo=f"spin velocity in eig.-basis finished")
 
+class _OrbitalCurrentVertex:
+    """Build a current from the moment supplied by the next electronic stage."""
+    def __init__(self, velocityProjectionList=(), orbitalvelocityProjectionList=(), **kwarg):
+        """Prepare {m, hbar*v}/2 and projections of the complete current vertex.
 
-class OrbitalVelocity(Velocity, Orbital):
-    def __init__(self, velocityProjectionList=[], orbitalvelocityProjectionList=[], **kwarg) -> None:
-        '''
-        Compute orbital velocity matrix in original basis and eigen-basis
-        and projected orbital velocity matrix.
-        Note, the projection is on the velocity component, corresponding to the orbital-currents running in specific basis.
-
-        Indexing:
-        self.ORHam_K[ik1, ik2, ik3, idirection, igamma, iorb, jorb] gives orbital velocity matrix in original basis,
-        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
-
-        self.orbitalVelocity_K[ik1, ik2, ik3, idirection, igamma, ieig, jeig] gives orbital velocity matrix in eigen-basis.
-        idirection can be 0 | 1 | 2, corresponding to x | y | z direction. 
-        igamma can be 0 | 1 | 2, corresponding to x | y | z orbital magnetic moment.
-
-        if orbitalvelocityProjctionList is not empty
-        self.orbitalVelocity_K_proj[iproj] gives each projected orbital velocity matrix in eigen-basis.
-        '''
+        orbitalVelocity_K has axes kgrid + (flow, polarization, band, band).
+        Projections select source and target shells of the current matrix.
+        """
         super().__init__(velocityProjectionList=velocityProjectionList, **kwarg)
         
         __oV=self.orbital_K[...,None,:,:,:] @ self.velocity_K[...,None,:,:]
         self.orbitalVelocity_K = (__oV + __oV.swapaxes(-2,-1).conj())/2
 
         self.projected_orbitalVelocity_K_list=[]
-        for iproj, orbitalvelocityProj in enumerate(orbitalvelocityProjectionList):
-            #projected_velocity_K=self.projected_velocity_K_list.pop(iproj+len(velocityProjectionList))
-            #__oV=self.orbital_K[...,None,:,:,:] @ projected_velocity_K[...,None,:,:]
-            #self.projected_orbitalVelocity_K_list.append((__oV + __oV.swapaxes(-2,-1).conj())/2)
+        for orbitalvelocityProj in orbitalvelocityProjectionList:
             proj1=projectionOperator(orbitalvelocityProj['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(orbitalvelocityProj['target'],self.model.atomicOrbInfoList,self.model.norbs)
             
@@ -933,3 +983,12 @@ class OrbitalVelocity(Velocity, Orbital):
         
         if self.verbose==2: showElapsedTime(extraInfo=f"orbital velocity in eig.-basis finished")
 
+class OrbitalVelocity(_OrbitalCurrentVertex, Orbital, Velocity):
+    """Atom-centered orbital magnetic-moment current {m_ACA, hbar*v}/2."""
+
+class OrbitalVelocity_BlochSelfRotate(_OrbitalCurrentVertex, Orbital_BlochSelfRotate):
+    """Transport vertex {m_self, hbar*v}/2 for Bloch self-rotation.
+
+    orbitalVelocity_K has axes kgrid + (flow, polarization, band, band)
+    and units mu_B * eV * angstrom, matching OrbitalVelocity.
+    """

@@ -7,7 +7,8 @@ from .Grid import AnormalousHallConductance, AnormalousHallConductance_diag, Ano
 from .Grid import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from .Grid import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
 from .Grid import SpinHallConductance,    SpinHallConductance_LG_DM, SpinHallConductance_diag
-from .Grid import OrbitalHallConductance, OrbitalHallConductance_LG_DM
+from .electronic_stages import Orbital_BlochSelfRotate, OrbitalVelocity_BlochSelfRotate
+from .Grid import OrbitalHallConductance, OrbitalHallConductance_LG_DM, OrbitalHallConductance_BlochSelfRotate_LG_DM
 from .Grid import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
 from .Grid import (SpinGalvanicConductivity_LG_DM, SpinGalvanicConductivity_VG_DM,
                    OrbitalGalvanicConductivity_LG_DM, OrbitalGalvanicConductivity_VG_DM)

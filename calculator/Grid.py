@@ -24,7 +24,8 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
 from .collision import (CollisionSpecification, PreparedCollision, resolve_collision, collision_mode,
                         prepare_phonon_background)
 from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbital,
-                                SpinTorque, SpinExchangeTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity)
+                                SpinTorque, SpinExchangeTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity,
+                                Orbital_BlochSelfRotate, OrbitalVelocity_BlochSelfRotate)
 from .response_inputs import ResponseInputs
 from .response_results import publish_conductivity, publish_second_order, FirstOrderResponseResult
 from .response_contractions import (
@@ -626,79 +627,6 @@ class Orbital_diag(FermiScan):
                 projected_orbital_diag_K=np.sum(vectors.conj() * _ov, axis=(4,))
             self.projected_orbital_diag_K_list.append(projected_orbital_diag_K)
 
-
-class OrbitalModern_LC(Velocity):
-    def __init__(self, orbitalProjectionList=[], _computeOrbitalModernLC=True, **kwarg,):
-        '''
-        Compute the local-circulation (LC), or Bloch-state self-rotation,
-        orbital magnetic-moment matrix from Eq. S9 of PRL 136, 236302
-        (2026).
-
-        The velocity matrices used by this code are dH/dk = hbar*v_phys in
-        eV*angstrom. ``orbital_K`` is returned in units of mu_B:
-
-        orbital_K[ik1, ik2, ik3, idirection, iband, jband].
-        '''
-        super().__init__(**kwarg)
-        if not _computeOrbitalModernLC:
-            return
-
-        nbands = self.energies.shape[-1]
-        moment_sum = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
-        cross_pairs = ((1, 2), (2, 0), (0, 1))
-
-        for p in range(nbands):
-            gap_p_band = self.energies[..., p, None] - self.energies
-            valid_gap = np.abs(gap_p_band) > self.degen
-            inverse_gap = np.zeros_like(gap_p_band)
-            inverse_gap[valid_gap] = 1.0 / gap_p_band[valid_gap]
-
-            weight = inverse_gap[..., :, None] + inverse_gap[..., None, :]
-            weight *= valid_gap[..., :, None] & valid_gap[..., None, :]
-
-            for component, (a, b) in enumerate(cross_pairs):
-                v_a_lp = self.velocity_K[..., a, :, p]
-                v_b_lp = self.velocity_K[..., b, :, p]
-                v_a_pn = self.velocity_K[..., a, p, :]
-                v_b_pn = self.velocity_K[..., b, p, :]
-                velocity_cross = (
-                    v_a_lp[..., :, None] * v_b_pn[..., None, :]
-                    - v_b_lp[..., :, None] * v_a_pn[..., None, :]
-                )
-                moment_sum[..., component, :, :] += weight * velocity_cross
-
-        # hbar^2/(2*m_e), expressed in eV*angstrom^2.  With velocity_K=dH/dk,
-        # Eq. S9 divided by mu_B has the prefactor 1/(4*i*constant).
-        hbar2_over_2me = hbar**2 / (2 * electron_mass * elementary_charge * angstrom**2)
-        self.orbital_K = moment_sum / (4j * hbar2_over_2me)
-        self.orbital_K = (
-            self.orbital_K +
-            self.orbital_K.conj().swapaxes(-2, -1)
-        ) / 2
-
-        self.projected_orbital_K_list = []
-        for orbitalProjection in orbitalProjectionList:
-            proj1 = projectionOperator(
-                orbitalProjection['source'],
-                self.model.atomicOrbInfoList,
-                self.model.norbs,
-            )
-            proj2 = projectionOperator(
-                orbitalProjection['target'],
-                self.model.atomicOrbInfoList,
-                self.model.norbs,
-            )
-            proj1_K = self.projectorInEigenBasis(proj1)[..., None, :, :]
-            proj2_K = self.projectorInEigenBasis(proj2)[..., None, :, :]
-            projected_orbital_K = (
-                proj1_K @ self.orbital_K
-                + self.orbital_K @ proj2_K
-            ) / 2
-            self.projected_orbital_K_list.append(projected_orbital_K)
-
-        if self.verbose == 2:
-            showElapsedTime(extraInfo="modern LC orbital magnetic moment in eig.-basis finished")
-
 class Velocity_diag(FermiScan):
     def __init__(self, velocityProjectionList=[], **kwarg) -> None:
         '''
@@ -752,7 +680,6 @@ class Velocity_diag(FermiScan):
                 _RO_K_proj_vector=RO_K_proj @ (vectors *self.energies[...,None,None,:])
                 projected_velocity_diag_K -= np.sum(vectors.conj() *_RO_K_proj_vector, axis=(4,))
             self.projected_velocity_diag_K_list.append(projected_velocity_diag_K)
-
 
 class SpinVelocity_diag(Velocity, Spin):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:
@@ -910,13 +837,13 @@ class OrbitalModern_IC(BerryCurv):
         if self.verbose==2:
             showElapsedTime(extraInfo="modern IC orbital magnetization finished")
 
-class OrbitalModern_Full(OrbitalModern_IC, OrbitalModern_LC):
+class OrbitalModern_Full(OrbitalModern_IC, Orbital_BlochSelfRotate):
     def __init__(self, orbitalProjectionList=[], **kwarg) -> None:
         '''
-        Compute LC and IC orbital magnetism using one eigensystem and one
-        velocity calculation.
+        Compute Bloch self-rotation and the equilibrium Berry correction
+        using one eigensystem and one velocity calculation.
 
-        ``orbital_K`` is the LC magnetic-moment operator. The band-diagonal
+        ``orbital_K`` is the self-rotation moment matrix. The band-diagonal
         equilibrium integrand including IC is ``orbital_full_diag_K``.
         '''
         super().__init__(orbitalProjectionList=orbitalProjectionList, **kwarg)
@@ -1532,7 +1459,7 @@ class SecondOrderAHC_BCP_FermiSurf(BerryConnectionPolarizability, FermiScan):
 
         if self.verbose==2: showElapsedTime(extraInfo="2nd-order anomalous Hall conductance (Fermi surface) finished")
 
-class BerryConnectionPolarizabilityMagSusceptibility(BerryConnectionPolarizability,Spin,OrbitalModern_LC,):
+class BerryConnectionPolarizabilityMagSusceptibility(BerryConnectionPolarizability,Spin,Orbital_BlochSelfRotate,):
     Iodd = False
     Todd = True
 
@@ -1553,7 +1480,7 @@ class BerryConnectionPolarizabilityMagSusceptibility(BerryConnectionPolarizabili
                 f"mag_type must be one of {validMagTypes}, got {mag_type!r}"
             )
 
-        super().__init__(gS=gS,_computeSpin=mag_type in ("total", "spin"),_computeOrbitalModernLC=mag_type in ("total", "orbital"),**kwarg,)
+        super().__init__(gS=gS,_computeSpin=mag_type in ("total", "spin"),_computeOrbitalBlochSelfRotate=mag_type in ("total", "orbital"),**kwarg,)
         nbands = self.energies.shape[-1]
 
         self.magneticMoment_K = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
@@ -3183,17 +3110,17 @@ class OrbitalHallConductance(OrbitalBerryCurv):
         self.projected_sigma=projected_sigma*(2*np.pi/(np.linalg.det(self.model.lattice[:2,:2])*np.prod(self.kgrid[:2]))) # for checking the TKNN SHC of 2D topo./trivial sys.
         if self.verbose==2: showElapsedTime(extraInfo=f"Orbital Hall conductance finished")
 
-class OrbitalHallConductance_LG_DM(DensityMatrixResponse):
+class _OrbitalHallConductance_LG_DM(DensityMatrixResponse):
     def __init__(self, currentProjectionList=[], orbitalcurrentProjectionList=[], responseFermiIndexList=None,
                  finiteTemperatureOccupations=False, fullCovariantDerivative=False, **kwarg) -> None:
         '''
         Calculate the dc orbital magnetic-moment current response from the common first-order
         length-gauge density-matrix kernel. Tensor axes are electric-field
         direction, orbital-current flow direction and orbital polarization. The
-        observable is {mu_L,v}/2, with mu_L/mu_B=-gL*L/hbar; there is no
+        observable is {mu_L,v}/2 for the selected moment stage; there is no
         charge-current minus. The historical 2D normalization below is retained.
         '''
-        super().__init__(electronic_stages=(OrbitalVelocity,), velocityProjectionList=currentProjectionList,
+        super().__init__(electronic_stages=(self.orbital_velocity_stage,), velocityProjectionList=currentProjectionList,
                          orbitalvelocityProjectionList=orbitalcurrentProjectionList, **kwarg)
         self.Iodd = False
         self.Todd = False
@@ -3229,7 +3156,20 @@ class OrbitalHallConductance_LG_DM(DensityMatrixResponse):
             setattr(self, f"projected_sigma_{name}", self.projected_sigma_channels[name])
             setattr(self, f"projected_response_{name}", self.projected_response_channels[name])
             setattr(self, f"sigma_{name}", self.sigma_channels[name])
-        if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix SHC finished")
+        if self.verbose==2: showElapsedTime(extraInfo=f"Length-gauge density-matrix OHC finished")
+
+class OrbitalHallConductance_LG_DM(_OrbitalHallConductance_LG_DM):
+    """Length-gauge DC response of the atom-centered orbital moment current."""
+    orbital_velocity_stage = OrbitalVelocity
+
+class OrbitalHallConductance_BlochSelfRotate_LG_DM(_OrbitalHallConductance_LG_DM):
+    """DC response of {m_BlochSelfRotate, v}/2 to the electric field.
+
+    Uses the Bloch self-rotation approximation, with the same tensor axes,
+    channels and 2D normalization as OrbitalHallConductance_LG_DM. This is
+    not the full Wannier LC/IC orbital-current response.
+    """
+    orbital_velocity_stage = OrbitalVelocity_BlochSelfRotate
 
 class SpinvelocityVelocityCorrelation_diag(SpinVelocity_diag, Velocity_diag):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:

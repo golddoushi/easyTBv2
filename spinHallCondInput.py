@@ -12,7 +12,7 @@ from task import BZGridTask, BZLineTask
 #| Bulk tasks |
 #+------------+
 from task import solvePDOS, solveVelocity, solveVelocity_diag
-from task import solveSHC, solveSHC_LG_DM, solveSHC_diag, solveOHC, solveOHC_LG_DM, solveStGC, solveAHC, solveAHC_LG_DM
+from task import solveSHC, solveSHC_LG_DM, solveSHC_diag, solveOHC, solveOHC_LG_DM, solveOHC_BlochSelfRotate_LG_DM, solveStGC, solveAHC, solveAHC_LG_DM
 from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
 from task import solveSGC_LG_DM, solveOGC_LG_DM, solveStGC_LG_DM, solveSGC_VG_DM, solveOGC_VG_DM, solveStGC_VG_DM
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
@@ -33,11 +33,11 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/Co3Pt4/"
-    model=System_w90(
+    mainDir="./mcalc/BN/"
+    model=System_tb(
         mainDir=mainDir,
         #hamR="omx",
-        #hamR="BN_fm_rashiba",
+        hamR="BNcol",
         #hamR="wannier90_mx",
         cutoff=-0.002,
         poscar="POSCAR",
@@ -73,10 +73,10 @@ def run():
             "Ti":(0,0,0,1,1,2,),
              "O":(0,0,1,1,2,),
         },
-        ispin=2,
-        spinSeparated=True,
+        #ispin=2,
+        #spinSeparated=True,
     )
-    #'''
+    '''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
@@ -159,8 +159,8 @@ def run():
     #fermi=9.04361448           # VASP FePtH
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
-    fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
-    #fermi=0            # model hamiltonian
+    #fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
+    fermi=0            # model hamiltonian
 
     fermiAxis=np.linspace(fermi-1.0,fermi+1.0,11)
     #fermiAxis=np.array([fermi,])
@@ -225,7 +225,7 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(24,32,1)
+    BZGrid=(60,60,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
@@ -233,14 +233,14 @@ def run():
     ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
     Pt1,Pt2,Pt3,Pt4=[(0,(0,1,2,)),],[(1,(0,1,2,)),],[(2,(0,1,2,)),],[(3,(0,1,2,)),]
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
-    calc=BZGridTask(model, solveOHC_LG_DM,
+    calc=BZGridTask(model, solveOHC_BlochSelfRotate_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
-                              {"source":Pt1+Pt2+Pt3+Pt4, "target":Pt1+Pt2+Pt3+Pt4},
+                              #{"source":Pt1+Pt2+Pt3+Pt4, "target":Pt1+Pt2+Pt3+Pt4},
                            ],
                           'projected shells for detecting spincurrent':[],
                           'projected shells for detecting orbitalcurrent':[
-                              {"source":Co1+Co2+Co3, "target":Co1+Co2+Co3},
+                              #{"source":Co1+Co2+Co3, "target":Co1+Co2+Co3},
                           ],
                           'projected shells for detecting spin accumulation':[
                               #{"source":Co1, "target":Co1},
@@ -252,9 +252,9 @@ def run():
                           'record fermi ids':recordFermiIndexList,
 
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
-                          "full covariant derivative": False, # include full covariant formalism for LG 2nd order density-matrix
+                          "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
 
-                          "finiteTemperatureOccupations": False, "kBT":0.026, "eta":0.06582, # ~10 fs
+                          "finiteTemperatureOccupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
                           "collisionSpecification": CollisionSpecification(mode="crta", constantLinewidth=0.06582), # collision model, currently only for DM based calculators
                           "degen":1e-6,
                     }, 
