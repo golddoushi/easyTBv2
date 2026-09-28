@@ -10,8 +10,9 @@ from .Grid import SpinHallConductance,    SpinHallConductance_LG_DM, SpinHallCon
 from .electronic_stages import Orbital_BlochSelfRotate, OrbitalVelocity_BlochSelfRotate
 from .Grid import OrbitalHallConductance, OrbitalHallConductance_LG_DM, OrbitalHallConductance_BlochSelfRotate_LG_DM
 from .Grid import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
-from .Grid import (SpinGalvanicConductivity_LG_DM, SpinGalvanicConductivity_VG_DM,
-                   OrbitalGalvanicConductivity_LG_DM, OrbitalGalvanicConductivity_VG_DM)
+from .Grid import ( SpinGalvanicConductivity_LG_DM,                    SpinGalvanicConductivity_VG_DM,
+                    OrbitalGalvanicConductivity_LG_DM,                 OrbitalGalvanicConductivity_VG_DM,
+                    OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM, OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM)
 from .Grid import (SpinTorque, SpintorqueGalvanicConductance,
                    SpintorqueGalvanicConductivity_LG_DM, SpintorqueGalvanicConductivity_VG_DM)
 from .Grid import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf

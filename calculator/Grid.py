@@ -3357,14 +3357,8 @@ class OrbitalVelocityCorrelation(Orbital,Velocity):
         self.orbitalVelocityCorrelation=self.projected_orbitalVelocityCorrelation[0,0]
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation functions <L \dot velocity> finished")
 
-class OrbitalGalvanicConductivity_LG_DM(DensityMatrixResponse):
-    """Dc electric-field-induced local orbital moment from the LG DM kernel.
-
-    ``sigma[fermi, field_direction, orbital_direction]`` is measured in
-    ``mu_B/(V/angstrom)/cell``. This class uses the local-circulation orbital
-    operator exposed by :class:`Orbital`; it does not add modern-theory
-    itinerant-circulation terms.
-    """
+class _OrbitalGalvanicConductivity_LG_DM(DensityMatrixResponse):
+    """DC LG response of the selected orbital magnetic-moment matrix."""
     Iodd = True
     Todd = True
 
@@ -3373,7 +3367,7 @@ class OrbitalGalvanicConductivity_LG_DM(DensityMatrixResponse):
                  fullCovariantDerivative=True, **kwarg):
         currentProjectionList = [] if currentProjectionList is None else currentProjectionList
         orbitalProjectionList = [] if orbitalProjectionList is None else orbitalProjectionList
-        super().__init__(electronic_stages=(Orbital,), velocityProjectionList=currentProjectionList,
+        super().__init__(electronic_stages=(self.orbital_stage,), velocityProjectionList=currentProjectionList,
                          orbitalProjectionList=orbitalProjectionList, **kwarg)
         observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
         result = _solve_dc_galvanic_lg_density_matrix(
@@ -3386,13 +3380,8 @@ class OrbitalGalvanicConductivity_LG_DM(DensityMatrixResponse):
         _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix orbital galvanic conductivity finished")
 
-class OrbitalGalvanicConductivity_VG_DM(DensityMatrixResponse):
-    """Dc local-orbital moment induced by an electric field in the VG DM kernel.
-
-    This uses the same local-circulation orbital operator as the LG class and
-    treats it as field independent. It does not include itinerant-circulation
-    terms or an explicit vector-potential derivative of the orbital operator.
-    """
+class _OrbitalGalvanicConductivity_VG_DM(DensityMatrixResponse):
+    """Pole-subtracted DC VG response of the selected fixed moment matrix."""
     Iodd = True
     Todd = True
 
@@ -3406,7 +3395,7 @@ class OrbitalGalvanicConductivity_VG_DM(DensityMatrixResponse):
         if response_requires_full_basis(kwarg):
             raise NotImplementedError("VG orbital galvanic conductivity requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
-        super().__init__(electronic_stages=(Orbital,), velocityProjectionList=[], orbitalProjectionList=orbitalProjectionList,
+        super().__init__(electronic_stages=(self.orbital_stage,), velocityProjectionList=[], orbitalProjectionList=orbitalProjectionList,
                          highOrderVelocity=False, **kwarg)
         observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
         result = _solve_dc_galvanic_vg_density_matrix(
@@ -3417,6 +3406,39 @@ class OrbitalGalvanicConductivity_VG_DM(DensityMatrixResponse):
         self.accept_first_order_result(result)
         _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B/(V/angstrom)/cell', result.pole_residual)
         if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix orbital galvanic conductivity finished")
+
+class OrbitalGalvanicConductivity_LG_DM(_OrbitalGalvanicConductivity_LG_DM):
+    """DC atom-centered orbital moment response, in mu_B/(V/angstrom)/cell.
+
+    sigma axes are (fermi, field_direction, orbital_direction).
+    """
+    orbital_stage = Orbital
+
+class OrbitalGalvanicConductivity_VG_DM(_OrbitalGalvanicConductivity_VG_DM):
+    """DC VG response of the field-independent atom-centered moment matrix."""
+    orbital_stage = Orbital
+
+class OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM(_OrbitalGalvanicConductivity_LG_DM):
+    """Electric-field-induced Bloch self-rotation moment from Tr(rho1 m_self).
+
+    sigma axes are (fermi, field_direction, orbital_direction), with units
+    mu_B/(V/angstrom)/cell. The unperturbed self-rotation matrix is the
+    observable; field-induced corrections to that matrix and Wannier IC
+    contributions are outside this approximation.
+    """
+    orbital_stage = Orbital_BlochSelfRotate
+
+class OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM(_OrbitalGalvanicConductivity_VG_DM):
+    """Pole-subtracted DC VG response of the fixed Bloch self-rotation moment.
+
+    Uses the same observable approximation and units as the BSR LG class.
+    The observable contact vertex is zero, as for the existing fixed-moment
+    galvanic calculators; this does not compute a field-induced change of
+    the self-rotation operator. Only the total drive and a complete
+    orthogonal electronic basis are supported by this VG entry point;
+    fullCovariantDerivative=True is required by the VG relaxation kernel.
+    """
+    orbital_stage = Orbital_BlochSelfRotate
 
 class OrbitalGalvanicConductance(OrbitalVelocityCorrelation):
     def __init__(self, fermiList=[], currentProjectionList=[], orbitalProjectionList=[], **kwarg) -> None:

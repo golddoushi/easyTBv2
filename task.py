@@ -20,8 +20,9 @@ from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, In
 from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag
 from calculator import OrbitalHallConductance, OrbitalHallConductance_LG_DM, OrbitalHallConductance_BlochSelfRotate_LG_DM
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
-from calculator import (SpinGalvanicConductivity_LG_DM, SpinGalvanicConductivity_VG_DM,
-                        OrbitalGalvanicConductivity_LG_DM, OrbitalGalvanicConductivity_VG_DM)
+from calculator import (SpinGalvanicConductivity_LG_DM,                    SpinGalvanicConductivity_VG_DM,
+                        OrbitalGalvanicConductivity_LG_DM,                 OrbitalGalvanicConductivity_VG_DM,
+                        OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM, OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM)
 from calculator import (SpinTorque, SpintorqueGalvanicConductance,
                         SpintorqueGalvanicConductivity_LG_DM, SpintorqueGalvanicConductivity_VG_DM)
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
@@ -962,6 +963,20 @@ def solveOGC_VG_DM(param):
         param, OrbitalGalvanicConductivity_VG_DM, 'orbitalProjectionList',
         ('projected shells for detecting orbital accumulation',)
     )
+
+def solveOGC_BlochSelfRotate_LG_DM(param):
+    return _solveGalvanicConductivity_DM(
+        param, OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM, 'orbitalProjectionList',
+        ('projected shells for detecting orbital accumulation',)
+    )
+
+
+def solveOGC_BlochSelfRotate_VG_DM(param):
+    return _solveGalvanicConductivity_DM(
+        param, OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM, 'orbitalProjectionList',
+        ('projected shells for detecting orbital accumulation',)
+    )
+
 
 def solveStGC_LG_DM(param):
     return _solveGalvanicConductivity_DM(
