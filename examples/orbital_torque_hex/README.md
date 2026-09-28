@@ -7,7 +7,7 @@ but can carry BSR moment through intersite wave-function circulation.
 | Stage | Question | Status |
 | --- | --- | --- |
 | 1 | Does a spin-independent s-only insulator have finite BSR OHC and zero SHC/ACA OHC? | Implemented in [orbital_hall_source.py](orbital_hall_source.py) |
-| 2 | What finite-ribbon boundary moment response corresponds to the bulk BSR-current response, in the gap and in the bands? | Planned; requires a consistent nonlocal moment observable |
+| 2 | What finite-ribbon boundary moment response corresponds to the bulk BSR-current response, in the gap and in the bands? | [orbital_ribbon.py](orbital_ribbon.py), [scope and audit](README_orbital_ribbon.md); symmetrized partition of ribbon BSR moment |
 | 3 | Can coupling to an SOC converter yield spin response from this source? | Planned; separate driving regions and disconnected-interface controls |
 | 4 | Does an attached exchange magnet acquire torque? | Planned; local/remote driving and angular-momentum-transfer checks |
 
@@ -49,24 +49,22 @@ previous examples' local-moment response units.
 
 Defaults: grids 48/96/192 (including the valleys), kBT=0.01 eV,
 linewidth=0.02 eV, Fermi scan -3.2 to +3.2 eV. The code also evaluates
-midgap explicitly, then halves temperature and linewidth there. An atomic
-control sets hopping to zero without closing the gap. Parameters are exposed
+midgap explicitly, then halves temperature and linewidth there. Parameters are exposed
 as `--hopping`, `--delta`, `--lattice-constant`, `--fermi`, `--grids`, `--kbt`,
-`--linewidth`, and `--output`. The source requires nonzero hopping and Delta;
-the atomic-limit control is automatic.
+`--linewidth`, and `--output`. The source requires nonzero hopping and Delta.
+No hopping-off transport control is computed: isolated atoms are not a transport system.
 
 Outputs under `tmp/orbital_torque_hex/source/` include `hall_scan.png` (gap
 shaded, BSR versus ACA, I/E decomposition and SHC), `hall_scan.csv`, full
 tensor arrays in `responses.npz`, `summary.json` with convergence and
-midgap checks, and reproducible Hamiltonian inputs/arrays for both models.
+midgap checks, and reproducible Hamiltonian inputs/arrays for the source model.
 Tensor axes are Fermi, electric-field direction, current-flow direction,
 moment polarization. The plotted component is Ex -> Jy of z moment.
 
 Default results at 192x192: midgap BSR OHC is 0.64753851594 in native
 normalization, entirely interband to numerical precision (I=4.94e-38).
 ACA OHC and SHC are exactly zero in the saved arrays. With temperature and
-linewidth halved, midgap BSR OHC is 0.64766603575. The atomic control is
-exactly zero. The maximum 96-to-192 mesh difference across the entire scan
+linewidth halved, midgap BSR OHC is 0.64766603575. The maximum 96-to-192 mesh difference across the entire scan
 is 1.97e-4; the midgap value agrees much more closely. All six source and
 existing BSR-calculator tests pass, including energy-reference invariance.
 

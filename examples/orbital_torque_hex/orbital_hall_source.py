@@ -84,7 +84,6 @@ def plot_results(arrays, summary, output):
     for n in grids:
         axes[0].plot(fermi, arrays[f'bsr_n{n}'][:, 0, 1, 2], label=f'BSR OHC {n} x {n}')
     axes[0].plot(fermi, arrays[f'aca_n{grid}'][:, 0, 1, 2], '--', label='ACA OHC (s orbitals)')
-    axes[0].plot(fermi, arrays['atomic_bsr'][:, 0, 1, 2], ':', label='BSR OHC, hopping off')
     for channel in ('I', 'E'):
         axes[1].plot(fermi, arrays[f'bsr_{channel}_n{grid}'][:, 0, 1, 2], label=f'BSR {channel} channel')
     axes[2].plot(fermi, arrays[f'shc_n{grid}'][:, 0, 1, 2], label='SHC: Ex, Jy, Sz')
@@ -120,12 +119,11 @@ def main(argv=None):
             [args.kbt, args.linewidth, args.lattice_constant, args.hopping, args.delta, *args.fermi])):
         parser.error('Finite parameters, grids >=3 and positive kBT, linewidth, lattice constant required')
     if args.delta == 0 or args.hopping == 0:
-        parser.error('Use nonzero delta and hopping for the gapped source; hopping-off control is automatic')
+        parser.error('Use nonzero delta and hopping for the gapped source')
     args.output.mkdir(parents=True, exist_ok=True)
     with contextlib.redirect_stdout(io.StringIO()):
         model = build_model(args.output/'model', args.hopping, args.delta, args.lattice_constant)
-        atomic = build_model(args.output/'atomic_control', 0., args.delta, args.lattice_constant)
-    for name, system in [('model', model), ('atomic_control', atomic)]:
+    for name, system in [('model', model)]:
         np.savez_compressed(args.output/name/'model.npz', ham_R=system.ham_R, iRvec=system.iRvec,
             lattice=system.lattice, rList=system.rList, spin=system.spin, orbital=system.orbital)
     grids = sorted(set(args.grids))
@@ -141,18 +139,15 @@ def main(argv=None):
                        max_abs_bsr=float(np.max(np.abs(result['bsr']))), band_edges_eV=result['band_edges'].tolist())
             metrics.append(row)
             print(json.dumps(row), flush=True)
-        control = calculate(atomic, grids[-1], fermi, args.kbt, args.linewidth)
         # Always evaluate midgap explicitly, even when absent from the requested scan.
         midgap = calculate(model, grids[-1], [0.], args.kbt, args.linewidth)
         narrower = calculate(model, grids[-1], [0.], args.kbt/2, args.linewidth/2)
-    arrays.update({f'atomic_{key}': value for key, value in control.items()})
     arrays.update({f'midgap_{key}': value for key, value in midgap.items()})
     arrays.update({f'narrower_midgap_{key}': value for key, value in narrower.items()})
     tol = 1e-10
     checks = dict(aca_moment_identically_zero=bool(np.all(model.orbital == 0)),
         aca_ohc_zero=all(row['max_abs_aca'] < tol for row in metrics),
         shc_zero=all(row['max_abs_shc'] < tol for row in metrics),
-        atomic_limit_zero=all(np.max(np.abs(control[key])) < tol for key in ('bsr', 'aca', 'shc')),
         midgap_bsr_finite=bool(abs(midgap['bsr'][0, 0, 1, 2]) > 1e-6),
         narrower_midgap_bsr_finite=bool(abs(narrower['bsr'][0, 0, 1, 2]) > 1e-6),
         bsr_hall_antisymmetric=bool(np.max(np.abs(result['bsr'][:, 0, 1, 2]+result['bsr'][:, 1, 0, 2])) < tol))
@@ -170,8 +165,8 @@ def main(argv=None):
     np.savez_compressed(args.output/'responses.npz', **arrays)
     np.savetxt(args.output/'hall_scan.csv', np.column_stack([fermi, result['bsr'][:, 0, 1, 2],
         result['bsr_I'][:, 0, 1, 2], result['bsr_E'][:, 0, 1, 2], result['aca'][:, 0, 1, 2],
-        result['shc'][:, 0, 1, 2], np.max(np.abs(result['shc']), axis=(1, 2, 3)), control['bsr'][:, 0, 1, 2]]),
-        delimiter=',', header='fermi_eV,BSR_OHC,BSR_I,BSR_E,ACA_OHC,SHC,max_abs_SHC,atomic_BSR_OHC', comments='')
+        result['shc'][:, 0, 1, 2], np.max(np.abs(result['shc']), axis=(1, 2, 3))]),
+        delimiter=',', header='fermi_eV,BSR_OHC,BSR_I,BSR_E,ACA_OHC,SHC,max_abs_SHC', comments='')
     (args.output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     plot_results(arrays, summary, args.output)
     print(json.dumps(summary, indent=2), flush=True)

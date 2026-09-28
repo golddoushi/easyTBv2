@@ -3381,7 +3381,8 @@ class _OrbitalGalvanicConductivity_LG_DM(DensityMatrixResponse):
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix orbital galvanic conductivity finished")
 
 class _OrbitalGalvanicConductivity_VG_DM(DensityMatrixResponse):
-    """Pole-subtracted DC VG response of the selected fixed moment matrix."""
+    """DC VG response with the contact appropriate to the selected moment."""
+    orbital_contact = False
     Iodd = True
     Todd = True
 
@@ -3396,10 +3397,12 @@ class _OrbitalGalvanicConductivity_VG_DM(DensityMatrixResponse):
             raise NotImplementedError("VG orbital galvanic conductivity requires the complete orthogonal model basis")
         kwarg.pop('highOrderVelocity', None)
         super().__init__(electronic_stages=(self.orbital_stage,), velocityProjectionList=[], orbitalProjectionList=orbitalProjectionList,
-                         highOrderVelocity=False, **kwarg)
+                         highOrderVelocity=False, orbitalContact=self.orbital_contact, **kwarg)
         observable_vertices = [self.orbital_K] + self.projected_orbital_K_list
+        contacts = ([self.electronic.orbitalA_K] + self.electronic.projected_orbitalA_K_list
+                    if self.orbital_contact else _zero_vg_observable_contacts(observable_vertices))
         result = _solve_dc_galvanic_vg_density_matrix(
-            self.inputs, observable_vertices, _zero_vg_observable_contacts(observable_vertices),
+            self.inputs, observable_vertices, contacts,
             responseFermiIndexList, finiteTemperatureOccupations,
             fullCovariantDerivative, "mu_B/(V/angstrom)/cell", collision=self.collision)
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
@@ -3429,16 +3432,20 @@ class OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM(_OrbitalGalvanicConducti
     orbital_stage = Orbital_BlochSelfRotate
 
 class OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM(_OrbitalGalvanicConductivity_VG_DM):
-    """Pole-subtracted DC VG response of the fixed Bloch self-rotation moment.
+    """DC VG BSR moment response including its vector-potential contact.
 
-    Uses the same observable approximation and units as the BSR LG class.
-    The observable contact vertex is zero, as for the existing fixed-moment
-    galvanic calculators; this does not compute a field-induced change of
-    the self-rotation operator. Only the total drive and a complete
-    orthogonal electronic basis are supported by this VG entry point;
-    fullCovariantDerivative=True is required by the VG relaxation kernel.
+    Uses D_a m_self, including derivatives of observable projections, for
+    the normalized vector potential a=e*A/hbar. The analytic derivative uses
+    energies, velocities and ordered velocity derivatives at the same k point;
+    no displaced meshes or finite-difference step are needed.
+    The DC finite part is pole-subtracted; inspect sum_rule_residual under
+    mesh refinement to verify the contact cancellation. A complete
+    orthogonal basis, total drive, and fullCovariantDerivative=True are required.
+    This implements the gauge transform of the BSR observable, not additional
+    physical field-induced changes of its definition or Wannier IC terms.
     """
     orbital_stage = Orbital_BlochSelfRotate
+    orbital_contact = True
 
 class OrbitalGalvanicConductance(OrbitalVelocityCorrelation):
     def __init__(self, fermiList=[], currentProjectionList=[], orbitalProjectionList=[], **kwarg) -> None:

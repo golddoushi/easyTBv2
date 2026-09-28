@@ -50,6 +50,10 @@ class ElectronicVertices:
     orbitalTorque_K: np.ndarray | None = None
     orbitalVelocity_K: np.ndarray | None = None
     orbital_K: np.ndarray | None = None
+    ordered_velocity_derivative_K: np.ndarray | None = None
+    connection_K: np.ndarray | None = None
+    orbitalA_K: np.ndarray | None = None
+    projected_orbitalA_K_list: list | tuple | None = None
     projected_orbitalTorqueAA_K_list: list | tuple | None = None
     projected_orbitalTorqueA_K_list: list | tuple | None = None
     projected_orbitalTorqueE_K_list: list | tuple | None = None
@@ -99,13 +103,14 @@ def states_from_stage(stage):
 
 
 def vertices_from_stage(stage, projections):
-    exchange = {name: getattr(stage, name) for name in
-        ('exchange_K', 'exchange_K_AO', 'RExchange_K', 'RRExchange_K',
+    additional = {name: getattr(stage, name) for name in
+        ('ordered_velocity_derivative_K', 'connection_K',
+         'exchange_K', 'exchange_K_AO', 'RExchange_K', 'RRExchange_K',
          'velocity_xc_bare_K', 'velocity_xc_K', 'w_xc_bare_K', 'w_xc_K')
         if hasattr(stage, name)}
     return ElectronicVertices(stage.states, stage.velocity_K, stage.RHam_K,
         tuple(stage.projected_velocity_K_list), getattr(stage, 'w_K', None),
-        getattr(stage, 'u_K', None), stage.exchangeVelocity, tuple(projections), **exchange)
+        getattr(stage, 'u_K', None), stage.exchangeVelocity, tuple(projections), **additional)
 
 
 def compute_states(model, kgrid=(1, 1, 1), *, kOffset=(0., 0., 0.), skip_low=False):
@@ -241,6 +246,14 @@ class ElectronicTensorView:
     @property
     def orbital_K(self):
         return self.electronic.orbital_K
+
+    @property
+    def orbitalA_K(self):
+        return self.electronic.orbitalA_K
+
+    @property
+    def projected_orbitalA_K_list(self):
+        return self.electronic.projected_orbitalA_K_list
 
     @property
     def projected_orbitalTorqueAA_K_list(self):
