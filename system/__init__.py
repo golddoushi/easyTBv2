@@ -21,6 +21,8 @@ class System:
         self.norbs:int=-1  
         # real-space hamiltonian produced by ab inito
         self.ham_R:np.ndarray=None
+        # Spin-independent real-space Hamiltonian, prepared by getH0R.
+        self.ham0_R:np.ndarray=None
         # exchange part of the real-space Hamiltonian
         self.soc_R:np.ndarray=None
         self.exchange_R:np.ndarray=None
@@ -1357,7 +1359,7 @@ class System:
         """
         # Additional orbital operators follow the same cell map as H.
         extra_arrays = {name: getattr(self, name) for name in
-                        ("exchange_R", "exchange_R_reference", "nonexchange_R", "rashba_R", "soc_R")
+                        ("exchange_R", "exchange_R_reference", "nonexchange_R", "rashba_R", "soc_R", "ham0_R")
                         if getattr(self, name) is not None}
         electronic_names = tuple(extra_arrays)
         if additional_operators is not None:
@@ -1732,12 +1734,34 @@ class System:
         spin_R[:,half_norbs:,:half_norbs]=self.ham_R[:,half_norbs:,:half_norbs]
         return spin_R
 
+    def getH0R(self):
+        """Extract and register the spin-independent Hamiltonian as ham0_R.
+
+        In the blocked two-spin basis, H0 = I_spin tensor (H_uu+H_dd)/2.
+        This retains all spin-independent onsite and hopping matrix elements,
+        with zero spin-off-diagonal blocks. For one spin channel H0 is H.
+        The result is a separate array; ham_R is not modified. Call again
+        explicitly after changing the spin-independent Hamiltonian.
+        """
+        if self.ispin == 1:
+            self.ham0_R = self.ham_R.copy()
+        elif self.ispin == 2 and self.norbs % 2 == 0:
+            half = self.norbs//2
+            scalar = (self.ham_R[:, :half, :half]+self.ham_R[:, half:, half:])/2
+            self.ham0_R = np.zeros_like(self.ham_R)
+            self.ham0_R[:, :half, :half] = scalar
+            self.ham0_R[:, half:, half:] = scalar
+        else:
+            raise ValueError('getH0R requires one spin channel or two equally sized blocked spin channels')
+        return self.ham0_R
+
     def getSOCR(self, provenance="subtract exchange", soc_R=None):
         """Register the real-space SOC Hamiltonian on the model's iRvec grid.
 
-        ``subtract exchange`` stores ham_R-exchange_R. This remainder can
-        contain spin-independent terms; it gives the SOC spin torque only
-        when all other spin-dependent interactions belong to exchange_R.
+        ``subtract exchange`` stores ham_R-ham0_R-exchange_R. Prepare
+        ham0_R with getH0R and supply exchange_R first. This identifies SOC
+        when SOC and exchange are the only spin-dependent interactions and
+        both are spin-traceless in the blocked spin basis.
         ``explicit`` copies the supplied soc_R, already included in ham_R.
         Neither route modifies ham_R. Direct assignment to soc_R is also
         supported.
@@ -1745,9 +1769,11 @@ class System:
         if provenance == "subtract exchange":
             if self.exchange_R is None:
                 raise ValueError('getSOCR requires exchange_R for subtract exchange provenance')
+            if self.ham0_R is None:
+                raise ValueError('getSOCR requires ham0_R; call getH0R first')
             if soc_R is not None:
                 raise ValueError('soc_R is only used with explicit provenance')
-            value = self.ham_R-self.exchange_R
+            value = self.ham_R-self.ham0_R-self.exchange_R
         elif provenance == "explicit":
             if soc_R is None:
                 raise ValueError('explicit SOC provenance requires soc_R')
@@ -2305,6 +2331,8 @@ class System:
             self.ham_R = transform_matrix(self.ham_R)
             if self.verbose: print("Transformed Hamiltonian (ham_R).")
 
+        if self.ham0_R is not None:
+            self.ham0_R = transform_matrix(self.ham0_R)
         if self.soc_R is not None:
             self.soc_R = transform_matrix(self.soc_R)
         if self.rashba_R is not None:
