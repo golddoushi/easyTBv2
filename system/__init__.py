@@ -22,6 +22,7 @@ class System:
         # real-space hamiltonian produced by ab inito
         self.ham_R:np.ndarray=None
         # exchange part of the real-space Hamiltonian
+        self.soc_R:np.ndarray=None
         self.exchange_R:np.ndarray=None
         # first and second real-space moments of the exchange Hamiltonian
         self.RExchange_R:np.ndarray=None
@@ -1356,7 +1357,7 @@ class System:
         """
         # Additional orbital operators follow the same cell map as H.
         extra_arrays = {name: getattr(self, name) for name in
-                        ("exchange_R", "exchange_R_reference", "nonexchange_R", "rashba_R")
+                        ("exchange_R", "exchange_R_reference", "nonexchange_R", "rashba_R", "soc_R")
                         if getattr(self, name) is not None}
         electronic_names = tuple(extra_arrays)
         if additional_operators is not None:
@@ -1731,6 +1732,33 @@ class System:
         spin_R[:,half_norbs:,:half_norbs]=self.ham_R[:,half_norbs:,:half_norbs]
         return spin_R
 
+    def getSOCR(self, provenance="subtract exchange", soc_R=None):
+        """Register the real-space SOC Hamiltonian on the model's iRvec grid.
+
+        ``subtract exchange`` stores ham_R-exchange_R. This remainder can
+        contain spin-independent terms; it gives the SOC spin torque only
+        when all other spin-dependent interactions belong to exchange_R.
+        ``explicit`` copies the supplied soc_R, already included in ham_R.
+        Neither route modifies ham_R. Direct assignment to soc_R is also
+        supported.
+        """
+        if provenance == "subtract exchange":
+            if self.exchange_R is None:
+                raise ValueError('getSOCR requires exchange_R for subtract exchange provenance')
+            if soc_R is not None:
+                raise ValueError('soc_R is only used with explicit provenance')
+            value = self.ham_R-self.exchange_R
+        elif provenance == "explicit":
+            if soc_R is None:
+                raise ValueError('explicit SOC provenance requires soc_R')
+            value = np.asarray(soc_R)
+        else:
+            raise ValueError(f'unsupported SOC provenance {provenance!r}')
+        if value.shape != self.ham_R.shape:
+            raise ValueError('soc_R must have the same shape and real-space grid as ham_R')
+        self.soc_R = np.array(value, dtype=complex, copy=True)
+        return self.soc_R
+
     def getExchangeR(self, provenance="explicit", reversedModel=None):
         r'''
         Construct the exchange part of the real-space Hamiltonian.
@@ -1907,6 +1935,7 @@ class System:
         for R, block in zip(iRvec, blocks):
             added[self.iRvecIndex[tuple(R)]] += block
         self.ham_R = self.ham_R + added
+        self.soc_R = added.copy() if self.soc_R is None else self.soc_R + added
         previous = getattr(self, "rashba_R", None)
         self.rashba_R = added.copy() if previous is None else previous + added
         # Preserve the original rigid exchange-rotation reference after adding SOC.
@@ -1991,64 +2020,30 @@ class System:
         if self.verbose: showElapsedTime(extraInfo=f"Successfully applied exchange splitting to {applied_orbitals} physical spatial orbitals.")
 
     def scaleSOC(self, lam=1.0, projection=[]):
-        """
-        Scales the SOC-induced spin-flip hopping amplitudes (tx, ty, tz) by lambda,
-        leaving the charge transport hopping (t0) intact.
-        """
-        if self.verbose: 
-            print(f"\n--- Scaling SOC Hopping Terms by lambda={lam:.4f} ---")
-            
-        half_norbs = self.norbs // 2
-        
-        if len(projection)==0: # empty projection default to the whole system
-            target_orbs = np.arange(half_norbs)    
-        else: # Collect target spatial orbital indices from the projection list
-            target_orbs = []
-            for iatom, shells in projection:
-                atom_info = self.atomicOrbInfoList[iatom]
-                for ishell in shells:
-                    for iorb in atom_info["orbital index"][ishell]:
-                        if iorb < half_norbs:
-                            target_orbs.append(iorb)
-        
-        count = 0
-        # Iterate over all unit cells to capture inter-cell hopping
-        for iR in range(self.nRvec):
-            # Iterate over all pairs of orbitals in the target list
-            for i_up in target_orbs:
-                for j_up in target_orbs:
-                    i_dn = i_up + half_norbs
-                    j_dn = j_up + half_norbs
-                    
-                    # Extract 2x2 inter-site hopping block
-                    H_uu = self.ham_R[iR, i_up, j_up]
-                    H_dd = self.ham_R[iR, i_dn, j_dn]
-                    H_ud = self.ham_R[iR, i_up, j_dn]
-                    H_du = self.ham_R[iR, i_dn, j_up]
-                    
-                    # Project to SU(2) Pauli basis
-                    t0 = 0.5 * (H_uu + H_dd)
-                    tz = 0.5 * (H_uu - H_dd)
-                    tx = 0.5 * (H_ud + H_du)
-                    ty = 0.5j * (H_ud - H_du)
-                    
-                    # Scale only the SOC-relevant Pauli components
-                    tz_p = tz * lam
-                    tx_p = tx * lam
-                    ty_p = ty * lam
-                    
-                    # Reconstruct and replace
-                    self.ham_R[iR, i_up, j_up] = t0 + tz_p
-                    self.ham_R[iR, i_dn, j_dn] = t0 - tz_p
-                    self.ham_R[iR, i_up, j_dn] = tx_p - 1j * ty_p
-                    self.ham_R[iR, i_dn, j_up] = tx_p + 1j * ty_p
-                    
-                    count += 1
-        
-        # Synchronize dependent matrices
-        self._refreshHamiltonianDerivedMatrices()
+        """Scale the registered SOC in selected spatial-orbital blocks.
 
-        if self.verbose: showElapsedTime(extraInfo=f"Successfully scaled {count} hopping matrix blocks.")
+        Both spin channels are selected together. The exchange Hamiltonian
+        and its rotation reference are unchanged.
+        """
+        if self.soc_R is None:
+            raise ValueError('scaleSOC requires soc_R; call getSOCR or add SOC first')
+        half = self.norbs//2
+        spatial = (list(range(half)) if not projection else sorted({
+            i for atom, shells in projection for shell in shells
+            for i in self.atomicOrbInfoList[atom]['orbital index'][shell] if i < half}))
+        indices = spatial+[i+half for i in spatial]
+        selected = np.ix_(np.arange(self.nRvec), indices, indices)
+        delta = np.zeros_like(self.soc_R)
+        delta[selected] = (lam-1)*self.soc_R[selected]
+        self.soc_R += delta
+        self.ham_R += delta
+        if self.nonexchange_R is not None:
+            self.nonexchange_R += delta
+        if self.rashba_R is not None:
+            self.rashba_R[selected] *= lam
+        if getattr(self, '_included_soi_R', None) is not None:
+            self._included_soi_R[selected] *= lam
+        self._refreshHamiltonianDerivedMatrices()
 
     def applyElectrostaticPotentialAtOnsites(self, efield):
         """
@@ -2309,6 +2304,11 @@ class System:
         if hasattr(self, 'ham_R') and self.ham_R is not None:
             self.ham_R = transform_matrix(self.ham_R)
             if self.verbose: print("Transformed Hamiltonian (ham_R).")
+
+        if self.soc_R is not None:
+            self.soc_R = transform_matrix(self.soc_R)
+        if self.rashba_R is not None:
+            self.rashba_R = transform_matrix(self.rashba_R)
 
         if self.exchange_R is not None:
             self.exchange_R = transform_matrix(self.exchange_R)

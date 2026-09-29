@@ -672,10 +672,12 @@ class System_w90(System):
         assert real_space_error<SYMPREC*0.2, f"assembled SOI Hamiltonian violates real-space Hermiticity: {real_space_error:.3e} eV"
 
         if replace and self._included_soi_R is not None:
+            self.soc_R-=self._included_soi_R
             self.ham_R-=self._included_soi_R
             if self.nonexchange_R is not None:
                 self.nonexchange_R-=self._included_soi_R
             self._included_soi_R=None
+        self.soc_R=soc_R.copy() if self.soc_R is None else self.soc_R+soc_R
         self.ham_R+=soc_R
         if self.nonexchange_R is not None:
             self.nonexchange_R+=soc_R
@@ -705,6 +707,7 @@ class System_w90(System):
             return
         global_spin_frame=self._soi_global_spin_frame
         self._restoreSOILocalSpinFrame()
+        self.soc_R-=self._included_soi_R
         self.ham_R-=self._included_soi_R
         if self.nonexchange_R is not None:
             self.nonexchange_R-=self._included_soi_R
