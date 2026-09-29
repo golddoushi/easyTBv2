@@ -82,6 +82,8 @@ class ElectronicVertices:
     spinTorqueProjectionList: list | tuple | None = None
     spinTorque_K: np.ndarray | None = None
     spinVelocity_K: np.ndarray | None = None
+    soc_K: np.ndarray | None = None
+    soc_K_AO: np.ndarray | None = None
     spin_K: np.ndarray | None = None
     velocity_xc_K: np.ndarray | None = None
     velocity_xc_bare_K: np.ndarray | None = None

@@ -85,7 +85,6 @@ class Calculator():
         self.verbose=defaultSettings["verbose"]
         if self.verbose==2: print("initializing calculator module finished")
 
-
 class Energy(Calculator, ElectronicAlgebra):
     def __init__(self, *, states=None, **kwarg) -> None:
         '''
@@ -212,7 +211,6 @@ class Energy(Calculator, ElectronicAlgebra):
         self.energies=self.energies[:,:,:,self.ibmin:]
         self.vectors=self.vectors[:,:,:,:,self.ibmin:]
         if self.verbose: print(f"Low-lying bands skipped, {self.ibmin=}")
-
 
 class Velocity(Energy):
     def __init__(self, velocityProjectionList=(), highOrderVelocity=False, exchangeVelocity=False,
@@ -507,6 +505,17 @@ class Spin(Energy):
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_spin_K_list.append((proj1_K@self.spin_K + self.spin_K@proj2_K)/2)
 
+    def spinCovariantDerivative(self, connection):
+        """D_a mu_c for the local Wannier spin representation used by Spin.
+
+        A nonlocal Spin implementation must also supply the ordinary derivative
+        of its Wannier spin matrix here. Eigenvector derivatives are not taken.
+        Axes: kgrid + (spin component, derivative direction, band, band).
+        """
+        spin = self.spin_K[..., :, None, :, :]
+        connection = connection[..., None, :, :, :]
+        return -1j*(connection @ spin-spin @ connection)
+
 class Orbital(Energy):
     def __init__(self, orbitalProjectionList=[], gL:float=1.0, **kwarg):
         '''
@@ -772,32 +781,36 @@ class SpinSOCTorque(Spin):
         if self.model.soc_R is None:
             raise ValueError('Spin SOC torque requires model.soc_R; call getSOCR or add SOC first')
         soc = self.model.soc_R
-        # Form the commutator in the fixed Wannier basis before interpolation.
-        spin = -gS*self.model.spin/2
-        torque_r = -1j*(spin[None] @ soc[:, None]
-                       - soc[:, None] @ spin[None])
-        mesh = np.zeros(self.kgrid+torque_r.shape[1:], dtype=complex)
-        derivative = np.zeros(self.kgrid+(3, 3, self.model.norbs, self.model.norbs),
+        mesh = np.zeros(self.kgrid+soc.shape[-2:], dtype=complex)
+        derivative = np.zeros(self.kgrid+(3, self.model.norbs, self.model.norbs),
                               dtype=complex) if spinSOCContact else None
         for i, r in enumerate(self.model.iRvec):
             index = tuple(np.asarray(r) % self.kgrid)
-            value = torque_r[i]*self.phaseFactorR[i]
+            value = soc[i]*self.phaseFactorR[i]
             mesh[index] += value
             if spinSOCContact:
-                derivative[index] += 1j*value[:, None]*(r @ self.model.lattice)[None, :, None, None]
-        u = self.vectors[..., None, :, :]
-        self.spinTorque_K = u.conj().swapaxes(-1, -2) @ (
-            np.fft.ifftn(mesh, axes=(0, 1, 2))*np.prod(self.kgrid)) @ u
+                derivative[index] += 1j*(r @ self.model.lattice)[:, None, None]*value
+        self.soc_K_AO = np.fft.ifftn(mesh, axes=(0, 1, 2))*np.prod(self.kgrid)
+        u = self.vectors
+        self.soc_K = u.conj().swapaxes(-1, -2) @ self.soc_K_AO @ u
+        soc_band = self.soc_K[..., None, :, :]
+        self.spinTorque_K = -1j*(self.spin_K @ soc_band-soc_band @ self.spin_K)
         if spinSOCContact:
-            # D_a T = partial_a T - i[AA_a,T]. This also includes D_a mu_S
-            # if the Wannier connection does not commute with spin.
             velocity = Velocity(states=self.states, electronic=kwarg.get('electronic'))
-            connection = velocity.connection_K[..., None, :, :, :]
-            u2 = self.vectors[..., None, None, :, :]
-            self.spinTorqueA_K = u2.conj().swapaxes(-1, -2) @ (
-                np.fft.ifftn(derivative, axes=(0, 1, 2))*np.prod(self.kgrid)) @ u2
+            aa = velocity.connection_K
+            u1 = u[..., None, :, :]
+            dsoc = u1.conj().swapaxes(-1, -2) @ (np.fft.ifftn(derivative, axes=(0, 1, 2))*np.prod(self.kgrid)) @ u1
+            dsoc -= 1j*(aa @ soc_band-soc_band @ aa)
+            # Product rule: D_a T_c = -i([D_a mu_c,H_SOC]+[mu_c,D_a H_SOC]).
+            # Spin owns D_a mu_c; the torque stage makes no local-spin reduction.
+            dspin = self.spinCovariantDerivative(aa)
+            spin = self.spin_K[..., :, None, :, :]
+            soc_band = self.soc_K[..., None, None, :, :]
+            dsoc = dsoc[..., None, :, :, :]
+            self.spinTorqueA_K = -1j*(dspin @ soc_band-soc_band @ dspin
+                                     +spin @ dsoc-dsoc @ spin)
+            connection = aa[..., None, :, :, :]
             moment = self.spinTorque_K[..., :, None, :, :]
-            self.spinTorqueA_K -= 1j*(connection @ moment-moment @ connection)
         self.spinTorqueProjectionList = spinTorqueProjectionList
         self.projected_spinTorque_K_list = []
         self.projected_spinTorqueA_K_list = []
@@ -813,7 +826,6 @@ class SpinSOCTorque(Spin):
                 dt = -1j*(connection @ pt-pt @ connection)
                 self.projected_spinTorqueA_K_list.append((ds @ moment+ps @ self.spinTorqueA_K
                     +self.spinTorqueA_K @ pt+moment @ dt)/2)
-
 
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
