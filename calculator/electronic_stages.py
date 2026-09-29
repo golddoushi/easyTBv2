@@ -773,8 +773,19 @@ class SpinSOCTorque(Spin):
     Consumes model.soc_R, registered during model construction (e.g. getSOCR
     or addRashbaSOC). No SOC decomposition or LLG reaction sign is applied
     here. Divide by hbar to obtain the electronic magnetic-moment rate.
+    Contact preparation requires electronic.connection_K in the same band
+    basis; this stage does not construct velocity or connection vertices.
     """
-    def __init__(self, spinTorqueProjectionList=(), spinSOCContact=False, gS=2.0, **kwarg):
+    def __init__(self, spinTorqueProjectionList=(), spinSOCContact=False, gS=2.0,
+                 *, electronic=None, **kwarg):
+        if electronic is not None:
+            if kwarg.get('states', electronic.states) is not electronic.states:
+                raise ValueError('Spin SOC torque requires electronic and states in the same band basis')
+            kwarg['states'] = electronic.states
+        if spinSOCContact:
+            if electronic is None:
+                raise ValueError('Spin SOC contact requires prepared electronic.connection_K')
+            electronic.require('connection_K')
         super().__init__(gS=gS, **kwarg)
         if self.model.overlap or self.skip_low:
             raise NotImplementedError('Spin SOC torque requires a complete orthogonal basis')
@@ -796,8 +807,7 @@ class SpinSOCTorque(Spin):
         soc_band = self.soc_K[..., None, :, :]
         self.spinTorque_K = -1j*(self.spin_K @ soc_band-soc_band @ self.spin_K)
         if spinSOCContact:
-            velocity = Velocity(states=self.states, electronic=kwarg.get('electronic'))
-            aa = velocity.connection_K
+            aa = electronic.connection_K
             u1 = u[..., None, :, :]
             dsoc = u1.conj().swapaxes(-1, -2) @ (np.fft.ifftn(derivative, axes=(0, 1, 2))*np.prod(self.kgrid)) @ u1
             dsoc -= 1j*(aa @ soc_band-soc_band @ aa)
