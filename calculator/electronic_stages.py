@@ -758,6 +758,63 @@ class SpinTorque(Spin):
             self.projected_spinTorqueE_K_list.append((proj1_K @ self.spinTorqueE_K + self.spinTorqueE_K @ proj2_K) / 2)
         if self.verbose==2: showElapsedTime(extraInfo="Dipole corrected spin torque in eig.-basis finished")
 
+class SpinSOCTorque(Spin):
+    """Electronic spin-moment torque -i[mu_S,H_SOC], in mu_B*eV.
+
+    Consumes model.soc_R, registered during model construction (e.g. getSOCR
+    or addRashbaSOC). No SOC decomposition or LLG reaction sign is applied
+    here. Divide by hbar to obtain the electronic magnetic-moment rate.
+    """
+    def __init__(self, spinTorqueProjectionList=(), spinSOCContact=False, gS=2.0, **kwarg):
+        super().__init__(gS=gS, **kwarg)
+        if self.model.overlap or self.skip_low:
+            raise NotImplementedError('Spin SOC torque requires a complete orthogonal basis')
+        if self.model.soc_R is None:
+            raise ValueError('Spin SOC torque requires model.soc_R; call getSOCR or add SOC first')
+        soc = self.model.soc_R
+        # Form the commutator in the fixed Wannier basis before interpolation.
+        spin = -gS*self.model.spin/2
+        torque_r = -1j*(spin[None] @ soc[:, None]
+                       - soc[:, None] @ spin[None])
+        mesh = np.zeros(self.kgrid+torque_r.shape[1:], dtype=complex)
+        derivative = np.zeros(self.kgrid+(3, 3, self.model.norbs, self.model.norbs),
+                              dtype=complex) if spinSOCContact else None
+        for i, r in enumerate(self.model.iRvec):
+            index = tuple(np.asarray(r) % self.kgrid)
+            value = torque_r[i]*self.phaseFactorR[i]
+            mesh[index] += value
+            if spinSOCContact:
+                derivative[index] += 1j*value[:, None]*(r @ self.model.lattice)[None, :, None, None]
+        u = self.vectors[..., None, :, :]
+        self.spinTorque_K = u.conj().swapaxes(-1, -2) @ (
+            np.fft.ifftn(mesh, axes=(0, 1, 2))*np.prod(self.kgrid)) @ u
+        if spinSOCContact:
+            # D_a T = partial_a T - i[AA_a,T]. This also includes D_a mu_S
+            # if the Wannier connection does not commute with spin.
+            velocity = Velocity(states=self.states, electronic=kwarg.get('electronic'))
+            connection = velocity.connection_K[..., None, :, :, :]
+            u2 = self.vectors[..., None, None, :, :]
+            self.spinTorqueA_K = u2.conj().swapaxes(-1, -2) @ (
+                np.fft.ifftn(derivative, axes=(0, 1, 2))*np.prod(self.kgrid)) @ u2
+            moment = self.spinTorque_K[..., :, None, :, :]
+            self.spinTorqueA_K -= 1j*(connection @ moment-moment @ connection)
+        self.spinTorqueProjectionList = spinTorqueProjectionList
+        self.projected_spinTorque_K_list = []
+        self.projected_spinTorqueA_K_list = []
+        for projection in spinTorqueProjectionList:
+            ps, pt = [self.projectorInEigenBasis(projectionOperator(
+                projection[key], self.model.atomicOrbInfoList, self.model.norbs))
+                [..., None, :, :] for key in ('source', 'target')]
+            self.projected_spinTorque_K_list.append(
+                (ps @ self.spinTorque_K+self.spinTorque_K @ pt)/2)
+            if spinSOCContact:
+                ps, pt = ps[..., None, :, :], pt[..., None, :, :]
+                ds = -1j*(connection @ ps-ps @ connection)
+                dt = -1j*(connection @ pt-pt @ connection)
+                self.projected_spinTorqueA_K_list.append((ds @ moment+ps @ self.spinTorqueA_K
+                    +self.spinTorqueA_K @ pt+moment @ dt)/2)
+
+
 class SpinExchangeTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
         '''

@@ -24,7 +24,8 @@ from calculator import (SpinGalvanicConductivity_LG_DM,                    SpinG
                         OrbitalGalvanicConductivity_LG_DM,                 OrbitalGalvanicConductivity_VG_DM,
                         OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM, OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM)
 from calculator import (SpinTorque, SpintorqueGalvanicConductance,
-                        SpintorqueGalvanicConductivity_LG_DM, SpintorqueGalvanicConductivity_VG_DM)
+                        SpintorqueGalvanicConductivity_LG_DM, SpintorqueGalvanicConductivity_VG_DM,
+                        SpinSOCTorqueGalvanicConductivity_LG_DM, SpinSOCTorqueGalvanicConductivity_VG_DM)
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
 from calculator import AnormalousHallConductance_VG_DM, Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE
@@ -990,6 +991,18 @@ def solveStGC_VG_DM(param):
         ('projected shells for detecting torque',),
         {'exchangeVelocity': param.get('exchange velocity', True)}
     )
+
+def solveSpinSOCTorqueGC_LG_DM(param):
+    return _solveGalvanicConductivity_DM(
+        param, SpinSOCTorqueGalvanicConductivity_LG_DM, 'spinTorqueProjectionList',
+        ('projected shells for detecting torque',))
+
+
+def solveSpinSOCTorqueGC_VG_DM(param):
+    return _solveGalvanicConductivity_DM(
+        param, SpinSOCTorqueGalvanicConductivity_VG_DM, 'spinTorqueProjectionList',
+        ('projected shells for detecting torque',))
+
 
 def solveVelocity(param):
     calc=Velocity(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=True)

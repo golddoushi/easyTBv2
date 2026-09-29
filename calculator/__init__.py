@@ -13,8 +13,9 @@ from .Grid import SpinGalvanicConductance, SpinGalvanicConductance_diag, Orbital
 from .Grid import ( SpinGalvanicConductivity_LG_DM,                    SpinGalvanicConductivity_VG_DM,
                     OrbitalGalvanicConductivity_LG_DM,                 OrbitalGalvanicConductivity_VG_DM,
                     OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM, OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM)
-from .Grid import (SpinTorque, SpintorqueGalvanicConductance,
-                   SpintorqueGalvanicConductivity_LG_DM, SpintorqueGalvanicConductivity_VG_DM)
+from .Grid import (SpinTorque, SpinSOCTorque, SpintorqueGalvanicConductance,
+                   SpintorqueGalvanicConductivity_LG_DM,    SpintorqueGalvanicConductivity_VG_DM,
+                   SpinSOCTorqueGalvanicConductivity_LG_DM, SpinSOCTorqueGalvanicConductivity_VG_DM)
 from .Grid import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
 
 from .Grid import ExchangeCoupling, Chern_FHS, Z2_FHS
