@@ -20,9 +20,25 @@ from system import System_tb
 from examples.orbital_torque_hex.orbital_ribbon import build_ribbon
 from examples.orbital_torque_hex.orbital_hall_source import calculate as bulk_hall
 from calculator import CollisionSpecification
-from calculator.electronic_stages import Orbital_BlochSelfRotate, Spin
+from calculator.electronic_stages import Orbital_BlochSelfRotate, Spin, SpinSOCTorque
 from calculator.response_stages import DensityMatrixResponse
 from calculator.density_matrix import LengthGaugeFirstOrderDMKernel
+
+
+OBSERVABLES = ('bsr', 'spin', 'aca', 'soc_torque')
+
+
+def observable_vertices(prepared):
+    u = prepared.states.vectors[..., None, :, :]
+    return dict(bsr=prepared.orbital_K, spin=prepared.spin_K,
+                aca=u.conj().swapaxes(-1, -2)@(-prepared.states.model.orbital)@u,
+                soc_torque=prepared.spinTorque_K)
+
+
+def observable_label(name):
+    if name == 'soc_torque':
+        return r'SOC $\delta T^S_z/E_x$'+'\n'+r'[$\mu_B$ eV/(V/$\AA$)]'
+    return name.upper()+r' $\delta\mu_z/E_x$'+'\n'+r'[$\mu_B$/(V/$\AA$)]'
 
 
 def _write_model(directory, lattice, positions, n_atoms, h, rvec, soc):
@@ -46,11 +62,14 @@ def _write_model(directory, lattice, positions, n_atoms, h, rvec, soc):
     model = System_tb(str(directory), hamR='junction', projections={'N': [0], 'C': [1]} if n_atoms else {'C': [1]}, ispin=2)
     model.verbose = False
     zero = model.iRvecIndex[(0, 0, 0)]
+    soc_r = np.zeros_like(model.ham_R)
     for atom in range(n_atoms, len(positions)):
         ids = np.flatnonzero(model.iorb2iatomMap == atom)
         angular = model.orbital[:, ids][:, :, ids]
         spin = model.spin[:, ids][:, :, ids]
-        model.ham_R[zero][np.ix_(ids, ids)] += soc/2*sum(angular[a]@spin[a] for a in range(3))
+        soc_r[zero][np.ix_(ids, ids)] += soc/2*sum(angular[a]@spin[a] for a in range(3))
+    model.ham_R += soc_r
+    model.getSOCR('explicit', soc_R=soc_r)
     model._refreshHamiltonianDerivedMatrices()
     return model
 
@@ -140,14 +159,14 @@ def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, worke
         prepared = DensityMatrixResponse(model=model, kgrid=(grid//count, 1, 1),
             kOffset=((shard+.5)/grid, 0., 0.), fermiList=np.asarray(fermi), kBT=kbt,
             collisionSpecification=CollisionSpecification('crta', constantLinewidth=linewidth),
-            electronic_stages=(Orbital_BlochSelfRotate, Spin))
+            electronic_stages=(Orbital_BlochSelfRotate, Spin, SpinSOCTorque))
         kernel = LengthGaugeFirstOrderDMKernel(prepared.inputs, full_covariant_derivative=True,
             finite_temperature_occupations=True, collision=prepared.collision)
         u = prepared.states.vectors
         ud = u.conj().swapaxes(-1, -2)
         vx = u@prepared.inputs.velocity_K[..., 0, :, :]@ud
         # Spin stage already supplies magnetic moment (minus Pauli).
-        observables = {'bsr': prepared.orbital_K, 'spin': prepared.spin_K}
+        observables = observable_vertices(prepared)
         for name, band in observables.items():
             ao = u[..., None, :, :]@band@ud[..., None, :, :]
             c_band = ud[..., None, :, :]@(ao*(c_mask[:, None]+c_mask[None, :])/2)@u[..., None, :, :]
@@ -201,12 +220,13 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
     """
     ids = [np.flatnonzero(mask) for mask in masks]
     shape = (len(drive_rows), len(masks), len(fermi))
-    result = {f'row_profile_{name}{suffix}': np.zeros(shape) for name in ('bsr', 'spin') for suffix in ('', '_I', '_E')}
+    result = {f'row_profile_{name}{suffix}': np.zeros(shape) for name in OBSERVABLES for suffix in ('', '_I', '_E')}
     weights = []
     for fi, mu in enumerate(fermi):
         state = kernel.fermi_state(fi, mu)
         weights.append(state.collision.solve(-1j*state.divided_difference, prepared.inputs.deltaE, 0.))
     scale = chunks*np.prod(prepared.states.energies.shape[:-1])
+    observables = observable_vertices(prepared)
     for index in np.ndindex(prepared.states.energies.shape[:-1]):
         u = prepared.states.vectors[index]
         def row_vertices(operator, rows):
@@ -219,7 +239,7 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
             return np.asarray(vertices)
         drives = row_vertices(prepared.inputs.velocity_K[index][0], drive_rows)
         drive_diag = np.diagonal(drives, axis1=-2, axis2=-1)
-        for name, band in [('bsr', prepared.orbital_K), ('spin', prepared.spin_K)]:
+        for name, band in observables.items():
             for start in range(0, len(masks), 8):
                 end = min(start+8, len(masks))
                 observed = row_vertices(band[index][2], range(start, end))
@@ -247,18 +267,18 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
     (output/'summary.json').write_text(json.dumps(metadata, indent=2)+'\n')
     with (output/'profiles.csv').open('w', newline='') as stream:
         writer = csv.writer(stream)
-        writer.writerow(['case','drive_row','drive_y_A','drive_region','observed_row','observed_y_A','observed_region','fermi_eV','bsr_z','bsr_I','bsr_E','spin_z','spin_I','spin_E'])
+        writer.writerow(['case','drive_row','drive_y_A','drive_region','observed_row','observed_y_A','observed_region','fermi_eV',*[name+suffix for name in OBSERVABLES for suffix in ('_z','_I','_E')]])
         for case in ('full','no_soc','disconnected'):
             for di, row in enumerate(drive_rows):
                 for observed in range(len(y)):
                     for fi, mu in enumerate(fermi):
-                        values = [arrays[f'{case}_row_profile_{name}{suffix}'][di, observed, fi] for name in ('bsr','spin') for suffix in ('','_I','_E')]
+                        values = [arrays[f'{case}_row_profile_{name}{suffix}'][di, observed, fi] for name in OBSERVABLES for suffix in ('','_I','_E')]
                         writer.writerow([case,row,y[row],regions[row],observed,y[observed],regions[observed],mu]+values)
     boundary = (y[regions == 'N'].max()+y[regions == 'C'].min())/2
     for fi, mu in enumerate(fermi):
         for di, row in enumerate(drive_rows):
-            fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True, constrained_layout=True)
-            for ax, name in zip(axes, ('bsr', 'spin')):
+            fig, axes = plt.subplots(4, 1, figsize=(9, 12), sharex=True, constrained_layout=True)
+            for ax, name in zip(axes, OBSERVABLES):
                 for case, style in [('full','-'), ('no_soc','--'), ('disconnected',':')]:
                     ax.plot(y, arrays[f'{case}_row_profile_{name}'][di, :, fi], style, label=case.replace('_',' '))
                 ax.axvspan(y.min(), boundary, color='steelblue', alpha=.08)
@@ -266,23 +286,27 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
                 ax.axvline(y[row], color='purple', ls=':', label='Driven row')
                 ax.axvline(boundary, color='0.4', ls='--', lw=.7)
                 ax.axhline(0, color='0.5', lw=.5)
-                ax.set_ylabel(name.upper()+r' $\delta\mu_z/E_x$'+'\n'+r'[$\mu_B$/(V/$\AA$)]')
+                ax.set_ylabel(observable_label(name))
                 ax.legend(fontsize=8)
                 ax.grid(alpha=.2)
-            axes[0].set_title(f'Drive row {row} ({regions[row]}), y={y[row]:.4g} Angstrom; EF={mu:g} eV; Nk={metadata["grid"]}\n'+r'Vertex $\{P_r,v_x\}/2$; z moment on each observed row')
+            axes[0].set_title(f'Drive row {row} ({regions[row]}), y={y[row]:.4g} Angstrom; EF={mu:g} eV; Nk={metadata["grid"]}\n'+r'Vertex $\{P_r,v_x\}/2$; z observable on each observed row')
             axes[-1].set_xlabel('Observed row y (Angstrom); N blue / C orange')
             target = output/f'profile_drive_row{row:03d}_f{fi}.png'
             temporary = target.with_suffix('.pending.png')
             fig.savefig(temporary, dpi=140)
             temporary.replace(target)
             plt.close(fig)
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
-        for ax, name in zip(axes, ('bsr','spin')):
+        fig, axes = plt.subplots(2, 2, figsize=(13, 10), constrained_layout=True)
+        axes = axes.ravel()
+        for ax, name in zip(axes, OBSERVABLES):
             values = arrays[f'full_row_profile_{name}'][:, :, fi]
             maximum = max(float(np.max(np.abs(values))), 1e-15)
             im = ax.imshow(values, origin='lower', aspect='auto', cmap='RdBu_r', vmin=-maximum, vmax=maximum)
-            ax.set(xlabel='Observed physical row index', ylabel='Selected drive index (see drive_rows array)', title=f'{name.upper()} z, EF={mu:g} eV')
-            fig.colorbar(im, ax=ax, label='mu_B/(V/Angstrom)')
+            ax.set(xlabel='Observed physical row index', ylabel='Driven physical row index', title=f'{name.upper().replace("_", " ")} z, EF={mu:g} eV')
+            ticks = np.unique(np.linspace(0, len(drive_rows)-1, min(9, len(drive_rows)), dtype=int))
+            ax.set_yticks(ticks, labels=np.asarray(drive_rows)[ticks])
+            ax.axvline(np.flatnonzero(regions == 'C')[0]-.5, color='0.4', ls='--', lw=.8)
+            fig.colorbar(im, ax=ax, label=('mu_B*eV/(V/Angstrom)' if name=='soc_torque' else 'mu_B/(V/Angstrom)'))
         fig.savefig(output/f'response_matrix_f{fi}.png', dpi=140)
         plt.close(fig)
 
@@ -316,17 +340,20 @@ def add_saved_row_profiles(output, drive_rows=None, workers=1):
             start = perf_counter()
             response = calculate(model, groups, regions, grid, p['fermi'], p['kbt'], p['linewidth'], workers, rows)
             timings[case] = perf_counter()-start
-            for name in ('bsr','spin'):
+            for name in OBSERVABLES:
+                for key in (name, 'drive_'+name):
+                    if f'{case}_{key}' in saved:
+                        checks[f'{case}_{key}_saved_agreement'] = float(np.max(np.abs(response[key]-saved[f'{case}_{key}'])))
                 matrix = response['row_profile_'+name]
-                checks[f'{case}_{name}_C_sum'] = float(np.max(np.abs(matrix[:, regions=='C'].sum(axis=1)-saved[f'{case}_drive_{name}'][rows,:,2])))
+                checks[f'{case}_{name}_C_sum'] = float(np.max(np.abs(matrix[:, regions=='C'].sum(axis=1)-response['drive_'+name][rows,:,2])))
                 if len(rows)==len(y):
-                    checks[f'{case}_{name}_drive_sum'] = float(np.max(np.abs(matrix.sum(axis=0)-saved[f'{case}_{name}'][:,:,2])))
+                    checks[f'{case}_{name}_drive_sum'] = float(np.max(np.abs(matrix.sum(axis=0)-response[name][:,:,2])))
             arrays.update({case+'_'+key:value for key,value in response.items() if key.startswith('row_profile_')})
             print(f'Row profiles: {case}, Nk={grid}, {len(rows)} drives, {timings[case]:.2f}s', flush=True)
             # Checkpoint computed cases before the next expensive evaluation.
             np.savez_compressed(output/'row_profiles'/'checkpoint.npz', **arrays)
     metadata = dict(parameters=p, grid=grid, workers=workers, effective_workers=mesh_execution(grid,workers)[1], axes=['selected_drive_row','observed_row','fermi'],
-        component='z', drive_rows=rows, residuals=checks, timings_seconds=timings,
+        component='z', units={name: ('mu_B*eV/(V/Angstrom)' if name=='soc_torque' else 'mu_B/(V/Angstrom)') for name in OBSERVABLES}, drive_rows=rows, residuals=checks, timings_seconds=timings,
         projection=summary['row_drive'], convergence='Uses saved finest mesh; reconstruction checks are not mesh-convergence tests')
     save_row_profiles(arrays, y, regions, p['fermi'], rows, output, metadata)
     if max(checks.values())>1e-8:
@@ -350,8 +377,8 @@ def plot(arrays, summary, output):
     boundary = (y[regions == 'N'].max()+y[regions == 'C'].min())/2
     for fi, mu in enumerate(arrays['fermi_eV']):
         for drive in (False, True):
-            fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True, constrained_layout=True)
-            for ax, name in zip(axes, ('bsr', 'spin')):
+            fig, axes = plt.subplots(4, 1, figsize=(9, 12), sharex=True, constrained_layout=True)
+            for ax, name in zip(axes, OBSERVABLES):
                 for case, style in [('full', 'o-'), ('no_soc', 's--'), ('disconnected', '^:')]:
                     key = f'{case}_'+('drive_' if drive else '')+name
                     ax.plot(y, arrays[key][:, fi, 2], style, ms=4, label=case.replace('_', ' '))
@@ -359,11 +386,11 @@ def plot(arrays, summary, output):
                 ax.axvspan(boundary, y.max(), color='orange', alpha=.1)
                 ax.axvline(boundary, color='0.4', ls='--', lw=.8)
                 ax.axhline(0, color='0.5', lw=.6)
-                ax.set_ylabel(('C-total ' if drive else 'Row ') + name.upper()+r' $\delta\mu_z/E_x$'+'\n'+r'[$\mu_B$/(V/$\AA$)]')
+                ax.set_ylabel(('C-total ' if drive else 'Row ') + observable_label(name))
                 ax.legend(fontsize=8)
                 ax.grid(alpha=.2)
             axes[0].set_title(f"{summary['edge'].capitalize()} N / p-shell C, EF={mu:g} eV\n"+
-                ('One symmetrized row drive at a time' if drive else 'Uniform Ex; moments summed over each physical row'))
+                ('One symmetrized row drive at a time' if drive else 'Uniform Ex; observables summed over each physical row'))
             axes[-1].set_xlabel(('Driven' if drive else 'Observed')+' row y (Angstrom); N blue / C orange')
             target = Path(output)/f'{"drive_rows" if drive else "profile"}_f{fi}.png'
             temporary = target.with_suffix('.pending.png')
@@ -378,12 +405,12 @@ def export_csv(arrays, output):
         with path.open('w', newline='') as stream:
             writer = csv.writer(stream)
             writer.writerow(['case', 'driven_row' if drive else 'observed_row', 'y_A', 'region', 'fermi_eV',
-                'C_total_BSR_z' if drive else 'row_BSR_z', 'C_total_spin_z' if drive else 'row_spin_z'])
+                *[(('C_total_' if drive else 'row_')+name+'_z') for name in OBSERVABLES]])
             for case in ('full', 'no_soc', 'disconnected'):
                 prefix = case+('_drive_' if drive else '_')
                 for row, (y, region) in enumerate(zip(arrays['y_A'], arrays['regions'])):
                     for fi, mu in enumerate(arrays['fermi_eV']):
-                        writer.writerow([case, row, y, region, mu, arrays[prefix+'bsr'][row, fi, 2], arrays[prefix+'spin'][row, fi, 2]])
+                        writer.writerow([case, row, y, region, mu, *[arrays[prefix+name][row, fi, 2] for name in OBSERVABLES]])
 
 
 def plot_geometry(model, groups, regions, output):
@@ -460,26 +487,38 @@ def main(argv=None):
     arrays = dict(fermi_eV=np.array(args.fermi))
     metrics = {}
     timings = {}
+    row_arrays, row_checks = {}, {}
     with threadpool_limits(1):
         for case, soc, interface in [('full', args.soc, args.interface_hopping), ('no_soc', 0., args.interface_hopping), ('disconnected', args.soc, 0.)]:
             with contextlib.redirect_stdout(io.StringIO()):
                 model, y, groups, regions = build_nc_ribbon(output/case, args.edge, args.n_width, args.c_width, soc,
                     args.converter_hopping, interface, args.converter_shift)
             np.savez_compressed(output/case/'model.npz', ham_R=model.ham_R, iRvec=model.iRvec, rList=model.rList,
-                lattice=model.lattice, spin=model.spin, orbital=model.orbital, atom_rows=groups, regions=regions)
+                lattice=model.lattice, spin=model.spin, orbital=model.orbital, soc_R=model.soc_R, atom_rows=groups, regions=regions)
             if case == 'full':
                 plot_geometry(model, groups, regions, output)
             for grid in grids:
                 start = perf_counter()
-                result = calculate(model, groups, regions, grid, args.fermi, args.kbt, args.linewidth, args.workers)
+                rows = None
+                if grid == grids[-1] and (args.row_profiles or args.profile_drive_rows is not None):
+                    rows = args.profile_drive_rows or list(range(len(regions)))
+                result = calculate(model, groups, regions, grid, args.fermi, args.kbt, args.linewidth, args.workers, rows)
+                if rows is not None:
+                    row_arrays.update({case+'_'+key: value for key, value in result.items() if key.startswith('row_profile_')})
+                    for name in OBSERVABLES:
+                        matrix = result['row_profile_'+name]
+                        row_checks[case+'_'+name+'_C_sum'] = float(np.max(np.abs(matrix[:, regions=='C'].sum(axis=1)-result['drive_'+name][rows,:,2])))
+                        if len(rows)==len(regions):
+                            row_checks[case+'_'+name+'_drive_sum'] = float(np.max(np.abs(matrix.sum(axis=0)-result[name][:,:,2])))
+                    result = {key:value for key,value in result.items() if not key.startswith('row_profile_')}
                 timings[f'{case}_n{grid}'] = perf_counter()-start
                 arrays.update({f'{case}_{key}_n{grid}': value for key, value in result.items()})
                 print(f'{case} Nk={grid}, workers={mesh_execution(grid,args.workers)[1]}, {timings[f"{case}_n{grid}"]:.2f}s: max C spin z={np.max(np.abs(result["spin"][regions=="C", :, 2])):.8g}', flush=True)
             arrays.update({f'{case}_{key}': value for key, value in result.items()})
-            metrics[case] = {name+'_drive_sum_residual': float(np.max(np.abs(result['drive_'+name].sum(axis=0)-result[name][regions == 'C'].sum(axis=0)))) for name in ('bsr', 'spin')}
+            metrics[case] = {name+'_drive_sum_residual': float(np.max(np.abs(result['drive_'+name].sum(axis=0)-result[name][regions == 'C'].sum(axis=0)))) for name in OBSERVABLES}
             metrics[case]['max_inplane'] = float(max(np.max(np.abs(result[key][..., :2])) for key in result))
-            metrics[case]['C_total_z_by_fermi'] = {name: result[name][regions == 'C', :, 2].sum(axis=0).tolist() for name in ('bsr', 'spin')}
-            metrics[case]['N_drives_C_total_z_by_fermi'] = {name: result['drive_'+name][regions == 'N', :, 2].sum(axis=0).tolist() for name in ('bsr', 'spin')}
+            metrics[case]['C_total_z_by_fermi'] = {name: result[name][regions == 'C', :, 2].sum(axis=0).tolist() for name in OBSERVABLES}
+            metrics[case]['N_drives_C_total_z_by_fermi'] = {name: result['drive_'+name][regions == 'N', :, 2].sum(axis=0).tolist() for name in OBSERVABLES}
             if len(grids)>1:
                 metrics[case]['mesh_max_difference'] = {key: float(np.max(np.abs(result[key]-arrays[f'{case}_{key}_n{grids[-2]}']))) for key in result}
         with contextlib.redirect_stdout(io.StringIO()):
@@ -488,16 +527,20 @@ def main(argv=None):
         arrays.update({f'converter_bulk_{key}': value for key, value in hall.items() if key != 'band_edges'})
     arrays.update(y_A=y, regions=regions)
     checks = dict(mirror_inplane_zero=all(row['max_inplane']<1e-8 for row in metrics.values()),
-        drive_rows_sum=all(row[name+'_drive_sum_residual']<1e-8 for row in metrics.values() for name in ('bsr', 'spin')),
+        drive_rows_sum=all(row[name+'_drive_sum_residual']<1e-8 for row in metrics.values() for name in OBSERVABLES),
         converter_bulk_hall_zero=all(np.max(np.abs(hall[key]))<1e-8 for key in ('bsr', 'aca', 'shc')),
+        soc_torque_N_zero=bool(np.max(np.abs(arrays['full_soc_torque'][regions=='N']))<1e-8),
+        no_soc_torque_zero=bool(np.max(np.abs(arrays['no_soc_soc_torque']))<1e-8),
         no_soc_spin_zero=bool(np.max(np.abs(arrays['no_soc_spin']))<1e-8),
-        disconnected_C_zero=all(np.max(np.abs(arrays['disconnected_'+name][regions=='C']))<1e-8 and np.max(np.abs(arrays['disconnected_drive_'+name]))<1e-8 for name in ('bsr','spin')))
+        disconnected_C_zero=all(np.max(np.abs(arrays['disconnected_'+name][regions=='C']))<1e-8 and np.max(np.abs(arrays['disconnected_drive_'+name]))<1e-8 for name in OBSERVABLES))
     summary = dict(edge=args.edge, parameters={k: v for k,v in vars(args).items() if k!='output'},
         execution={str(grid): dict(zip(('chunks', 'effective_workers'), mesh_execution(grid,args.workers))) for grid in grids}, timings_seconds=timings,
         metrics=metrics, checks=checks, profile_axes=['observed_row','fermi','moment_xyz'], drive_axes=['driven_row','fermi','moment_xyz'],
         row_drive='symmetrized {P_row,v_x}/2; half of cross-row bonds at each endpoint; NOT strictly confined P_row v_x P_row',
         bsr_observable='junction-derived nonlocal BSR, projected as {P_row,m}/2; C sum includes interface coherences',
-        units='mu_B/(V/Angstrom) per longitudinal repeat', bulk_hall_max={key: float(np.max(np.abs(hall[key]))) for key in ('bsr','aca','shc')})
+        aca_observable='mu_L=-L in mu_B; onsite p-shell moment, zero in s-only N',
+        soc_torque_observable='i[H_SOC,mu_S] = hbar*d(mu_S)/dt from SOC; electronic torque, no reaction sign',
+        units={name: ('mu_B*eV/(V/Angstrom)' if name=='soc_torque' else 'mu_B/(V/Angstrom)')+' per longitudinal repeat' for name in OBSERVABLES}, bulk_hall_max={key: float(np.max(np.abs(hall[key]))) for key in ('bsr','aca','shc')})
     np.savez_compressed(output/'responses.npz', **arrays)
     (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     plot(arrays, summary, output)
@@ -506,7 +549,13 @@ def main(argv=None):
     if not all(checks.values()):
         raise RuntimeError('NC validation failed; inspect summary.json')
     if args.row_profiles or args.profile_drive_rows is not None:
-        add_saved_row_profiles(output, args.profile_drive_rows, args.workers)
+        save_row_profiles(row_arrays, y, regions, args.fermi, rows, output,
+            dict(parameters=summary['parameters'], grid=grids[-1], workers=args.workers,
+                 axes=['selected_drive_row','observed_row','fermi'], component='z',
+                 units=summary['units'], drive_rows=rows, residuals=row_checks,
+                 projection=summary['row_drive']))
+        if max(row_checks.values())>1e-8:
+            raise RuntimeError('Row-profile reconstruction failed')
 
 
 if __name__ == '__main__':

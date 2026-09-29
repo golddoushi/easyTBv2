@@ -48,7 +48,7 @@ The uniform-drive profiles sum moments over each physical transverse row;
 an armchair dimer line contains both atoms. BSR is calculated from the full
 junction eigenstates, rather than copied from the isolated source. Its row
 observable is {P_row,m_BSR}/2, and the C-total observable is {P_C,m_BSR}/2.
-The spin observable is the magnetic moment -sigma in mu_B. The BSR and spin
+The spin observable is the magnetic moment -sigma in mu_B. All four observable
 profiles use the established length-gauge first-order density-matrix kernel,
 including population I and coherence E channels, with scalar CRTA.
 
@@ -66,15 +66,15 @@ field strictly confined to N or a self-consistent electrostatic solution.
 
 Each calculation includes full, SOC-off, and interface-disconnected cases.
 The last case retains hopping and SOC within C. Disconnected C has zero
-BSR/spin accumulation, including under the row drives; turning SOC off
+BSR/spin/ACA/SOC-torque response, including under the row drives; turning SOC off
 eliminates spin response but need not eliminate junction BSR response.
 
 ## Output and validation
 
 Outputs live in `tmp/orbital_torque_hex/nc_zigzag` or `nc_armchair`:
 
-- `profile_f0.png`, `profile_f1.png`: uniform Ex, row BSR/spin z moments.
-- `drive_rows_f0.png`, `drive_rows_f1.png`: C-total BSR/spin z versus driven row.
+- `profile_f0.png`, `profile_f1.png`: uniform Ex, row BSR/spin/ACA moments and SOC torque (z).
+- `drive_rows_f0.png`, `drive_rows_f1.png`: C-total BSR/spin/ACA/SOC-torque z versus driven row.
 - `geometry.png`: N/C sites and interface bonds.
 - `responses.npz`: full xyz arrays, profile I/E channels, controls, and each mesh.
 - `profiles.csv`, `drive_rows.csv`: z-component tables for all cases and fillings.
@@ -83,7 +83,8 @@ Outputs live in `tmp/orbital_torque_hex/nc_zigzag` or `nc_armchair`:
 - Case subdirectories: reproducible primitive source and junction Hamiltonians.
   `model.npz` includes the final SOC Hamiltonian; the hr input precedes SOC.
 
-Response units are mu_B/(V/Angstrom) per longitudinal repeat. Defaults use
+Moment response units are mu_B/(V/Angstrom) per longitudinal repeat; SOC torque
+response units are mu_B*eV/(V/Angstrom) per longitudinal repeat. Defaults use
 EF=0 and 0.8 eV, kBT=0.01 eV, linewidth=0.02 eV, and 512/1024 shifted k meshes.
 Chunks of at most 32 points bound memory and exactly partition the mesh.
 `--workers N` runs independent chunks concurrently in a thread pool, with
@@ -113,7 +114,7 @@ from N and converted into spin: the junction changes the eigenstates, C
 driving can contribute, and BSR is a nonlocal observable with an explicitly
 chosen spatial partition. EF=0 denotes the isolated N midgap; C is metallic
 for these parameters, so the entire junction must not be called insulating.
-ACA moments in C are distinct from the BSR observable requested here.
+ACA moments in C are distinct from BSR and are now plotted alongside it.
 
 Options include `--edge`, `--n-width`, `--c-width`, `--soc`,
 `--interface-hopping`, `--converter-hopping`, `--converter-shift`, `--grids`,
@@ -141,24 +142,26 @@ is necessary.
 
 The `row_profiles/` subdirectory contains:
 
-- `profile_drive_rowNNN_fM.png`: BSR/spin z versus observed y for a specified
+- `profile_drive_rowNNN_fM.png`: BSR/spin/ACA/SOC-torque z versus observed y for a specified
   drive, with full/SOC-off/disconnected models. A vertical marker identifies
   the driven row. These are raw responses, with no spatial symmetrization.
 - `response_matrix_fM.png`: full-model heatmaps; horizontal index is observed
-  row and vertical index enumerates selected drives in `drive_rows`.
+  row and vertical labels give the physical row indices in `drive_rows`.
 - `responses.npz`: all cases, z-only total/I/E matrices with axes selected
   drive row, observed row, Fermi; plus positions, regions and drive indices.
 - `profiles.csv`: total/I/E values with drive and observed row indices,
   coordinates, region labels and Fermi energies.
 - `summary.json`: source parameters, mesh, timing, and marginal residuals.
-- `checkpoint.npz`: intermediate completed cases; model inputs in `models/`.
+- With `--row-profiles-only`, `checkpoint.npz` saves intermediate completed
+  cases and `models/` contains rebuilt model inputs.
 
 Replot stored matrices without recalculation using `--plot-only --row-profiles`
 with the same `--output` directory.
 Use `--plot-only --row-profiles-only` to regenerate just that subdirectory,
 leaving the original uniform and C-total plots untouched.
 
-For each drive, summing observed C rows must reproduce the old C-total curve.
+For each drive, summing observed C rows must reproduce the C-total curve.
+Saved marginal arrays, when present, are also checked against the fresh calculation.
 When all drives are requested, summing drive rows must reproduce the uniform
 profile. Both identities are checked, and independent tests compare every
 matrix element and I/E channel with public projected DM calculators. The
@@ -210,3 +213,60 @@ then compare converter width, linewidth and interface coupling. Inspect the
 two-row matrix and its I/E components to distinguish a moment near the drive
 from a response near the interface. The projected-drive protocol is not a
 self-consistent electrostatic bias or proof of diffusion.
+
+
+## ACA moment and local SOC torque
+
+All figures now have four panels: BSR, spin, ACA orbital moment, and electronic
+SOC spin-moment torque. NPZ keys use `aca` and `soc_torque`, with the same
+I/E channels and row-drive conventions as `bsr` and `spin`. Individual-drive
+profiles include all three control models; the response-matrix figure has
+four full-model heatmaps. The production calculation uses LG throughout.
+`--row-profiles` shares the finest-mesh preparation with the uniform calculation.
+Existing two-observable files need recalculation before four-panel replotting.
+
+The ACA vertex is mu_L=-L in mu_B; the spin vertex is mu_S=-sigma in mu_B.
+The exact onsite SOC term is explicitly registered in model.soc_R, including
+an all-zero array in the SOC-off control. The torque vertex is
+T_SOC=i[H_SOC,mu_S], i.e. hbar times the SOC contribution to d(mu_S)/dt.
+It has units mu_B*eV. Divide by hbar=0.6582119569 eV fs for a moment rate
+in mu_B/fs. This is an electronic torque, not a reaction torque on a
+ferromagnet (this N/C model contains no ferromagnet).
+
+Because SOC is onsite and only present in C, both ACA moment and SOC torque
+operators are identically zero on N. A nonzero C-row torque identifies a
+local SOC source/sink of electronic spin moment. It need not track the
+accumulated spin density: steady state also balances spin transport and
+relaxation. Its sign can vary between rows. Atomic SOC couples the p-shell
+ACA angular momentum; this diagnostic does not by itself prove that the
+source of that angular momentum was a transported conserved BSR current.
+
+The SOC-calculator audit checks the commutator sign, SOC/exchange decomposition,
+analytic covariant contact (including projector derivatives), no-SOC limit,
+LG/VG agreement, raw finite-frequency VG contraction, and pure-gauge residual.
+LG/VG agreement of the pole-subtracted finite part alone is insufficient:
+the raw pure-gauge residual must also converge with the mesh. The VG calculator
+is retained for this validation, not used in production figures.
+Tests in tests/test_hex_nc_ribbon.py additionally compare all four uniform,
+row-drive, and two-row responses, including I/E channels, against the public
+LG calculators, check SOC torque against VG, and verify its support only in C.
+
+Validation on 2026-09-29: 19 tests passed across `test_spin_soc_torque`,
+`test_hex_nc_ribbon`, and `test_observable_contacts`. For N width 2 / C width 2,
+both edge geometries, EF=0 and 0.8 eV, kBT=0.01 eV and eta=0.02 eV, the
+64/128/256/512-point checks give identical LG/VG finite torque responses and
+maximum raw projected pure-gauge residual below 1.3e-15. This validates gauge
+cancellation in these tests; it does not establish mesh convergence of the
+physical response. The independent contact test also exercises a general
+nonlocal position connection, where the contact is nonzero.
+
+The four-observable wide-ribbon run is saved separately in
+`tmp/orbital_torque_hex/nc_zigzag_soc_analysis`: N width 6, C width 32,
+lambda=0.1 eV, Nk=384, EF=0, kBT=0.01 eV, eta=0.02 eV, eight workers.
+It includes all 44 individual-drive profiles and all three cases. BSR/spin
+agree exactly with the prior saved run at those parameters. All controls
+pass; the largest two-row marginal residual is 2.44e-14. ACA magnitude peaks
+at physical row 12 (the first C row), whereas SOC torque magnitude peaks
+at row 16. Torque is zero in N but extends across C and changes sign.
+Its uniform-drive I channel is below 9e-15; the finite response is in E.
+These observations describe this mesh, not a further convergence claim.
