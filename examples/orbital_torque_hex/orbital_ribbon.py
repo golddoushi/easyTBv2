@@ -17,13 +17,31 @@ from calculator import (CollisionSpecification, OrbitalGalvanicConductivity_Bloc
     SpinGalvanicConductivity_LG_DM)
 
 
-def build_ribbon(directory, width=8, hopping=1., delta=.5):
-    """Periodic a1 along x, open a2 (finite y); 2*width atomic rows."""
+def build_ribbon(directory, width=8, hopping=1., delta=.5, edge='zigzag'):
+    """Periodic Cartesian x, open y; width counts transverse supercells.
+
+    Armchair: periodic a1+2*a2, transverse -width*a1, rotated by -90 deg.
+    It has 4*width atoms versus 2*width for zigzag; widths are not equivalent.
+    """
     if width < 2:
         raise ValueError('width >= 2 required')
-    model = build_model(directory, hopping=hopping, delta=delta)
-    model.make_supercell(np.diag([1, width, 1]))
+    if edge not in ('zigzag', 'armchair'):
+        raise ValueError('edge must be zigzag or armchair')
+    model = build_model(directory, hopping=hopping, delta=delta, rotation=-90 if edge == 'armchair' else 0)
+    transform = [[1, 2, 0], [-width, 0, 0], [0, 0, 1]] if edge == 'armchair' else np.diag([1, width, 1])
+    model.make_supercell(transform)
+    if edge == 'armchair':
+        # Reassign basis atoms to a common rectangular strip before cutting.
+        # Cutting the unwrapped primitive-cell basis leaves dangling atoms.
+        model.shiftOrigin(1, shift=0.25/width)
     model.cutEdge(1)
+    if edge == 'armchair':
+        # This s-only TB model uses the diagonal position approximation.
+        # Restore its centers after shiftOrigin remaps the home-cell basis.
+        model.AA_R_W[:] = 0
+        origin = model.iRvecIndex[(0, 0, 0)]
+        for orbital in range(model.norbs):
+            model.AA_R_W[origin, :, orbital, orbital] = model.rList[:, orbital]
     assert np.all(model.iRvec[:, 1:] == 0)
     return model
 
@@ -104,12 +122,25 @@ def plot_profiles(arrays, summary, output):
     import matplotlib.pyplot as plt
     n = max(summary['parameters']['grids'])
     x = np.arange(len(arrays[f'y_A_n{n}']))
+    armchair = summary['parameters']['edge'] == 'armchair'
+    if armchair:
+        # Equal-y atoms form one physical dimer line. Floating-point y sorting
+        # does not preserve sublattice order, so connecting individual atoms
+        # produces a misleading apparent violation of glide symmetry.
+        coordinates, groups = np.unique(np.round(arrays[f'y_A_n{n}'], 8), return_inverse=True)
+        atom_count = len(x)
+        arrays = dict(arrays)
+        for key, values in list(arrays.items()):
+            if values.ndim == 4 and values.shape[0] == atom_count:
+                arrays[key] = np.array([values[groups == group].sum(axis=0) for group in range(len(coordinates))])
+        x = coordinates
     for fi, mu in enumerate(arrays['fermi_eV']):
         fig, axes = plt.subplots(3, 1, figsize=(8, 8), sharex=True, constrained_layout=True)
         for grid in summary['parameters']['grids']:
             axes[0].plot(x, arrays[f'bsr_n{grid}'][:, fi, 0, 2], 'o-', ms=3, label=f'BSR LG Nk={grid}')
         axes[0].plot(x, arrays[f'bsr_vg_n{n}'][:, fi, 0, 2], 'x--', label='BSR VG finite part')
-        axes[0].plot(x, arrays['narrower_bsr'][:, fi, 0, 2], '-.', label='BSR LG: half kBT and linewidth')
+        axes[0].plot(x, arrays['narrower_bsr'][:, fi, 0, 2], '-.', label='BSR LG: half linewidth (fixed kBT)')
+        axes[0].plot(x, arrays['colder_bsr'][:, fi, 0, 2], ':', label='BSR LG: half kBT (fixed linewidth)')
         for ch in ('I', 'E'):
             axes[1].plot(x, arrays[f'bsr_{ch}_n{n}'][:, fi, 0, 2], 'o-', ms=3, label=f'BSR {ch}')
         axes[2].plot(x, arrays[f'aca_n{n}'][:, fi, 0, 2], label='ACA z / Ex')
@@ -121,16 +152,45 @@ def plot_profiles(arrays, summary, output):
             ax.grid(alpha=.2)
             ax.legend(fontsize=8)
             ax.set_ylabel(r'$\delta\mu/E_x$ [$\mu_B$/(V/$\AA$)]')
-        axes[0].set_title(f'Projected ribbon BSR moment: EF={mu:g} eV\n{len(x)} atomic rows; fixed-operator response')
-        axes[2].set_xlabel('Observed atomic row (increasing y)')
-        fig.savefig(Path(output)/f'profile_f{fi}.png', dpi=160)
+        spatial_label = f'{len(x)} dimer lines (sum of both atoms)' if armchair else f'{len(x)} atoms'
+        axes[0].set_title(f"{summary['parameters']['edge'].capitalize()} ribbon BSR moment: EF={mu:g} eV\n{spatial_label}; fixed-operator response")
+        axes[2].set_xlabel('Dimer-line y (Angstrom)' if armchair else 'Observed atom (ordered by y)')
+        # Publish a complete PNG so file viewers never observe a partial write.
+        temporary = Path(output)/f'profile_f{fi}.pending.png'
+        fig.savefig(temporary, dpi=160)
+        temporary.replace(Path(output)/f'profile_f{fi}.png')
         plt.close(fig)
+
+
+def plot_geometry(model, output, edge):
+    """Show three longitudinal cells, including actual boundary bonds."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+    half = model.norbs//2
+    positions = model.rList[:, :half].T
+    for cell in (-1, 0, 1):
+        points = positions+cell*model.lattice[0]
+        for r, block in zip(model.iRvec, model.ham_R[:, :half, :half]):
+            for i, j in zip(*np.nonzero(np.abs(block)>1e-10)):
+                if i == j and np.all(r == 0):
+                    continue
+                bond = np.array([points[i], points[j]+r@model.lattice])
+                ax.plot(bond[:, 0], bond[:, 1], color='0.65', lw=1)
+        onsite = np.diag(model.ham_R[model.iRvecIndex[(0, 0, 0)], :half, :half]).real
+        ax.scatter(points[:, 0], points[:, 1], c=onsite, cmap='coolwarm', vmin=-.5, vmax=.5, zorder=3)
+    ax.set(xlabel='x (Angstrom): periodic / electric field', ylabel='y (Angstrom): open', title=f'{edge.capitalize()} ribbon: actual nearest-neighbor bonds')
+    ax.set_aspect('equal')
+    fig.savefig(Path(output)/'geometry.png', dpi=160)
+    plt.close(fig)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--output', type=Path, default=Path('tmp/orbital_torque_hex/ribbon'))
+    p.add_argument('--output', type=Path, default=None)
     p.add_argument('--width', type=int, default=8)
+    p.add_argument('--edge', choices=['zigzag', 'armchair'], default='zigzag')
     p.add_argument('--grids', type=int, nargs='+', default=[256, 512])
     p.add_argument('--fermi', type=float, nargs='+', default=[0., .8])
     p.add_argument('--kbt', type=float, default=.01)
@@ -139,6 +199,8 @@ def main(argv=None):
     p.add_argument('--mesh-shift', type=float, default=0., help='k offset in mesh spacings; 0.5 avoids endpoint degeneracies')
     p.add_argument('--plot-only', action='store_true')
     args = p.parse_args(argv)
+    if args.output is None:
+        args.output = Path('tmp/orbital_torque_hex')/('ribbon_armchair' if args.edge == 'armchair' else 'ribbon')
     if args.plot_only:
         with np.load(args.output/'responses.npz') as arrays:
             plot_profiles(arrays, json.loads((args.output/'summary.json').read_text()), args.output)
@@ -147,7 +209,8 @@ def main(argv=None):
         p.error('width >=2, grids >=3, batch size >=1, finite fillings and positive finite kBT/linewidth required')
     args.output.mkdir(parents=True, exist_ok=True)
     with contextlib.redirect_stdout(io.StringIO()):
-        model = build_ribbon(args.output/'model', args.width)
+        model = build_ribbon(args.output/'model', args.width, edge=args.edge)
+    plot_geometry(model, args.output, args.edge)
     for name, system in [('model', model)]:
         np.savez_compressed(args.output/name/'ribbon_model.npz', ham_R=system.ham_R, iRvec=system.iRvec,
             lattice=system.lattice, rList=system.rList, orbital=system.orbital, spin=system.spin)
@@ -166,26 +229,31 @@ def main(argv=None):
                 band_edges_eV=response['band_edges'].tolist())
             metrics.append(metric)
             print(json.dumps(metric), flush=True)
-        narrower = calculate_profile(model, grids[-1], args.fermi, args.kbt/2, args.linewidth/2, args.batch_size, args.mesh_shift)
+        narrower = calculate_profile(model, grids[-1], args.fermi, args.kbt, args.linewidth/2, args.batch_size, args.mesh_shift)
+        colder = calculate_profile(model, grids[-1], args.fermi, args.kbt/2, args.linewidth, args.batch_size, args.mesh_shift)
     arrays.update({f'narrower_{key}': value for key, value in narrower.items()})
+    arrays.update({f'colder_{key}': value for key, value in colder.items()})
     checks = dict(lg_vg_equal=all(m['lg_vg_difference'] < 1e-9 for m in metrics),
         projected_moments_sum=all(m['projected_sum_residual'] < 1e-9 for m in metrics),
         zero_aca_and_spin=all(max(m['max_aca'], m['max_spin']) < 1e-9 for m in metrics))
     summary = dict(parameters={k: v for k, v in vars(args).items() if k != 'output'}, checks=checks,
         metrics=metrics, axes=['observed_row', 'fermi', 'field', 'moment'], units='mu_B/(V/Angstrom) per x repeat',
         projection='symmetrized {P_row,m_BSR}/2; ribbon-derived nonlocal moment',
+        parameter_controls={'narrower': 'half linewidth, unchanged kBT', 'colder': 'half kBT, unchanged linewidth'},
         vg_scope='BSR covariant contact included; inspect static pole residual under mesh refinement, independently of finite-part LG/VG equality',
         max_bsr_Ex_z_by_fermi=np.max(np.abs(response['bsr'][:, :, 0, 2]), axis=0).tolist(),
+        colder_max_bsr_Ex_z_by_fermi=np.max(np.abs(colder['bsr'][:, :, 0, 2]), axis=0).tolist(),
+        colder_max_profile_change_by_fermi=np.max(np.abs(colder['bsr'][:, :, 0, 2]-response['bsr'][:, :, 0, 2]), axis=0).tolist(),
         narrower_max_bsr_Ex_z_by_fermi=np.max(np.abs(narrower['bsr'][:, :, 0, 2]), axis=0).tolist())
     if len(grids) > 1:
         summary['last_mesh_Ex_z_difference_by_fermi'] = np.max(np.abs(response['bsr'][:, :, 0, 2]-arrays[f'bsr_n{grids[-2]}'][:, :, 0, 2]), axis=0).tolist()
     np.savez_compressed(args.output/'responses.npz', **arrays)
     with (args.output/'profiles.csv').open('w', newline='') as stream:
         writer = csv.writer(stream)
-        writer.writerow(['row', 'y_A', 'fermi_eV', 'BSR_LG_Ex_z', 'BSR_I', 'BSR_E', 'BSR_VG', 'ACA', 'spin_z', 'narrower_BSR'])
+        writer.writerow(['row', 'y_A', 'fermi_eV', 'BSR_LG_Ex_z', 'BSR_I', 'BSR_E', 'BSR_VG', 'ACA', 'spin_z', 'half_linewidth_BSR', 'half_kBT_BSR'])
         for row, y in enumerate(response['y_A']):
             for fi, mu in enumerate(args.fermi):
-                writer.writerow([row, y, mu]+[response[key][row, fi, 0, 2] for key in ('bsr', 'bsr_I', 'bsr_E', 'bsr_vg', 'aca', 'spin')]+[narrower['bsr'][row, fi, 0, 2]])
+                writer.writerow([row, y, mu]+[response[key][row, fi, 0, 2] for key in ('bsr', 'bsr_I', 'bsr_E', 'bsr_vg', 'aca', 'spin')]+[narrower['bsr'][row, fi, 0, 2], colder['bsr'][row, fi, 0, 2]])
     (args.output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     plot_profiles(arrays, summary, args.output)
     print(json.dumps(summary, indent=2))

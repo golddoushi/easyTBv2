@@ -17,7 +17,7 @@ from calculator import (CollisionSpecification, OrbitalHallConductance_BlochSelf
                         OrbitalHallConductance_LG_DM, SpinHallConductance_LG_DM)
 
 
-def build_model(directory, hopping=1., delta=.5, lattice_constant=2.4):
+def build_model(directory, hopping=1., delta=.5, lattice_constant=2.4, rotation=0.):
     """BNcol geometry and hoppings, duplicated as (A up,B up,A down,B down).
 
     H_AB=-t*(1+exp(i k.a1)+exp(-i k.a2)); H_AA=Delta=-H_BB.
@@ -28,9 +28,12 @@ def build_model(directory, hopping=1., delta=.5, lattice_constant=2.4):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     a = lattice_constant
+    angle = np.deg2rad(rotation)
+    rotate = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    lattice = np.array([[a, 0, 0], [-a/2, a*np.sqrt(3)/2, 0], [0, 0, 15]]) @ rotate.T
     (directory/'POSCAR').write_text(
-        f'Spinful s-only honeycomb\n1.0\n{a:.16g} 0 0\n{-a/2:.16g} {a*np.sqrt(3)/2:.16g} 0\n'
-        '0 0 15\nA B\n1 1\nDirect\n'
+        'Spinful s-only honeycomb\n1.0\n'+''.join(' '.join(f'{v:.16g}' for v in row)+'\n' for row in lattice)+
+        'A B\n1 1\nDirect\n'
         '0.6666666666666667 0.3333333333333333 0.5\n'
         '0.3333333333333333 0.6666666666666667 0.5\n')
     rvec = np.array([[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, -1, 0], [0, 1, 0]])

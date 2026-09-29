@@ -4,6 +4,7 @@
 python examples/orbital_torque_hex/orbital_ribbon.py
 python examples/orbital_torque_hex/orbital_ribbon.py --plot-only
 python examples/orbital_torque_hex/orbital_ribbon.py --mesh-shift 0.5 --output tmp/orbital_torque_hex/ribbon_shifted
+python examples/orbital_torque_hex/orbital_ribbon.py --edge armchair --width 4 --mesh-shift 0.5 --grids 128 256 --output tmp/orbital_torque_hex/ribbon_armchair
 python tests/test_hex_orbital_ribbon.py
 ```
 
@@ -14,6 +15,29 @@ Defaults: 8 primitive transverse cells, 16 atoms at different y coordinates,
 The original staggered onsite energies and hopping are retained. The two
 terminations are inequivalent because of the sublattice potential; an odd
 profile or zero total moment is not imposed.
+
+`--edge armchair` instead uses the rectangular supercell with longitudinal
+vector a1+2*a2 and transverse vector -width*a1, rotated so the longitudinal
+direction is again Cartesian x. The basis is wrapped before cutting, and
+the diagonal TB position vertex is rebuilt at the new centers. Tests check
+nearest-neighbor distances, four two-neighbor edge atoms, and three-neighbor
+interior atoms. `geometry.png` shows the actual bonds and both sublattices.
+Armchair width W contains 4W atoms (2W dimer lines), versus 2W zigzag atoms.
+Width 4 armchair and width 8 zigzag both have 32 bands but different physical
+widths and repeat lengths; their raw per-cell susceptibilities are not a
+matched-width comparison. Saved arrays and CSV retain each atom separately.
+Armchair profile figures sum the two atoms at equal y and plot against the
+physical dimer-line coordinate. These are sums, not averages.
+
+The glide `(x,y) -> (x+Lx/2, ymin+ymax-y)` preserves each sublattice and
+the Hamiltonian. Ex is even and the axial moment mz is odd, requiring
+opposite responses at glide-related sites, for each I/E channel separately.
+The earlier atom-index plots could appear asymmetric because floating-point
+y sorting ordered A/B differently within equal-y dimers. Reversing that
+index sequence is not the glide permutation. At EF=0.8, the lower-edge A/B
+responses are -3.34168330/+10.02672103; their upper-edge partners have the
+opposite signs. Dimer-line edge sums are +6.68503772/-6.68503772. No symmetry
+averaging is imposed; the corrected plot simply groups equal-y sites.
 
 ## Calculator audit and scope
 
@@ -76,8 +100,8 @@ The applied Ex is uniform; there are no row-projected drives in this stage.
 `tmp/orbital_torque_hex/ribbon/` contains:
 
 - `profile_f0.png` and `profile_f1.png`: BSR z/Ex profiles at each filling,
-  LG mesh comparison, VG finite part, and a run with
-  both temperature and linewidth halved. The next panel separates I/E;
+  LG mesh comparison, VG finite part, half linewidth at fixed temperature,
+  and half temperature at fixed linewidth. The next panel separates I/E;
   the final panel shows ACA and spin zeros without rounding the data.
 - `responses.npz`: full field/moment tensors and channels for every mesh,
   VG pole residuals including the contact and reduced-temperature/linewidth runs.
@@ -103,7 +127,44 @@ current or torque source. It also does not establish edge localization or a
 decay length without width convergence. The 64/128 meshes were inadequate
 for the metallic case; defaults use 256/512 and report remaining differences.
 
-At Nk=512, the maximum z/Ex response is 0.00786228 at EF=0 and 11.33479065
+The earlier simultaneous change of temperature and linewidth could not
+identify which parameter caused the difference. The current example varies
+them independently: `narrower_*` means half linewidth only, while `colder_*`
+means half kBT only. At EF=0 the zigzag spectrum has edges +/-0.5 eV, so the
+occupied-to-empty transition gap is at least 1 eV, much larger than linewidth
+0.02 eV. Fermi occupation corrections at kBT=0.01 eV are exponentially small
+(exp(-50)); small splittings within occupied or empty manifolds do not supply
+a sizable occupation difference. Interband therefore does not imply a
+small-gap resonance.
+
+The CRTA coherence kernel is proportional to
+`i*(f_n-f_m)*v_nm/[Delta_nm*(Delta_nm-i*eta)]` in the code's convention.
+For this time-reversal-symmetric model's time-reversal-odd moment response,
+the surviving dissipative contribution contains a factor proportional to
+`eta/(Delta_nm^2+eta^2)` (with the other matrix elements and gap factors).
+When eta is far below the occupied-to-empty gap it scales approximately
+linearly with eta. This explains why a finite interband accumulation can
+halve with linewidth, despite saturated occupations. It does not demonstrate
+a relaxation-independent insulating edge accumulation. The BSR operator's
+own excluded-gap prescription is a separate issue from these response
+denominators.
+
+Independent controls at EF=0 (maximum absolute atom-projected z response):
+
+| Ribbon / shifted mesh | kBT=.01, eta=.02 | kBT=.005, eta=.02 | kBT=.01, eta=.01 |
+|---|---:|---:|---:|
+| Zigzag W=8 / 512 | 0.0078996691 | 0.0078996691 | 0.0039503235 |
+| Armchair W=4 / 256 | 0.0064458894 | 0.0064458894 | 0.0032235118 |
+
+Units are mu_B/(V/Angstrom) per longitudinal repeat. Temperature halving
+changes neither midgap profile at numerical precision; linewidth halving
+approximately halves both. The armchair 128-to-256 midgap profile change is
+below 9e-13, whereas the metallic change is 0.00458 and needs further mesh
+convergence for higher precision. These are fixed-width examples, not width
+convergence or evidence that one termination is more efficient.
+
+For reference, in the original unshifted run with jointly varied parameters,
+at Nk=512 the maximum z/Ex response was 0.00786228 at EF=0 and 11.33479065
 at EF=0.8 eV. Halving both temperature and linewidth gives 0.00393163 and
 22.82692282 respectively. The 256-to-512 maximum profile differences are
 3.74e-5 and 2.64e-4; these are finite-mesh comparisons, not a claim of exact
@@ -112,7 +173,7 @@ the maximum spin response is below 4e-20. These response values use the
 unshifted meshes; the contact changes the static gauge residual, not the
 pole-subtracted dc finite part. Residual units are mu_B eV/(V/Angstrom).
 
-Options: `--width`, `--grids`, `--fermi`, `--kbt`, `--linewidth`,
+Options: `--edge`, `--width`, `--grids`, `--fermi`, `--kbt`, `--linewidth`,
 `--batch-size`, `--mesh-shift`, `--output`, `--plot-only`. Projector batches limit memory
 and reuse the band states. Equal interleaved k submeshes cap each calculator
 at 64 points; their union is exactly the requested grid. Response tensors
