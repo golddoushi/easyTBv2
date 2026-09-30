@@ -42,7 +42,6 @@ class ElectronicVertices:
     RRExchange_K: np.ndarray | None = None
     exchange_K: np.ndarray | None = None
     exchange_K_AO: np.ndarray | None = None
-    exchange_R_intepolated: np.ndarray | None = None
     orbitalTorqueAA_K: np.ndarray | None = None
     orbitalTorqueA_K: np.ndarray | None = None
     orbitalTorqueE_K: np.ndarray | None = None
@@ -60,10 +59,6 @@ class ElectronicVertices:
     projected_orbitalTorque_K_list: list | tuple | None = None
     projected_orbitalVelocity_K_list: list | tuple | None = None
     projected_orbital_K_list: list | tuple | None = None
-    projected_spinExchangeTorqueAA_K_list: list | tuple | None = None
-    projected_spinExchangeTorqueA_K_list: list | tuple | None = None
-    projected_spinExchangeTorqueE_K_list: list | tuple | None = None
-    projected_spinExchangeTorque_K_list: list | tuple | None = None
     projected_spinTorqueAA_K_list: list | tuple | None = None
     projected_spinTorqueA_K_list: list | tuple | None = None
     projected_spinTorqueE_K_list: list | tuple | None = None
@@ -72,10 +67,6 @@ class ElectronicVertices:
     projected_spin_K_list: list | tuple | None = None
     r_K: np.ndarray | None = None
     r_deriv_K: np.ndarray | None = None
-    spinExchangeTorqueAA_K: np.ndarray | None = None
-    spinExchangeTorqueA_K: np.ndarray | None = None
-    spinExchangeTorqueE_K: np.ndarray | None = None
-    spinExchangeTorque_K: np.ndarray | None = None
     spinTorqueAA_K: np.ndarray | None = None
     spinTorqueA_K: np.ndarray | None = None
     spinTorqueE_K: np.ndarray | None = None
@@ -218,10 +209,6 @@ class ElectronicTensorView:
         return self.electronic.exchange_K_AO
 
     @property
-    def exchange_R_intepolated(self):
-        return self.electronic.exchange_R_intepolated
-
-    @property
     def orbitalTorqueAA_K(self):
         return self.electronic.orbitalTorqueAA_K
 
@@ -282,22 +269,6 @@ class ElectronicTensorView:
         return self.electronic.projected_orbital_K_list
 
     @property
-    def projected_spinExchangeTorqueAA_K_list(self):
-        return self.electronic.projected_spinExchangeTorqueAA_K_list
-
-    @property
-    def projected_spinExchangeTorqueA_K_list(self):
-        return self.electronic.projected_spinExchangeTorqueA_K_list
-
-    @property
-    def projected_spinExchangeTorqueE_K_list(self):
-        return self.electronic.projected_spinExchangeTorqueE_K_list
-
-    @property
-    def projected_spinExchangeTorque_K_list(self):
-        return self.electronic.projected_spinExchangeTorque_K_list
-
-    @property
     def projected_spinTorqueAA_K_list(self):
         return self.electronic.projected_spinTorqueAA_K_list
 
@@ -328,22 +299,6 @@ class ElectronicTensorView:
     @property
     def r_deriv_K(self):
         return self.electronic.r_deriv_K
-
-    @property
-    def spinExchangeTorqueAA_K(self):
-        return self.electronic.spinExchangeTorqueAA_K
-
-    @property
-    def spinExchangeTorqueA_K(self):
-        return self.electronic.spinExchangeTorqueA_K
-
-    @property
-    def spinExchangeTorqueE_K(self):
-        return self.electronic.spinExchangeTorqueE_K
-
-    @property
-    def spinExchangeTorque_K(self):
-        return self.electronic.spinExchangeTorque_K
 
     @property
     def spinTorqueAA_K(self):

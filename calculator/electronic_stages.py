@@ -872,27 +872,26 @@ class SpinExchangeTorque(Spin):
         assert self.model.exchange_R.shape==self.model.ham_R.shape, f"exchange_R shape {self.model.exchange_R.shape} differs from ham_R shape {self.model.ham_R.shape}"
 
         exchange_R=self.model.exchange_R*self.phaseFactorR[:,None,None]
-        self.exchange_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
+        exchange_R_intepolated=np.zeros(self.kgrid+(self.model.norbs,self.model.norbs),dtype=complex)
         for iR,Rvec in enumerate(self.model.iRvec):
-            self.exchange_R_intepolated[tuple(Rvec)]=exchange_R[iR]
-        self.exchange_K_AO=np.fft.ifftn(self.exchange_R_intepolated,axes=(0,1,2))*np.prod(self.kgrid)
+            index = tuple(np.asarray(Rvec) % self.kgrid)
+            exchange_R_intepolated[index] += exchange_R[iR]
+        self.exchange_K_AO=np.fft.ifftn(exchange_R_intepolated,axes=(0,1,2))*np.prod(self.kgrid)
         self.exchange_K=self.vectors.conj().swapaxes(-2,-1) @ self.exchange_K_AO @ self.vectors
 
         spin=self.spin_K
         exchange=self.exchange_K[...,None,:,:]
-        self.spinExchangeTorque_K=-1j*(spin@exchange-exchange@spin)
-        self.spinTorque_K=self.spinExchangeTorque_K
+        self.spinTorque_K=-1j*(spin@exchange-exchange@spin)
 
         self.spinTorqueProjectionList = spinTorqueProjectionList
-        self.projected_spinExchangeTorque_K_list=[]
+        self.projected_spinTorque_K_list=[]
         for spinTorqueProjection in spinTorqueProjectionList:
             proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
-            projected=(proj1_K@self.spinExchangeTorque_K+self.spinExchangeTorque_K@proj2_K)/2
-            self.projected_spinExchangeTorque_K_list.append(projected)
-        self.projected_spinTorque_K_list=self.projected_spinExchangeTorque_K_list
+            projected=(proj1_K@self.spinTorque_K + self.spinTorque_K@proj2_K)/2
+            self.projected_spinTorque_K_list.append(projected)
         if self.verbose==2: showElapsedTime(extraInfo="spin exchange torque in eig.-basis finished")
 
     def buildSpinTorqueVelocityCommutator(self):
@@ -904,8 +903,8 @@ class SpinExchangeTorque(Spin):
         retain the local field-independent approximation with zero vertices.
         '''
         nbasis=self.energies.shape[-1]
-        self.spinExchangeTorqueA_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
-        self.spinExchangeTorqueAA_K=np.zeros(self.kgrid+(3,3,3,nbasis,nbasis),dtype=complex)
+        self.spinTorqueA_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
+        self.spinTorqueAA_K=np.zeros(self.kgrid+(3,3,3,nbasis,nbasis),dtype=complex)
         if getattr(self,"exchangeVelocity",False):
             assert hasattr(self,"velocity_xc_K") and hasattr(self,"w_xc_K"), \
                 "exchange velocity matrices were requested but not constructed"
@@ -913,28 +912,22 @@ class SpinExchangeTorque(Spin):
                 spin_c=self.spin_K[...,c,:,:]
                 for a in range(3):
                     velocity_xc_a=self.velocity_xc_K[...,a,:,:]
-                    self.spinExchangeTorqueA_K[...,c,a,:,:]=-1j*(spin_c@velocity_xc_a-velocity_xc_a@spin_c)
+                    self.spinTorqueA_K[...,c,a,:,:]=-1j*(spin_c@velocity_xc_a-velocity_xc_a@spin_c)
                     for b in range(3):
                         w_xc_ab=self.w_xc_K[...,a,b,:,:]
-                        self.spinExchangeTorqueAA_K[...,c,a,b,:,:]=-1j*(spin_c@w_xc_ab-w_xc_ab@spin_c)
-        self.spinTorqueA_K=self.spinExchangeTorqueA_K
-        self.spinTorqueAA_K=self.spinExchangeTorqueAA_K
+                        self.spinTorqueAA_K[...,c,a,b,:,:]=-1j*(spin_c@w_xc_ab-w_xc_ab@spin_c)
 
-        self.projected_spinExchangeTorqueA_K_list=[]
-        self.projected_spinExchangeTorqueAA_K_list=[]
+        self.projected_spinTorqueA_K_list=[]
+        self.projected_spinTorqueAA_K_list=[]
         for spinTorqueProjection in self.spinTorqueProjectionList:
             proj1=projectionOperator(spinTorqueProjection['source'],self.model.atomicOrbInfoList,self.model.norbs)
             proj2=projectionOperator(spinTorqueProjection['target'],self.model.atomicOrbInfoList,self.model.norbs)
             proj1_K=self.projectorInEigenBasis(proj1)
             proj2_K=self.projectorInEigenBasis(proj2)
-            self.projected_spinExchangeTorqueA_K_list.append(
-                (proj1_K[...,None,None,:,:]@self.spinExchangeTorqueA_K
-                 +self.spinExchangeTorqueA_K@proj2_K[...,None,None,:,:])/2)
-            self.projected_spinExchangeTorqueAA_K_list.append(
-                (proj1_K[...,None,None,None,:,:]@self.spinExchangeTorqueAA_K
-                 +self.spinExchangeTorqueAA_K@proj2_K[...,None,None,None,:,:])/2)
-        self.projected_spinTorqueA_K_list=self.projected_spinExchangeTorqueA_K_list
-        self.projected_spinTorqueAA_K_list=self.projected_spinExchangeTorqueAA_K_list
+            self.projected_spinTorqueA_K_list.append(
+                (proj1_K[...,None,None,:,:]@self.spinTorqueA_K + self.spinTorqueA_K@proj2_K[...,None,None,:,:])/2)
+            self.projected_spinTorqueAA_K_list.append(
+                (proj1_K[...,None,None,None,:,:]@self.spinTorqueAA_K + self.spinTorqueAA_K@proj2_K[...,None,None,None,:,:])/2)
         if self.verbose==2: showElapsedTime(extraInfo="velocity corrected spin exchange torque finished")
 
     def buildSpinTorqueDipoleCommutator(self):
@@ -946,10 +939,8 @@ class SpinExchangeTorque(Spin):
         through explicit dipole-dependent exchange-torque vertices.
         '''
         nbasis=self.energies.shape[-1]
-        self.spinExchangeTorqueE_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
-        self.spinTorqueE_K=self.spinExchangeTorqueE_K
-        self.projected_spinExchangeTorqueE_K_list=[np.zeros_like(self.spinExchangeTorqueE_K) for _ in self.spinTorqueProjectionList]
-        self.projected_spinTorqueE_K_list=self.projected_spinExchangeTorqueE_K_list
+        self.spinTorqueE_K=np.zeros(self.kgrid+(3,3,nbasis,nbasis),dtype=complex)
+        self.projected_spinTorqueE_K_list=[np.zeros_like(self.spinTorqueE_K) for _ in self.spinTorqueProjectionList]
         if self.verbose==2: showElapsedTime(extraInfo="zero dipole corrected spin exchange torque finished")
 
 class OrbitalTorque(Orbital):
