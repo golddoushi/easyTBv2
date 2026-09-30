@@ -34,3 +34,5 @@ from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOn
 from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath
 from .Path import SurfaceBulkSpectraOnPath
 
+from .Grid import (SpinFluxTorque, SpinFluxTorqueGalvanicConductivity_LG_DM,
+                   SpinFluxTorqueGalvanicConductivity_VG_DM)

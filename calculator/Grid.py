@@ -24,7 +24,7 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
 from .collision import (CollisionSpecification, PreparedCollision, resolve_collision, collision_mode,
                         prepare_phonon_background)
 from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbital,
-                                SpinTorque, SpinExchangeTorque, SpinSOCTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity,
+                                SpinTorque, SpinExchangeTorque, SpinSOCTorque, SpinFluxTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity,
                                 Orbital_BlochSelfRotate, OrbitalVelocity_BlochSelfRotate)
 from .response_inputs import ResponseInputs
 from .response_results import publish_conductivity, publish_second_order, FirstOrderResponseResult
@@ -3587,19 +3587,49 @@ class SpintorqueVelocityCorrelation(SpinExchangeTorque,Velocity):
         
         if self.verbose==2: showElapsedTime(extraInfo=f"evaluations on inter band contributions on correlation function <Torque_Spin velocity> finished")
 
+def _publish_spin_torque_projection_results(owner):
+    """Expose both observable groups without repeating the density-matrix solve.
+
+    The combined observable axis is total, projected torque, then torque of
+    projected spin. Named group arrays exclude the total, which remains sigma.
+    """
+    nt = len(owner.projected_spinTorque_K_list)
+    ns = len(owner.projectedSpin_torque_K_list)
+    owner.torque_observable_labels = (('total', 0),)+tuple(
+        ('projected_spinTorque', i) for i in range(nt))+tuple(
+        ('projectedSpin_torque', i) for i in range(ns))
+    for prefix, selection in (('projected_spinTorque', slice(1, 1+nt)),
+                              ('projectedSpin_torque', slice(1+nt, 1+nt+ns))):
+        for name in ('sigma', 'response'):
+            setattr(owner, prefix+'_'+name, getattr(owner, 'projected_'+name)[:, selection])
+            setattr(owner, prefix+'_'+name+'_channels', {key: value[:, selection]
+                for key, value in getattr(owner, 'projected_'+name+'_channels').items()})
+        if hasattr(owner, 'projected_sum_rule_residual'):
+            setattr(owner, prefix+'_sum_rule_residual', owner.projected_sum_rule_residual[:, selection])
+
 class _SpinTorqueGalvanicConductivity_LG_DM(DensityMatrixResponse):
-    """LG response contraction shared by the electronic spin-torque stages."""
+    """LG response with two independent, simultaneously available projections.
+
+    spinTorqueProjectionList projects -i[mu,H]; spinProjectionList selects
+    mu_P first and measures -i[mu_P,H]. Combined observable axes are ordered
+    total, projected torque, torque of projected spin. The separate
+    projected_spinTorque_sigma and projectedSpin_torque_sigma arrays exclude
+    the total; corresponding response, channel and residual arrays use the
+    same grouping. Empty input lists produce empty groups, never a fallback
+    to the other projection definition.
+    """
     Iodd = True
     Todd = False
 
-    def __init__(self, currentProjectionList=None, spinTorqueProjectionList=None,
+    def __init__(self, currentProjectionList=None, spinProjectionList=None, spinTorqueProjectionList=None,
                  responseFermiIndexList=None, finiteTemperatureOccupations=True,
                  fullCovariantDerivative=True, **kwarg):
         currentProjectionList = [] if currentProjectionList is None else currentProjectionList
+        spinProjectionList = [] if spinProjectionList is None else spinProjectionList
         spinTorqueProjectionList = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
         super().__init__(electronic_stages=(self.torque_stage,), velocityProjectionList=currentProjectionList,
-                         spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
-        observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list
+                         spinProjectionList=spinProjectionList, spinTorqueProjectionList=spinTorqueProjectionList, **kwarg)
+        observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list + self.projectedSpin_torque_K_list
         result = _solve_dc_galvanic_lg_density_matrix(
             self.inputs, observable_vertices, responseFermiIndexList,
             finiteTemperatureOccupations, fullCovariantDerivative,
@@ -3608,7 +3638,37 @@ class _SpinTorqueGalvanicConductivity_LG_DM(DensityMatrixResponse):
         self.fullCovariantDerivative = bool(fullCovariantDerivative)
         self.accept_first_order_result(result)
         _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B*eV/(V/angstrom)/cell', result.pole_residual)
+        _publish_spin_torque_projection_results(self)
         if self.verbose==2: showElapsedTime(extraInfo="Length-gauge density-matrix spin-torque galvanic conductivity finished")
+
+class _SpinTorqueGalvanicConductivity_VG_DM(DensityMatrixResponse):
+    """VG response with both projection orders and complete first-order contacts."""
+    Iodd = True
+    Todd = False
+
+    def __init__(self, currentProjectionList=None, spinProjectionList=None, spinTorqueProjectionList=None,
+                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
+                 fullCovariantDerivative=True, **kwarg):
+        if currentProjectionList:
+            raise NotImplementedError('VG spin torque requires the total drive current')
+        if response_requires_full_basis(kwarg):
+            raise NotImplementedError('VG spin torque requires the complete orthogonal model basis')
+        spinProjectionList = [] if spinProjectionList is None else spinProjectionList
+        spinTorqueProjectionList = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
+        super().__init__(electronic_stages=(self.torque_stage,), velocityProjectionList=[],
+            spinProjectionList=spinProjectionList, spinTorqueProjectionList=spinTorqueProjectionList,
+            **self.contact_options, **kwarg)
+        observables = [self.spinTorque_K]+self.projected_spinTorque_K_list+self.projectedSpin_torque_K_list
+        contacts = [self.spinTorqueA_K]+self.projected_spinTorqueA_K_list+self.projectedSpin_torqueA_K_list
+        units = 'mu_B*eV/(V/angstrom)/cell'
+        result = _solve_dc_galvanic_vg_density_matrix(self.inputs, observables, contacts,
+            responseFermiIndexList, finiteTemperatureOccupations, fullCovariantDerivative,
+            units, collision=self.collision)
+        self.fullCovariantDerivative = bool(fullCovariantDerivative)
+        self.accept_first_order_result(result)
+        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels,
+            result.response_channels, units, result.pole_residual)
+        _publish_spin_torque_projection_results(self)
 
 class SpintorqueGalvanicConductivity_LG_DM(_SpinTorqueGalvanicConductivity_LG_DM):
     """LG electronic exchange torque in mu_B*eV/(V/angstrom)/cell.
@@ -3619,40 +3679,18 @@ class SpintorqueGalvanicConductivity_LG_DM(_SpinTorqueGalvanicConductivity_LG_DM
     """
     torque_stage = SpinExchangeTorque
 
-class SpintorqueGalvanicConductivity_VG_DM(DensityMatrixResponse):
-    """Dc electric-field-induced exchange torque from the VG DM kernel.
+class SpintorqueGalvanicConductivity_VG_DM(_SpinTorqueGalvanicConductivity_VG_DM):
+    """VG exchange torque with analytic contacts for both projection orders.
 
-    For nonlocal exchange, ``exchangeVelocity=True`` includes
-    ``dT_XC/dA=-i[mu_S,v_XC]`` in the pure-gauge sum rule. The analytic dc
-    response is pole subtracted and should agree with the LG counterpart;
-    ``sum_rule_residual`` exposes finite-mesh or incomplete-vertex errors.
+    Includes spin and projector derivatives as well as D_a H_XC.
     """
-    Iodd = True
-    Todd = False
+    torque_stage = SpinExchangeTorque
+    contact_options = {'spinExchangeContact': True}
 
-    def __init__(self, currentProjectionList=None, spinTorqueProjectionList=None,
-                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
-                 fullCovariantDerivative=True, exchangeVelocity=True, **kwarg):
-        currentProjectionList = [] if currentProjectionList is None else currentProjectionList
-        spinTorqueProjectionList = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
-        if currentProjectionList:
-            raise NotImplementedError("VG spin-torque galvanic conductivity requires the total drive current")
-        if response_requires_full_basis(kwarg):
-            raise NotImplementedError("VG spin-torque galvanic conductivity requires the complete orthogonal model basis")
-        kwarg.pop('highOrderVelocity', None)
-        super().__init__(electronic_stages=(SpinExchangeTorque,), velocityProjectionList=[], spinTorqueProjectionList=spinTorqueProjectionList,
-                         highOrderVelocity=False, exchangeVelocity=exchangeVelocity, **kwarg)
-        self.prepare_torque_vertices("spin", "velocity")
-        observable_vertices = [self.spinTorque_K] + self.projected_spinTorque_K_list
-        contact_vertices = [self.spinTorqueA_K] + self.projected_spinTorqueA_K_list
-        result = _solve_dc_galvanic_vg_density_matrix(
-            self.inputs, observable_vertices, contact_vertices, responseFermiIndexList,
-            finiteTemperatureOccupations, fullCovariantDerivative,
-            "mu_B*eV/(V/angstrom)/cell", collision=self.collision)
-        self.fullCovariantDerivative = bool(fullCovariantDerivative)
-        self.accept_first_order_result(result)
-        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels, result.response_channels, 'mu_B*eV/(V/angstrom)/cell', result.pole_residual)
-        if self.verbose==2: showElapsedTime(extraInfo="Velocity-gauge density-matrix spin-torque galvanic conductivity finished")
+    def __init__(self, *, exchangeVelocity=True, **kwarg):
+        if not exchangeVelocity:
+            raise ValueError('VG exchange torque requires the complete exchange contact')
+        super().__init__(**kwarg)
 
 class SpinSOCTorqueGalvanicConductivity_LG_DM(_SpinTorqueGalvanicConductivity_LG_DM):
     """DC LG response of -i[mu_S,H_SOC] to the electric field.
@@ -3664,36 +3702,26 @@ class SpinSOCTorqueGalvanicConductivity_LG_DM(_SpinTorqueGalvanicConductivity_LG
     """
     torque_stage = SpinSOCTorque
 
-class SpinSOCTorqueGalvanicConductivity_VG_DM(DensityMatrixResponse):
-    """DC VG electronic SOC torque with the analytic contact D_a T_SOC.
+class SpinSOCTorqueGalvanicConductivity_VG_DM(_SpinTorqueGalvanicConductivity_VG_DM):
+    """VG SOC torque with both projection orders and analytic contacts."""
+    torque_stage = SpinSOCTorque
+    contact_options = {'spinSOCContact': True}
 
-    Same observable, sign and units as the LG calculator. The contact includes
-    derivatives of spin and projection operators for a general connection.
-    The DC finite part is pole subtracted; sum_rule_residual diagnoses the
-    pure-gauge cancellation under mesh refinement.
+class SpinFluxTorqueGalvanicConductivity_LG_DM(_SpinTorqueGalvanicConductivity_LG_DM):
+    """DC LG response of -i[mu_S,H0] and -i[projected_spin,H0].
+
+    spinProjectionList selects spin moments before the commutator. Equal
+    source/target projections describe regional spin inflow from H0.
+    projected_sigma[drive, observable, fermi, field, spin] includes the
+    unprojected observable at index zero; sigma is that total response.
+    Units are mu_B*eV/(V/angstrom)/cell, with no LLG reaction sign.
     """
-    Iodd = True
-    Todd = False
+    torque_stage = SpinFluxTorque
 
-    def __init__(self, currentProjectionList=None, spinTorqueProjectionList=None,
-                 responseFermiIndexList=None, finiteTemperatureOccupations=True,
-                 fullCovariantDerivative=True, **kwarg):
-        if currentProjectionList:
-            raise NotImplementedError('VG spin SOC torque requires the total drive current')
-        if response_requires_full_basis(kwarg):
-            raise NotImplementedError('VG spin SOC torque requires the complete orthogonal model basis')
-        projections = [] if spinTorqueProjectionList is None else spinTorqueProjectionList
-        super().__init__(electronic_stages=(SpinSOCTorque,), velocityProjectionList=[],
-                         spinTorqueProjectionList=projections, spinSOCContact=True, **kwarg)
-        result = _solve_dc_galvanic_vg_density_matrix(
-            self.inputs, [self.spinTorque_K]+self.projected_spinTorque_K_list,
-            [self.spinTorqueA_K]+self.projected_spinTorqueA_K_list, responseFermiIndexList,
-            finiteTemperatureOccupations, fullCovariantDerivative,
-            'mu_B*eV/(V/angstrom)/cell', collision=self.collision)
-        self.fullCovariantDerivative = bool(fullCovariantDerivative)
-        self.accept_first_order_result(result)
-        _store_dc_galvanic_density_matrix(self, result.kernel, result.projected_channels,
-            result.response_channels, 'mu_B*eV/(V/angstrom)/cell', result.pole_residual)
+class SpinFluxTorqueGalvanicConductivity_VG_DM(_SpinTorqueGalvanicConductivity_VG_DM):
+    """VG H0-driven spin torque with both projection orders and analytic contacts."""
+    torque_stage = SpinFluxTorque
+    contact_options = {'spinFluxContact': True}
 
 class SpintorqueGalvanicConductance(SpintorqueVelocityCorrelation):
     def __init__(self, currentProjectionList=[], spinTorqueProjectionList=[], **kwarg) -> None:

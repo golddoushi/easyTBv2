@@ -75,6 +75,10 @@ class ElectronicVertices:
     spinVelocity_K: np.ndarray | None = None
     soc_K: np.ndarray | None = None
     soc_K_AO: np.ndarray | None = None
+    ham0_K: np.ndarray | None = None
+    ham0_K_AO: np.ndarray | None = None
+    projectedSpin_torque_K_list: list | tuple | None = None
+    projectedSpin_torqueA_K_list: list | tuple | None = None
     spin_K: np.ndarray | None = None
     velocity_xc_K: np.ndarray | None = None
     velocity_xc_bare_K: np.ndarray | None = None
@@ -323,6 +327,14 @@ class ElectronicTensorView:
     @property
     def spinVelocity_K(self):
         return self.electronic.spinVelocity_K
+
+    @property
+    def projectedSpin_torque_K_list(self):
+        return self.electronic.projectedSpin_torque_K_list
+
+    @property
+    def projectedSpin_torqueA_K_list(self):
+        return self.electronic.projectedSpin_torqueA_K_list
 
     @property
     def spin_K(self):
