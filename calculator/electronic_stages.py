@@ -476,6 +476,52 @@ class Velocity(Energy):
 
         self.electronic = vertices_from_stage(self, velocityProjectionList)
 
+def _angular_torque_projections(stage, moment, projected_moments, moment_derivative,
+                                hamiltonian, angularProjectionList, angularTorqueProjectionList,
+                                *, connection=None, hamiltonianDerivative=None):
+    """Build both project-after-commutator and commutator-after-project vertices.
+
+    hamiltonianDerivative is D_a H in the same band basis. First-order
+    contacts use the full product rule, including projector derivatives.
+    """
+    def comm(a, b):
+        return a @ b-b @ a
+    def projectors(projection):
+        return [stage.projectorInEigenBasis(projectionOperator(
+            projection[key], stage.model.atomicOrbInfoList, stage.model.norbs))
+            [..., None, :, :] for key in ('source', 'target')]
+    h = hamiltonian[..., None, :, :]
+    torque = -1j*comm(moment, h)
+    projected_torque = []
+    for projection in angularTorqueProjectionList:
+        ps, pt = projectors(projection)
+        projected_torque.append((ps @ torque+torque @ pt)/2)
+    projected_moment_torque = [-1j*comm(spin, h) for spin in projected_moments]
+    if hamiltonianDerivative is None:
+        return torque, projected_torque, projected_moment_torque, None, [], []
+    h = hamiltonian[..., None, None, :, :]
+    dh = hamiltonianDerivative[..., None, :, :, :]
+    ds = moment_derivative(connection)
+    spin = moment[..., :, None, :, :]
+    aa = connection[..., None, :, :, :]
+    torque_a = -1j*(comm(ds, h)+comm(spin, dh))
+    projected_torque_a = []
+    for projection in angularTorqueProjectionList:
+        ps, pt = [p[..., None, :, :] for p in projectors(projection)]
+        dps, dpt = -1j*comm(aa, ps), -1j*comm(aa, pt)
+        torque_expanded = torque[..., :, None, :, :]
+        projected_torque_a.append((dps @ torque_expanded+ps @ torque_a
+            +torque_a @ pt+torque_expanded @ dpt)/2)
+    projected_moment_torque_a = []
+    for projection, projected_spin in zip(angularProjectionList, projected_moments):
+        ps, pt = [p[..., None, :, :] for p in projectors(projection)]
+        dps, dpt = -1j*comm(aa, ps), -1j*comm(aa, pt)
+        dprojected = (dps @ spin+ps @ ds+ds @ pt+spin @ dpt)/2
+        projected_moment_torque_a.append(-1j*(comm(dprojected, h)
+            +comm(projected_spin[..., :, None, :, :], dh)))
+
+    return torque, projected_torque, projected_moment_torque, torque_a, projected_torque_a, projected_moment_torque_a
+
 class Spin(Energy):
     def __init__(self, spinProjectionList=[], gS:float=2.0, _computeSpin=True, **kwarg,):
         '''
@@ -508,47 +554,12 @@ class Spin(Energy):
     def buildSpinTorqueProjections(self, hamiltonian, spinProjectionList,
                                    spinTorqueProjectionList, *, connection=None,
                                    hamiltonianDerivative=None):
-        """Build both project-after-commutator and commutator-after-project vertices.
-
-        hamiltonianDerivative is D_a H in the same band basis. First-order
-        contacts use the full product rule, including projector derivatives.
-        """
-        def comm(a, b):
-            return a @ b-b @ a
-        def projectors(projection):
-            return [self.projectorInEigenBasis(projectionOperator(
-                projection[key], self.model.atomicOrbInfoList, self.model.norbs))
-                [..., None, :, :] for key in ('source', 'target')]
-        h = hamiltonian[..., None, :, :]
-        self.spinTorque_K = -1j*comm(self.spin_K, h)
         self.spinTorqueProjectionList = spinTorqueProjectionList
-        self.projected_spinTorque_K_list = []
-        for projection in spinTorqueProjectionList:
-            ps, pt = projectors(projection)
-            self.projected_spinTorque_K_list.append((ps @ self.spinTorque_K+self.spinTorque_K @ pt)/2)
-        self.projectedSpin_torque_K_list = [-1j*comm(spin, h) for spin in self.projected_spin_K_list]
-        if hamiltonianDerivative is None:
-            return
-        h = hamiltonian[..., None, None, :, :]
-        dh = hamiltonianDerivative[..., None, :, :, :]
-        ds = self.spinCovariantDerivative(connection)
-        spin = self.spin_K[..., :, None, :, :]
-        aa = connection[..., None, :, :, :]
-        self.spinTorqueA_K = -1j*(comm(ds, h)+comm(spin, dh))
-        self.projected_spinTorqueA_K_list = []
-        for projection in spinTorqueProjectionList:
-            ps, pt = [p[..., None, :, :] for p in projectors(projection)]
-            dps, dpt = -1j*comm(aa, ps), -1j*comm(aa, pt)
-            torque = self.spinTorque_K[..., :, None, :, :]
-            self.projected_spinTorqueA_K_list.append((dps @ torque+ps @ self.spinTorqueA_K
-                +self.spinTorqueA_K @ pt+torque @ dpt)/2)
-        self.projectedSpin_torqueA_K_list = []
-        for projection, projected_spin in zip(spinProjectionList, self.projected_spin_K_list):
-            ps, pt = [p[..., None, :, :] for p in projectors(projection)]
-            dps, dpt = -1j*comm(aa, ps), -1j*comm(aa, pt)
-            dprojected = (dps @ spin+ps @ ds+ds @ pt+spin @ dpt)/2
-            self.projectedSpin_torqueA_K_list.append(-1j*(comm(dprojected, h)
-                +comm(projected_spin[..., :, None, :, :], dh)))
+        (self.spinTorque_K, self.projected_spinTorque_K_list, self.projectedSpin_torque_K_list,
+         self.spinTorqueA_K, self.projected_spinTorqueA_K_list, self.projectedSpin_torqueA_K_list) = (
+            _angular_torque_projections(self, self.spin_K, self.projected_spin_K_list,
+                self.spinCovariantDerivative, hamiltonian, spinProjectionList, spinTorqueProjectionList,
+                connection=connection, hamiltonianDerivative=hamiltonianDerivative))
 
     def spinCovariantDerivative(self, connection):
         """D_a mu_c for the local Wannier spin representation used by Spin.
@@ -588,6 +599,73 @@ class Orbital(Energy):
             proj1_K=self.projectorInEigenBasis(proj1)[...,None,:,:]
             proj2_K=self.projectorInEigenBasis(proj2)[...,None,:,:]
             self.projected_orbital_K_list.append((proj1_K@self.orbital_K + self.orbital_K@proj2_K)/2)
+
+    def orbitalCovariantDerivative(self, connection):
+        """D_a mu_L,c for the fixed ACA orbital operator in the Wannier basis."""
+        moment = self.orbital_K[..., :, None, :, :]
+        aa = connection[..., None, :, :, :]
+        return -1j*(aa @ moment-moment @ aa)
+
+class _OrbitalHamiltonianTorque(Orbital):
+    """ACA moment commutator with a registered Hamiltonian contribution.
+
+    Both projection orders are supported. Contacts use prepared connections
+    and first Fourier derivatives; no additional electronic stages are built.
+    """
+    angular_kind = "orbital"
+
+    def __init__(self, orbitalProjectionList=(), orbitalTorqueProjectionList=(),
+                 orbitalTorqueContact=False, *, electronic=None, **kwarg):
+        if electronic is not None:
+            if kwarg.get('states', electronic.states) is not electronic.states:
+                raise ValueError('Orbital torque requires electronic and states in the same band basis')
+            kwarg['states'] = electronic.states
+        if orbitalTorqueContact:
+            if electronic is None:
+                raise ValueError('Orbital torque contact requires prepared electronic.connection_K')
+            electronic.require('connection_K')
+        super().__init__(orbitalProjectionList=orbitalProjectionList, **kwarg)
+        if self.model.overlap or self.skip_low:
+            raise NotImplementedError('Orbital torque requires a complete orthogonal basis')
+        h_r = getattr(self.model, self.hamiltonian_field)
+        if h_r is None:
+            raise ValueError(f'Orbital torque requires model.{self.hamiltonian_field}')
+        mesh = np.zeros(self.kgrid+h_r.shape[-2:], complex)
+        derivative = np.zeros(self.kgrid+(3, self.model.norbs, self.model.norbs), complex) if orbitalTorqueContact else None
+        for i, r in enumerate(self.model.iRvec):
+            index = tuple(np.asarray(r) % self.kgrid)
+            value = h_r[i]*self.phaseFactorR[i]
+            mesh[index] += value
+            if orbitalTorqueContact:
+                derivative[index] += 1j*(r @ self.model.lattice)[:, None, None]*value
+        u = self.vectors
+        h_ao = np.fft.ifftn(mesh, axes=(0, 1, 2))*np.prod(self.kgrid)
+        h = u.conj().swapaxes(-1, -2) @ h_ao @ u
+        setattr(self, self.hamiltonian_field.replace('_R', '_K_AO'), h_ao)
+        setattr(self, self.hamiltonian_field.replace('_R', '_K'), h)
+        dh = None
+        if orbitalTorqueContact:
+            aa, u1 = electronic.connection_K, u[..., None, :, :]
+            dh = u1.conj().swapaxes(-1, -2) @ (np.fft.ifftn(derivative, axes=(0, 1, 2))*np.prod(self.kgrid)) @ u1
+            dh -= 1j*(aa @ h[..., None, :, :]-h[..., None, :, :] @ aa)
+        (self.orbitalTorque_K, self.projected_orbitalTorque_K_list, self.projectedOrbital_torque_K_list,
+         self.orbitalTorqueA_K, self.projected_orbitalTorqueA_K_list, self.projectedOrbital_torqueA_K_list) = (
+            _angular_torque_projections(self, self.orbital_K, self.projected_orbital_K_list,
+                self.orbitalCovariantDerivative, h, orbitalProjectionList, orbitalTorqueProjectionList,
+                connection=electronic.connection_K if orbitalTorqueContact else None, hamiltonianDerivative=dh))
+
+class OrbitalSOCTorque(_OrbitalHamiltonianTorque):
+    """ACA orbital magnetic-moment torque -i[mu_L,H_SOC], in mu_B*eV."""
+    hamiltonian_field = 'soc_R'
+
+class OrbitalFluxTorque(_OrbitalHamiltonianTorque):
+    """ACA orbital torque -i[mu_L,H0], in mu_B*eV.
+
+    Unlike spin, orbital moment need not commute with spin-independent H0.
+    This includes crystal-field torque as well as regional transport; the
+    projected-moment commutator is not generally a pure boundary flux.
+    """
+    hamiltonian_field = 'ham0_R'
 
 class Orbital_BlochSelfRotate(Velocity):
     def __init__(self, orbitalProjectionList=[], _computeOrbitalBlochSelfRotate=True,
@@ -821,6 +899,8 @@ class SpinSOCTorque(Spin):
     Contact preparation requires electronic.connection_K in the same band
     basis; this stage does not construct velocity or connection vertices.
     """
+    angular_kind = "spin"
+
     def __init__(self, spinTorqueProjectionList=(), spinProjectionList=(), spinSOCContact=False, gS=2.0,
                  *, electronic=None, **kwarg):
         if electronic is not None:
@@ -870,6 +950,8 @@ class SpinFluxTorque(Spin):
     inflow due to H0 only. Nonlocal SOC/exchange transport is not included.
     VG contacts consume prepared electronic.connection_K at the same k.
     """
+    angular_kind = "spin"
+
     def __init__(self, spinProjectionList=(), spinTorqueProjectionList=(), spinFluxContact=False, gS=2.0,
                  *, electronic=None, **kwarg):
         if electronic is not None:
@@ -909,6 +991,8 @@ class SpinFluxTorque(Spin):
             connection=electronic.connection_K if spinFluxContact else None, hamiltonianDerivative=dh0)
 
 class SpinExchangeTorque(Spin):
+    angular_kind = "spin"
+
     def __init__(self, spinTorqueProjectionList=(), spinProjectionList=(),
                  spinExchangeContact=False, *, electronic=None, **kwarg):
         '''

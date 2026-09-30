@@ -23,6 +23,8 @@ from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, Or
 from calculator import (SpinGalvanicConductivity_LG_DM,                    SpinGalvanicConductivity_VG_DM,
                         OrbitalGalvanicConductivity_LG_DM,                 OrbitalGalvanicConductivity_VG_DM,
                         OrbitalGalvanicConductivity_BlochSelfRotate_LG_DM, OrbitalGalvanicConductivity_BlochSelfRotate_VG_DM)
+from calculator import (OrbitalFluxTorqueGalvanicConductivity_LG_DM, OrbitalFluxTorqueGalvanicConductivity_VG_DM,
+                        OrbitalSOCTorqueGalvanicConductivity_LG_DM, OrbitalSOCTorqueGalvanicConductivity_VG_DM)
 from calculator import (SpinFluxTorqueGalvanicConductivity_LG_DM,
                         SpinFluxTorqueGalvanicConductivity_VG_DM)
 from calculator import (SpinTorque, SpintorqueGalvanicConductance,
@@ -943,7 +945,7 @@ def _solveGalvanicConductivity_DM(param, calculatorClass, projectionArgument,
         result['projected sum rule residual'] = calc.projected_sum_rule_residual
     if hasattr(calc, 'torque_observable_labels'):
         result['torque observable labels'] = calc.torque_observable_labels
-        for prefix in ('projected_spinTorque', 'projectedSpin_torque'):
+        for prefix in ('projected_angularTorque', 'projectedAngular_torque'):
             for field in ('sigma', 'response', 'sigma_channels', 'response_channels', 'sum_rule_residual'):
                 name = prefix+'_'+field
                 if hasattr(calc, name):
@@ -988,35 +990,51 @@ def solveOGC_BlochSelfRotate_VG_DM(param):
     )
 
 
-def _solveSpinTorqueGalvanicConductivity_DM(param, calculatorClass):
-    """Pass both independent projection lists; never select one by torque type."""
-    return _solveGalvanicConductivity_DM(param, calculatorClass, 'spinTorqueProjectionList',
-        ('projected shells for detecting torque',),
-        {'spinProjectionList': param.get('projected shells for detecting spin accumulation', [])})
+def _solveAngularTorqueGalvanicConductivity_DM(param, calculatorClass):
+    """Pass both angular projection lists and return separately named response groups."""
+    return _solveGalvanicConductivity_DM(param, calculatorClass, 'angularTorqueProjectionList',
+        ('angularTorqueProjectionList',),
+        {'angularProjectionList': param.get('angularProjectionList', [])})
 
 
 def solveStGC_LG_DM(param):
-    return _solveSpinTorqueGalvanicConductivity_DM(param, SpintorqueGalvanicConductivity_LG_DM)
+    return _solveAngularTorqueGalvanicConductivity_DM(param, SpintorqueGalvanicConductivity_LG_DM)
 
 
 def solveStGC_VG_DM(param):
-    return _solveSpinTorqueGalvanicConductivity_DM(param, SpintorqueGalvanicConductivity_VG_DM)
+    return _solveAngularTorqueGalvanicConductivity_DM(param, SpintorqueGalvanicConductivity_VG_DM)
 
 
 def solveSpinSOCTorqueGC_LG_DM(param):
-    return _solveSpinTorqueGalvanicConductivity_DM(param, SpinSOCTorqueGalvanicConductivity_LG_DM)
+    return _solveAngularTorqueGalvanicConductivity_DM(param, SpinSOCTorqueGalvanicConductivity_LG_DM)
 
 
 def solveSpinSOCTorqueGC_VG_DM(param):
-    return _solveSpinTorqueGalvanicConductivity_DM(param, SpinSOCTorqueGalvanicConductivity_VG_DM)
+    return _solveAngularTorqueGalvanicConductivity_DM(param, SpinSOCTorqueGalvanicConductivity_VG_DM)
 
 
 def solveSpinFluxTorqueGC_LG_DM(param):
-    return _solveSpinTorqueGalvanicConductivity_DM(param, SpinFluxTorqueGalvanicConductivity_LG_DM)
+    return _solveAngularTorqueGalvanicConductivity_DM(param, SpinFluxTorqueGalvanicConductivity_LG_DM)
 
 
 def solveSpinFluxTorqueGC_VG_DM(param):
-    return _solveSpinTorqueGalvanicConductivity_DM(param, SpinFluxTorqueGalvanicConductivity_VG_DM)
+    return _solveAngularTorqueGalvanicConductivity_DM(param, SpinFluxTorqueGalvanicConductivity_VG_DM)
+
+
+def solveOrbitalSOCTorqueGC_LG_DM(param):
+    return _solveAngularTorqueGalvanicConductivity_DM(param, OrbitalSOCTorqueGalvanicConductivity_LG_DM)
+
+
+def solveOrbitalSOCTorqueGC_VG_DM(param):
+    return _solveAngularTorqueGalvanicConductivity_DM(param, OrbitalSOCTorqueGalvanicConductivity_VG_DM)
+
+
+def solveOrbitalFluxTorqueGC_LG_DM(param):
+    return _solveAngularTorqueGalvanicConductivity_DM(param, OrbitalFluxTorqueGalvanicConductivity_LG_DM)
+
+
+def solveOrbitalFluxTorqueGC_VG_DM(param):
+    return _solveAngularTorqueGalvanicConductivity_DM(param, OrbitalFluxTorqueGalvanicConductivity_VG_DM)
 
 
 def solveVelocity(param):

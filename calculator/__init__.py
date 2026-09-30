@@ -36,3 +36,7 @@ from .Path import SurfaceBulkSpectraOnPath
 
 from .Grid import (SpinFluxTorque, SpinFluxTorqueGalvanicConductivity_LG_DM,
                    SpinFluxTorqueGalvanicConductivity_VG_DM)
+
+from .Grid import (OrbitalFluxTorque, OrbitalSOCTorque,
+                   OrbitalFluxTorqueGalvanicConductivity_LG_DM, OrbitalFluxTorqueGalvanicConductivity_VG_DM,
+                   OrbitalSOCTorqueGalvanicConductivity_LG_DM, OrbitalSOCTorqueGalvanicConductivity_VG_DM)

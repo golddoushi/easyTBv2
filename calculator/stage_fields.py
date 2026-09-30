@@ -1,6 +1,8 @@
 """Fields published by each additional electronic computation stage."""
 
 ELECTRONIC_STAGE_FIELDS = {
+    'OrbitalFluxTorque': ('ham0_K', 'ham0_K_AO', 'orbital_K', 'projected_orbital_K_list', 'orbitalTorque_K', 'orbitalTorqueA_K', 'projected_orbitalTorque_K_list', 'projected_orbitalTorqueA_K_list', 'projectedOrbital_torque_K_list', 'projectedOrbital_torqueA_K_list'),
+    'OrbitalSOCTorque': ('soc_K', 'soc_K_AO', 'orbital_K', 'projected_orbital_K_list', 'orbitalTorque_K', 'orbitalTorqueA_K', 'projected_orbitalTorque_K_list', 'projected_orbitalTorqueA_K_list', 'projectedOrbital_torque_K_list', 'projectedOrbital_torqueA_K_list'),
     'Dipole'                         : ('r_K', 'r_deriv_K'),
     'Spin'                           : ('spin_K',    'projected_spin_K_list'),
     'Orbital_BlochSelfRotate'        : ('orbital_K', 'projected_orbital_K_list', 'orbitalA_K', 'projected_orbitalA_K_list', 'ordered_velocity_derivative_K', 'connection_K'),

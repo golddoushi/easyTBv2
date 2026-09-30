@@ -77,6 +77,8 @@ class ElectronicVertices:
     soc_K_AO: np.ndarray | None = None
     ham0_K: np.ndarray | None = None
     ham0_K_AO: np.ndarray | None = None
+    projectedOrbital_torque_K_list: list | tuple | None = None
+    projectedOrbital_torqueA_K_list: list | tuple | None = None
     projectedSpin_torque_K_list: list | tuple | None = None
     projectedSpin_torqueA_K_list: list | tuple | None = None
     spin_K: np.ndarray | None = None
@@ -331,6 +333,14 @@ class ElectronicTensorView:
     @property
     def projectedSpin_torque_K_list(self):
         return self.electronic.projectedSpin_torque_K_list
+
+    @property
+    def projectedOrbital_torque_K_list(self):
+        return self.electronic.projectedOrbital_torque_K_list
+
+    @property
+    def projectedOrbital_torqueA_K_list(self):
+        return self.electronic.projectedOrbital_torqueA_K_list
 
     @property
     def projectedSpin_torqueA_K_list(self):
