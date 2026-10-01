@@ -21,7 +21,7 @@ between edge geometries. Armchair rows collect both atoms of a dimer line.
 
 ## Observables and decomposition
 
-Production now computes four observables, with NPZ names:
+Production retains four spin observables and adds five ACA orbital-rate diagnostics. Spin NPZ names:
 
 - `spin`: local spin magnetic moment M_r={P_r,mu_S}/2, mu_S=-sigma mu_B.
 - `soc_torque`: {P_r,i[H_SOC,mu_S]}/2. Because SOC is onsite here, this
@@ -37,12 +37,12 @@ rows vanishes. The total Hamiltonian rate need not vanish in a driven
 steady state: driving and collision terms must also enter its balance.
 It is not a reaction torque on a magnetic order parameter.
 
-Moments have units mu_B/(V/Angstrom) per longitudinal repeat. All three
+Moments have units mu_B/(V/Angstrom) per longitudinal repeat. All
 rates have units mu_B*eV/(V/Angstrom), i.e. hbar times moment rate. Divide
 by hbar=.6582119569 eV fs for rates in mu_B/fs. No area normalization is
 applied. Only z is plotted; xyz is retained for symmetry checks.
 
-BSR and ACA observables are omitted to reduce cost, not because their
+BSR and ACA accumulation plots are omitted to reduce cost, not because their
 irrelevance to spin generation has been established. The Hamiltonian and
 its orbital degrees of freedom are unchanged.
 
@@ -54,8 +54,8 @@ and not a self-consistent spatial electric-field solution.
 
 For any H_a, i[H_a,M_r] equals the projected spin torque
 {P_r,i[H_a,mu_S]}/2 plus {i[H_a,P_r],mu_S}/2. The SOC/exchange calculators
-provide both orders simultaneously: spinTorqueProjectionList selects the
-former, spinProjectionList selects the complete local rate. Equal source
+provide both orders simultaneously: angularTorqueProjectionList selects the
+former, angularProjectionList selects the complete local rate. Equal source
 and target specify a Hermitian regional moment. For nonlocal SOC/exchange,
 their complete local rates contain additional transport. SpinFluxTorque
 includes H0 transport only. For a general model the three complete local
@@ -69,7 +69,7 @@ separately from pole-subtracted finite-response agreement.
 
 ## Outputs and controls
 
-`profile_fN.png` and `drive_rows_fN.png` have four panels for uniform-drive
+`profile_fN.png` and `drive_rows_fN.png` have nine panels for uniform-drive
 row profiles and C-total response versus driven row, respectively. Each
 includes full, SOC-off, and interface-disconnected controls. `responses.npz`
 retains total/I/E uniform profiles, row drives, and mesh comparisons;
@@ -78,7 +78,7 @@ records parameters, timing, decomposition, mirror and control checks.
 `geometry.png` shows actual bonds; model files are in case subdirectories.
 
 With `--row-profiles`, the finest-mesh calculation also produces
-`row_profiles/profile_drive_rowNNN_fM.png` for every drive, four full-model
+`row_profiles/profile_drive_rowNNN_fM.png` for every drive, nine full-model
 heatmaps in `response_matrix_fM.png`, all-control total/I/E arrays in
 `responses.npz`, CSV tables and reconstruction residuals. Use
 `--profile-drive-rows 0 12 43` to select drives. Summing observed C rows
@@ -88,7 +88,7 @@ Small residuals verify algebra, not k-mesh convergence.
 `--row-profiles-only --output PATH` rebuilds saved model parameters and
 checks existing shared observables before adding the new row matrices.
 `--plot-only --row-profiles --output PATH` replots current-format files.
-Old BSR/ACA files need recalculation for the new four-panel output.
+Old BSR/ACA files need recalculation for the new nine-panel output.
 
 Parallelism uses fixed chunks of at most 32 k points and one BLAS thread
 per worker. `--workers N` changes scheduling, not the mesh or reduction
@@ -121,3 +121,54 @@ still be inspected before interpreting amplitudes.
 ```text
 python -m unittest tests.test_spin_flux_torque tests.test_spin_soc_torque tests.test_spin_torque_projection_orders tests.test_hex_nc_ribbon
 ```
+
+
+## Orbital transfer diagnostics
+
+The five added observables use mu_L=-L mu_B and M_L,r={P_r,mu_L}/2:
+
+- `orbital_soc`: projected i[H_SOC,mu_L], equal to i[H_SOC,M_L,r] for onsite SOC.
+- `orbital_h0`: i[H0,M_L,r], the complete H0-induced local rate.
+- `orbital_crystal`: {P_r,i[H0,mu_L]}/2, the projected crystal/interface torque.
+- `orbital_transfer`: {i[H0,P_r],mu_L}/2, evaluated as orbital_h0 minus orbital_crystal.
+- `orbital_total`: i[H,M_L,r], evaluated independently from the full band energies.
+
+OrbitalFluxTorqueGalvanicConductivity measures orbital_h0 when supplied
+angularProjectionList; with angularTorqueProjectionList it measures
+orbital_crystal. H0 does not conserve ACA orbital moment at the s-p interface,
+so orbital_h0 alone is NOT an orbital influx. All five quantities use the
+same energy-weighted rate units as spin torque.
+
+The checks verify orbital_total=orbital_h0+orbital_soc, zero global summed
+orbital_transfer, and spin SOC torque + 2*orbital SOC torque = 0. The factor
+2 comes from magnetic g factors, not a transfer efficiency. Both projection
+orders and all I/E channels are compared with the public LG calculators;
+VG residuals and independent nonlocal-SOC contact derivatives are tested.
+Obsolete spin/orbital projection keyword names are now rejected explicitly
+at the response-calculator layer; use the generic angular names above.
+
+`orbital_cut_current_fN.png` and `orbital_cut_currents.npz/.csv` show
+J_L(r+1/2)=-sum_{q<=r} orbital_transfer_q, positive toward increasing y.
+The row_profiles folder additionally contains `orbital_cut_current_fN.png`
+for all three controls on a shared color scale, and `orbital_cut_currents.npz`
+with axes [driving row, cut after observed row, Fermi]. The cut-current unit
+is mu_B*eV/(V/Angstrom), or hbar times moment flow per electric field.
+Uniform cut arrays retain xyz; row-drive cut arrays retain z.
+
+Cuts strictly inside C connect identical p shells with scalar H0 hopping,
+so these are clean ACA orbital-current diagnostics. At N/C the same
+symmetrized partition is a convention: s-only N has no ACA moment, and
+orbital_crystal and orbital_transfer can cancel there although the actual
+local ACA rate is zero. Nonzero interface ACA transfer alone does not prove
+a conserved BSR current arriving from N. No BSR operator is computed here.
+
+Validation: all 32 orbital/spin/ribbon tests pass. The C16 weak-SOC benchmark
+is saved in `tmp/orbital_torque_hex/nc_zigzag_n6_c16_soc0.01_orbital_transfer`
+(N width 6, C width 16, SOC .01 eV, EF=0, 512/1024 points, eight workers).
+All controls pass; uniform and two-row orbital identities have maximum
+residual 8.17e-15, and marginal reconstruction errors are below 1.17e-14.
+Spin matches the prior C16 run exactly. Maximum internal-C orbital cut
+current magnitude is .10869 with SOC and .10528 without SOC; the disconnected
+control is below 1.18e-14, in the rate units specified above. These values
+show ACA orbital transport in the coupled ribbon, not proof of a conserved
+BSR current originating in N. `orbital_audit.json` records identity residuals.

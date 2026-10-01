@@ -19,28 +19,46 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from system import System_tb
 from examples.orbital_torque_hex.orbital_ribbon import build_ribbon
 from calculator import CollisionSpecification
-from calculator.electronic_stages import Spin, SpinSOCTorque, SpinFluxTorque
+from calculator.electronic_stages import Spin, SpinSOCTorque, SpinFluxTorque, OrbitalSOCTorque, OrbitalFluxTorque
 from calculator.response_stages import DensityMatrixResponse
 from calculator.density_matrix import LengthGaugeFirstOrderDMKernel
 
 
-OBSERVABLES = ('spin', 'soc_torque', 'flux_torque', 'total_torque')
+SPIN_OBSERVABLES = ('spin', 'soc_torque', 'flux_torque', 'total_torque')
+ORBITAL_OBSERVABLES = ('orbital_soc', 'orbital_h0', 'orbital_crystal', 'orbital_transfer', 'orbital_total')
+OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES
 
 
 def observable_vertices(prepared):
     # Flux and total vertices require projection BEFORE the commutator.
+    orbital_soc = OrbitalSOCTorque(states=prepared.states)
+    orbital_h0 = OrbitalFluxTorque(states=prepared.states)
     return dict(spin=prepared.spin_K, soc_torque=prepared.spinTorque_K,
-                flux_torque=prepared.spin_K, total_torque=prepared.spin_K)
+                flux_torque=prepared.spin_K, total_torque=prepared.spin_K,
+                orbital_soc=orbital_soc.orbitalTorque_K, orbital_h0=orbital_soc.orbital_K,
+                orbital_crystal=orbital_h0.orbitalTorque_K, orbital_total=orbital_soc.orbital_K)
 
 
 def rate_hamiltonians(prepared):
-    return dict(flux_torque=SpinFluxTorque(states=prepared.states).ham0_K,
-                total_torque=prepared.states.energies[..., :, None]*np.eye(prepared.states.energies.shape[-1]))
+    h0 = SpinFluxTorque(states=prepared.states).ham0_K
+    full = prepared.states.energies[..., :, None]*np.eye(prepared.states.energies.shape[-1])
+    return dict(flux_torque=h0, total_torque=full, orbital_h0=h0, orbital_total=full)
+
+
+def orbital_balance_residual(response, prefix=''):
+    residuals = []
+    for suffix in ('', '_I', '_E'):
+        residuals.extend((np.max(np.abs(response[prefix+'orbital_total'+suffix]
+            -response[prefix+'orbital_h0'+suffix]-response[prefix+'orbital_soc'+suffix])),
+            np.max(np.abs(response[prefix+'soc_torque'+suffix]+2*response[prefix+'orbital_soc'+suffix]))))
+    return float(max(residuals))
 
 
 def observable_label(name):
     if name != 'spin':
-        return name.replace('_torque', '').upper()+r' $\delta T^S_z/E_x$'+'\n'+r'[$\mu_B$ eV/(V/$\AA$)]'
+        angular = 'L' if name.startswith('orbital_') else 'S'
+        title = name.replace('orbital_', '').replace('_torque', '').upper()
+        return title+rf' $\delta T^{angular}_z/E_x$'+'\n'+r'[$\mu_B$ eV/(V/$\AA$)]'
     return r'SPIN $\delta\mu_z/E_x$'+'\n'+r'[$\mu_B$/(V/$\AA$)]'
 
 
@@ -196,6 +214,9 @@ def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, worke
                 dual = u[..., None, :, :]@(weight.swapaxes(-1, -2)[..., None, :, :]*c_band)@ud[..., None, :, :]
                 diagonal = np.diagonal((vx[..., None, :, :]@dual+dual@vx[..., None, :, :])/2, axis1=-2, axis2=-1)
                 results['drive_'+name][:, fi] += np.einsum('ri,...ci->...rc', masks, diagonal).real.mean(axis=(0, 1, 2))/count
+        for suffix in ('', '_I', '_E'):
+            results['orbital_transfer'+suffix] = results['orbital_h0'+suffix]-results['orbital_crystal'+suffix]
+        results['drive_orbital_transfer'] = results['drive_orbital_h0']-results['drive_orbital_crystal']
         if profile_rows is not None:
             results.update(_row_profile_matrices(prepared, kernel, masks, profile_rows, fermi, count))
         return results
@@ -255,7 +276,7 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
             for start in range(0, len(masks), 8):
                 end = min(start+8, len(masks))
                 observed = row_vertices(band[index][2], range(start, end))
-                if name == 'total_torque':
+                if name in ('total_torque', 'orbital_total'):
                     energies = prepared.states.energies[index]
                     observed = 1j*(energies[:, None]-energies[None, :])*observed
                 elif name in hamiltonians:
@@ -270,6 +291,8 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
                     result['row_profile_'+name][:, start:end, fi] += total
                     result['row_profile_'+name+'_I'][:, start:end, fi] += intra
                     result['row_profile_'+name+'_E'][:, start:end, fi] += total-intra
+    for suffix in ('', '_I', '_E'):
+        result['row_profile_orbital_transfer'+suffix] = result['row_profile_orbital_h0'+suffix]-result['row_profile_orbital_crystal'+suffix]
     return result
 
 
@@ -280,6 +303,10 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
     import matplotlib.pyplot as plt
     output = Path(output)/'row_profiles'
     output.mkdir(parents=True, exist_ok=True)
+    cut_arrays = {case+'_orbital_cut_current': -np.cumsum(arrays[case+'_row_profile_orbital_transfer'], axis=1)[:, :-1]
+                  for case in ('full', 'no_soc', 'disconnected')}
+    np.savez_compressed(output/'orbital_cut_currents.npz', **cut_arrays,
+                        cut_y_A=(y[:-1]+y[1:])/2, drive_rows=drive_rows, fermi_eV=fermi)
     np.savez_compressed(output/'responses.npz', **arrays, y_A=y, regions=regions,
         fermi_eV=fermi, drive_rows=np.asarray(drive_rows))
     (output/'summary.json').write_text(json.dumps(metadata, indent=2)+'\n')
@@ -295,7 +322,8 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
     boundary = (y[regions == 'N'].max()+y[regions == 'C'].min())/2
     for fi, mu in enumerate(fermi):
         for di, row in enumerate(drive_rows):
-            fig, axes = plt.subplots(4, 1, figsize=(9, 12), sharex=True, constrained_layout=True)
+            fig, axes = plt.subplots(3, 3, figsize=(18, 13), sharex=True, constrained_layout=True)
+            axes = axes.ravel()
             for ax, name in zip(axes, OBSERVABLES):
                 for case, style in [('full','-'), ('no_soc','--'), ('disconnected',':')]:
                     ax.plot(y, arrays[f'{case}_row_profile_{name}'][di, :, fi], style, label=case.replace('_',' '))
@@ -307,14 +335,14 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
                 ax.set_ylabel(observable_label(name))
                 ax.legend(fontsize=8)
                 ax.grid(alpha=.2)
-            axes[0].set_title(f'Drive row {row} ({regions[row]}), y={y[row]:.4g} Angstrom; EF={mu:g} eV; Nk={metadata["grid"]}\n'+r'Vertex $\{P_r,v_x\}/2$; z observable on each observed row')
+            fig.suptitle(f'Drive row {row} ({regions[row]}), y={y[row]:.4g} Angstrom; EF={mu:g} eV; Nk={metadata["grid"]}\n'+r'Vertex $\{P_r,v_x\}/2$; z observable on each observed row')
             axes[-1].set_xlabel('Observed row y (Angstrom); N blue / C orange')
             target = output/f'profile_drive_row{row:03d}_f{fi}.png'
             temporary = target.with_suffix('.pending.png')
             fig.savefig(temporary, dpi=140)
             temporary.replace(target)
             plt.close(fig)
-        fig, axes = plt.subplots(2, 2, figsize=(13, 10), constrained_layout=True)
+        fig, axes = plt.subplots(3, 3, figsize=(18, 14), constrained_layout=True)
         axes = axes.ravel()
         for ax, name in zip(axes, OBSERVABLES):
             values = arrays[f'full_row_profile_{name}'][:, :, fi]
@@ -326,6 +354,50 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
             ax.axvline(np.flatnonzero(regions == 'C')[0]-.5, color='0.4', ls='--', lw=.8)
             fig.colorbar(im, ax=ax, label=('mu_B*eV/(V/Angstrom)' if name!='spin' else 'mu_B/(V/Angstrom)'))
         fig.savefig(output/f'response_matrix_f{fi}.png', dpi=140)
+        plt.close(fig)
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
+        maximum = max(max(float(np.max(np.abs(v[:,:,fi]))) for v in cut_arrays.values()), 1e-15)
+        for ax, case in zip(axes, ('full', 'no_soc', 'disconnected')):
+            im = ax.imshow(cut_arrays[case+'_orbital_cut_current'][:,:,fi], origin='lower', aspect='auto',
+                           cmap='RdBu_r', vmin=-maximum, vmax=maximum)
+            ticks = np.unique(np.linspace(0, len(drive_rows)-1, min(9,len(drive_rows)), dtype=int))
+            ax.set_yticks(ticks, labels=np.asarray(drive_rows)[ticks])
+            ax.set(xlabel='Cut after physical row', ylabel='Driven physical row', title=case.replace('_',' '))
+            ax.axvline(np.flatnonzero(regions=='C')[0]-.5, color='0.4', ls='--')
+        fig.colorbar(im, ax=axes, label='Orbital moment current toward +y [mu_B eV/(V/Angstrom)]')
+        fig.savefig(output/f'orbital_cut_current_f{fi}.png', dpi=140)
+        plt.close(fig)
+
+
+def save_orbital_cuts(arrays, output):
+    """Symmetrized H0 orbital flux across cuts; strictly internal C cuts are unambiguous here."""
+    import matplotlib.pyplot as plt
+    output = Path(output)
+    y, regions = arrays['y_A'], arrays['regions']
+    cuts = (y[:-1]+y[1:])/2
+    currents = {case: -np.cumsum(arrays[case+'_orbital_transfer'], axis=0)[:-1]
+                for case in ('full', 'no_soc', 'disconnected')}
+    np.savez_compressed(output/'orbital_cut_currents.npz', **currents, cut_y_A=cuts,
+                        fermi_eV=arrays['fermi_eV'], inside_C=(regions[:-1]=='C') & (regions[1:]=='C'))
+    with (output/'orbital_cut_currents.csv').open('w', newline='') as stream:
+        writer = csv.writer(stream)
+        writer.writerow(['case','cut_after_row','cut_y_A','inside_C','fermi_eV','orbital_current_z'])
+        for case, values in currents.items():
+            for cut in range(len(cuts)):
+                for fi, mu in enumerate(arrays['fermi_eV']):
+                    writer.writerow([case,cut,cuts[cut],regions[cut]==regions[cut+1]=='C',mu,values[cut,fi,2]])
+    for fi, mu in enumerate(arrays['fermi_eV']):
+        fig, ax = plt.subplots(figsize=(9,5), constrained_layout=True)
+        for (case, values), style in zip(currents.items(), ('o-', 's--', '^:')):
+            ax.plot(cuts, values[:,fi,2], style, label=case.replace('_',' '), ms=3)
+        boundary = (y[regions=='N'].max()+y[regions=='C'].min())/2
+        ax.axvline(boundary, ls='--', color='0.4')
+        ax.axhline(0, color='0.5', lw=.5)
+        ax.set(xlabel='Cut y (Angstrom); positive current toward +y',
+               ylabel='Orbital moment current / Ex [mu_B eV/(V/Angstrom)]',
+               title=f'Uniform drive, EF={mu:g} eV; symmetrized H0 orbital current')
+        ax.legend(); ax.grid(alpha=.2)
+        fig.savefig(output/f'orbital_cut_current_f{fi}.png', dpi=150)
         plt.close(fig)
 
 
@@ -358,6 +430,7 @@ def add_saved_row_profiles(output, drive_rows=None, workers=1):
             start = perf_counter()
             response = calculate(model, groups, regions, grid, p['fermi'], p['kbt'], p['linewidth'], workers, rows)
             timings[case] = perf_counter()-start
+            checks[case+'_orbital_balance'] = orbital_balance_residual(response, 'row_profile_')
             for name in OBSERVABLES:
                 for key in (name, 'drive_'+name):
                     if f'{case}_{key}' in saved:
@@ -395,7 +468,8 @@ def plot(arrays, summary, output):
     boundary = (y[regions == 'N'].max()+y[regions == 'C'].min())/2
     for fi, mu in enumerate(arrays['fermi_eV']):
         for drive in (False, True):
-            fig, axes = plt.subplots(4, 1, figsize=(9, 12), sharex=True, constrained_layout=True)
+            fig, axes = plt.subplots(3, 3, figsize=(18, 13), sharex=True, constrained_layout=True)
+            axes = axes.ravel()
             for ax, name in zip(axes, OBSERVABLES):
                 for case, style in [('full', 'o-'), ('no_soc', 's--'), ('disconnected', '^:')]:
                     key = f'{case}_'+('drive_' if drive else '')+name
@@ -407,7 +481,7 @@ def plot(arrays, summary, output):
                 ax.set_ylabel(('C-total ' if drive else 'Row ') + observable_label(name))
                 ax.legend(fontsize=8)
                 ax.grid(alpha=.2)
-            axes[0].set_title(f"{summary['edge'].capitalize()} N / p-shell C, EF={mu:g} eV\n"+
+            fig.suptitle(f"{summary['edge'].capitalize()} N / p-shell C, EF={mu:g} eV\n"+
                 ('One symmetrized row drive at a time' if drive else 'Uniform Ex; observables summed over each physical row'))
             axes[-1].set_xlabel(('Driven' if drive else 'Observed')+' row y (Angstrom); N blue / C orange')
             target = Path(output)/f'{"drive_rows" if drive else "profile"}_f{fi}.png'
@@ -495,6 +569,7 @@ def main(argv=None):
         with np.load(output/'responses.npz') as arrays:
             plot(arrays, json.loads((output/'summary.json').read_text()), output)
             export_csv(arrays, output)
+            save_orbital_cuts(arrays, output)
         if args.row_profiles:
             replot_row_profiles(output)
         return
@@ -523,6 +598,7 @@ def main(argv=None):
                     rows = args.profile_drive_rows or list(range(len(regions)))
                 result = calculate(model, groups, regions, grid, args.fermi, args.kbt, args.linewidth, args.workers, rows)
                 if rows is not None:
+                    row_checks[case+'_orbital_balance'] = orbital_balance_residual(result, 'row_profile_')
                     row_arrays.update({case+'_'+key: value for key, value in result.items() if key.startswith('row_profile_')})
                     row_checks[case+'_rate_sum'] = float(max(np.max(np.abs(
                         result['row_profile_total_torque'+suffix]-result['row_profile_flux_torque'+suffix]
@@ -539,6 +615,10 @@ def main(argv=None):
             arrays.update({f'{case}_{key}': value for key, value in result.items()})
             metrics[case] = {name+'_drive_sum_residual': float(np.max(np.abs(result['drive_'+name].sum(axis=0)-result[name][regions == 'C'].sum(axis=0)))) for name in OBSERVABLES}
             metrics[case]['rate_sum_residual'] = float(max(np.max(np.abs(result[prefix+'total_torque'+suffix]-result[prefix+'flux_torque'+suffix]-result[prefix+'soc_torque'+suffix])) for prefix,suffix in [('', ''), ('', '_I'), ('', '_E'), ('drive_', '')]))
+            metrics[case]['orbital_soc_exchange_residual'] = float(np.max(np.abs(result['soc_torque']+2*result['orbital_soc'])))
+            metrics[case]['orbital_rate_sum_residual'] = float(np.max(np.abs(result['orbital_total']-result['orbital_h0']-result['orbital_soc'])))
+            metrics[case]['orbital_rate_sum_residual'] = max(metrics[case]['orbital_rate_sum_residual'], orbital_balance_residual(result))
+            metrics[case]['orbital_transfer_global_residual'] = float(np.max(np.abs(result['orbital_transfer'].sum(axis=0))))
             metrics[case]['flux_global_residual'] = float(np.max(np.abs(result['flux_torque'].sum(axis=0))))
             metrics[case]['max_inplane'] = float(max(np.max(np.abs(result[key][..., :2])) for key in result))
             metrics[case]['C_total_z_by_fermi'] = {name: result[name][regions == 'C', :, 2].sum(axis=0).tolist() for name in OBSERVABLES}
@@ -546,7 +626,8 @@ def main(argv=None):
             if len(grids)>1:
                 metrics[case]['mesh_max_difference'] = {key: float(np.max(np.abs(result[key]-arrays[f'{case}_{key}_n{grids[-2]}']))) for key in result}
     arrays.update(y_A=y, regions=regions)
-    checks = dict(rate_sum=all(row['rate_sum_residual']<1e-8 for row in metrics.values()),
+    checks = dict(orbital_balance=all(row[key]<1e-8 for row in metrics.values() for key in ('orbital_soc_exchange_residual','orbital_rate_sum_residual','orbital_transfer_global_residual')),
+        rate_sum=all(row['rate_sum_residual']<1e-8 for row in metrics.values()),
         flux_global_zero=all(row['flux_global_residual']<1e-8 for row in metrics.values()),
         mirror_inplane_zero=all(row['max_inplane']<1e-8 for row in metrics.values()),
         drive_rows_sum=all(row[name+'_drive_sum_residual']<1e-8 for row in metrics.values() for name in OBSERVABLES),
@@ -566,6 +647,7 @@ def main(argv=None):
     (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     plot(arrays, summary, output)
     export_csv(arrays, output)
+    save_orbital_cuts(arrays, output)
     print(json.dumps(summary, indent=2))
     if not all(checks.values()):
         raise RuntimeError('NC validation failed; inspect summary.json')
