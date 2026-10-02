@@ -26,16 +26,50 @@ from calculator.density_matrix import LengthGaugeFirstOrderDMKernel
 
 SPIN_OBSERVABLES = ('spin', 'soc_torque', 'flux_torque', 'total_torque')
 ORBITAL_OBSERVABLES = ('orbital_soc', 'orbital_h0', 'orbital_crystal', 'orbital_transfer', 'orbital_total')
-OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES
+SPIN_BALANCE = ('spin_source', 'spin_relaxation', 'spin_continuity')
+ORBITAL_BALANCE = ('orbital', 'orbital_source', 'orbital_relaxation', 'orbital_continuity')
+OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES + SPIN_BALANCE + ORBITAL_BALANCE
+PLOT_OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES + ('spin_source', 'orbital_source')
+
+
+def observable_units(name):
+    return 'mu_B/(V/Angstrom)' if name in ('spin', 'orbital') else 'mu_B*eV/(V/Angstrom)'
+
+
+def add_orbital_balance(result, linewidth, prefix='', suffixes=('', '_I', '_E')):
+    for suffix in suffixes:
+        result[prefix+'orbital_relaxation'+suffix] = linewidth*result[prefix+'orbital'+suffix]
+        result[prefix+'orbital_continuity'+suffix] = (
+            result[prefix+'orbital_transfer'+suffix]+result[prefix+'orbital_crystal'+suffix]
+            +result[prefix+'orbital_soc'+suffix]+result[prefix+'orbital_source'+suffix]
+            -result[prefix+'orbital_relaxation'+suffix])
+
+
+def orbital_continuity_residual(result, prefix='', suffixes=('', '_I', '_E')):
+    return float(max(np.max(np.abs(result[prefix+'orbital_continuity'+s])) for s in suffixes))
+
+
+def add_spin_balance(result, linewidth, prefix='', suffixes=('', '_I', '_E')):
+    """Combine independently contracted source and Hamiltonian rates."""
+    for suffix in suffixes:
+        result[prefix+'spin_relaxation'+suffix] = linewidth*result[prefix+'spin'+suffix]
+        result[prefix+'spin_continuity'+suffix] = (
+            result[prefix+'flux_torque'+suffix]+result[prefix+'soc_torque'+suffix]
+            +result[prefix+'spin_source'+suffix]-result[prefix+'spin_relaxation'+suffix])
+
+
+def spin_continuity_residual(result, prefix='', suffixes=('', '_I', '_E')):
+    return float(max(np.max(np.abs(result[prefix+'spin_continuity'+s])) for s in suffixes))
 
 
 def observable_vertices(prepared):
     # Flux and total vertices require projection BEFORE the commutator.
     orbital_soc = OrbitalSOCTorque(states=prepared.states)
     orbital_h0 = OrbitalFluxTorque(states=prepared.states)
-    return dict(spin=prepared.spin_K, soc_torque=prepared.spinTorque_K,
+    return dict(spin=prepared.spin_K, spin_source=prepared.spin_K, soc_torque=prepared.spinTorque_K,
                 flux_torque=prepared.spin_K, total_torque=prepared.spin_K,
                 orbital_soc=orbital_soc.orbitalTorque_K, orbital_h0=orbital_soc.orbital_K,
+                orbital=orbital_soc.orbital_K, orbital_source=orbital_soc.orbital_K,
                 orbital_crystal=orbital_h0.orbitalTorque_K, orbital_total=orbital_soc.orbital_K)
 
 
@@ -55,6 +89,13 @@ def orbital_balance_residual(response, prefix=''):
 
 
 def observable_label(name):
+    if name == 'orbital_source':
+        return r'SOURCE $D_L/E_x$'+'\n'+r'[$\mu_B$ eV/(V/$\AA$)]'
+    if name in SPIN_BALANCE:
+        title = {'spin_source': r'SOURCE $D_S/E_x$',
+                 'spin_relaxation': r'CRTA LOSS $\eta\delta\mu_S^z/E_x$',
+                 'spin_continuity': r'RESIDUAL $(T_{H_0}+T_{SOC}+D_S-\eta\delta\mu_S^z)/E_x$'}[name]
+        return title+'\n'+r'[$\mu_B$ eV/(V/$\AA$)]'
     if name != 'spin':
         angular = 'L' if name.startswith('orbital_') else 'S'
         title = name.replace('orbital_', '').replace('_torque', '').upper()
@@ -202,7 +243,13 @@ def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, worke
                 results.setdefault(key, np.zeros((len(regions), len(fermi), 3)))
             for fi, mu in enumerate(fermi):
                 state = kernel.fermi_state(fi, mu)
-                rho_channels = state.at_frequency(0.).block(0).rho1
+                if name in ('spin_source', 'orbital_source'):
+                    # solve(-i B, Delta) = B/(eta+i Delta): B is the physical
+                    # source in (eta+i ad_H)rho=B, not the solver numerator -i B.
+                    source = state.derivative(0)
+                    rho_channels = {'I': source*kernel.diag, 'E': source*~kernel.diag}
+                else:
+                    rho_channels = state.at_frequency(0.).block(0).rho1
                 for channel, rho in rho_channels.items():
                     effective_rho = rho if h is None else 1j*(rho@h-h@rho)
                     density = (u@effective_rho@ud)[..., None, :, :]
@@ -210,15 +257,20 @@ def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, worke
                     local = np.einsum('ri,...ci->...rc', masks, diagonal).real.mean(axis=(0, 1, 2))/count
                     results[name+'_'+channel][:, fi] += local
                     results[name][:, fi] += local
-                weight = state.collision.solve(-1j*state.divided_difference, prepared.inputs.deltaE, 0.)
+                weight = (state.divided_difference if name in ('spin_source', 'orbital_source') else
+                          state.collision.solve(-1j*state.divided_difference, prepared.inputs.deltaE, 0.))
                 dual = u[..., None, :, :]@(weight.swapaxes(-1, -2)[..., None, :, :]*c_band)@ud[..., None, :, :]
                 diagonal = np.diagonal((vx[..., None, :, :]@dual+dual@vx[..., None, :, :])/2, axis1=-2, axis2=-1)
                 results['drive_'+name][:, fi] += np.einsum('ri,...ci->...rc', masks, diagonal).real.mean(axis=(0, 1, 2))/count
         for suffix in ('', '_I', '_E'):
             results['orbital_transfer'+suffix] = results['orbital_h0'+suffix]-results['orbital_crystal'+suffix]
         results['drive_orbital_transfer'] = results['drive_orbital_h0']-results['drive_orbital_crystal']
+        add_spin_balance(results, linewidth)
+        add_spin_balance(results, linewidth, 'drive_', ('',))
+        add_orbital_balance(results, linewidth)
+        add_orbital_balance(results, linewidth, 'drive_', ('',))
         if profile_rows is not None:
-            results.update(_row_profile_matrices(prepared, kernel, masks, profile_rows, fermi, count))
+            results.update(_row_profile_matrices(prepared, kernel, masks, profile_rows, fermi, count, linewidth))
         return results
 
     # Set the process-wide BLAS limit outside worker threads to avoid nested
@@ -243,7 +295,7 @@ def _sum_parts(parts):
     return total
 
 
-def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
+def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks, linewidth):
     """All observed rows for selected drives; z only, with I/E decomposition.
 
     Build symmetrized vertices from low-rank row projectors, then contract
@@ -253,9 +305,10 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
     ids = [np.flatnonzero(mask) for mask in masks]
     shape = (len(drive_rows), len(masks), len(fermi))
     result = {f'row_profile_{name}{suffix}': np.zeros(shape) for name in OBSERVABLES for suffix in ('', '_I', '_E')}
-    weights = []
+    weights, source_weights = [], []
     for fi, mu in enumerate(fermi):
         state = kernel.fermi_state(fi, mu)
+        source_weights.append(state.divided_difference)
         weights.append(state.collision.solve(-1j*state.divided_difference, prepared.inputs.deltaE, 0.))
     scale = chunks*np.prod(prepared.states.energies.shape[:-1])
     observables = observable_vertices(prepared)
@@ -284,7 +337,7 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
                     observed = 1j*(h@observed-observed@h)
                 flat_observed = observed.swapaxes(-1, -2).reshape(end-start, -1).T.copy()
                 observed_diag = np.diagonal(observed, axis1=-2, axis2=-1)
-                for fi, weight in enumerate(weights):
+                for fi, weight in enumerate(source_weights if name in ('spin_source', 'orbital_source') else weights):
                     w = weight[index]
                     total = ((drives*w).reshape(len(drive_rows), -1)@flat_observed).real/scale
                     intra = ((drive_diag*np.diag(w))@observed_diag.T).real/scale
@@ -293,6 +346,8 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks):
                     result['row_profile_'+name+'_E'][:, start:end, fi] += total-intra
     for suffix in ('', '_I', '_E'):
         result['row_profile_orbital_transfer'+suffix] = result['row_profile_orbital_h0'+suffix]-result['row_profile_orbital_crystal'+suffix]
+    add_spin_balance(result, linewidth, 'row_profile_')
+    add_orbital_balance(result, linewidth, 'row_profile_')
     return result
 
 
@@ -322,9 +377,9 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
     boundary = (y[regions == 'N'].max()+y[regions == 'C'].min())/2
     for fi, mu in enumerate(fermi):
         for di, row in enumerate(drive_rows):
-            fig, axes = plt.subplots(3, 3, figsize=(18, 13), sharex=True, constrained_layout=True)
+            fig, axes = plt.subplots(4, 3, figsize=(18, 17), sharex=True, constrained_layout=True)
             axes = axes.ravel()
-            for ax, name in zip(axes, OBSERVABLES):
+            for ax, name in zip(axes, PLOT_OBSERVABLES):
                 for case, style in [('full','-'), ('no_soc','--'), ('disconnected',':')]:
                     ax.plot(y, arrays[f'{case}_row_profile_{name}'][di, :, fi], style, label=case.replace('_',' '))
                 ax.axvspan(y.min(), boundary, color='steelblue', alpha=.08)
@@ -336,15 +391,16 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
                 ax.legend(fontsize=8)
                 ax.grid(alpha=.2)
             fig.suptitle(f'Drive row {row} ({regions[row]}), y={y[row]:.4g} Angstrom; EF={mu:g} eV; Nk={metadata["grid"]}\n'+r'Vertex $\{P_r,v_x\}/2$; z observable on each observed row')
-            axes[-1].set_xlabel('Observed row y (Angstrom); N blue / C orange')
+            axes[-1].set_visible(False)
+            axes[-2].set_xlabel('Observed row y (Angstrom); N blue / C orange')
             target = output/f'profile_drive_row{row:03d}_f{fi}.png'
             temporary = target.with_suffix('.pending.png')
             fig.savefig(temporary, dpi=140)
             temporary.replace(target)
             plt.close(fig)
-        fig, axes = plt.subplots(3, 3, figsize=(18, 14), constrained_layout=True)
+        fig, axes = plt.subplots(4, 3, figsize=(18, 18), constrained_layout=True)
         axes = axes.ravel()
-        for ax, name in zip(axes, OBSERVABLES):
+        for ax, name in zip(axes, PLOT_OBSERVABLES):
             values = arrays[f'full_row_profile_{name}'][:, :, fi]
             maximum = max(float(np.max(np.abs(values))), 1e-15)
             im = ax.imshow(values, origin='lower', aspect='auto', cmap='RdBu_r', vmin=-maximum, vmax=maximum)
@@ -352,7 +408,8 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
             ticks = np.unique(np.linspace(0, len(drive_rows)-1, min(9, len(drive_rows)), dtype=int))
             ax.set_yticks(ticks, labels=np.asarray(drive_rows)[ticks])
             ax.axvline(np.flatnonzero(regions == 'C')[0]-.5, color='0.4', ls='--', lw=.8)
-            fig.colorbar(im, ax=ax, label=('mu_B*eV/(V/Angstrom)' if name!='spin' else 'mu_B/(V/Angstrom)'))
+            fig.colorbar(im, ax=ax, label=observable_units(name))
+        axes[-1].set_visible(False)
         fig.savefig(output/f'response_matrix_f{fi}.png', dpi=140)
         plt.close(fig)
         fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
@@ -431,6 +488,8 @@ def add_saved_row_profiles(output, drive_rows=None, workers=1):
             response = calculate(model, groups, regions, grid, p['fermi'], p['kbt'], p['linewidth'], workers, rows)
             timings[case] = perf_counter()-start
             checks[case+'_orbital_balance'] = orbital_balance_residual(response, 'row_profile_')
+            checks[case+'_spin_continuity'] = spin_continuity_residual(response, 'row_profile_')
+            checks[case+'_orbital_continuity'] = orbital_continuity_residual(response, 'row_profile_')
             for name in OBSERVABLES:
                 for key in (name, 'drive_'+name):
                     if f'{case}_{key}' in saved:
@@ -444,7 +503,7 @@ def add_saved_row_profiles(output, drive_rows=None, workers=1):
             # Checkpoint computed cases before the next expensive evaluation.
             np.savez_compressed(output/'row_profiles'/'checkpoint.npz', **arrays)
     metadata = dict(parameters=p, grid=grid, workers=workers, effective_workers=mesh_execution(grid,workers)[1], axes=['selected_drive_row','observed_row','fermi'],
-        component='z', units={name: ('mu_B*eV/(V/Angstrom)' if name!='spin' else 'mu_B/(V/Angstrom)') for name in OBSERVABLES}, drive_rows=rows, residuals=checks, timings_seconds=timings,
+        component='z', units={name: observable_units(name) for name in OBSERVABLES}, drive_rows=rows, residuals=checks, timings_seconds=timings,
         projection=summary['row_drive'], convergence='Uses saved finest mesh; reconstruction checks are not mesh-convergence tests')
     save_row_profiles(arrays, y, regions, p['fermi'], rows, output, metadata)
     if max(checks.values())>1e-8:
@@ -468,9 +527,9 @@ def plot(arrays, summary, output):
     boundary = (y[regions == 'N'].max()+y[regions == 'C'].min())/2
     for fi, mu in enumerate(arrays['fermi_eV']):
         for drive in (False, True):
-            fig, axes = plt.subplots(3, 3, figsize=(18, 13), sharex=True, constrained_layout=True)
+            fig, axes = plt.subplots(4, 3, figsize=(18, 17), sharex=True, constrained_layout=True)
             axes = axes.ravel()
-            for ax, name in zip(axes, OBSERVABLES):
+            for ax, name in zip(axes, PLOT_OBSERVABLES):
                 for case, style in [('full', 'o-'), ('no_soc', 's--'), ('disconnected', '^:')]:
                     key = f'{case}_'+('drive_' if drive else '')+name
                     ax.plot(y, arrays[key][:, fi, 2], style, ms=4, label=case.replace('_', ' '))
@@ -483,7 +542,8 @@ def plot(arrays, summary, output):
                 ax.grid(alpha=.2)
             fig.suptitle(f"{summary['edge'].capitalize()} N / p-shell C, EF={mu:g} eV\n"+
                 ('One symmetrized row drive at a time' if drive else 'Uniform Ex; observables summed over each physical row'))
-            axes[-1].set_xlabel(('Driven' if drive else 'Observed')+' row y (Angstrom); N blue / C orange')
+            axes[-1].set_visible(False)
+            axes[-2].set_xlabel(('Driven' if drive else 'Observed')+' row y (Angstrom); N blue / C orange')
             target = Path(output)/f'{"drive_rows" if drive else "profile"}_f{fi}.png'
             temporary = target.with_suffix('.pending.png')
             fig.savefig(temporary, dpi=160)
@@ -599,6 +659,8 @@ def main(argv=None):
                 result = calculate(model, groups, regions, grid, args.fermi, args.kbt, args.linewidth, args.workers, rows)
                 if rows is not None:
                     row_checks[case+'_orbital_balance'] = orbital_balance_residual(result, 'row_profile_')
+                    row_checks[case+'_spin_continuity'] = spin_continuity_residual(result, 'row_profile_')
+                    row_checks[case+'_orbital_continuity'] = orbital_continuity_residual(result, 'row_profile_')
                     row_arrays.update({case+'_'+key: value for key, value in result.items() if key.startswith('row_profile_')})
                     row_checks[case+'_rate_sum'] = float(max(np.max(np.abs(
                         result['row_profile_total_torque'+suffix]-result['row_profile_flux_torque'+suffix]
@@ -615,6 +677,10 @@ def main(argv=None):
             arrays.update({f'{case}_{key}': value for key, value in result.items()})
             metrics[case] = {name+'_drive_sum_residual': float(np.max(np.abs(result['drive_'+name].sum(axis=0)-result[name][regions == 'C'].sum(axis=0)))) for name in OBSERVABLES}
             metrics[case]['rate_sum_residual'] = float(max(np.max(np.abs(result[prefix+'total_torque'+suffix]-result[prefix+'flux_torque'+suffix]-result[prefix+'soc_torque'+suffix])) for prefix,suffix in [('', ''), ('', '_I'), ('', '_E'), ('drive_', '')]))
+            metrics[case]['spin_continuity_residual'] = max(spin_continuity_residual(result), spin_continuity_residual(result, 'drive_', ('',)))
+            metrics[case]['uniform_spin_source_max'] = float(np.max(np.abs(result['spin_source'])))
+            metrics[case]['orbital_continuity_residual'] = max(orbital_continuity_residual(result), orbital_continuity_residual(result, 'drive_', ('',)))
+            metrics[case]['uniform_orbital_source_max'] = float(np.max(np.abs(result['orbital_source'])))
             metrics[case]['orbital_soc_exchange_residual'] = float(np.max(np.abs(result['soc_torque']+2*result['orbital_soc'])))
             metrics[case]['orbital_rate_sum_residual'] = float(np.max(np.abs(result['orbital_total']-result['orbital_h0']-result['orbital_soc'])))
             metrics[case]['orbital_rate_sum_residual'] = max(metrics[case]['orbital_rate_sum_residual'], orbital_balance_residual(result))
@@ -628,6 +694,8 @@ def main(argv=None):
     arrays.update(y_A=y, regions=regions)
     checks = dict(orbital_balance=all(row[key]<1e-8 for row in metrics.values() for key in ('orbital_soc_exchange_residual','orbital_rate_sum_residual','orbital_transfer_global_residual')),
         rate_sum=all(row['rate_sum_residual']<1e-8 for row in metrics.values()),
+        spin_continuity=all(row['spin_continuity_residual']<1e-8 for row in metrics.values()),
+        orbital_continuity=all(row['orbital_continuity_residual']<1e-8 for row in metrics.values()),
         flux_global_zero=all(row['flux_global_residual']<1e-8 for row in metrics.values()),
         mirror_inplane_zero=all(row['max_inplane']<1e-8 for row in metrics.values()),
         drive_rows_sum=all(row[name+'_drive_sum_residual']<1e-8 for row in metrics.values() for name in OBSERVABLES),
@@ -642,7 +710,13 @@ def main(argv=None):
         flux_observable='i[H0,{P_row,mu_S}/2]; positive means spin-moment influx',
         total_observable='i[H,{P_row,mu_S}/2]; Hamiltonian rate excluding collision and drive',
         soc_torque_observable='i[H_SOC,mu_S] = hbar*d(mu_S)/dt from SOC; electronic torque, no reaction sign',
-        units={name: ('mu_B*eV/(V/Angstrom)' if name!='spin' else 'mu_B/(V/Angstrom)')+' per longitudinal repeat' for name in OBSERVABLES})
+        spin_source='Direct Tr(M_S B_d), B_d=f[epsilon_n,epsilon_m]*({P_d,v_x}/2)_nm; no collision resolvent',
+        spin_relaxation='linewidth * spin; positive-side CRTA loss eta*delta mu_S',
+        spin_continuity='flux_torque + soc_torque + spin_source - spin_relaxation; all terms independently contracted except relaxation from spin',
+        orbital_source='Direct Tr(M_L B_d), same velocity-projected LG source as spin_source; ACA moment only',
+        orbital_continuity='orbital_transfer + orbital_crystal + orbital_soc + orbital_source - linewidth*orbital; ACA moment independently computed',
+        plotted_observables=PLOT_OBSERVABLES, stored_observables=OBSERVABLES,
+        units={name: observable_units(name)+' per longitudinal repeat' for name in OBSERVABLES})
     np.savez_compressed(output/'responses.npz', **arrays)
     (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     plot(arrays, summary, output)

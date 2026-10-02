@@ -42,9 +42,9 @@ rates have units mu_B*eV/(V/Angstrom), i.e. hbar times moment rate. Divide
 by hbar=.6582119569 eV fs for rates in mu_B/fs. No area normalization is
 applied. Only z is plotted; xyz is retained for symmetry checks.
 
-BSR and ACA accumulation plots are omitted to reduce cost, not because their
-irrelevance to spin generation has been established. The Hamiltonian and
-its orbital degrees of freedom are unchanged.
+BSR accumulation is not computed. ACA accumulation is computed and saved
+for the orbital continuity check, but omitted from the plots. These choices
+do not establish irrelevance of orbital response to spin generation.
 
 ## Projection and general nonlocal interactions
 
@@ -69,7 +69,7 @@ separately from pole-subtracted finite-response agreement.
 
 ## Outputs and controls
 
-`profile_fN.png` and `drive_rows_fN.png` have nine panels for uniform-drive
+`profile_fN.png` and `drive_rows_fN.png` have eleven panels for uniform-drive
 row profiles and C-total response versus driven row, respectively. Each
 includes full, SOC-off, and interface-disconnected controls. `responses.npz`
 retains total/I/E uniform profiles, row drives, and mesh comparisons;
@@ -78,17 +78,56 @@ records parameters, timing, decomposition, mirror and control checks.
 `geometry.png` shows actual bonds; model files are in case subdirectories.
 
 With `--row-profiles`, the finest-mesh calculation also produces
-`row_profiles/profile_drive_rowNNN_fM.png` for every drive, nine full-model
+`row_profiles/profile_drive_rowNNN_fM.png` for every drive, eleven full-model
 heatmaps in `response_matrix_fM.png`, all-control total/I/E arrays in
 `responses.npz`, CSV tables and reconstruction residuals. Use
 `--profile-drive-rows 0 12 43` to select drives. Summing observed C rows
 reconstructs each C total; summing all drives reconstructs uniform profiles.
 Small residuals verify algebra, not k-mesh convergence.
 
+The final two panels show the directly evaluated spin and ACA orbital sources.
+Relaxation and continuity residuals are retained in NPZ/CSV data and summary
+checks, but not plotted:
+
+- `spin_source`: D_S=Re Tr(M_S B_d), evaluated directly from the LG source.
+  In the band basis B_d=f[epsilon_n,epsilon_m] (v_x^d)_nm, with the finite
+  f' limit at degeneracies and v_x^d={P_d,v_x}/2. No relaxation denominator
+  is used in this contraction. The kernel passes -i B_d to its solver;
+  B_d, not -i B_d, is the source in (eta+i ad_H)rho_1=B_d.
+- `spin_relaxation`: eta*delta mu_S, the CRTA loss displayed on the positive
+  side of the balance; eta is the input linewidth in eV.
+- `spin_continuity`: flux_torque+soc_torque+spin_source-spin_relaxation.
+  The source is not inferred from this difference. H_XC=0 in this model.
+- `orbital_source`: D_L=Re Tr(M_L B_d), using the same source and the
+  ACA moment mu_L=-L mu_B. It is not a BSR source or an inferred residual.
+- `orbital`: independently contracted ACA accumulation, stored in
+  mu_B/(V/Angstrom) for the continuity check, not plotted.
+- `orbital_relaxation`: linewidth*orbital, stored without a panel.
+- `orbital_continuity`: orbital_transfer+orbital_crystal+orbital_soc
+  +orbital_source-orbital_relaxation. It checks the complete orbital balance,
+  including crystal/interface angular-momentum exchange.
+
+All rate terms use mu_B*eV/(V/Angstrom) per longitudinal repeat and are exported
+for every control, uniform profile, C-total driving curve, and row matrix.
+The uniform and row-matrix I/E channels use band diagonal/off-diagonal
+source or response components. Summary files check the continuity residual
+independently of the existing torque-decomposition and marginal checks.
+Uniform D_S should approach zero with k convergence, while individual
+velocity-projected driving sources may have nonzero spin moments. Their
+sum recovers the uniform source. The same statement applies to D_L for the
+onsite ACA operator. In the s-only N region, ACA moment and its source are
+zero; projected crystal and transfer terms can still cancel at the interface.
+Neither source term establishes a physical spatial electric-field protocol.
+
+Recompute old results to obtain the direct source; `--plot-only` cannot
+recover it independently from previously saved spin/torque arrays. Use
+`--row-profiles-only` on saved velocity-projected results to regenerate just
+the row-profile directory, or rerun normally for all eleven-panel outputs.
+
 `--row-profiles-only --output PATH` rebuilds saved model parameters and
 checks existing shared observables before adding the new row matrices.
 `--plot-only --row-profiles --output PATH` replots current-format files.
-Old BSR/ACA files need recalculation for the new nine-panel output.
+Older outputs need recalculation to include the direct orbital source.
 
 Parallelism uses fixed chunks of at most 32 k points and one BLAS thread
 per worker. `--workers N` changes scheduling, not the mesh or reduction
