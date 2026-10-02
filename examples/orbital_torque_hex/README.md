@@ -9,6 +9,7 @@ but can carry BSR moment through intersite wave-function circulation.
 | 1 | Does a spin-independent s-only insulator have finite BSR OHC and zero SHC/ACA OHC? | Implemented in [orbital_hall_source.py](orbital_hall_source.py) |
 | 2 | What finite-ribbon boundary moment response corresponds to the bulk BSR-current response, in the gap and in the bands? | [orbital_ribbon.py](orbital_ribbon.py), [scope and audit](README_orbital_ribbon.md); symmetrized partition of ribbon BSR moment |
 | 3 | Can coupling to an SOC converter yield spin response from this source? | [orbital_nc_ribbon.py](orbital_nc_ribbon.py), [model and projection conventions](README_orbital_nc_ribbon.md); zigzag/armchair sources, p-shell C, spin moment, spin/orbital SOC torques, orbital transfer and crystal torque, cut currents and local rates under uniform and row drives |
+| 3b | Can a SOC-free buffer separate interface orbital generation from SOC conversion? | [orbital_nbc_ribbon.py](orbital_nbc_ribbon.py), [width comparisons and display alignment](README_orbital_nbc_ribbon.md); N/C width controls at fixed B |
 | 4 | Does an attached exchange magnet acquire torque? | Planned; local/remote driving and angular-momentum-transfer checks |
 
 ## Run stage 1
