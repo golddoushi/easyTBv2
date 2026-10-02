@@ -29,7 +29,7 @@ ORBITAL_OBSERVABLES = ('orbital_soc', 'orbital_h0', 'orbital_crystal', 'orbital_
 SPIN_BALANCE = ('spin_source', 'spin_relaxation', 'spin_continuity')
 ORBITAL_BALANCE = ('orbital', 'orbital_source', 'orbital_relaxation', 'orbital_continuity')
 OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES + SPIN_BALANCE + ORBITAL_BALANCE
-PLOT_OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES + ('spin_source', 'orbital_source')
+PLOT_OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES + ('spin_source', 'orbital_source', 'orbital')
 
 
 def observable_units(name):
@@ -89,6 +89,8 @@ def orbital_balance_residual(response, prefix=''):
 
 
 def observable_label(name):
+    if name == 'orbital':
+        return r'ACA ORBITAL $\delta\mu_L^z/E_x$'+'\n'+r'[$\mu_B$/(V/$\AA$)]'
     if name == 'orbital_source':
         return r'SOURCE $D_L/E_x$'+'\n'+r'[$\mu_B$ eV/(V/$\AA$)]'
     if name in SPIN_BALANCE:
@@ -358,6 +360,7 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
     import matplotlib.pyplot as plt
     output = Path(output)/'row_profiles'
     output.mkdir(parents=True, exist_ok=True)
+    metadata = dict(metadata, plotted_observables=PLOT_OBSERVABLES)
     cut_arrays = {case+'_orbital_cut_current': -np.cumsum(arrays[case+'_row_profile_orbital_transfer'], axis=1)[:, :-1]
                   for case in ('full', 'no_soc', 'disconnected')}
     np.savez_compressed(output/'orbital_cut_currents.npz', **cut_arrays,
@@ -391,8 +394,7 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
                 ax.legend(fontsize=8)
                 ax.grid(alpha=.2)
             fig.suptitle(f'Drive row {row} ({regions[row]}), y={y[row]:.4g} Angstrom; EF={mu:g} eV; Nk={metadata["grid"]}\n'+r'Vertex $\{P_r,v_x\}/2$; z observable on each observed row')
-            axes[-1].set_visible(False)
-            axes[-2].set_xlabel('Observed row y (Angstrom); N blue / C orange')
+            axes[-1].set_xlabel('Observed row y (Angstrom); N blue / C orange')
             target = output/f'profile_drive_row{row:03d}_f{fi}.png'
             temporary = target.with_suffix('.pending.png')
             fig.savefig(temporary, dpi=140)
@@ -409,7 +411,6 @@ def save_row_profiles(arrays, y, regions, fermi, drive_rows, output, metadata):
             ax.set_yticks(ticks, labels=np.asarray(drive_rows)[ticks])
             ax.axvline(np.flatnonzero(regions == 'C')[0]-.5, color='0.4', ls='--', lw=.8)
             fig.colorbar(im, ax=ax, label=observable_units(name))
-        axes[-1].set_visible(False)
         fig.savefig(output/f'response_matrix_f{fi}.png', dpi=140)
         plt.close(fig)
         fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
@@ -542,8 +543,7 @@ def plot(arrays, summary, output):
                 ax.grid(alpha=.2)
             fig.suptitle(f"{summary['edge'].capitalize()} N / p-shell C, EF={mu:g} eV\n"+
                 ('One symmetrized row drive at a time' if drive else 'Uniform Ex; observables summed over each physical row'))
-            axes[-1].set_visible(False)
-            axes[-2].set_xlabel(('Driven' if drive else 'Observed')+' row y (Angstrom); N blue / C orange')
+            axes[-1].set_xlabel(('Driven' if drive else 'Observed')+' row y (Angstrom); N blue / C orange')
             target = Path(output)/f'{"drive_rows" if drive else "profile"}_f{fi}.png'
             temporary = target.with_suffix('.pending.png')
             fig.savefig(temporary, dpi=160)
@@ -627,7 +627,10 @@ def main(argv=None):
         return
     if args.plot_only:
         with np.load(output/'responses.npz') as arrays:
-            plot(arrays, json.loads((output/'summary.json').read_text()), output)
+            summary = json.loads((output/'summary.json').read_text())
+            summary['plotted_observables'] = PLOT_OBSERVABLES
+            plot(arrays, summary, output)
+            (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
             export_csv(arrays, output)
             save_orbital_cuts(arrays, output)
         if args.row_profiles:

@@ -42,8 +42,8 @@ rates have units mu_B*eV/(V/Angstrom), i.e. hbar times moment rate. Divide
 by hbar=.6582119569 eV fs for rates in mu_B/fs. No area normalization is
 applied. Only z is plotted; xyz is retained for symmetry checks.
 
-BSR accumulation is not computed. ACA accumulation is computed and saved
-for the orbital continuity check, but omitted from the plots. These choices
+BSR accumulation is not computed. ACA accumulation is computed, saved,
+and plotted to interpret the orbital continuity check. These choices
 do not establish irrelevance of orbital response to spin generation.
 
 ## Projection and general nonlocal interactions
@@ -69,7 +69,7 @@ separately from pole-subtracted finite-response agreement.
 
 ## Outputs and controls
 
-`profile_fN.png` and `drive_rows_fN.png` have eleven panels for uniform-drive
+`profile_fN.png` and `drive_rows_fN.png` have twelve panels for uniform-drive
 row profiles and C-total response versus driven row, respectively. Each
 includes full, SOC-off, and interface-disconnected controls. `responses.npz`
 retains total/I/E uniform profiles, row drives, and mesh comparisons;
@@ -78,14 +78,14 @@ records parameters, timing, decomposition, mirror and control checks.
 `geometry.png` shows actual bonds; model files are in case subdirectories.
 
 With `--row-profiles`, the finest-mesh calculation also produces
-`row_profiles/profile_drive_rowNNN_fM.png` for every drive, eleven full-model
+`row_profiles/profile_drive_rowNNN_fM.png` for every drive, twelve full-model
 heatmaps in `response_matrix_fM.png`, all-control total/I/E arrays in
 `responses.npz`, CSV tables and reconstruction residuals. Use
 `--profile-drive-rows 0 12 43` to select drives. Summing observed C rows
 reconstructs each C total; summing all drives reconstructs uniform profiles.
 Small residuals verify algebra, not k-mesh convergence.
 
-The final two panels show the directly evaluated spin and ACA orbital sources.
+The final three panels show the spin source, ACA orbital source, and ACA accumulation.
 Relaxation and continuity residuals are retained in NPZ/CSV data and summary
 checks, but not plotted:
 
@@ -101,7 +101,7 @@ checks, but not plotted:
 - `orbital_source`: D_L=Re Tr(M_L B_d), using the same source and the
   ACA moment mu_L=-L mu_B. It is not a BSR source or an inferred residual.
 - `orbital`: independently contracted ACA accumulation, stored in
-  mu_B/(V/Angstrom) for the continuity check, not plotted.
+  mu_B/(V/Angstrom) for the continuity check and plotted as the twelfth panel.
 - `orbital_relaxation`: linewidth*orbital, stored without a panel.
 - `orbital_continuity`: orbital_transfer+orbital_crystal+orbital_soc
   +orbital_source-orbital_relaxation. It checks the complete orbital balance,
@@ -122,7 +122,9 @@ Neither source term establishes a physical spatial electric-field protocol.
 Recompute old results to obtain the direct source; `--plot-only` cannot
 recover it independently from previously saved spin/torque arrays. Use
 `--row-profiles-only` on saved velocity-projected results to regenerate just
-the row-profile directory, or rerun normally for all eleven-panel outputs.
+the row-profile directory, or rerun normally for all twelve-panel outputs.
+If the saved arrays already contain `orbital`, `--plot-only --row-profiles`
+adds the ACA accumulation panel without recomputing any responses.
 
 `--row-profiles-only --output PATH` rebuilds saved model parameters and
 checks existing shared observables before adding the new row matrices.
