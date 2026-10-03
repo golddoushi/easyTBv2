@@ -12,6 +12,11 @@ but can carry BSR moment through intersite wave-function circulation.
 | 3b | Can a SOC-free buffer separate interface orbital generation from SOC conversion? | [orbital_nbc_ribbon.py](orbital_nbc_ribbon.py), [width comparisons and display alignment](README_orbital_nbc_ribbon.md); N/C width controls at fixed B |
 | 4 | Does an attached exchange magnet acquire torque? | Planned; local/remote driving and angular-momentum-transfer checks |
 
+An alternative s-only converter is implemented in
+[orbital_km_nc_ribbon.py](orbital_km_nc_ribbon.py): intrinsic Kane–Mele
+intersite SOC, with BSR/spin profiles and explicit SOC hopping influx.
+See its [model and interpretation](README_orbital_km_nc_ribbon.md).
+
 ## Run stage 1
 
 ```text

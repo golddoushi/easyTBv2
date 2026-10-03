@@ -39,8 +39,18 @@ The example reuses the NC length-gauge density-matrix response implementation
 without modifying the calculators. Plots show z components of spin and ACA
 orbital accumulation, spin SOC/flux/total torques, orbital SOC/H0/crystal/
 transfer/total torques, and direct spin/orbital source terms. Relaxation and
-independently evaluated continuity residuals remain in the data. BSR is not
-computed in this example.
+independently evaluated continuity residuals remain in the data. Add `--bsr` to compute BSR moment accumulation using the established LG
+density-matrix kernel and the full junction self-rotation vertex. It is off
+by default to avoid its extra cost. The observable is partitioned as
+`{P_row,mu_BSR}/2`; it is not an isolated-N moment or an orbital-current
+measurement. BSR is separate from the ACA continuity equation.
+
+With `--bsr`, an extra z-component panel appears in uniform profiles,
+C-total driving-row plots and (with `--row-profiles`) row matrices and
+individual-drive profiles. NPZ stores `bsr`, `bsr_I`, `bsr_E`, `drive_bsr`
+and optional `row_profile_bsr`/I/E arrays; CSV and regional totals also
+include BSR. Plot-only mode detects BSR in the saved data; it cannot add
+BSR to an earlier simulation that did not compute it.
 
 Each `nN_bB_cC/` case contains:
 

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from system import System_tb
 from examples.orbital_torque_hex.orbital_ribbon import build_ribbon
 from calculator import CollisionSpecification
-from calculator.electronic_stages import Spin, SpinSOCTorque, SpinFluxTorque, OrbitalSOCTorque, OrbitalFluxTorque
+from calculator.electronic_stages import Spin, SpinSOCTorque, SpinFluxTorque, OrbitalSOCTorque, OrbitalFluxTorque, Orbital_BlochSelfRotate
 from calculator.response_stages import DensityMatrixResponse
 from calculator.density_matrix import LengthGaugeFirstOrderDMKernel
 
@@ -33,7 +33,7 @@ PLOT_OBSERVABLES = SPIN_OBSERVABLES + ORBITAL_OBSERVABLES + ('spin_source', 'orb
 
 
 def observable_units(name):
-    return 'mu_B/(V/Angstrom)' if name in ('spin', 'orbital') else 'mu_B*eV/(V/Angstrom)'
+    return 'mu_B/(V/Angstrom)' if name in ('spin', 'orbital', 'bsr') else 'mu_B*eV/(V/Angstrom)'
 
 
 def add_orbital_balance(result, linewidth, prefix='', suffixes=('', '_I', '_E')):
@@ -51,10 +51,11 @@ def orbital_continuity_residual(result, prefix='', suffixes=('', '_I', '_E')):
 
 def add_spin_balance(result, linewidth, prefix='', suffixes=('', '_I', '_E')):
     """Combine independently contracted source and Hamiltonian rates."""
+    soc_rate = 'soc_local_rate' if prefix+'soc_local_rate' in result else 'soc_torque'
     for suffix in suffixes:
         result[prefix+'spin_relaxation'+suffix] = linewidth*result[prefix+'spin'+suffix]
         result[prefix+'spin_continuity'+suffix] = (
-            result[prefix+'flux_torque'+suffix]+result[prefix+'soc_torque'+suffix]
+            result[prefix+'flux_torque'+suffix]+result[prefix+soc_rate+suffix]
             +result[prefix+'spin_source'+suffix]-result[prefix+'spin_relaxation'+suffix])
 
 
@@ -73,10 +74,13 @@ def observable_vertices(prepared):
                 orbital_crystal=orbital_h0.orbitalTorque_K, orbital_total=orbital_soc.orbital_K)
 
 
-def rate_hamiltonians(prepared):
+def rate_hamiltonians(prepared, include_soc_local=False):
     h0 = SpinFluxTorque(states=prepared.states).ham0_K
     full = prepared.states.energies[..., :, None]*np.eye(prepared.states.energies.shape[-1])
-    return dict(flux_torque=h0, total_torque=full, orbital_h0=h0, orbital_total=full)
+    rates = dict(flux_torque=h0, total_torque=full, orbital_h0=h0, orbital_total=full)
+    if include_soc_local:
+        rates['soc_local_rate'] = SpinSOCTorque(states=prepared.states).soc_K
+    return rates
 
 
 def orbital_balance_residual(response, prefix=''):
@@ -89,6 +93,8 @@ def orbital_balance_residual(response, prefix=''):
 
 
 def observable_label(name):
+    if name == 'bsr':
+        return r'BSR $\delta\mu_{BSR}^z/E_x$'+'\n'+r'[$\mu_B$/(V/$\AA$)]'
     if name == 'orbital':
         return r'ACA ORBITAL $\delta\mu_L^z/E_x$'+'\n'+r'[$\mu_B$/(V/$\AA$)]'
     if name == 'orbital_source':
@@ -204,7 +210,7 @@ def mesh_execution(grid, workers=1):
     return chunks, min(workers, chunks)
 
 
-def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, workers=1, profile_rows=None):
+def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, workers=1, profile_rows=None, compute_bsr=False, compute_soc_local=False):
     """Established LG scalar-CRTA kernel; exact dual contraction for row drives.
 
     Observables use {P_row,m}/2. Inter-row v_x bonds are half-assigned to each
@@ -234,7 +240,11 @@ def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, worke
         vx = u@prepared.inputs.velocity_K[..., 0, :, :]@ud
         # Spin stage already supplies magnetic moment (minus Pauli).
         observables = observable_vertices(prepared)
-        hamiltonians = rate_hamiltonians(prepared)
+        if compute_bsr:
+            observables['bsr'] = Orbital_BlochSelfRotate(states=prepared.states).orbital_K
+        if compute_soc_local:
+            observables['soc_local_rate'] = prepared.spin_K
+        hamiltonians = rate_hamiltonians(prepared, 'soc_local_rate' in observables)
         for name, band in observables.items():
             ao = u[..., None, :, :]@band@ud[..., None, :, :]
             c_band = ud[..., None, :, :]@(ao*(c_mask[:, None]+c_mask[None, :])/2)@u[..., None, :, :]
@@ -272,7 +282,7 @@ def calculate(model, groups, regions, grid, fermi, kbt=.01, linewidth=.02, worke
         add_orbital_balance(results, linewidth)
         add_orbital_balance(results, linewidth, 'drive_', ('',))
         if profile_rows is not None:
-            results.update(_row_profile_matrices(prepared, kernel, masks, profile_rows, fermi, count, linewidth))
+            results.update(_row_profile_matrices(prepared, kernel, masks, profile_rows, fermi, count, linewidth, observables))
         return results
 
     # Set the process-wide BLAS limit outside worker threads to avoid nested
@@ -297,7 +307,7 @@ def _sum_parts(parts):
     return total
 
 
-def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks, linewidth):
+def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks, linewidth, observables=None):
     """All observed rows for selected drives; z only, with I/E decomposition.
 
     Build symmetrized vertices from low-rank row projectors, then contract
@@ -306,15 +316,16 @@ def _row_profile_matrices(prepared, kernel, masks, drive_rows, fermi, chunks, li
     """
     ids = [np.flatnonzero(mask) for mask in masks]
     shape = (len(drive_rows), len(masks), len(fermi))
-    result = {f'row_profile_{name}{suffix}': np.zeros(shape) for name in OBSERVABLES for suffix in ('', '_I', '_E')}
+    observables = observable_vertices(prepared) if observables is None else observables
+    names = OBSERVABLES + tuple(name for name in observables if name not in OBSERVABLES)
+    result = {f'row_profile_{name}{suffix}': np.zeros(shape) for name in names for suffix in ('', '_I', '_E')}
     weights, source_weights = [], []
     for fi, mu in enumerate(fermi):
         state = kernel.fermi_state(fi, mu)
         source_weights.append(state.divided_difference)
         weights.append(state.collision.solve(-1j*state.divided_difference, prepared.inputs.deltaE, 0.))
     scale = chunks*np.prod(prepared.states.energies.shape[:-1])
-    observables = observable_vertices(prepared)
-    hamiltonians = rate_hamiltonians(prepared)
+    hamiltonians = rate_hamiltonians(prepared, 'soc_local_rate' in observables)
     for index in np.ndindex(prepared.states.energies.shape[:-1]):
         u = prepared.states.vectors[index]
         def row_vertices(operator, rows):

@@ -73,6 +73,10 @@ def alignment(region_lists):
     return x, labels, np.array([-.5, b-.5]), weights, missing
 
 
+def stored_observables(result):
+    return OBSERVABLES + (('bsr',) if 'bsr' in result else ())
+
+
 def diagnostics(result, regions):
     checks = dict(spin_continuity=spin_continuity_residual(result),
         orbital_continuity=orbital_continuity_residual(result),
@@ -80,7 +84,7 @@ def diagnostics(result, regions):
         drive_spin_continuity=spin_continuity_residual(result, 'drive_', ('',)),
         drive_orbital_continuity=orbital_continuity_residual(result, 'drive_', ('',)),
         soc_outside_C=float(np.max(np.abs(result['soc_torque'][regions!='C']))))
-    for name in OBSERVABLES:
+    for name in stored_observables(result):
         checks[name+'_drive_sum'] = float(np.max(np.abs(
             result['drive_'+name].sum(axis=0)-result[name][regions=='C'].sum(axis=0))))
         if 'row_profile_'+name in result:
@@ -95,6 +99,7 @@ def diagnostics(result, regions):
 
 def save_physical(output, result, y, regions, fermi):
     """All scientific data remain on the native grid, including cut currents."""
+    names = stored_observables(result)
     cuts = -np.cumsum(result['orbital_transfer'], axis=0)[:-1]
     data = dict(result, y_A=y, regions=regions, fermi_eV=fermi,
         orbital_cut_current=cuts, cut_y_A=(y[:-1]+y[1:])/2)
@@ -104,10 +109,10 @@ def save_physical(output, result, y, regions, fermi):
     for prefix, filename in [('', 'profiles.csv'), ('drive_', 'drive_rows.csv')]:
         with (output/filename).open('w', newline='') as stream:
             writer = csv.writer(stream)
-            writer.writerow(['physical_row','y_A','region','fermi_eV',*OBSERVABLES])
+            writer.writerow(['physical_row','y_A','region','fermi_eV',*names])
             for r in range(len(y)):
                 for fi, mu in enumerate(fermi):
-                    writer.writerow([r,y[r],regions[r],mu,*[result[prefix+k][r,fi,2] for k in OBSERVABLES]])
+                    writer.writerow([r,y[r],regions[r],mu,*[result[prefix+k][r,fi,2] for k in names]])
     # Interval balance for the SOC-free buffer, using native boundary cuts.
     first, last = np.flatnonzero(regions=='B')[[0,-1]]
     # Include the N/B crystal contribution on B's first row. Internal B cuts
@@ -126,6 +131,8 @@ def plot_comparisons(output, summary):
     for case in cases:
         with np.load(output/case['name']/'responses.npz') as saved:
             data.append(dict(saved))
+    plot_names = PLOT_OBSERVABLES + (('bsr',) if all('bsr' in a for a in data) else ())
+    panel_rows = (len(plot_names)+2)//3
     x, regions, boundaries, weights, missing = alignment([a['regions'] for a in data])
     display = dict(x=x, regions=regions, interfaces=boundaries,
                    alignment='native rows; B starts at zero; absent outer rows are NaN')
@@ -146,8 +153,8 @@ def plot_comparisons(output, summary):
         row_output.mkdir(exist_ok=True)
     for fi, mu in enumerate(summary['parameters']['fermi']):
         for prefix, filename in [('', 'profile'), ('drive_', 'drive_rows')]:
-            fig, axes = plt.subplots(4,3,figsize=(18,17),constrained_layout=True)
-            for ax, name in zip(axes.flat, PLOT_OBSERVABLES):
+            fig, axes = plt.subplots(panel_rows,3,figsize=(18,4.25*panel_rows),constrained_layout=True)
+            for ax, name in zip(axes.flat, plot_names):
                 for case, a, w, mask in zip(cases, data, weights, missing):
                     values = w@a[prefix+name][:,fi,2]
                     values[mask] = np.nan
@@ -159,6 +166,8 @@ def plot_comparisons(output, summary):
                 ax.set_xlabel('Aligned row coordinate (not distance); N / B / C')
             axes.flat[0].legend(fontsize=8)
             fig.suptitle(f'N/B/C width comparisons, EF={mu:g} eV; '+('C-total versus driving row' if prefix else 'uniform Ex')+'\nDots: native physical rows; B and both interfaces aligned')
+            for unused in list(axes.flat)[len(plot_names):]:
+                unused.set_visible(False)
             fig.savefig(output/f'{filename}_f{fi}.png',dpi=140)
             plt.close(fig)
         fig,ax=plt.subplots(figsize=(10,5),constrained_layout=True)
@@ -172,17 +181,17 @@ def plot_comparisons(output, summary):
         plt.close(fig)
         if not has_rows:
             continue
-        matrices = [{name:w@a['row_profile_'+name][:,:,fi]@w.T for name in PLOT_OBSERVABLES}
+        matrices = [{name:w@a['row_profile_'+name][:,:,fi]@w.T for name in plot_names}
                     for a,w in zip(data,weights)]
         for matrix, mask in zip(matrices, missing):
             for values in matrix.values():
                 values[mask, :] = np.nan
                 values[:, mask] = np.nan
         # Consistent color scales across all width cases, for each observable.
-        vmax = {name:max(1e-15,*(np.nanmax(abs(m[name])) for m in matrices)) for name in PLOT_OBSERVABLES}
+        vmax = {name:max(1e-15,*(np.nanmax(abs(m[name])) for m in matrices)) for name in plot_names}
         for case, matrix in zip(cases, matrices):
-            fig, axes = plt.subplots(4,3,figsize=(18,18),constrained_layout=True)
-            for ax,name in zip(axes.flat,PLOT_OBSERVABLES):
+            fig, axes = plt.subplots(panel_rows,3,figsize=(18,4.5*panel_rows),constrained_layout=True)
+            for ax,name in zip(axes.flat,plot_names):
                 im=ax.pcolormesh(x,x,matrix[name],shading='nearest',cmap='RdBu_r',vmin=-vmax[name],vmax=vmax[name])
                 for boundary in boundaries:
                     ax.axvline(boundary,color='.4',ls='--',lw=.6)
@@ -191,11 +200,13 @@ def plot_comparisons(output, summary):
                 fig.colorbar(im,ax=ax,label=observable_units(name))
                 display[f'{case["name"]}_matrix_{name}_f{fi}']=matrix[name]
             fig.suptitle(case['label']+f', EF={mu:g} eV; native rows; blank areas lie outside this ribbon')
+            for unused in list(axes.flat)[len(plot_names):]:
+                unused.set_visible(False)
             fig.savefig(row_output/f'{case["name"]}_response_matrix_f{fi}.png',dpi=140)
             plt.close(fig)
         for d in range(len(x)):
-            fig,axes=plt.subplots(4,3,figsize=(18,17),constrained_layout=True)
-            for ax,name in zip(axes.flat,PLOT_OBSERVABLES):
+            fig,axes=plt.subplots(panel_rows,3,figsize=(18,4.25*panel_rows),constrained_layout=True)
+            for ax,name in zip(axes.flat,plot_names):
                 for case,matrix,mask in zip(cases,matrices,missing):
                     if mask[d]:
                         continue
@@ -206,6 +217,8 @@ def plot_comparisons(output, summary):
                 ax.set_xlabel('Aligned observing coordinate; N / B / C')
             axes.flat[0].legend(fontsize=7)
             fig.suptitle(f'Aligned drive {d}, {regions[d]}, x={x[d]:.3g}; EF={mu:g} eV\nOnly cases containing this physical driving row are shown')
+            for unused in list(axes.flat)[len(plot_names):]:
+                unused.set_visible(False)
             fig.savefig(row_output/f'profile_drive_node{d:03d}_f{fi}.png',dpi=140)
             plt.close(fig)
     np.savez_compressed(output/'aligned_display.npz',**display)
@@ -225,6 +238,7 @@ def main(argv=None):
     parser.add_argument('--kbt',type=float,default=.01)
     parser.add_argument('--linewidth',type=float,default=.02)
     parser.add_argument('--workers',type=int,default=1)
+    parser.add_argument('--bsr',action='store_true',help='Compute and plot BSR moment accumulation (additional cost)')
     parser.add_argument('--row-profiles',action='store_true')
     parser.add_argument('--plot-only',action='store_true')
     parser.add_argument('--output',type=Path)
@@ -242,7 +256,7 @@ def main(argv=None):
     summary=dict(parameters={k:v for k,v in vars(args).items() if k!='output'},cases=[],
         row_drive='velocity projection {P_row,v_x}/2',
         alignment='Fixed B, native row indices; both interfaces aligned; no interpolation',
-        units={k:observable_units(k) for k in OBSERVABLES})
+        units={k:observable_units(k) for k in OBSERVABLES + (('bsr',) if args.bsr else ())})
     summary['parameters']['widths']=widths
     b=args.b_width
     for n,c in widths:
@@ -258,7 +272,7 @@ def main(argv=None):
         for grid in grids:
             start=perf_counter()
             rows=list(range(len(y))) if args.row_profiles and grid==grids[-1] else None
-            result=calculate(model,groups,regions,grid,args.fermi,args.kbt,args.linewidth,args.workers,rows)
+            result=calculate(model,groups,regions,grid,args.fermi,args.kbt,args.linewidth,args.workers,rows,compute_bsr=args.bsr)
             case['timings_seconds'][str(grid)]=perf_counter()-start
             case['checks'][str(grid)]=diagnostics(result,regions)
             np.savez_compressed(directory/f'responses_n{grid}.npz',**result,y_A=y,regions=regions,fermi_eV=args.fermi)
@@ -268,7 +282,7 @@ def main(argv=None):
             print(f'{name} Nk={grid}: {case["timings_seconds"][str(grid)]:.2f}s',flush=True)
         case['buffer_cut_balance_residual']=save_physical(directory,result,y,regions,args.fermi)
         case['regional_totals_z']={region:{key:result[key][regions==region,:,2].sum(axis=0).tolist()
-            for key in OBSERVABLES} for region in ('N','B','C')}
+            for key in stored_observables(result)} for region in ('N','B','C')}
         summary['cases'].append(case)
         (output/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
         residual=max(case['buffer_cut_balance_residual'],*(v for checks in case['checks'].values() for v in checks.values()))
