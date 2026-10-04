@@ -9,7 +9,7 @@ under `tmp/orbital_torque/`; model inputs and response data are regenerated ther
 | --- | --- | --- |
 | 1 | Periodic spin-independent square s+p source: finite OHC, zero SHC? | [orbital_hall_source.py](orbital_hall_source.py), [notes](README_orbital_hall_source.md) |
 | 2 | Finite source ribbon: does a longitudinal field induce opposite edge orbital moments? | [orbital_ribbon.py](orbital_ribbon.py), [notes](README_orbital_ribbon.md) |
-| 3 | N-C ribbon: orbital/spin accumulation with mixing, SOC, disconnected-interface and N-only-drive controls | [orbital_nc_ribbon.py](orbital_nc_ribbon.py), [notes](README_nc_ribbon.md) |
+| 3 | N-C ribbon: spin/orbital accumulation, SOC/flux/crystal torques and interface-aligned width controls | [orbital_nc_ribbon.py](orbital_nc_ribbon.py), [notes](README_nc_ribbon.md) |
 | 4 | N/C/F ribbon: local moments, exchange torque and driving-row decomposition with five controls | [orbital_ncf_ribbon.py](orbital_ncf_ribbon.py), [notes](README_ncf_ribbon.md) |
 
 The step-2 ribbon is an intermediate step before the two-zone SOC junction.

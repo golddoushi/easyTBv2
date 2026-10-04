@@ -51,6 +51,19 @@ def build_nbc_ribbon(directory, edge='zigzag', n_width=4, b_width=3, c_width=4,
 
 def alignment(region_lists):
     """Align native row indices about a fixed B; absent outer rows stay empty."""
+    if region_lists and all(not np.any(r=='B') for r in region_lists):
+        counts=[(np.count_nonzero(r=='N'),np.count_nonzero(r=='C')) for r in region_lists]
+        if any(min(pair)<1 for pair in counts):
+            raise ValueError('Every case must contain N and C')
+        x=np.arange(-max(n for n,c in counts),max(c for n,c in counts))
+        weights=[];missing=[]
+        for regions,(n,c) in zip(region_lists,counts):
+            if not np.array_equal(regions,np.repeat(['N','C'],[n,c])):
+                raise ValueError('Physical rows must be ordered N, C')
+            native=np.arange(-n,c);ix=np.searchsorted(x,native)
+            w=np.zeros((len(x),len(native)));w[ix,np.arange(len(native))]=1
+            weights.append(w);missing.append(~np.isin(x,native))
+        return x,np.where(x<0,'N','C'),np.array([-.5]),weights,missing
     counts = [tuple(np.count_nonzero(r == label) for label in ('N','B','C'))
               for r in region_lists]
     if not counts or any(min(c) < 1 for c in counts):
@@ -134,14 +147,16 @@ def plot_comparisons(output, summary):
     plot_names = PLOT_OBSERVABLES + (('bsr',) if all('bsr' in a for a in data) else ())
     panel_rows = (len(plot_names)+2)//3
     x, regions, boundaries, weights, missing = alignment([a['regions'] for a in data])
+    region_title = 'N/B/C' if np.any(regions=='B') else 'N/C'
     display = dict(x=x, regions=regions, interfaces=boundaries,
-                   alignment='native rows; B starts at zero; absent outer rows are NaN')
+                   alignment='native rows; first B row (or first C without B) at zero; absent outer rows are NaN')
     for case, w, mask in zip(cases, weights, missing):
         display[case['name']+'_weights'] = w
         display[case['name']+'_missing'] = mask
     def decorate(ax):
         for region, color in [('N','steelblue'),('B','green'),('C','orange')]:
             xx = x[regions==region]
+            if not len(xx): continue
             ax.axvspan(xx[0]-.5, xx[-1]+.5, color=color, alpha=.07)
         for boundary in boundaries:
             ax.axvline(boundary, color='.4', ls='--', lw=.7)
@@ -163,9 +178,9 @@ def plot_comparisons(output, summary):
                     ax.plot(x[~mask],values[~mask],'o',ms=2,color=line.get_color())
                 decorate(ax)
                 ax.set_ylabel(('C-total ' if prefix else '')+observable_label(name))
-                ax.set_xlabel('Aligned row coordinate (not distance); N / B / C')
+                ax.set_xlabel('Aligned row coordinate (not distance); '+region_title)
             axes.flat[0].legend(fontsize=8)
-            fig.suptitle(f'N/B/C width comparisons, EF={mu:g} eV; '+('C-total versus driving row' if prefix else 'uniform Ex')+'\nDots: native physical rows; B and both interfaces aligned')
+            fig.suptitle(f'{region_title} width comparisons, EF={mu:g} eV; '+('C-total versus driving row' if prefix else 'uniform Ex')+'\nDots: native physical rows; interfaces aligned')
             for unused in list(axes.flat)[len(plot_names):]:
                 unused.set_visible(False)
             fig.savefig(output/f'{filename}_f{fi}.png',dpi=140)
@@ -214,7 +229,7 @@ def plot_comparisons(output, summary):
                 decorate(ax)
                 ax.axvline(x[d],color='purple',ls=':',lw=.7)
                 ax.set_ylabel(observable_label(name))
-                ax.set_xlabel('Aligned observing coordinate; N / B / C')
+                ax.set_xlabel('Aligned observing coordinate; '+region_title)
             axes.flat[0].legend(fontsize=7)
             fig.suptitle(f'Aligned drive {d}, {regions[d]}, x={x[d]:.3g}; EF={mu:g} eV\nOnly cases containing this physical driving row are shown')
             for unused in list(axes.flat)[len(plot_names):]:
