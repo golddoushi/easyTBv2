@@ -25,7 +25,7 @@ from .collision import (CollisionSpecification, PreparedCollision, resolve_colli
                         prepare_phonon_background)
 from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbital,
                                 SpinTorque, SpinExchangeTorque, SpinSOCTorque, SpinFluxTorque, OrbitalSOCTorque, OrbitalFluxTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity,
-                                Orbital_BlochSelfRotate, OrbitalVelocity_BlochSelfRotate)
+                                Orbital_BlochSelfRotate, OrbitalVelocity_BlochSelfRotate, OrbitalVelocity_BlochSelfRotateV2)
 from .response_inputs import ResponseInputs
 from .response_results import publish_conductivity, publish_second_order, FirstOrderResponseResult
 from .response_contractions import (
@@ -3170,6 +3170,11 @@ class OrbitalHallConductance_BlochSelfRotate_LG_DM(_OrbitalHallConductance_LG_DM
     not the full Wannier LC/IC orbital-current response.
     """
     orbital_velocity_stage = OrbitalVelocity_BlochSelfRotate
+
+class OrbitalHallConductance_BlochSelfRotateV2_LG_DM(_OrbitalHallConductance_LG_DM):
+    """Length-gauge DC OHC using the PRB 114, 214403 Bloch moment."""
+    orbital_velocity_stage = OrbitalVelocity_BlochSelfRotateV2
+
 
 class SpinvelocityVelocityCorrelation_diag(SpinVelocity_diag, Velocity_diag):
     def __init__(self, velocityProjectionList=[], spinvelocityProjectionList=[], **kwarg) -> None:

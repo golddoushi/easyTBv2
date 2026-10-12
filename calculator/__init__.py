@@ -40,3 +40,6 @@ from .Grid import (SpinFluxTorque, SpinFluxTorqueGalvanicConductivity_LG_DM,
 from .Grid import (OrbitalFluxTorque, OrbitalSOCTorque,
                    OrbitalFluxTorqueGalvanicConductivity_LG_DM, OrbitalFluxTorqueGalvanicConductivity_VG_DM,
                    OrbitalSOCTorqueGalvanicConductivity_LG_DM, OrbitalSOCTorqueGalvanicConductivity_VG_DM)
+
+from .electronic_stages import Orbital_BlochSelfRotateV2, OrbitalVelocity_BlochSelfRotateV2
+from .Grid import OrbitalHallConductance_BlochSelfRotateV2_LG_DM

@@ -685,38 +685,7 @@ class Orbital_BlochSelfRotate(Velocity):
         if not _computeOrbitalBlochSelfRotate:
             return
 
-        nbands = self.energies.shape[-1]
-        moment_sum = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
-        cross_pairs = ((1, 2), (2, 0), (0, 1))
-
-        for p in range(nbands):
-            gap_p_band = self.energies[..., p, None] - self.energies
-            valid_gap = np.abs(gap_p_band) > self.degen
-            inverse_gap = np.zeros_like(gap_p_band)
-            inverse_gap[valid_gap] = 1.0 / gap_p_band[valid_gap]
-
-            weight = inverse_gap[..., :, None] + inverse_gap[..., None, :]
-            weight *= valid_gap[..., :, None] & valid_gap[..., None, :]
-
-            for component, (a, b) in enumerate(cross_pairs):
-                v_a_lp = self.velocity_K[..., a, :, p]
-                v_b_lp = self.velocity_K[..., b, :, p]
-                v_a_pn = self.velocity_K[..., a, p, :]
-                v_b_pn = self.velocity_K[..., b, p, :]
-                velocity_cross = (
-                    v_a_lp[..., :, None] * v_b_pn[..., None, :]
-                    - v_b_lp[..., :, None] * v_a_pn[..., None, :]
-                )
-                moment_sum[..., component, :, :] += weight * velocity_cross
-
-        # hbar^2/(2*m_e), expressed in eV*angstrom^2.  With velocity_K=dH/dk,
-        # Eq. S9 divided by mu_B has the prefactor 1/(4*i*constant).
-        hbar2_over_2me = hbar**2 / (2 * electron_mass * elementary_charge * angstrom**2)
-        self.orbital_K = moment_sum / (4j * hbar2_over_2me)
-        self.orbital_K = (
-            self.orbital_K +
-            self.orbital_K.conj().swapaxes(-2, -1)
-        ) / 2
+        self.orbital_K = self.build_bloch_moment()
 
         self.projected_orbital_K_list = []
         for orbitalProjection in orbitalProjectionList:
@@ -732,10 +701,7 @@ class Orbital_BlochSelfRotate(Velocity):
             )
             proj1_K = self.projectorInEigenBasis(proj1)[..., None, :, :]
             proj2_K = self.projectorInEigenBasis(proj2)[..., None, :, :]
-            projected_orbital_K = (
-                proj1_K @ self.orbital_K
-                + self.orbital_K @ proj2_K
-            ) / 2
+            projected_orbital_K = (proj1_K @ self.orbital_K + self.orbital_K @ proj2_K) / 2
             self.projected_orbital_K_list.append(projected_orbital_K)
 
         if orbitalContact:
@@ -755,6 +721,42 @@ class Orbital_BlochSelfRotate(Velocity):
 
         if self.verbose == 2:
             showElapsedTime(extraInfo="Bloch self-rotation magnetic moment in eig.-basis finished")
+
+    def bloch_moment_weight(self, inverse_gap, valid_gap):
+        """Original BSR excludes the intermediate band on both legs."""
+        return (inverse_gap[..., :, None] + inverse_gap[..., None, :]) * (valid_gap[..., :, None] & valid_gap[..., None, :])
+
+    def build_bloch_moment(self):
+        """Unprojected magnetic moment; subclasses can change its definition."""
+        nbands = self.energies.shape[-1]
+        moment_sum = np.zeros(self.kgrid + (3, nbands, nbands), dtype=complex)
+        cross_pairs = ((1, 2), (2, 0), (0, 1))
+
+        for p in range(nbands):
+            gap_p_band = self.energies[..., p, None] - self.energies
+            valid_gap = np.abs(gap_p_band) > self.degen
+            inverse_gap = np.zeros_like(gap_p_band)
+            inverse_gap[valid_gap] = 1.0 / gap_p_band[valid_gap]
+
+            weight = self.bloch_moment_weight(inverse_gap, valid_gap)
+
+            for component, (a, b) in enumerate(cross_pairs):
+                v_a_lp = self.velocity_K[..., a, :, p]
+                v_b_lp = self.velocity_K[..., b, :, p]
+                v_a_pn = self.velocity_K[..., a, p, :]
+                v_b_pn = self.velocity_K[..., b, p, :]
+                velocity_cross = (
+                    v_a_lp[..., :, None] * v_b_pn[..., None, :] - v_b_lp[..., :, None] * v_a_pn[..., None, :]
+                )
+                moment_sum[..., component, :, :] += weight * velocity_cross
+
+        # hbar^2/(2*m_e), expressed in eV*angstrom^2.  With velocity_K=dH/dk,
+        # Eq. S9 divided by mu_B has the prefactor 1/(4*i*constant).
+        hbar2_over_2me = hbar**2 / (2 * electron_mass * elementary_charge * angstrom**2)
+        self.orbital_K = moment_sum / (4j * hbar2_over_2me)
+        self.orbital_K = (self.orbital_K + self.orbital_K.conj().swapaxes(-2, -1)) / 2
+
+        return self.orbital_K
 
     def bloch_self_rotation_contact(self):
         """D_d m_c in mu_B*angstrom for normalized a=e*A/hbar.
@@ -801,6 +803,27 @@ class Orbital_BlochSelfRotate(Velocity):
                    - rotation[..., None, :, :] @ self.orbital_K)
             contact[..., d, :, :] = (dm+dm.conj().swapaxes(-1, -2))/2
         return contact
+
+class Orbital_BlochSelfRotateV2(Orbital_BlochSelfRotate):
+    """Wannier-derived Bloch moment, PRB 114, 214403, Eq. (16)/Eq. (S66).
+
+    Each inverse energy denominator is masked independently. This includes
+    the extra off-diagonal term absent from V1 and preserves its diagonal.
+    Units and projections are inherited (mu_B). Gaps <= degen are excluded;
+    this is a spectral cutoff, not an extension through a band touching.
+    This vertex alone is not the full thermodynamic orbital magnetization.
+    """
+    def __init__(self, orbitalContact=False, **kwarg):
+        if orbitalContact:
+            raise NotImplementedError('V2 orbital contact has not been implemented')
+        super().__init__(orbitalContact=False, **kwarg)
+
+    def bloch_moment_weight(self, inverse_gap, valid_gap):
+        return inverse_gap[..., :, None] + inverse_gap[..., None, :]
+
+    def bloch_self_rotation_contact(self):
+        raise NotImplementedError('V2 orbital contact has not been implemented')
+
 
 class SpinTorque(Spin):
     def __init__(self, spinTorqueProjectionList=[], **kwarg):
@@ -1306,3 +1329,7 @@ class OrbitalVelocity_BlochSelfRotate(_OrbitalCurrentVertex, Orbital_BlochSelfRo
     orbitalVelocity_K has axes kgrid + (flow, polarization, band, band)
     and units mu_B * eV * angstrom, matching OrbitalVelocity.
     """
+
+
+class OrbitalVelocity_BlochSelfRotateV2(_OrbitalCurrentVertex, Orbital_BlochSelfRotateV2):
+    """Current {m_V2, hbar*v}/2 with the Wannier-derived Bloch moment."""

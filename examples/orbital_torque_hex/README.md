@@ -57,7 +57,7 @@ Defaults: grids 48/96/192 (including the valleys), kBT=0.01 eV,
 linewidth=0.02 eV, Fermi scan -3.2 to +3.2 eV. The code also evaluates
 midgap explicitly, then halves temperature and linewidth there. Parameters are exposed
 as `--hopping`, `--delta`, `--lattice-constant`, `--fermi`, `--grids`, `--kbt`,
-`--linewidth`, and `--output`. The source requires nonzero hopping and Delta.
+`--linewidth`, and `--output`. The source requires nonzero nearest-neighbor hopping; Delta may be zero for Haldane models.
 No hopping-off transport control is computed: isolated atoms are not a transport system.
 
 Outputs under `tmp/orbital_torque_hex/source/` include `hall_scan.png` (gap
@@ -73,6 +73,68 @@ ACA OHC and SHC are exactly zero in the saved arrays. With temperature and
 linewidth halved, midgap BSR OHC is 0.64766603575. The maximum 96-to-192 mesh difference across the entire scan
 is 1.97e-4; the midgap value agrees much more closely. All six source and
 existing BSR-calculator tests pass, including energy-reference invariance.
+
+## BSR V2 and finite-periodic Haldane validation
+
+Stage 1 now compares the original BSR vertex, `Orbital_BlochSelfRotateV2`
+(PRB 114, 214403, Eq.16 / supplementary Eq.S66), and a finite periodic
+lattice reference. V2 inherits the moment projection and units of V1 but
+masks each inverse energy denominator separately. The band diagonals are
+unchanged; the extra off-diagonal moment changes interband responses.
+The corresponding current and LG calculator are
+`OrbitalVelocity_BlochSelfRotateV2` and
+`OrbitalHallConductance_BlochSelfRotateV2_LG_DM`.
+V2 contact terms are not implemented: requesting them raises an explicit
+error rather than using the V1 contact. Neither vertex alone is the full
+thermodynamic orbital magnetization. Both retain the `degen` spectral cutoff;
+results at a gap closing require separate convergence analysis.
+
+```text
+python examples/orbital_torque_hex/orbital_hall_source.py --haldane-controls
+python examples/orbital_torque_hex/orbital_hall_source.py --delta 0.4 --t2 0.15 --phase 0.7853981633974483 --output tmp/orbital_torque_hex/haldane
+python tests/test_bsr_v2.py
+```
+
+`--t2` is the next-nearest-neighbor hopping in eV, and `--phase` is its
+phase in **radians**. Opposite triangular hopping orientations on A and B
+carry opposite phases. Both spins have the same hoppings: this is Haldane,
+not Kane-Mele SOC, and SHC still cancels. The NN hopping sign is related to
+Eq.19 by a sublattice gauge change. With nonzero t2 the scalar band energy
+shifts, so the midpoint is calculated from the sampled valence/conduction
+edges rather than assumed to be zero. Shading is shown only for a positive
+sampled indirect gap; metallic cases have no genuine midgap.
+
+`--haldane-controls` additionally runs M=0.4 eV, t2=0.15 eV and phase/pi
+= 0, 0.15, 0.25, 0.5 in four subdirectories, and produces
+`haldane_controls.png`. Other settings, including the NN hopping, are
+inherited from the CLI. Each case saves all method tensors and I/E channels,
+CSV curves, and mesh-difference/error metrics. `--plot-only --haldane-controls`
+also rebuilds the overview from saved results.
+
+The finite reference follows Eqs.20,21,1,2: construct physical bond
+velocities, reconstruct off-diagonal position elements from energy gaps,
+then evaluate the symmetrized r-cross-v moment with diagonal position terms
+removed. An N by N periodic lattice splits exactly into the N by N momentum
+blocks used by `--grids`. We exploit this symmetry instead of diagonalizing
+a dense 4N-squared matrix. Physical bond displacements are unwrapped at the
+periodic seam; a diagonal sawtooth position commutator on the torus would be
+a different calculation. The small-supercell test explicitly assembles the
+full real-space torus and verifies the block result.
+
+Agreement with V2 is an algebra/implementation check using the paper's
+position prescription, not independent evidence that the prescription is
+the unique physical orbital observable. It also does not establish k-mesh
+convergence. The tests check Hermiticity, identical diagonals, Bloch-phase
+covariance, the explicit Eq.16 correction, current construction, dense-torus
+agreement, and SHC cancellation. For t2=0 and for phase=pi/2 the extra term
+vanishes (constant scalar band energy); general phases distinguish V1/V2.
+
+### Open-boundary finite samples
+
+The inconsistent direct-coordinate/PBC-velocity diagnostic has been removed.
+Use [orbital_hall_obc.py](orbital_hall_obc.py) for finite open samples with
+consistent position, velocity, eigenstates, and electric dipole driving.
+See [OBC definitions and convergence](README_orbital_hall_obc.md).
 
 ## Why an insulating gap does not force this response to vanish
 
