@@ -11,6 +11,7 @@ from scipy.constants import Boltzmann, electron_volt
 from scipy.special import expit
 
 from phonon import PhononBath
+from phonon.base import active_mode_indices
 from .electronic_stages import Energy
 from .Path import EnergyOnPath
 from auxiliary import uniform_qmesh
@@ -131,6 +132,9 @@ class ModelElectronSelfEnergy:
         kBT = Boltzmann * self.temperature / electron_volt
         epc, phonons = epc_model, epc_model.phonon_model
         has_quadratic = epc.has_second_order
+        self.debye_waller_status = ('unavailable_general_hessian'
+            if getattr(epc, 'capabilities', {}).get('general_hessian', {}).get('status') == 'unknown'
+            else 'included' if has_quadratic else 'zero_in_supplied_model')
 
         # q is the outer loop so all electronic k points share one vectorized
         # EPC construction and one set of medium-sized contractions.  This is
@@ -141,8 +145,9 @@ class ModelElectronSelfEnergy:
             intermediate = self.intermediate_energies[:, iq]
             vectors_kq = self.intermediate_vectors[:, iq]
             phonon_energies, _ = phonons.modes(q)
-            branches = (np.arange(len(phonon_energies)) if self.phononSelection is None
-                        else self.phononSelection.branch_indices(len(phonon_energies)))
+            branches = active_mode_indices(phonons, q, self.phononSelection)
+            if not len(branches):
+                continue
             phonon_energies = phonon_energies[branches]
             if self.temperature == 0:
                 bose = np.zeros_like(phonon_energies)

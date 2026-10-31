@@ -62,3 +62,7 @@ class EPCModel(ABC):
             kpoints, q, self.phonon_model.modeDisplacements(q))
         return (vectors_kq.conj().swapaxes(-2, -1)[:, None]
                 @ vertices @ vectors_k[:, None])
+
+    def matrixElementsBatchBounded(self, kpoints, q, vectors_k, vectors_kq, *, workspaceBytes):
+        """Optional provider workspace control; analytic models use caller batches."""
+        return self.matrixElementsBatch(kpoints, q, vectors_k, vectors_kq)

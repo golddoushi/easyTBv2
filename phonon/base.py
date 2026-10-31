@@ -38,6 +38,19 @@ class Phonon(ABC):
     def modes(self, q=(0, 0, 0)):
         """Return energies (nmodes,) in eV and e (nmodes,natoms,3)."""
 
+    def activeModeMask(self, q=(0, 0, 0)):
+        """Keep branch labels fixed; providers may explicitly mask translations.
+
+        The default retains the historical strictly-positive mode contract.
+        A force-constant provider can override this with a documented acoustic
+        policy. An inactive mode is never assigned an artificial frequency.
+        """
+        energies, _ = self.modes(q)
+        energies = np.asarray(energies)
+        if np.any(energies <= 0) or not np.all(np.isfinite(energies)):
+            raise ValueError('EPC requires positive finite active mode energies; zero acoustic modes need an explicit limiting prescription')
+        return np.ones(energies.shape, dtype=bool)
+
     def modeDisplacements(self, q=(0, 0, 0)):
         """Zero-point displacement amplitudes in Angstrom, without Bose factors.
 
@@ -51,3 +64,16 @@ class Phonon(ABC):
         lengths = np.sqrt(hbar**2 / (2 * self.masses[None, :, None] * atomic_mass
                                     * energies[:, None, None] * electron_volt)) * 1e10
         return vectors * lengths
+
+
+def active_mode_indices(phonons, q, selection=None):
+    """Intersect a selection with an explicit mask without renumbering branches."""
+    energies, _ = phonons.modes(q)
+    energies = np.asarray(energies)
+    mask = np.asarray(phonons.activeModeMask(q))
+    if energies.ndim != 1 or mask.dtype != np.dtype(bool) or mask.shape != energies.shape:
+        raise ValueError('Phonon active mask must be boolean with one entry per branch')
+    if not np.all(np.isfinite(energies)) or np.any(energies[mask] <= 0):
+        raise ValueError('EPC requires positive finite active mode energies')
+    branches = np.arange(len(energies)) if selection is None else selection.branch_indices(len(energies))
+    return branches[mask[branches]]

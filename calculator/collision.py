@@ -165,6 +165,12 @@ class CollisionSpecification:
         tolerance in eV, respectively. EPC population solves are constrained
         to fixed particle number. Response clients require
         fullCovariantDerivative=True and a converged electronic mesh.
+    transitionStorage : ``'auto'`` | ``'sparse'`` | ``'matrix_free'``
+        Full EPC storage. Auto uses a conservative sparse workspace estimate;
+        matrix_free recomputes bounded rate blocks and uses iterative solves.
+    workspaceBytes, kBatchSize
+        Full EPC numerical workspace estimate and optional electronic batch cap.
+        Resident models/prepared electronic arrays are separate from this budget.
 
     """
 
@@ -173,7 +179,8 @@ class CollisionSpecification:
                  linewidthSource=None, phononBath=PhononBath(),
                  delta=.03, populationSolver="auto",
                  solverTolerance=1e-10, stationaryTolerance=1e-12,
-                 enforceDetailedBalance=True, secondOrderLinewidthDerivative="frozen"):
+                 enforceDetailedBalance=True, secondOrderLinewidthDerivative="frozen",
+                 transitionStorage='auto', workspaceBytes=512*1024**2, kBatchSize=None):
         mode=str(mode).lower()
         if mode in ("full", "epc_markov"):
             mode="epc"
@@ -194,12 +201,16 @@ class CollisionSpecification:
         if secondOrderLinewidthDerivative not in ("frozen", "covariant"):
             raise ValueError("secondOrderLinewidthDerivative must be frozen or covariant")
         self.secondOrderLinewidthDerivative=secondOrderLinewidthDerivative
-        if (not np.isfinite(self.constantLinewidth) or self.constantLinewidth < 0
-                or not np.isfinite(self.linewidthFloor) or self.linewidthFloor < 0):
-            raise ValueError("constantLinewidth and linewidthFloor must be finite and nonnegative")
+        if transitionStorage not in ('auto', 'sparse', 'matrix_free'):
+            raise ValueError('transitionStorage must be auto, sparse or matrix_free')
+        self.transitionStorage = transitionStorage
+        self.workspaceBytes = workspaceBytes
+        self.kBatchSize = kBatchSize
         if self.mode != "serta" and linewidthSource is not None:
             raise ValueError("linewidthSource is only meaningful for SERTA")
         if self.mode == "epc":
+            if transitionStorage == 'matrix_free' and populationSolver == 'direct':
+                raise ValueError('matrix_free collisions require an iterative population solver')
             if self.populationSolver not in ("auto", "direct", "iterative"):
                 raise ValueError("populationSolver must be auto, direct, or iterative")
 
@@ -429,7 +440,8 @@ class CollisionOperator_full(CollisionOperator):
         self.nbands=inputs.energies.shape[-1]
         self.size=self.nk*self.nbands
         self.transition_rates=self._transition_rates()
-        self.reverse_rates=self.transition_rates.T.tocsr()
+        self.reverse_rates=(self.transition_rates.T if isinstance(self.transition_rates, LinearOperator)
+                            else self.transition_rates.T.tocsr())
         self._views={}
         self.population_linewidth=None
         self.coherence_linewidth=None
@@ -439,28 +451,15 @@ class CollisionOperator_full(CollisionOperator):
         return delta/np.pi/(value*value+delta*delta)
 
     def _phonon_population(self, energies):
-        specification=self.specification
-        kBT=Boltzmann*specification.phononBath.temperature/electron_volt
-        if specification.phononBath.statistics == "classical":
-            return np.zeros_like(energies) if kBT == 0 else kBT/energies
-        if specification.phononBath.statistics == "wigner":
-            if kBT == 0:
-                return np.full_like(energies,.5)
-            return .5/np.tanh(energies/(2*kBT))
-        if kBT == 0:
-            return np.zeros_like(energies)
-        x=energies/kBT
-        return np.exp(-x)/(-np.expm1(-x))
+        from .epc_rates import phonon_population
+        return phonon_population(energies, self.specification.phononBath)
 
     def _transition_rates(self):
         """Return R[final,initial] in eV for all mesh-closed EPC processes."""
-        inputs, model=self.inputs, self.inputs.model
+        from .epc_rates import MeshEPCRates, EPCRateOperator
+        inputs=self.inputs
         self.rate_balance_relative_change=0.
         grid=self.kgrid
-        kindices=np.indices(tuple(grid)).reshape(3,-1).T
-        kpoints=uniform_qmesh(grid)+inputs.kOffset
-        energies=inputs.energies.reshape(self.nk,self.nbands)
-        vectors=inputs.vectors.reshape(self.nk,self.nbands,self.nbands)
         if self.phononSelection is None:
             qpoints=uniform_qmesh(self.qgrid)
             qshifts=np.indices(self.qgrid).reshape(3,-1).T*(grid//np.asarray(self.qgrid))
@@ -469,51 +468,30 @@ class CollisionOperator_full(CollisionOperator):
             qpoints=self.phononSelection.qpoints
             qshifts=self.phononSelection.mesh_shifts(grid)
             qweights=self.phononSelection.weights
-        # q maps each initial state to a distinct final k block. Sum modes
-        # before storage and fill CSC directly, avoiding mode-resolved COO
-        # triplets and their concatenation copies. No rate cutoff is applied.
-        per_column=len(qpoints)*self.nbands
-        index_dtype=np.int32 if self.size*per_column < np.iinfo(np.int32).max else np.int64
-        values=np.empty((self.size,per_column),dtype=float)
-        rows=np.empty(values.shape,dtype=index_dtype)
-        source_k=np.arange(self.nk)
-        modes=self.epc_model.phonon_model
-        for iq, (qshift, q, qweight) in enumerate(zip(qshifts,qpoints,qweights)):
-            destination_indices=(kindices+qshift) % grid
-            destination_k=np.ravel_multi_index(destination_indices.T,tuple(grid))
-            phonon_energies,_=modes.modes(q)
-            branches=(np.arange(len(phonon_energies)) if self.phononSelection is None
-                      else self.phononSelection.branch_indices(len(phonon_energies)))
-            phonon_energies=phonon_energies[branches]
-            if np.any(phonon_energies <= 0) or not np.all(np.isfinite(phonon_energies)):
-                raise ValueError("EPC rates require positive finite mode energies; zero acoustic modes need an explicit limiting prescription")
-            population=self._phonon_population(phonon_energies)
-            g=self.epc_model.matrixElementsBatch(kpoints,q,vectors,vectors[destination_k])[:,branches]
-            initial=energies[:,None,None,:]
-            final=energies[destination_k][:,None,:,None]
-            difference=initial-final
-            emission=self._lorentzian(difference-phonon_energies[None,:,None,None],self.specification.delta)
-            absorption=self._lorentzian(difference+phonon_energies[None,:,None,None],self.specification.delta)
-            if self.specification.phononBath.statistics == "quantum":
-                weight=(population[None,:,None,None]+1)*emission+population[None,:,None,None]*absorption
-            else:
-                weight=population[None,:,None,None]*(emission+absorption)
-            rates=(2*np.pi*qweight*np.sum(np.abs(g)**2*weight,axis=1)).swapaxes(-1,-2)
-            final_ids=np.broadcast_to(destination_k[:,None,None]*self.nbands
-                                     +np.arange(self.nbands)[None,None,:],rates.shape)
-            initial_ids=source_k[:,None,None]*self.nbands+np.arange(self.nbands)[None,:,None]
-            rates=np.where(final_ids == initial_ids,0.,rates)
-            slot=slice(iq*self.nbands,(iq+1)*self.nbands)
-            values[:,slot]=rates.reshape(self.size,self.nbands)
-            rows[:,slot]=final_ids.reshape(self.size,self.nbands)
-        result=csc_matrix((values.ravel(),rows.ravel(),
-                           np.arange(self.size+1,dtype=index_dtype)*per_column),shape=(self.size,self.size))
-        result.eliminate_zeros()
-        result.sort_indices()
+        # Include forward/reverse and balancing temporaries in the estimate.
+        self.estimatedTransitionBytes = 96*self.size*len(qpoints)*self.nbands+16*(self.size+1)
+        requested = self.specification.transitionStorage
+        self.transitionStorage = ('sparse' if self.estimatedTransitionBytes <= self.specification.workspaceBytes//2
+                                  else 'matrix_free') if requested == 'auto' else requested
+        if self.transitionStorage == 'sparse' and self.estimatedTransitionBytes >= self.specification.workspaceBytes:
+            raise MemoryError('Sparse EPC rates exceed workspaceBytes; use matrix_free or a larger budget')
+        if self.transitionStorage == 'matrix_free' and self.specification.populationSolver == 'direct':
+            raise ValueError('matrix_free collisions require an iterative population solver')
+        workspace = self.specification.workspaceBytes-(self.estimatedTransitionBytes if self.transitionStorage == 'sparse' else 0)
+        self.rate_sampler = MeshEPCRates(inputs, self.specification, qpoints, qshifts, qweights,
+                                        workspace=workspace)
+        if self.transitionStorage == 'matrix_free':
+            result = EPCRateOperator(self.rate_sampler)
+            self.rate_scale = result.max_rate_bound
+            # Computing the sparse Frobenius diagnostic would defeat bounded
+            # storage. Stationarity and iterative residuals remain checked.
+            self.rate_balance_relative_change = None if self.specification.enforceDetailedBalance else 0.
+            return result
+        result=self.rate_sampler.sparse()
         if self.specification.enforceDetailedBalance:
             raw_norm=np.linalg.norm(result.data)
             activity=(result+result.T).tocoo()
-            energies=energies.reshape(-1)
+            energies=inputs.energies.reshape(-1)
             thermal_fraction=expit(-(energies[activity.row]-energies[activity.col])/self.bath_kBT)
             balanced=csc_matrix((activity.data*thermal_fraction,(activity.row,activity.col)),shape=activity.shape)
             balanced.eliminate_zeros()
@@ -522,6 +500,7 @@ class CollisionOperator_full(CollisionOperator):
             self.rate_balance_relative_change=(np.linalg.norm(difference.data)/raw_norm
                                                if raw_norm else 0.)
             result=balanced
+        self.rate_scale = float(np.max(result.data)) if result.nnz else 0.
         return result
 
     def population_collision(self, occupations):
@@ -544,6 +523,12 @@ class CollisionOperator_full(CollisionOperator):
         """Derivative of the EPC gain-minus-loss integral (no reservoir)."""
         p=np.asarray(occupations).reshape(-1)
         r, rt=self.transition_rates,self.reverse_rates
+        if isinstance(r, LinearOperator):
+            damping = r@p+rt@(1-p)
+            result = LinearOperator(r.shape, dtype=np.result_type(p, float),
+                matvec=lambda x: (1-p)*(r@x)+p*(rt@x)-damping*x)
+            result.population_diagonal = -damping
+            return result
         return (diags(1-p)@r+diags(p)@rt-diags(r@p+rt@(1-p))).tocsc()
 
     def forFermi(self, fermi):
@@ -599,7 +584,12 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         self.constant_eta=None
 
     def _damping(self, populations):
-        return (-self.parent.population_jacobian(populations)
+        from .epc_rates import shifted_operator
+        jacobian = self.parent.population_jacobian(populations)
+        if isinstance(jacobian, LinearOperator):
+            operator = LinearOperator(jacobian.shape, dtype=jacobian.dtype, matvec=lambda x: -(jacobian@x))
+            return shifted_operator(operator, -jacobian.population_diagonal, self.specification.constantLinewidth)
+        return (-jacobian
                 +self.specification.constantLinewidth*eye(self.parent.size,format="csc"))
 
     def _fermi_for_number(self, particle_number):
@@ -635,18 +625,27 @@ class _CollisionOperatorFullFermi(CollisionOperator):
             self.max_projected_source=max(self.max_projected_source,float(abs(removed)))
             source=source-self.number_mode*removed
             n=self.parent.size
-            matrix=bmat([[operator.astype(complex),csc_matrix(self.number_mode[:,None])],
-                         [csc_matrix(np.full((1,n),1/n)),csc_matrix((1,1))]],format="csc")
+            if isinstance(operator, LinearOperator):
+                matrix = LinearOperator((n+1, n+1), dtype=complex,
+                    matvec=lambda x: np.concatenate((operator@x[:-1]+self.number_mode*x[-1], [x[:-1].sum()/n])))
+                diagonal = np.concatenate((operator.population_diagonal, [0.])).astype(complex)
+            else:
+                matrix=bmat([[operator.astype(complex),csc_matrix(self.number_mode[:,None])],
+                             [csc_matrix(np.full((1,n),1/n)),csc_matrix((1,1))]],format="csc")
+                diagonal = matrix.diagonal().astype(complex)
             rhs=np.concatenate((source.astype(complex),[0.]))
             factor_key=None if cache_key is None else ("fixed-number",cache_key)
         else:
-            matrix=operator.astype(complex).tocsc()
+            matrix=operator if isinstance(operator, LinearOperator) else operator.astype(complex).tocsc()
+            diagonal=(operator.population_diagonal.copy() if isinstance(operator, LinearOperator)
+                      else matrix.diagonal()).astype(complex)
             rhs=source.astype(complex)
             factor_key=cache_key
         if not np.any(rhs):
             return np.zeros(source.shape,dtype=dtype)
-        direct=(self.specification.populationSolver == "direct" or
-                (self.specification.populationSolver == "auto" and self.parent.size <= 512))
+        direct=(not isinstance(matrix, LinearOperator) and
+                (self.specification.populationSolver == "direct" or
+                 (self.specification.populationSolver == "auto" and self.parent.size <= 512)))
         if direct:
             factor=self._factors.get(factor_key) if factor_key is not None else None
             if factor is None:
@@ -664,7 +663,6 @@ class _CollisionOperatorFullFermi(CollisionOperator):
                     break
                 result+=factor.solve(correction)
         else:
-            diagonal=matrix.diagonal().astype(complex)
             diagonal[np.abs(diagonal) <= self.specification.linewidthFloor]=1.
             preconditioner=LinearOperator(matrix.shape,dtype=complex,matvec=lambda x:x/diagonal)
             result,info=gmres(matrix,rhs,M=preconditioner,
@@ -688,8 +686,7 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         p=target.copy()
         initial=float(np.max(np.abs(residual(p))))
         if self.specification.enforceDetailedBalance:
-            scale=max(float(np.max(self.parent.transition_rates.data))
-                      if self.parent.transition_rates.nnz else 0.,gamma,1.)
+            scale=max(self.parent.rate_scale,gamma,1.)
             if initial > max(100*np.finfo(float).eps*scale,10*self.specification.stationaryTolerance):
                 raise RuntimeError(f"pair-balanced EPC rates violate their Fermi stationary state by {initial:.3g} eV")
             return p,dict(iterations=0,residual_eV=initial,detailed_balance=True,
@@ -782,7 +779,10 @@ class _CollisionOperatorFullFermi(CollisionOperator):
         frequency=float(frequency)
         if not np.isfinite(frequency):
             raise ValueError("Population solve frequency must be finite")
-        operator=self.population_damping-1j*frequency*eye(self.parent.size,format="csc")
+        from .epc_rates import shifted_operator
+        operator=shifted_operator(self.population_damping, self.population_damping.diagonal()
+                                 if not isinstance(self.population_damping, LinearOperator)
+                                 else self.population_damping.population_diagonal, -1j*frequency)
         return (1j*self._linear_solve(operator,array.reshape(-1),frequency)).reshape(shape)
 
     def solve_steady_population(self, source):

@@ -2,5 +2,6 @@
 
 from .base import EPCModel
 from .ssh import SSHModelEPC, SSHTimeOperators
+from .vasp import VaspWannierEPC
 
-__all__ = ["EPCModel", "SSHModelEPC", "SSHTimeOperators"]
+__all__ = ["EPCModel", "SSHModelEPC", "SSHTimeOperators", "VaspWannierEPC"]

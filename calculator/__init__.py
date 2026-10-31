@@ -23,6 +23,7 @@ from .collision import (CollisionSpecification, CollisionOperator,
                         CollisionOperator_linewidth, CollisionOperator_full,
                         CollisionInputs, PreparedCollision, prepare_collision)
 from .model_self_energy import ModelElectronSelfEnergy, ModelEPCLinewidth
+from .epc_linewidth import EPCLinewidth
 from .electronic import ElectronicStates, ElectronicVertices, compute_states, compute_vertices
 from .response_inputs import ResponseInputs
 from .requirements import ComputationRequirements

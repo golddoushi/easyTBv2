@@ -10,6 +10,20 @@ from auxiliary import SYMPREC
 from fileio import readHrDat, readPOSCAR, readRDat
 from fileio import ElectronSelfEnergy, W90CHK, W90MMN, W90EIG, W90SOI
 
+
+def _embed_wannier_operator(transform, destinations, count, matrix):
+    """Embed the original checkpoint Fourier operator in the expanded R basis.
+
+    A module-level callable keeps System_w90 picklable for spawn workers.
+    Position/self-energy operators retain their checkpoint interpolation even
+    when the Hamiltonian has additional pair-specific wsvec translations.
+    """
+    original = transform(matrix)
+    result = np.zeros((count,)+original.shape[1:], dtype=original.dtype)
+    result[destinations] = original
+    return result
+
+
 class System_w90(System):
 
     def __init__(self,
@@ -68,6 +82,7 @@ class System_w90(System):
         # TB approximation
         self.getAA=getAA
         self.mainDir=mainDir
+        self.poscar_path=os.path.abspath(os.path.join(mainDir,poscar))
         self.hamR=hamR
         single_seed=os.path.join(mainDir,hamR)
         up_seed=single_seed+'.up'
@@ -216,8 +231,8 @@ class System_w90(System):
         self.iorb2iatomMap=np.full(self.norbs,-1,dtype=int)
         self.ispin=ispin
         
-        self.posinfo=readPOSCAR('%s/%s'%(mainDir,poscar))
-        orb_list=obtainProjectionsPlain('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
+        self.posinfo=readPOSCAR(self.poscar_path)
+        orb_list=obtainProjectionsPlain(self.poscar_path,projections,ispin=ispin)
         assert self.norbs == sum([len(atom) for atom in orb_list]), f"{self.norbs=} {sum([len(atom) for atom in orb_list])=}"
         print("pls. check the wcc and atom coors.")
         print("At present, the atom coor will be used (for furthur symmerization)")
@@ -235,7 +250,7 @@ class System_w90(System):
                 self.rList[:,iorb]=atom_cart
                 self.iorb2iatomMap[iorb]=iatom
         
-        self.atomicOrbInfoList=obtainProjections('%s/%s'%(mainDir,poscar),projections,ispin=ispin)
+        self.atomicOrbInfoList=obtainProjections(self.poscar_path,projections,ispin=ispin)
         '''
         # tight-binding approach
         hrDat=readHrDat('%s/%s_hr.dat'%(mainDir,hamR),ignoreImagPart=ignoreImagPart,overlap=False,format=format)
@@ -259,6 +274,63 @@ class System_w90(System):
         # 13. compute orbital angular moment operator
         self.atomOrbAM=self.orbitalAngularMomentCubic()
         self.getOrbitalMatrice()
+
+    @classmethod
+    def fromEPCReference(cls, source, *, projections, getAA=True, **options):
+        """Construct the main System in the validated EPC equilibrium gauge.
+
+        Preserve pair-specific wsvec Hamiltonian images rather than replacing
+        them with a cell-only Wigner-Seitz interpolation. getAA=True reads MMN
+        position matrices. getAA=False explicitly uses fixed Wannier centres.
+        Source loading is supplied by epc.WannierEPCModel and runs no DFT jobs.
+        """
+        forbidden = {'format', 'ispin', 'spinSeparated', 'hamR', 'poscar'} & set(options)
+        if forbidden:
+            raise ValueError('EPC reference fixes format, spin frame, seed and structure')
+        system = cls(source.config['wannier_directory'], hamR=source.config['seedname'],
+                     poscar=str(source.source_paths['poscar']), format='VASP', ispin=1,
+                     spinSeparated=False, projections=projections, getAA=getAA, **options)
+        from elph.vasp import validate_wannier_frame
+        validate_wannier_frame(system, source)
+        original_vectors = tuple(map(tuple, system.iRvec))
+        original_transform = system._fourier_q_to_R
+        positions = {}
+        if getAA:
+            for r, a in zip(system.iRvec, system.AA_R_W):
+                key = tuple(r)
+                positions[key] = positions.get(key, 0)+a
+        else:
+            a = np.zeros((3, system.norbs, system.norbs), complex)
+            indices = np.arange(system.norbs)
+            a[:, indices, indices] = source.reference.centres_ang.T
+            positions[(0, 0, 0)] = a
+        hamiltonian = {}
+        for r, h, weight in zip(source.electrons.re_vectors, source.electrons.h_r_ev,
+                                source.electrons.re_weights):
+            key = tuple(r)
+            hamiltonian[key] = hamiltonian.get(key, 0)+h*weight
+        vectors = sorted(set(positions) | set(hamiltonian) | set(original_vectors))
+        system.iRvec = np.asarray(vectors, dtype=int)
+        system.nRvec = len(vectors)
+        system.iRvecIndex = {r: index for index, r in enumerate(vectors)}
+        destinations = np.array([system.iRvecIndex[r] for r in original_vectors])
+        system._fourier_q_to_R = functools.partial(_embed_wannier_operator,
+            original_transform, destinations, len(vectors))
+        # Every stored H/position block already includes its image weights.
+        system.Ndegen = np.ones(len(vectors), dtype=int)
+        system.ham_R = np.array([hamiltonian.get(r, np.zeros((system.norbs, system.norbs), complex)) for r in vectors])
+        system.AA_R_W = np.array([positions.get(r, np.zeros((3, system.norbs, system.norbs), complex)) for r in vectors])
+        system.rList = source.reference.centres_ang.T.copy()
+        system.posinfo['lattice'] = source.lattice_ang.copy()
+        system.posinfo['pos ions (frac.)'] = source.positions_frac.copy()
+        system.posinfo['pos ions (cart.)'] = source.positions_frac@source.lattice_ang
+        system.getRHam_R(); system.getRRHam_R(); system.getRRRHam_R()
+        system.epcReferenceProvenance = dict(source.provenance)
+        system.epcPositionKind = 'full_equilibrium_MMN' if getAA else 'fixed_Wannier_centres'
+        # The currently reviewed source loader is scalar, with spin degeneracy
+        # supplied by the response layer. It must not masquerade as spinor EPC.
+        system.epcSpinMultiplicity = source.spin_multiplicity
+        return system
 
     def _validateSeparatedCheckpoints(self,chk_up:W90CHK,chk_dn:W90CHK):
         assert chk_up.num_wann==chk_dn.num_wann, (
