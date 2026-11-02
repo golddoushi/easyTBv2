@@ -128,9 +128,6 @@ def _contract_dc_first_order_density_matrix(inputs, drive_vertices, observable_v
                 response_channels["I"][response_index] = response_i
     return FirstOrderResponseResult(kernel, projected_channels, response_channels, fermi_indices)
 
-
-
-
 def _first_order_observable_shape(inputs, observable_vertices):
     """Validate first-order vertices and return the observable component axes."""
     if not observable_vertices:
@@ -146,7 +143,6 @@ def _first_order_observable_shape(inputs, observable_vertices):
     if any(tuple(vertex.shape[nk_dimensions:-2]) != component_shape for vertex in observable_vertices):
         raise ValueError("All observable vertices must have the same component shape")
     return drive_shape, component_shape
-
 
 def _contract_first_order_observable(rho, observable, component_shape):
     """Evaluate Tr(rho O) for an observable with arbitrary component axes."""
@@ -333,7 +329,6 @@ def _contract_first_order_density_matrix_response(inputs, kernel_class, drive_ve
                         response_channels["E"][index] = value_e
     return FirstOrderResponseResult(kernel, projected_channels, response_channels, fermi_indices, omega_indices)
 
-
 def _contract_first_order_lg_response(inputs, drive_vertices, observable_vertices,
                                       frequencies, responseFermiIndexList=None,
                                       responseOmegaIndexList=None,
@@ -344,7 +339,6 @@ def _contract_first_order_lg_response(inputs, drive_vertices, observable_vertice
         inputs, LengthGaugeFirstOrderDMKernel, drive_vertices, observable_vertices,
         frequencies, responseFermiIndexList, responseOmegaIndexList,
         finiteTemperatureOccupations, fullCovariantDerivative, collision=collision)
-
 
 def _contract_first_order_vg_response(inputs, drive_vertices, observable_vertices,
                                       contact_vertices, frequencies,
@@ -419,7 +413,6 @@ def _contract_first_order_vg_response(inputs, drive_vertices, observable_vertice
     result.pole_residual = pole_residual
     return result
 
-
 def _store_dc_galvanic_density_matrix(owner, kernel, projected_channels,
                                        response_channels, units, pole_residual=None):
     """Store a zero-frequency first-order response in the galvanic API."""
@@ -470,7 +463,6 @@ def _solve_dc_galvanic_lg_density_matrix(inputs, observable_vertices,
         fullCovariantDerivative=full_covariant_derivative, collision=collision)
     return result
 
-
 def _solve_dc_galvanic_vg_density_matrix(inputs, observable_vertices,
                                           observable_contact_vertices,
                                           responseFermiIndexList,
@@ -487,12 +479,10 @@ def _solve_dc_galvanic_vg_density_matrix(inputs, observable_vertices,
         fullCovariantDerivative=full_covariant_derivative, collision=collision)
     return result
 
-
 def _zero_vg_observable_contacts(observable_vertices):
     """Return dO/dA=0 vertices for field-independent local observables."""
     return [np.zeros(vertex.shape[:-2]+(3,)+vertex.shape[-2:], dtype=complex)
             for vertex in observable_vertices]
-
 
 #
 # Implemented calculaors
