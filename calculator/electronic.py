@@ -191,6 +191,10 @@ class ElectronicTensorView:
         return self.electronic.w_K
 
     @property
+    def ordered_velocity_derivative_K(self):
+        return self.electronic.ordered_velocity_derivative_K
+
+    @property
     def u_K(self):
         return self.electronic.u_K
 

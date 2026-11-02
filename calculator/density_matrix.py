@@ -634,8 +634,9 @@ class DividedDifferenceLGFermiState(_SecondOrderDMFermiState):
         v = inputs.velocity_K
         self.f_div1 = fermi_divided_difference(energies[..., :, None], energies[..., None, :], fermi, inputs.kBT)
         self.df = self.f_div1[..., None, :, :] * v
-        # w[a,b] = D_b V_a. Only an N x N intermediate is made for each band l.
-        self.d2f = self.f_div1[..., None, None, :, :] * inputs.w_K
+        # DO NOT use symmerized w_K_{ab} = (D_a D_b H + D_b D_a H)/2 here.
+        # Rather, use the ordered velocity derivative D_a D_b H
+        self.d2f = self.f_div1[..., None, None, :, :] * inputs.ordered_velocity_derivative_K
         for l in range(kernel.nbands):
             div2 = fermi_second_divided_difference(
                 energies[..., :, None], energies[..., l, None, None], energies[..., None, :], fermi, inputs.kBT
@@ -726,8 +727,8 @@ class LengthGaugeSecondOrderDMKernel(_SecondOrderDMKernel):
                 name: f"second-order {sectors[name[0]]} from first-order {sectors[name[1]]}"
                 for name in self.channel_names
             }
-            if inputs.w_K is None:
-                raise ValueError("Full LG requires w_K[a,b] = D_b velocity_K[a]")
+            if inputs.ordered_velocity_derivative_K is None:
+                raise ValueError("Full LG requires ordered_velocity_derivative_K[a,b] = D_b velocity_K[a]")
             energies = inputs.energies
             scale = np.maximum(1.0, np.max(np.abs(energies), axis=-1, keepdims=True))
             tolerance = np.maximum(abs(getattr(inputs, "degen", 0.0)), 64 * np.finfo(float).eps * scale)
