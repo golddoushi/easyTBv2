@@ -16,7 +16,7 @@ from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
 from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM
 from calculator import BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
-from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM
+from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM, InverseFaradayTorque_LG_FD
 from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag
 from calculator import OrbitalHallConductance, OrbitalHallConductance_LG_DM, OrbitalHallConductance_BlochSelfRotate_LG_DM
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
@@ -866,6 +866,30 @@ def solveIFTorque_LG_DM(param):
             "projected sigma channels": calc.projected_sigma_channels,
             "sigma channels": calc.chi_IFT_channels,
             "iq": param["iq"]}
+
+def solveIFTorque_LG_FD(param):
+    """CRTA finite-difference benchmark; same integrated output keys as LG_DM."""
+    calc = InverseFaradayTorque_LG_FD(model=param['model'],
+        kgrid=param['FFT grid'], kOffset=param['kOffset'], skip_low=False,
+        degen=param.get('degen', 1e-6),
+        eta=param.get('eta', .06582), kBT=param.get('kBT', .026),
+        fermiList=param['fermi'], omegaList=param['omega'],
+        ife_type=param.get('mag type', 'spin'),
+        finiteDifferenceStep=param.get('finite difference step', 1e-3),
+        fullCovariantDerivative=param.get('full covariant derivative', True),
+        torqueProjectionList=param.get('projected shells for detecting torque',
+            param.get('projected shells for detecting spin accumulation', [])),
+        velocityProjectionList=param.get('projected shells for applying current', []),
+        responseOmegaIndexList=param.get('record frequency ids', []),
+        responseFermiIndexList=param.get('record fermi ids', None),
+        verbose=param['verbose'],
+        **{key:param[key] for key in ('collisionSpecification','preparedCollision','electronic','states') if key in param})
+    return {'sigma':calc.chi_IFT, 'projected sigma':calc.projected_chi_IFT,
+            'projected response':calc.projected_response,
+            'projected response channels':calc.projected_response_channels,
+            'projected sigma channels':calc.projected_sigma_channels,
+            'sigma channels':calc.chi_IFT_channels,
+            'energies':calc.energies, 'iq':param['iq']}
 
 def solveSGC(param):
     calc=SpinGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,

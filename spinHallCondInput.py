@@ -17,7 +17,7 @@ from task import solveSGC, solveSGC_diag, solveOGC, solveOGC_diag
 from task import solveSGC_LG_DM, solveOGC_LG_DM, solveStGC_LG_DM, solveSGC_VG_DM, solveOGC_VG_DM, solveStGC_VG_DM
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_BlochAcceleration_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
-from task import solveIFTorque_TDSE, solveIFTorque_VG_DM, solveIFTorque_LG_DM
+from task import solveIFTorque_TDSE, solveIFTorque_VG_DM, solveIFTorque_LG_DM, solveIFTorque_LG_FD
 from task import solveINPHE_BCP
 #+------------+
 #| Line tasks |
@@ -33,11 +33,11 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 
 def run():
     # Pbene, spin hall conductance
-    mainDir="./mcalc/BN/"
-    model=System_tb(
+    mainDir="./mcalc/FeCl2/"
+    model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
-        hamR="BNcol",
+        #hamR="BNcol",
         #hamR="wannier90_mx",
         cutoff=-0.002,
         poscar="POSCAR",
@@ -73,15 +73,15 @@ def run():
             "Ti":(0,0,0,1,1,2,),
              "O":(0,0,1,1,2,),
         },
-        #ispin=2,
-        #spinSeparated=True,
+        ispin=2,
+        spinSeparated=True,
     )
-    '''
+    #'''
     # Symmetrize the direction-independent collinear and orbital-SOI
     # ingredients once, then assemble any requested magnetization direction.
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
-    magnetizationTheta ,magnetizationPhi = 0/180*np.pi, 0/180*np.pi
+    magnetizationTheta ,magnetizationPhi = 5/180*np.pi, 0/180*np.pi
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -148,7 +148,7 @@ def run():
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-3.0         # VASP 2H-FeCl2 U=2.0
+    fermi=-3.0         # VASP 2H-FeCl2 U=2.0
     #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
@@ -160,17 +160,17 @@ def run():
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePt
     #fermi=-0.20789123834373*27.2113845  # OPENMX FePtH
     #fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
-    fermi=0            # model hamiltonian
+    #fermi=0            # model hamiltonian
 
-    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,11)
-    #fermiAxis=np.array([fermi,])
-    #omegaAxis=np.arange(0.1,3.05,1.0)
-    omegaAxis=[0]
+    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,11)
+    fermiAxis=np.array([fermi,])
+    omegaAxis=np.arange(0.5,3.05,0.5)
+    #omegaAxis=[0]
     model.setFermi(fermi)
     
     '''
     # check band intepolation
-    spin_proj, orbital_proj= True, True
+    spin_proj, orbital_proj= False, False
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
                    args={"spin proj":spin_proj, "orbital proj":orbital_proj, "degen":1e-2},
                    )
@@ -225,15 +225,17 @@ def run():
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
-    BZGrid=(60,60,1)
+    BZGrid=(48,48,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="SHC" # "IFE" or "IFT"; must match the selected response calculator
+    ObservableType="IFT" # "IFE" or "IFT"; must match the selected response calculator
     Pt1,Pt2,Pt3,Pt4=[(0,(0,1,2,)),],[(1,(0,1,2,)),],[(2,(0,1,2,)),],[(3,(0,1,2,)),]
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
-    calc=BZGridTask(model, solveOHC_BlochSelfRotate_LG_DM,
+    # Set IFT_SOLVER=FD to run the independent finite-difference benchmark.
+    ift_solver = solveIFTorque_LG_FD
+    calc=BZGridTask(model, ift_solver,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":Pt1+Pt2+Pt3+Pt4, "target":Pt1+Pt2+Pt3+Pt4},
@@ -253,6 +255,7 @@ def run():
 
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
                           "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
+                          "finite difference step": 0.001, # inverse angstrom; for Finite-difference algo.
 
                           "finiteTemperatureOccupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
                           "collisionSpecification": CollisionSpecification(mode="crta", constantLinewidth=0.06582), # collision model, currently only for DM based calculators
@@ -304,7 +307,7 @@ def run():
             fout.write("\n")
     exit()'''
     
-    #'''
+    '''
     # output (possibly symmetrized) 3-rank conductance
     projected_sigma_average = projected_sigma/len(calc.results)
     with open("%s/angularmomentHallConductance.txt"%mainDir,"w") as fout:
@@ -350,7 +353,7 @@ def run():
             fout.write("\n")
     exit()#'''
 
-    '''
+    #'''
     # output projected 3-ranked, frequency-dependent complex conductance
     projected_sigma_average = projected_sigma/len(calc.results)
     for iproj1 in range(projected_sigma_average.shape[0]):

@@ -29,7 +29,9 @@ from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbi
 from .response_inputs import ResponseInputs
 from .response_results import publish_conductivity, publish_second_order, FirstOrderResponseResult
 from .response_contractions import (
-    _normalize_response_index_list, _contract_second_order_observable, _sum_density_matrix_channels, solve_bpve_lg, solve_bpve_vg, solve_ife_lg, solve_ife_vg, solve_torque_lg, solve_torque_vg)
+    _normalize_response_index_list, _contract_second_order_observable, _sum_density_matrix_channels, 
+    solve_bpve_lg, solve_bpve_vg, 
+    solve_ife_lg, solve_ife_vg, solve_torque_lg, solve_torque_vg, solve_torque_fd)
 from .response_stages import ElectronicResponse, DensityMatrixResponse, PhononResponse, response_requires_full_basis
 
 
@@ -2925,6 +2927,38 @@ class InverseFaradayTorque_LG_DM(DensityMatrixResponse):
         result = solve_torque_lg(self.inputs, collision=self.collision,
             responseOmegaIndexList=responseOmegaIndexList, responseFermiIndexList=responseFermiIndexList, fullCovariantDerivative=fullCovariantDerivative, finiteTemperatureOccupations=finiteTemperatureOccupations, ife_type=ife_type, torqueProjectionList=torqueProjectionList)
         publish_second_order(self, result, "chi_IFT")
+
+class InverseFaradayTorque_LG_FD(DensityMatrixResponse):
+    """Displaced-mesh central-difference spin exchange IFT benchmark (CRTA).
+
+    finiteDifferenceStep is Cartesian inverse angstrom. Output has the same
+    raw electronic normalization and tensor ordering as LG_DM.
+    """
+    def __init__(self, ife_type='spin', finiteDifferenceStep=1e-3,
+                 torqueProjectionList=(), velocityProjectionList=(),
+                 responseOmegaIndexList=(), responseFermiIndexList=None,
+                 fullCovariantDerivative=True, finiteTemperatureOccupations=True,
+                 **kwarg):
+        if ife_type != 'spin' or torqueProjectionList or velocityProjectionList:
+            raise NotImplementedError('FD benchmark supports unprojected spin exchange torque only')
+        if not fullCovariantDerivative:
+            raise ValueError('FD always evaluates the full covariant derivative')
+        super().__init__(electronic_stages=(SpinExchangeTorque,), **kwarg)
+        eta = self.collision.requireConstant('IFT finite differences')
+        def prepare(offset):
+            if np.all(offset == 0):
+                return self.inputs
+            return ElectronicResponse(model=self.model, kgrid=self.kgrid,
+                kOffset=self.kOffset+self.model.lattice@offset/(2*np.pi),
+                skip_low=False, electronic_stages=(SpinExchangeTorque,),
+                kBT=self.kBT, fermiList=self.fermiList, omegaList=self.omegaList,
+                eta=eta, degen=self.degen, verbose=0).inputs
+        result = solve_torque_fd(self.inputs, collision=self.collision,
+            displaced_inputs=prepare, finiteDifferenceStep=finiteDifferenceStep,
+            responseOmegaIndexList=responseOmegaIndexList,
+            responseFermiIndexList=responseFermiIndexList)
+        publish_second_order(self, result, "chi_IFT")
+        self.finiteDifferenceStep = finiteDifferenceStep
 
 class InverseFaradayTorque_VG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],

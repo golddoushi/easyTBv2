@@ -94,7 +94,6 @@ def solve_bpve_lg(inputs: ResponseInputs, *, collision,
     result.omega_indices = tuple(responseOmegaIndexList)
     return result
 
-
 def solve_bpve_vg(inputs: ResponseInputs, *, collision,
     responseOmegaIndexList=(), responseFermiIndexList=None, fullCovariantDerivative=False, finiteTemperatureOccupations=False, velocityProjectionList=()):
     result = SecondOrderResponseResult()
@@ -191,7 +190,6 @@ def solve_bpve_vg(inputs: ResponseInputs, *, collision,
     result.omega_indices = tuple(responseOmegaIndexList)
     return result
 
-
 def solve_ife_lg(inputs: ResponseInputs, *, collision,
     responseOmegaIndexList=(), responseFermiIndexList=None, fullCovariantDerivative=False, ife_type="total"):
     result = SecondOrderResponseResult()
@@ -260,7 +258,6 @@ def solve_ife_lg(inputs: ResponseInputs, *, collision,
     result.fermi_indices = tuple(responseFermiIndexList)
     result.omega_indices = tuple(responseOmegaIndexList)
     return result
-
 
 def solve_ife_vg(inputs: ResponseInputs, *, collision,
     responseOmegaIndexList=(), responseFermiIndexList=None, fullCovariantDerivative=False, ife_type="total"):
@@ -343,7 +340,6 @@ def solve_ife_vg(inputs: ResponseInputs, *, collision,
     result.fermi_indices = tuple(responseFermiIndexList)
     result.omega_indices = tuple(responseOmegaIndexList)
     return result
-
 
 def solve_torque_lg(inputs: ResponseInputs, *, collision,
     responseOmegaIndexList=(), responseFermiIndexList=None, fullCovariantDerivative=False, finiteTemperatureOccupations=False, ife_type="total", torqueProjectionList=()):
@@ -469,7 +465,6 @@ def solve_torque_lg(inputs: ResponseInputs, *, collision,
     result.fermi_indices = tuple(responseFermiIndexList)
     result.omega_indices = tuple(responseOmegaIndexList)
     return result
-
 
 def solve_torque_vg(inputs: ResponseInputs, *, collision,
     responseOmegaIndexList=(), responseFermiIndexList=None, fullCovariantDerivative=False, finiteTemperatureOccupations=False, ife_type="total", torqueProjectionList=()):
@@ -617,3 +612,109 @@ def solve_torque_vg(inputs: ResponseInputs, *, collision,
     return result
 
 
+def _torque_fd_response(sample, *, fermiList, omegaList, kBT, eta, step=1e-3, record=None):
+    """Independent central differences in a common Wannier basis (Cartesian k)."""
+    from scipy.special import expit
+    if not all(np.isfinite(x) and x > 0 for x in (kBT, eta, step)):
+        raise ValueError('kBT, eta and step must be finite and positive')
+    step = float(step)
+    cache = {}
+
+    def point(q):
+        key = tuple(q)
+        if key not in cache:
+            h, a, t = map(np.asarray, sample(np.asarray(q)*step))
+            if h.shape[-1] != h.shape[-2] or a.shape != h.shape[:-2]+(3,)+h.shape[-2:] or t.shape != a.shape:
+                raise ValueError('Expected H (...,n,n) and A,T (...,3,n,n)')
+            for matrix in (h, a, t):
+                if not np.all(np.isfinite(matrix)) or np.max(np.abs(matrix-matrix.conj().swapaxes(-1,-2))) > 1e-8*max(1.,np.max(np.abs(matrix))):
+                    raise ValueError(f'H, A and T must be finite Hermitian matrices; residual={np.max(np.abs(matrix-matrix.conj().swapaxes(-1,-2)))} scale={np.max(np.abs(matrix))}')
+            e, u = np.linalg.eigh(h)
+            cache[key] = e, u, a, t
+        return cache[key]
+
+    def solve(x, q, energy):
+        e, u, _, _ = point(q)
+        ud = u.conj().swapaxes(-1, -2)
+        return u @ ((ud @ x @ u)/(e[..., :, None]-e[..., None, :]-energy-1j*eta)) @ ud
+
+    def derivative(fun, q, axis):
+        shift = np.eye(3, dtype=int)[axis]
+        x = fun(q)
+        a = point(q)[2][..., axis, :, :]
+        return (fun(q+shift)-fun(q-shift))/(2*step)-1j*(a@x-x@a)
+
+    origin = np.zeros(3, dtype=int)
+    torque = point(origin)[3]
+    value = np.empty((len(fermiList),len(omegaList),3,3,3), complex)
+    for im, mu in enumerate(fermiList):
+        def equilibrium(q):
+            e, u, _, _ = point(q)
+            return (u*expit((mu-e)/kBT)[...,None,:]) @ u.conj().swapaxes(-1,-2)
+        for iw, omega in enumerate(omegaList):
+            first = {}
+            def rho1(q, axis, sign):
+                key = (tuple(q), axis, sign)
+                if key not in first:
+                    first[key] = solve(-1j*derivative(equilibrium,q,axis),q,sign*omega)
+                return first[key]
+            for a in range(3):
+                for b in range(3):
+                    source = -1j*(derivative(lambda q: rho1(q,a,-1),origin,b)
+                                  + derivative(lambda q: rho1(q,b,1),origin,a))
+                    rho2 = solve(source,origin,0.)
+                    integrand = np.einsum('...mn,...cnm->...c',rho2,torque)
+                    value[im,iw,a,b] = integrand.reshape(-1,3).mean(axis=0)
+                    if record is not None:
+                        record(im, iw, a, b, integrand)
+    return value
+
+def _fd_wannier_sampler(prepare_inputs):
+    """Adapt prepare_inputs(cartesian_offset) -> complete ResponseInputs.
+
+    The factory must prepare spin exchange torque at each displaced mesh and
+    convert Cartesian offsets to fractional kOffset using lattice/(2*pi).
+    Uses only energies, eigenvectors, AA_R_W and the exchange torque vertex.
+    """
+    def sample(offset):
+        inputs = prepare_inputs(offset)
+        s = inputs.states
+        if s.model.overlap or s.skip_low or s.ibmin:
+            raise NotImplementedError('Requires a complete orthogonal Wannier basis')
+        u = s.vectors
+        ud = u.conj().swapaxes(-1,-2)
+        h = (u*s.energies[...,None,:]) @ ud
+        t = u[...,None,:,:] @ inputs.spinTorque_K @ ud[...,None,:,:]
+        ar = s.model.AA_R_W*s.phaseFactorR[:,None,None,None]
+        mesh = np.zeros(tuple(s.kgrid)+ar.shape[1:],complex)
+        for r, value in zip(s.model.iRvec, ar):
+            mesh[tuple(np.asarray(r)%s.kgrid)] += value
+        a = np.fft.ifftn(mesh,axes=(0,1,2))*np.prod(s.kgrid)
+        return h, (a+a.conj().swapaxes(-1,-2))/2, t
+    return sample
+
+def solve_torque_fd(inputs: ResponseInputs, *, collision, displaced_inputs,
+                    finiteDifferenceStep=1e-3, responseOmegaIndexList=(),
+                    responseFermiIndexList=None):
+    """CRTA spin exchange IFT, returned through the standard result contract.
+
+    displaced_inputs(offset) prepares inputs at Cartesian momentum offsets.
+    Electronic preparation is owned by the Grid boundary. No analytic
+    derivatives enter the FD recursion. I/E channel separation is not provided.
+    """
+    eta = collision.requireConstant('IFT finite differences')
+    oi = _normalize_response_index_list(responseOmegaIndexList, len(inputs.omegaList))
+    fi = _normalize_response_index_list(
+        range(len(inputs.fermiList)) if responseFermiIndexList is None and oi else responseFermiIndexList,
+        len(inputs.fermiList))
+    result = SecondOrderResponseResult()
+    result.omega_indices, result.fermi_indices = tuple(oi), tuple(fi)
+    result.integrands = np.zeros((1,1,1)+tuple(inputs.kgrid)+(len(fi),len(oi),3,3,3),complex)
+    def record(im, iw, a, b, integrand):
+        if im in fi and iw in oi:
+            result.integrands[0,0,0,...,fi.index(im),oi.index(iw),a,b,:] = integrand
+    result.value = _torque_fd_response(_fd_wannier_sampler(displaced_inputs),
+        fermiList=inputs.fermiList, omegaList=inputs.omegaList, kBT=inputs.kBT,
+        eta=eta, step=finiteDifferenceStep, record=record)
+    result.projected_value = result.value[None,None,None,...]
+    return result
