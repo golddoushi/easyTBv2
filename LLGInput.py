@@ -501,8 +501,8 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     The supplied pulse is therefore the slowly varying electric-field
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
-    center_times = [100.0 + 100_000.0 * ipulse for ipulse in range(25)]
-    peak_field=0.06/2
+    center_times = [100.0 + 100_000.0 * ipulse for ipulse in range(30)]
+    peak_field=0.06
     intensity_fwhm = 50.0
     intensity=0.5*speed_of_light*epsilon_0*(peak_field*1E10)**2
     fluence=intensity*intensity_fwhm*np.sqrt(np.pi/(4*np.log(2)))*1E-15
@@ -517,8 +517,8 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     time_step = PulseTimeStepSchedule.gaussian(
         center_times=center_times,
         intensity_fwhm=intensity_fwhm,
-        fine_step=10.0,
-        coarse_step=1500.0,
+        fine_step  =  10.0,
+        coarse_step=1000.0,
         window_half_width_in_fwhm=3.0,
     )
 
@@ -534,7 +534,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         light_pulse=pulse,
         external_field=np.array([0.0, 0.0, 0.0]),  # in Tesla
         use_DFT_mae=False,
-        extra_uniaxial_mae=0.125E-3,               # in eV
+        extra_uniaxial_mae=0.2E-3,               # in eV
         extra_uniaxial_mae_direction=(0, 0, 1), 
         alpha=1e-3,
         theta0=5*np.pi/180,
@@ -542,7 +542,7 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     )
     time_axis, trajectory = device.run(
         #t_total=   100_400.0,
-        t_total= 3_100_000.0,
+        t_total= 5_100_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
@@ -582,4 +582,4 @@ def run_sot_example(mainDir="./",show_torque_map=True):
 
 if __name__ == "__main__":
     #run_sot_example()
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=0.75,polarization="xy-",show_torque_map=True)
+    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.4,polarization="xy+",show_torque_map=True)

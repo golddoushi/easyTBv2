@@ -234,8 +234,7 @@ def run():
     Pt1,Pt2,Pt3,Pt4=[(0,(0,1,2,)),],[(1,(0,1,2,)),],[(2,(0,1,2,)),],[(3,(0,1,2,)),]
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
     # Set IFT_SOLVER=FD to run the independent finite-difference benchmark.
-    ift_solver = solveIFTorque_LG_FD
-    calc=BZGridTask(model, ift_solver,
+    calc=BZGridTask(model, solveIFTorque_LG_FD,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":Pt1+Pt2+Pt3+Pt4, "target":Pt1+Pt2+Pt3+Pt4},
@@ -254,7 +253,7 @@ def run():
                           'record fermi ids':recordFermiIndexList,
 
                           "mag type": "spin", # Type of Inversed Faraday effect, can be spin | orbital | total
-                          "full covariant derivative": True, # include full covariant formalism for LG 2nd order density-matrix
+                          "full covariant derivative": True, # include full covariant formalism for LG 2nd order DM
                           "finite difference step": 0.001, # inverse angstrom; for Finite-difference algo.
 
                           "finiteTemperatureOccupations": True, "kBT":0.026, "eta":0.06582, # ~10 fs
