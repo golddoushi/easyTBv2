@@ -743,12 +743,13 @@ class IFTDevice:
     def _optical_torque(self, m, time) -> np.ndarray:
         return self.optical_torque(m, time)
 
-    def run(self, t_total=1000.0, time_step=0.1):
+    def run(self, t_total=1000.0, time_step=0.1, stationary_state=None):
         """Advance the device from its current state, with time in fs."""
         time_axis, trajectory = self.dynamic.integrate(
             initial_m=self.m,
             time_span=[self.time, self.time + t_total],
             time_step=time_step,
+            stationary_state=stationary_state,
         )
         self.m = trajectory[-1].copy()
         self.time = time_axis[-1]

@@ -581,5 +581,10 @@ def run_sot_example(mainDir="./",show_torque_map=True):
     plt.show()
 
 if __name__ == "__main__":
-    #run_sot_example()
-    run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.4,polarization="xy+",show_torque_map=True)
+    import sys
+    if len(sys.argv) > 1:
+        from LLG.ensemble import main
+        main()
+    else:
+        #run_sot_example()
+        run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.4,polarization="xy+",show_torque_map=True)

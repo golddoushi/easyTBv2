@@ -302,6 +302,7 @@ class SingleMomentLLG:
         initial_m: Sequence[float],
         time_span: Sequence[float],
         time_step: float | TimeStepFunction,
+        stationary_state=None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Integrate the trajectory with fourth-order Runge-Kutta.
@@ -328,6 +329,10 @@ class SingleMomentLLG:
         -----
         Units must be mutually consistent.  For example, with time in seconds
         and field in tesla, ``gamma`` is in rad/(s T) and torque in 1/s.
+        An optional ``stationary_state(m)`` predicate may certify that a state
+        remains stationary under ALL subsequent fields and drives. If true,
+        append its constant continuation at the final time without RK4 steps.
+        A zero instantaneous derivative alone is not such a certificate.
         """
         interval = np.asarray(time_span, dtype=float)
         if interval.shape != (2,) or not np.all(np.isfinite(interval)):
@@ -349,6 +354,10 @@ class SingleMomentLLG:
 
         while time_values[-1] < stop:
             current_time = time_values[-1]
+            if stationary_state is not None and stationary_state(trajectory[-1]):
+                time_values.append(stop)
+                trajectory.append(trajectory[-1].copy())
+                break
             requested_step = float(step_function(current_time, trajectory[-1]))
             if not np.isfinite(requested_step) or requested_step <= 0.0:
                 raise ValueError(

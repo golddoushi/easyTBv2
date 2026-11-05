@@ -24,11 +24,10 @@ from SphericalHarmonics import (
     project_tangential,
     transform_ift_tensor,
 )
-from auxiliary import fermiDiracOccupations, solve_chemical_potential
+from auxiliary import fermiDiracOccupations
 from auxiliary import getWholeSymmetryOperator, SYMPREC
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
-from calculator import CollisionSpecification
 from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
 
 _orientation_worker_model = None
@@ -73,45 +72,6 @@ def distributed_run_settings(stage, workers_per_node=None, shard_rank=None, shar
 
 class StaleIFTCheckpointError(RuntimeError):
     """Raised when a saved IFT sample was produced by incompatible settings or code."""
-
-def build_ift_checkpoint_signature(main_dir,solver_name,occupation_mode,kBT,eta,degen,mag_type,
-                                   torque_projection_specs,exchange_provenance):
-    """Fingerprint electronic settings and code without coupling checkpoints to VSH postprocessing."""
-    source_dir = Path(__file__).resolve().parent
-    source_files = [
-        source_dir / "calculator" / "__init__.py", source_dir / "task.py",
-        source_dir / "auxiliary.py", source_dir / "paramReader.py",
-        source_dir / "system" / "__init__.py", source_dir / "system" / "system_w90.py",
-    ]
-    source_hash = hashlib.sha256()
-    for path in source_files:
-        source_hash.update(path.relative_to(source_dir).as_posix().encode("utf-8"))
-        normalized_source = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
-        source_hash.update(normalized_source.encode("utf-8"))
-    for function in (
-            solve_energy_orientation, solve_ift_orientation, collect_bz_energies,
-            collect_bz_response, fixed_number_electronic_state):
-        source_hash.update(function.__name__.encode("utf-8"))
-        normalized_source = inspect.getsource(function).replace("\r\n", "\n").replace("\r", "\n")
-        source_hash.update(normalized_source.encode("utf-8"))
-
-    model_inputs = []
-    for path in sorted(Path(main_dir).iterdir(), key=lambda item: item.name):
-        is_input = path.name == "POSCAR" or path.name.endswith("_hr.dat") or path.suffix.lower() in {
-            ".chk", ".eig", ".mmn", ".soi", ".win",
-        }
-        if path.is_file() and is_input:
-            model_inputs.append((path.name, path.stat().st_size))
-
-    payload = {
-        "format_version": IFT_CHECKPOINT_FORMAT_VERSION,
-        "solver_name": solver_name, "occupation_mode": occupation_mode,
-        "kBT_eV": float(kBT), "eta_eV": float(eta), "degen_eV": float(degen), "mag_type": mag_type,
-        "torque_projection_specs": torque_projection_specs,
-        "exchange_provenance": exchange_provenance,
-        "electronic_source_sha256": source_hash.hexdigest(), "model_inputs": model_inputs,
-    }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 def checkpoint_signatures_compatible(saved_signature, expected_signature, saved_format_version):
     """Compare signatures, allowing semantic reuse of version-2 checkpoints."""
@@ -175,9 +135,9 @@ def solve_ift_orientation(job):
                 "omega": job["omega_axis"],
                 "mag type": job["mag_type"],
                 "projected shells for detecting torque": job["torque_projection_specs"],
-                "finiteTemperatureOccupations": job["occupation_mode"] == "fermi-dirac",
+                "full covariant derivative": job["full covariant derivative"],
+                "finite temperature occupations": job["occupation_mode"] == "fermi-dirac",
                 "kBT": job["kBT"], "eta": job["eta"], "degen": job["degen"],
-                "collisionSpecification": CollisionSpecification("crta", constantLinewidth=job["eta"]),
             },
             BZGrid=job["bz_grid"], BZSymm=False, mode="run", ncores=job["bz_workers"])
         projected_chi_sample = collect_bz_response(calc)
@@ -258,6 +218,30 @@ def fixed_electron_band_energy(energies, occupied_state_count, number_kpoints):
     lowest_unoccupied = partitioned[occupied_state_count]
     discrete_fermi = 0.5 * (highest_occupied + lowest_unoccupied)
     return np.sum(occupied) / number_kpoints, discrete_fermi, highest_occupied, lowest_unoccupied
+
+def solve_chemical_potential(energies, target_electrons_per_cell, number_kpoints, kBT, tol=1.0e-12):
+    """Find the chemical potential giving a fixed Fermi-Dirac electron count."""
+    energies = np.asarray(energies, dtype=float)
+    number_bands = energies.size / number_kpoints
+    if not 0.0 < target_electrons_per_cell < number_bands:
+        raise ValueError("target_electrons_per_cell must lie strictly between zero and the number of bands.")
+    if kBT <= 0.0:
+        raise ValueError("A positive kBT is required for Fermi-Dirac filling.")
+
+    margin = max(40.0 * kBT, 1.0)
+    lower = float(np.min(energies) - margin)
+    upper = float(np.max(energies) + margin)
+    for _ in range(200): # Bisector searching for the chemical potential that gives correct filling
+        chemical_potential = 0.5 * (lower + upper)
+        occupations = fermiDiracOccupations(energies, [chemical_potential], kBT)[0]
+        electron_count = np.sum(occupations) / number_kpoints
+        if abs(electron_count - target_electrons_per_cell) < tol:
+            return chemical_potential
+        if electron_count < target_electrons_per_cell:
+            lower = chemical_potential
+        else:
+            upper = chemical_potential
+    raise RuntimeError("The fixed-number chemical-potential search did not converge.")
 
 def fixed_number_electronic_state(energies, target_electrons_per_cell, number_kpoints, occupation_mode, kBT):
     """
@@ -363,8 +347,7 @@ def load_energy_sample(path,expected_direction,expected_bz_grid,expected_target_
             "nominal_occupied_state_count": int(data["nominal_occupied_state_count"]),
         }
 
-def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_name,occupation_mode,kBT,
-                    calculation_signature,projected_chi_ift):
+def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_name,occupation_mode,kBT,projected_chi_ift):
     """Atomically save one completed fixed-number IFT calculation."""
     temporary = path.with_suffix(".tmp.npz")
     np.savez_compressed(
@@ -377,13 +360,12 @@ def save_ift_sample(path,direction,chemical_potential,omega_axis,bz_grid,solver_
         occupation_mode=occupation_mode,
         kBT_eV=kBT,
         checkpoint_format_version=IFT_CHECKPOINT_FORMAT_VERSION,
-        calculation_signature=calculation_signature,
         projected_chi_IFT=projected_chi_ift,
     )
     temporary.replace(path)
 
 def load_ift_sample(path,expected_direction,expected_chemical_potential,expected_omega_axis,expected_bz_grid,
-                    expected_solver_name,expected_occupation_mode,expected_kBT,expected_calculation_signature):
+                    expected_solver_name,expected_occupation_mode,expected_kBT):
     """Load and validate one fixed-number IFT checkpoint."""
     global _warned_legacy_ift_checkpoint
     with np.load(path) as data:
@@ -391,8 +373,6 @@ def load_ift_sample(path,expected_direction,expected_chemical_potential,expected
         if not required.issubset(data.files):
             raise StaleIFTCheckpointError(f"{path.name} predates complete IFT checkpoint validation")
         saved_format_version = int(data["checkpoint_format_version"])
-        signature_matches = checkpoint_signatures_compatible(
-            str(data["calculation_signature"]), expected_calculation_signature, saved_format_version)
         signatures_match = (
             np.allclose(data["direction"], expected_direction, atol=1.0e-12)
             and np.isclose(float(data["chemical_potential_eV"]), expected_chemical_potential)
@@ -401,7 +381,6 @@ def load_ift_sample(path,expected_direction,expected_chemical_potential,expected
             and str(data["solver_name"]) == expected_solver_name
             and str(data["occupation_mode"]) == expected_occupation_mode
             and np.isclose(float(data["kBT_eV"]), expected_kBT)
-            and signature_matches
         )
         if not signatures_match:
             raise StaleIFTCheckpointError(f"IFT settings or implementation changed since {path.name} was written")
@@ -900,18 +879,18 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     # Electronic calculation.
     main_dir = Path("./mcalc/MnBi2Te4")
     wannierBasis={
-        "Fe": (0, 1, 2),
         "Mn": (0, 1, 2),
-        "Cl": (0, 1),
         "Bi": (0, 1),
-        "Te": (0, 1),
+        "Te": (0, 1,),
     }
-    reference_fermi = 0.95
+    reference_fermi = 0.95         # VASP MnBi2Te4 U=4.0
     reference_direction = np.asarray([0.0, 0.0, 1.0])
     # Set this directly when the electron number is known.  Otherwise it is
     # inferred from reference_fermi at reference_direction.
-    fixed_electrons_per_cell = None
-    occupation_mode = "zero-temperature" # fermi-dirac | zero-temperature
+    #fixed_electrons_per_cell = None  # determine by fermi in reference
+    fixed_electrons_per_cell = 41   # VASP MnBi2Te4
+    occupation_mode = "fermi-dirac" # fermi-dirac | zero-temperature
+    fullCovariant = True
     electronic_kBT = 0.026
     eta = 0.06582      # eV (6.582 meV), corresponding to hbar/eta about 100 fs
     degen = 1.0e-3     # eV; regularizes r_mn=v_mn/(i DeltaE_mn) inside near-degenerate subspaces
@@ -920,8 +899,8 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.array([ 0.75, 0.8, 0.85, 2.35, 2.4, 2.45, ])
-    bz_grid = (180, 180, 1)
+    omega_axis = np.array([ 0.7, 0.75, 0.8, 0.9, 1.0, 2.4 ])
+    bz_grid = (162, 162, 1)
     # Primary parallelism is over magnetization directions.  A hybrid setup
     # is also possible, provided the following worker-count product does not
     # exceed the allocated physical cores.
@@ -943,7 +922,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
 
     # Angular representation.  A degree-l tangential VSH expansion has
     # 2*l*(l+2) coefficients for each response-tensor component.
-    harmonic_degree = 24
+    harmonic_degree = 15
     if harmonic_degree_override is not None:
         harmonic_degree = int(harmonic_degree_override)
         if harmonic_degree < 1: raise ValueError("harmonic_degree must be positive.")
@@ -967,9 +946,6 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance=exchange_provenance)
     model.setFermi(reference_fermi)
-    ift_checkpoint_signature = build_ift_checkpoint_signature(
-        main_dir, ift_solver.__name__, occupation_mode, electronic_kBT, eta, degen, mag_type,
-        torque_projection_specs, exchange_provenance)
     directions = fibonacci_sphere(number_of_orientations, antipodal=True)
     theta_axis, phi_axis = cartesian_to_spherical(directions)
     selected_indices = (orientation_indices_for_shard(number_of_orientations, shard_rank, shard_count)
@@ -1027,7 +1003,6 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
             f"Missing {reference_path}. Run '--stage prepare' once before launching compute shards.")
     else:
         reference_theta, reference_phi = cartesian_to_spherical(reference_direction[None, :])
-        #exit()
         model.includeSOCFromSOI(
             theta=reference_theta[0],
             phi=reference_phi[0],
@@ -1062,7 +1037,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     if stage == "prepare":
         print(f"Preparation complete: {reference_path}")
         return
-
+    
     # The model is mutable when its magnetization direction changes.  Give
     # every orientation process a private copy and keep each inner BZ solve
     # serial by default.  On Linux, fork shares the large immutable Wannier
@@ -1140,7 +1115,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
                 try:
                     projected_chi_samples[index] = load_ift_sample(
                         sample_path, direction, chemical_potential[index], omega_axis, np.asarray(bz_grid),
-                        ift_solver.__name__, occupation_mode, electronic_kBT, ift_checkpoint_signature)
+                        ift_solver.__name__, occupation_mode, electronic_kBT)
                     loaded_ift_samples += 1
                 except StaleIFTCheckpointError as error:
                     stale_ift_samples.append(str(error))
@@ -1154,6 +1129,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
                     "bz_grid": tuple(bz_grid), "bz_workers": number_of_bz_workers_per_orientation,
                     "ift_solver": ift_solver, "mag_type": mag_type,
                     "torque_projection_specs": torque_projection_specs,
+                    "full covariant derivative": fullCovariant, 
                     "occupation_mode": occupation_mode, "kBT": electronic_kBT, "eta": eta, "degen": degen,
                     "worker_verbose": orientation_worker_verbose,
                 })
@@ -1176,8 +1152,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
                 save_ift_sample(
                     ift_sample_dir / f"orientation_{index:04d}.npz",
                     directions[index], chemical_potential[index], omega_axis, np.asarray(bz_grid),
-                    ift_solver.__name__, occupation_mode, electronic_kBT,
-                    ift_checkpoint_signature, projected_chi_sample)
+                    ift_solver.__name__, occupation_mode, electronic_kBT, projected_chi_sample)
                 projected_chi_samples[index] = projected_chi_sample
                 completed += 1
                 print(
