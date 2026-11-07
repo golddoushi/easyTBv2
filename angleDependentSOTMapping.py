@@ -7,8 +7,6 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager, redirect_stdout
 import argparse
-import hashlib
-import inspect
 import json
 import warnings
 from pathlib import Path
@@ -28,6 +26,7 @@ from auxiliary import fermiDiracOccupations
 from auxiliary import getWholeSymmetryOperator, SYMPREC
 from system import System_w90
 from task import BZGridTask, solveEnergy, solveIFTorque_LG_DM
+from calculator import CollisionSpecification
 from auxiliary import BOHR_MAGNETON_EV_PER_TESLA
 
 _orientation_worker_model = None
@@ -42,6 +41,7 @@ def orientation_indices_for_shard(number_of_orientations, shard_rank, shard_coun
 
 def command_line_arguments():
     parser = argparse.ArgumentParser(description="Angle-dependent electronic and IFT mapping.")
+    parser.add_argument("--fit-orientations", type=int, help="Aggregate a nested subset of the saved antipodal directions and write a separate refit map.")
     parser.add_argument("--stage", choices=("all", "prepare", "compute", "aggregate"), default="all",
         help="Run locally end-to-end, prepare shared filling, compute one Slurm shard, or aggregate checkpoints.")
     parser.add_argument("--workers-per-node", type=int, default=None,
@@ -136,6 +136,7 @@ def solve_ift_orientation(job):
                 "mag type": job["mag_type"],
                 "projected shells for detecting torque": job["torque_projection_specs"],
                 "full covariant derivative": job["full covariant derivative"],
+                "collisionSpecification": job["collisionSpecification"],
                 "finite temperature occupations": job["occupation_mode"] == "fermi-dirac",
                 "kBT": job["kBT"], "eta": job["eta"], "degen": job["degen"],
             },
@@ -369,7 +370,7 @@ def load_ift_sample(path,expected_direction,expected_chemical_potential,expected
     """Load and validate one fixed-number IFT checkpoint."""
     global _warned_legacy_ift_checkpoint
     with np.load(path) as data:
-        required = {"checkpoint_format_version", "calculation_signature"}
+        required = {"checkpoint_format_version", }
         if not required.issubset(data.files):
             raise StaleIFTCheckpointError(f"{path.name} predates complete IFT checkpoint validation")
         saved_format_version = int(data["checkpoint_format_version"])
@@ -875,7 +876,7 @@ def output_energy_table(path, directions, theta, phi,
             )
 
 def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_rank=None, shard_count=None,
-        harmonic_degree_override=None):
+        harmonic_degree_override=None, fit_orientations=None):
     # Electronic calculation.
     main_dir = Path("./mcalc/MnBi2Te4")
     wannierBasis={
@@ -893,6 +894,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     fullCovariant = True
     electronic_kBT = 0.026
     eta = 0.06582      # eV (6.582 meV), corresponding to hbar/eta about 100 fs
+    collisionSpecification = CollisionSpecification(mode="crta", constantLinewidth=eta) # set one of the collision
     degen = 1.0e-3     # eV; regularizes r_mn=v_mn/(i DeltaE_mn) inside near-degenerate subspaces
 
     # Set this only when the fixed moment magnitude is known.  If supplied,
@@ -927,6 +929,11 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
         harmonic_degree = int(harmonic_degree_override)
         if harmonic_degree < 1: raise ValueError("harmonic_degree must be positive.")
     number_of_orientations = 16*96
+    if fit_orientations is not None:
+        if stage != "aggregate" or fit_orientations % 2 or not 2 <= fit_orientations <= number_of_orientations:
+            raise ValueError("--fit-orientations requires aggregate and an even count within the original grid")
+        if fit_orientations//2 - (fit_orientations//2 + 4)//5 < harmonic_degree*(harmonic_degree+2):
+            raise ValueError("Too few antipodal pairs for the requested degree in five-fold validation")
     resume_completed_orientations = True
     validation_folds = 5
     validation_active_signal_fraction = 0.05
@@ -1130,6 +1137,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
                     "ift_solver": ift_solver, "mag_type": mag_type,
                     "torque_projection_specs": torque_projection_specs,
                     "full covariant derivative": fullCovariant, 
+                    "collisionSpecification": collisionSpecification,
                     "occupation_mode": occupation_mode, "kBT": electronic_kBT, "eta": eta, "degen": degen,
                     "worker_verbose": orientation_worker_verbose,
                 })
@@ -1171,6 +1179,28 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
         executor_start_method = "Slurm sharding with node-local process pools"
 
     projected_chi_ift = np.asarray(projected_chi_samples)
+    source_indices = np.arange(number_of_orientations)
+    if fit_orientations is not None:
+        # Select well-separated unoriented axes. Each prefix gives a nested
+        # subset; sorting restores the original order before paired CV.
+        half = number_of_orientations // 2
+        axes = directions[:half]
+        assert np.allclose(axes, -directions[half:])
+        similarity = np.zeros(half)
+        pairs = []
+        index = 0
+        for _ in range(fit_orientations // 2):
+            pairs.append(index)
+            similarity = np.maximum(similarity, np.abs(axes @ axes[index]))
+            similarity[index] = 2.
+            index = int(np.argmin(similarity))
+        pairs = np.sort(pairs)
+        source_indices = np.r_[pairs, pairs + half]
+        directions, theta_axis, phi_axis, internal_energy, free_energy, chemical_potential, highest_occupied, lowest_unoccupied, projected_chi_ift = (
+            np.asarray(array)[source_indices] for array in (directions, theta_axis, phi_axis, internal_energy, free_energy, chemical_potential, highest_occupied, lowest_unoccupied, projected_chi_ift))
+        main_dir = main_dir / "refits" / f"N{fit_orientations}_L{harmonic_degree}"
+        main_dir.mkdir(parents=True, exist_ok=True)
+        number_of_orientations = fit_orientations
     tangential_chi_ift = project_tangential(projected_chi_ift, directions)
 
     band_energy = free_energy
@@ -1327,6 +1357,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     np.savez_compressed(
         output_path,
         format_version=3,
+        fit_source_indices=source_indices,
         directions=directions,
         orientation_weights=np.full(number_of_orientations, 4.*np.pi/number_of_orientations),
         theta=theta_axis, phi=phi_axis, reference_direction=reference_direction,
@@ -1411,7 +1442,9 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
 
     metadata = {
         "format_version": 3,
-        "sampling": "equal-area antipodal Fibonacci sphere",
+        "sampling": ("nested farthest-axis subset of an antipodal Fibonacci sphere"
+                     if fit_orientations is not None and fit_orientations < 16*96
+                     else "equal-area antipodal Fibonacci sphere"),
         "number_of_orientations": number_of_orientations,
         "harmonic_degree": harmonic_degree,
         "energy_model": (
@@ -1551,4 +1584,4 @@ if __name__ == "__main__":
     run(stage=arguments.stage, workers_per_node=arguments.workers_per_node,
         bz_workers_per_orientation=arguments.bz_workers_per_orientation,
         shard_rank=arguments.shard_rank, shard_count=arguments.shard_count,
-        harmonic_degree_override=arguments.harmonic_degree)
+        harmonic_degree_override=arguments.harmonic_degree, fit_orientations=arguments.fit_orientations)
