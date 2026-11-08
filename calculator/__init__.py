@@ -44,3 +44,5 @@ from .Grid import (OrbitalFluxTorque, OrbitalSOCTorque,
 
 from .electronic_stages import Orbital_BlochSelfRotateV2, OrbitalVelocity_BlochSelfRotateV2
 from .Grid import OrbitalHallConductance_BlochSelfRotateV2_LG_DM
+
+from .Grid import InverseFaradayTorque_BlochAcceleration_TDSE

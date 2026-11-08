@@ -718,3 +718,128 @@ def solve_torque_fd(inputs: ResponseInputs, *, collision, displaced_inputs,
         eta=eta, step=finiteDifferenceStep, record=record)
     result.projected_value = result.value[None,None,None,...]
     return result
+
+# Physical time is fs, photon energy and linewidth are eV, k is inverse angstrom.
+BLOCH_HBAR_EV_FS = 0.6582119569
+
+def _bloch_wannier_sampler(inputs, gS=2.):
+    """Fourier-interpolate H, full position connection, and exchange torque.
+
+    No band truncation, k derivative, or expansion in the driving field enters.
+    The spin operator uses the same gS convention as SpinExchangeTorque.
+    """
+    s, model = inputs.states, inputs.states.model
+    if model.overlap or s.skip_low or s.ibmin:
+        raise NotImplementedError('Bloch LG requires a complete orthogonal Wannier basis')
+    if model.exchange_R is None:
+        raise ValueError('Prepare model.exchange_R before the Bloch LG calculation')
+    grid = tuple(s.kgrid)
+    rcart = model.iRvec @ model.lattice
+    indices = tuple((np.asarray(model.iRvec, int) % np.asarray(grid)).T)
+    spin = -float(gS)*np.asarray(model.spin)/2
+    def fourier(block, phase):
+        mesh = np.zeros(grid + block.shape[1:], complex)
+        np.add.at(mesh, indices, block * phase.reshape((-1,)+(1,)*(block.ndim-1)))
+        value = np.fft.ifftn(mesh, axes=(0,1,2))*np.prod(grid)
+        return (value + value.conj().swapaxes(-1,-2))/2
+    def sample(offset):
+        phase = s.phaseFactorR * np.exp(1j*(rcart @ offset))
+        h = fourier(model.ham_R, phase)
+        a = fourier(model.AA_R_W, phase)
+        exchange = fourier(model.exchange_R, phase)[...,None,:,:]
+        torque = -1j*(spin @ exchange - exchange @ spin)
+        return h, a, torque
+    return sample
+
+def solve_torque_bloch_acceleration(sample, *, times_fs, field, fermiList,
+                                    kBT, eta, phase_pair=True, progress=None):
+    """Full LG characteristic equation with CRTA, in a common Wannier basis.
+
+    hbar*kdot=-E; hbar*rhodot=-i[H(k)+E.A(k),rho]-eta*(rho-F(H(k))).
+    E is the real physical field in V/angstrom. Midpoint unitary propagation
+    and symmetric exact relaxation give a stable, second-order splitting.
+    Density matrices are neither expanded in E nor normalized after a step.
+    Output axes: (Fermi level, time, torque Cartesian component).
+    """
+    from scipy.special import expit
+    times = np.asarray(times_fs, float)
+    mu = np.asarray(fermiList, float)
+    if mu.ndim!=1 or not len(mu) or not np.all(np.isfinite(mu)):
+        raise ValueError('fermiList must be nonempty and finite')
+    def equilibrium(h):
+        en, u = np.linalg.eigh(h)
+        f = expit((mu.reshape((-1,)+(1,)*en.ndim)-en[None,...])/kBT)
+        return (u[None,...]*f[...,None,:]) @ u.conj().swapaxes(-1,-2)[None,...]
+    def measure(rho, torque):
+        return np.einsum('f...mn,...cnm->f...c',rho,torque).real.reshape(len(mu),-1,3).mean(axis=1)
+    def electric(t):
+        e = np.asarray(field(t), float)
+        if e.shape!=(3,) or not np.all(np.isfinite(e)):
+            raise ValueError('field(t) must return three finite real components')
+        return e
+    h0, _, torque0 = sample(np.zeros(3))
+    initial = equilibrium(h0)
+    baseline = measure(initial,torque0)
+    # Fixed initial-band populations avoid an extra diagonalization per step.
+    initial_energies, initial_vectors = np.linalg.eigh(h0)
+    def diagnostics(rho, h):
+        populations = np.einsum('...mi,f...mn,...ni->f...i',
+            initial_vectors.conj(), rho, initial_vectors, optimize=True).real
+        populations = populations.reshape(len(mu),-1,h.shape[-1]).mean(axis=1)
+        number = np.trace(rho,axis1=-2,axis2=-1).real.reshape(len(mu),-1).mean(axis=1)
+        energy = np.einsum('f...mn,...nm->f...',rho,h).real.reshape(len(mu),-1).mean(axis=1)
+        return number,energy,populations
+    n0, energy0, pop0 = diagnostics(initial,h0)
+    diagnostic_traces = []
+    traces, shifts = [], []
+    hermiticity = 0.
+    for sign in ((1.,-1.) if phase_pair else (1.,)):
+        rho, q = initial.copy(), np.zeros(3)
+        trace = np.zeros((len(mu),len(times),3))
+        shift = np.zeros((len(times),3))
+        numbers = np.empty((len(mu),len(times)))
+        energies = np.empty_like(numbers)
+        populations = np.empty((len(mu),len(times),h0.shape[-1]))
+        numbers[:,0], energies[:,0], populations[:,0] = n0,energy0,pop0
+        for it,(t0,t1) in enumerate(zip(times[:-1],times[1:]),1):
+            dt, tm = t1-t0, (t0+t1)/2
+            e0, em, e1 = sign*electric(t0), sign*electric(tm), sign*electric(t1)
+            eq = sign*electric((t0+tm)/2)
+            qm = q - dt*(e0+4*eq+em)/(12*BLOCH_HBAR_EV_FS)
+            q = q - dt*(e0+4*em+e1)/(6*BLOCH_HBAR_EV_FS)
+            h,a,_ = sample(qm)
+            target = equilibrium(h)
+            heff = h + np.einsum('a,...amn->...mn',em,a)
+            en,u = np.linalg.eigh(heff)
+            evolution = (u*np.exp(-1j*en*dt/BLOCH_HBAR_EV_FS)[...,None,:]) @ u.conj().swapaxes(-1,-2)
+            decay = np.exp(-eta*dt/(2*BLOCH_HBAR_EV_FS))
+            rho = decay*rho + (1-decay)*target
+            rho = evolution[None,...] @ rho @ evolution.conj().swapaxes(-1,-2)[None,...]
+            rho = decay*rho + (1-decay)*target
+            hermiticity = max(hermiticity,float(np.max(np.abs(rho-rho.conj().swapaxes(-1,-2)))))
+            hend,_,torque = sample(q)
+            numbers[:,it],energies[:,it],populations[:,it] = diagnostics(rho,hend)
+            trace[:,it] = measure(rho,torque)-baseline
+            shift[it] = q
+            if progress is not None and (it % max(1,(len(times)-1)//10)==0 or it==len(times)-1):
+                progress(sign,it,len(times)-1)
+        diagnostic_traces.append(dict(electron_number=numbers,
+            electron_number_change=numbers-n0[:,None],
+            electronic_energy=energies,electronic_energy_change=energies-energy0[:,None],
+            initial_band_populations=populations))
+        traces.append(trace)
+        shifts.append(shift)
+    result = dict(times_fs=times, field=np.array([electric(t) for t in times]),
+                  torque=traces[0], k_shift=shifts[0], equilibrium_torque=baseline,
+                  hermiticity_error=hermiticity)
+    for ip, diagnostics_phase in enumerate(diagnostic_traces):
+        suffix = '' if ip==0 else '_minus'
+        for key,value in diagnostics_phase.items():
+            result[key+suffix] = value
+    if phase_pair:
+        result['torque_minus'] = traces[1]
+        result['torque_even'] = (traces[0]+traces[1])/2
+        result['torque_odd'] = (traces[0]-traces[1])/2
+    integrate = (np.trapezoid if hasattr(np, 'trapezoid') else np.trapz)
+    result['impulse'] = integrate(result.get('torque_even',result['torque']),times,axis=1)
+    return result

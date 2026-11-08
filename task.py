@@ -16,7 +16,7 @@ from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
 from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM
 from calculator import BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
-from calculator import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM, InverseFaradayTorque_LG_FD
+from calculator import InverseFaradayTorque_BlochAcceleration_TDSE, InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM, InverseFaradayTorque_LG_FD
 from calculator import SpinHallConductance, SpinHallConductance_LG_DM, SpinHallConductance_diag
 from calculator import OrbitalHallConductance, OrbitalHallConductance_LG_DM, OrbitalHallConductance_BlochSelfRotate_LG_DM
 from calculator import SpinGalvanicConductance, SpinGalvanicConductance_diag, OrbitalGalvanicConductance, OrbitalGalvanicConductance_diag
@@ -890,6 +890,36 @@ def solveIFTorque_LG_FD(param):
             'projected sigma channels':calc.projected_sigma_channels,
             'sigma channels':calc.chi_IFT_channels,
             'energies':calc.energies, 'iq':param['iq']}
+
+def solveIFTorque_BlochAcceleration_TDSE(param):
+    """BZGridTask adapter; finite-field traces deliberately have no sigma key."""
+    calc = InverseFaradayTorque_BlochAcceleration_TDSE(
+        model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],
+        skip_low=False,fermiList=param['fermi'],omegaList=param['omega'],
+        eta=param.get('eta',.06582), kBT=param.get('kBT',.026),
+        times_fs=param['times_fs'], E0=param.get('E0',.001),
+        polarization=param.get('polarization',(1,1j,0)),
+        pulse_fwhm_fs=param.get('pulse_fwhm_fs',50.),
+        pulse_center_fs=param.get('pulse_center_fs',0.),
+        phase_pair=param.get('phase_pair',True), ife_type=param.get('mag type','spin'),
+        fullCovariantDerivative=param.get('full covariant derivative',True),
+        torqueProjectionList=param.get('projected shells for detecting torque',
+            param.get('projected shells for detecting spin accumulation',())),
+        velocityProjectionList=param.get('projected shells for applying current',()),
+        verbose=param.get('verbose',0),
+        **{key:param[key] for key in ('collisionSpecification','preparedCollision','electronic','states') if key in param})
+    result = dict(iq=param['iq'],energies=calc.energies,times_fs=calc.times_fs,
+                  torque=calc.torque,impulse=calc.impulse,
+                  hermiticity_error=calc.hermiticity_error,
+                  field=np.stack([r['field'] for r in calc.results]),
+                  k_shift=np.stack([r['k_shift'] for r in calc.results]))
+    for key in calc.results[0]:
+        if key.startswith(('electron_number','electronic_energy','initial_band_populations')):
+            result[key] = np.stack([r[key] for r in calc.results],axis=1)
+    if hasattr(calc,'torque_even'):
+        result.update(torque_even=calc.torque_even,torque_odd=calc.torque_odd)
+    return result
+
 
 def solveSGC(param):
     calc=SpinGalvanicConductance(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],eta=0.06582,degen=1e-6,skip_low=True,

@@ -2960,6 +2960,57 @@ class InverseFaradayTorque_LG_FD(DensityMatrixResponse):
         publish_second_order(self, result, "chi_IFT")
         self.finiteDifferenceStep = finiteDifferenceStep
 
+class InverseFaradayTorque_BlochAcceleration_TDSE(DensityMatrixResponse):
+    """Nonperturbative full-LG spin exchange torque along accelerated k paths.
+
+    E(t)=E0*envelope(t)*Re[polarization*exp(-i*omega*(t-center)/hbar)].
+    polarization has unit complex norm; E0 is NOT the positive-frequency
+    amplitude. A circular field therefore has instantaneous magnitude E0/sqrt(2).
+    pulse_fwhm_fs is the INTENSITY FWHM. pulse_fwhm_fs=None selects CW.
+    Results are physical raw electronic torque (mu_B eV), not a susceptibility.
+    """
+    def __init__(self, *, times_fs, E0=0.001, polarization=(1,1j,0),
+                 pulse_fwhm_fs=50., pulse_center_fs=0., phase_pair=True,
+                 ife_type='spin', fullCovariantDerivative=True,
+                 finiteTemperatureOccupations=True,
+                 torqueProjectionList=(), velocityProjectionList=(), **kwarg):
+        from .response_contractions import (_bloch_wannier_sampler,
+            solve_torque_bloch_acceleration, BLOCH_HBAR_EV_FS)
+        if ife_type!='spin' or torqueProjectionList or velocityProjectionList:
+            raise NotImplementedError('Bloch LG supports unprojected spin exchange torque only')
+        assert fullCovariantDerivative, 'Bloch LG always includes the full covariant derivative'
+        
+        super().__init__(electronic_stages=(SpinExchangeTorque,), **kwarg)
+        eta = self.collision.requireConstant('Bloch acceleration full LG')
+        eps = np.asarray(polarization,complex)
+        if eps.shape!=(3,) or not np.all(np.isfinite(eps)) or np.linalg.norm(eps)==0:
+            raise ValueError('polarization must be a nonzero finite complex three-vector')
+        eps = eps/np.linalg.norm(eps)
+        if pulse_fwhm_fs is not None and (not np.isfinite(pulse_fwhm_fs) or pulse_fwhm_fs<=0):
+            raise ValueError('pulse_fwhm_fs must be positive or None (CW)')
+        sample = _bloch_wannier_sampler(self.inputs, gS=kwarg.get('gS',2.))
+        self.results = []
+        for omega in self.omegaList:
+            def field(t):
+                tau = t-pulse_center_fs
+                envelope = 1. if pulse_fwhm_fs is None else np.exp(-2*np.log(2)*(tau/pulse_fwhm_fs)**2)
+                return E0*envelope*np.real(eps*np.exp(-1j*omega*tau/BLOCH_HBAR_EV_FS))
+            self.results.append(solve_torque_bloch_acceleration(sample,
+                times_fs=times_fs,field=field,fermiList=self.fermiList,
+                kBT=self.kBT,eta=eta,phase_pair=phase_pair,
+                progress=(lambda sign,step,total: print(
+                    f"Bloch LG omega={omega:g} eV, phase={sign:+g}: {step}/{total}",flush=True))
+                    if self.verbose else None))
+        self.times_fs = np.asarray(times_fs,float)
+        self.polarization, self.E0 = eps, E0
+        # (Fermi, photon energy, time, Cartesian torque); impulse omits time.
+        self.torque = np.stack([r['torque'] for r in self.results],axis=1)
+        self.impulse = np.stack([r['impulse'] for r in self.results],axis=1)
+        if phase_pair:
+            self.torque_even = np.stack([r['torque_even'] for r in self.results],axis=1)
+            self.torque_odd = np.stack([r['torque_odd'] for r in self.results],axis=1)
+        self.hermiticity_error = max(r['hermiticity_error'] for r in self.results)
+
 class InverseFaradayTorque_VG_DM(DensityMatrixResponse):
     def __init__(self, ife_type="total", velocityProjectionList=[], torqueProjectionList=[],
                  responseOmegaIndexList=[], responseFermiIndexList=None,

@@ -31,7 +31,7 @@ from auxiliary import showElapsedTime, getCBM, getVBM
 from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeffs, outputIFTcoeffs,
                     output4thData, outputBZDistributionData, outputIFEResponseOnBZ, outputIFTResponseOnBZ)
 
-def run():
+def run(bloch_options=None):
     # Pbene, spin hall conductance
     mainDir="./mcalc/FeCl2/"
     model=System_w90(
@@ -224,6 +224,10 @@ def run():
     #calc=Chern_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
+
+    if bloch_options is not None:
+        from blochAccelerationInput import run_bloch_scan
+        return run_bloch_scan(model, fermiAxis, bloch_options)
 
     BZGrid=(48,48,1)
     BZSymm=False
