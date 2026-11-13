@@ -901,8 +901,10 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     # the file also contains B_anis=-grad_m(E)/(M mu_B), in tesla.
     moment_magnitude_muB = 5 # mu_B
 
-    omega_axis = np.array([ 0.7, 0.75, 0.8, 0.9, 1.0, 2.4 ])
-    bz_grid = (162, 162, 1)
+    omega_axis     = np.array([1.0, 2.65]) #np.array([ 0.7, 0.75, 0.8, 0.9, 1.0, 2.4 ])
+    scissor_shift  = 0.25
+    scissor_cutoff = reference_fermi
+    bz_grid        = (81, 81, 1)
     # Primary parallelism is over magnetization directions.  A hybrid setup
     # is also possible, provided the following worker-count product does not
     # exceed the allocated physical cores.
@@ -949,7 +951,7 @@ def run(stage="all", workers_per_node=None, bz_workers_per_orientation=1, shard_
     minimum_recommended = 2 * harmonic_degree * (harmonic_degree + 2)
     assert number_of_orientations >= minimum_recommended, f"Use at least {minimum_recommended} orientations for a stable degree-{harmonic_degree} VSH fit."
 
-    model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True)
+    model = System_w90(mainDir=str(main_dir) + os.sep, projections=wannierBasis, ispin=2, spinSeparated=True, scissor_cutoff=scissor_cutoff, scissor_shift=scissor_shift)
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance=exchange_provenance)
     model.setFermi(reference_fermi)

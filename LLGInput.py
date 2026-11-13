@@ -501,9 +501,9 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     The supplied pulse is therefore the slowly varying electric-field
     envelope, and ``intensity_fwhm`` is its intensity FWHM.
     """
-    center_times = [100.0 + 100_000.0 * ipulse for ipulse in range(30)]
-    peak_field=0.06
-    intensity_fwhm = 50.0
+    center_times = [14_400*25*0 + 1000_000.0 * ipulse for ipulse in range(1)]
+    peak_field=0.005/5
+    intensity_fwhm = 7_200*25*60
     intensity=0.5*speed_of_light*epsilon_0*(peak_field*1E10)**2
     fluence=intensity*intensity_fwhm*np.sqrt(np.pi/(4*np.log(2)))*1E-15
     print(f"Fluence of one pulse {4*fluence:.3f} J/m2 {4*fluence*0.1:.3f} mJ/cm2")
@@ -517,8 +517,8 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
     time_step = PulseTimeStepSchedule.gaussian(
         center_times=center_times,
         intensity_fwhm=intensity_fwhm,
-        fine_step  =  10.0,
-        coarse_step=1000.0,
+        fine_step  =1_500.0,
+        coarse_step=1_500.0,
         window_half_width_in_fwhm=3.0,
     )
 
@@ -541,8 +541,8 @@ def run_ift_example(mainDir, omega0, polarization="xy+",show_torque_map=True):
         phi0=0*np.pi/180,
     )
     time_axis, trajectory = device.run(
-        #t_total=   100_400.0,
-        t_total= 5_100_000.0,
+        t_total=   100_400.0,
+        #t_total= 11_000_000.0,
         time_step=time_step,
     )
     plot_mag_evolution(mainDir=mainDir,time_axis=time_axis,trajectory=trajectory,pulse=pulse,pulse_title=r"|E(t)|[$(V/\AA)$]")
@@ -587,4 +587,4 @@ if __name__ == "__main__":
         main()
     else:
         #run_sot_example()
-        run_ift_example(mainDir="mcalc/MnBi2Te4",omega0=2.4,polarization="xy+",show_torque_map=True)
+        run_ift_example(mainDir="mcalc/MnBi2Te4/",omega0=2.65,polarization="xy-",show_torque_map=True)

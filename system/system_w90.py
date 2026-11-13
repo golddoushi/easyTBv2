@@ -24,6 +24,20 @@ def _embed_wannier_operator(transform, destinations, count, matrix):
     return result
 
 
+def _scissor_eigenvalues(energies, shift, cutoff):
+    """Shift raw .eig states strictly above cutoff without modifying the input."""
+    corrected = np.array(energies, dtype=float, copy=True)
+    if shift == 0:
+        return corrected
+    selected = corrected > cutoff
+    counts = selected.sum(axis=-1)
+    if np.any(counts != counts.flat[0]) or np.any(corrected == cutoff):
+        warnings.warn('Scissor cutoff does not cleanly separate a fixed band manifold on the input mesh; '
+                      'check band crossings and interpolation convergence.', RuntimeWarning)
+    corrected[selected] += shift
+    return corrected
+
+
 class System_w90(System):
 
     def __init__(self,
@@ -31,6 +45,7 @@ class System_w90(System):
                  poscar:str="POSCAR",projections:dict=None,ispin=1,
                  getAA:bool=True,trans_inv=True,
                  spinSeparated=None,
+                 scissor_shift=0.0, scissor_cutoff=None,
                  ) -> None:
         '''
         The system in basis of wannier orbitals, with convention as below:
@@ -73,6 +88,14 @@ class System_w90(System):
           in which 0 is "s", 1 is "p", 2 is "d", 3 is "d" and 4 is "f". By now, only these 4 kinds are supported.
         - trans_inv : bool
         switch the periodic boundary condition
+        - scissor_shift : float
+        Rigid additive shift of raw DFT eigenvalues strictly above
+        scissor_cutoff, before Wannier projection and Fourier interpolation.
+        Default zero disables the correction. Subsequent exchange extraction
+        uses the corrected Hamiltonian, as usual. Applied before any later SOC.
+        - scissor_cutoff : float | None
+        Threshold in the raw .eig energy reference (not relative to setFermi).
+        Required for a nonzero shift. Prefer a threshold inside a global gap.
         '''
         super().__init__()
         # wannier basis are normalized and othorgonal
@@ -100,6 +123,9 @@ class System_w90(System):
         self._included_soi_R=None
         self._soi_global_spin_frame=None
 
+        if scissor_shift != 0 and scissor_cutoff is None:
+            raise ValueError('A nonzero scissor_shift requires scissor_cutoff')
+        self.scissor_shift, self.scissor_cutoff = scissor_shift, scissor_cutoff
         showElapsedTime()
 
         if self.spinSeparated:
@@ -119,6 +145,9 @@ class System_w90(System):
             ham_k_DFT_up=W90EIG(seedname=up_seed)
             ham_k_DFT_dn=W90EIG(seedname=dn_seed)
             self._w90_dft_eigenvalues=(ham_k_DFT_up.data,ham_k_DFT_dn.data)
+            ham_k_DFT_up.data = _scissor_eigenvalues(ham_k_DFT_up.data, scissor_shift, self.scissor_cutoff)
+            ham_k_DFT_dn.data = _scissor_eigenvalues(ham_k_DFT_dn.data, scissor_shift, self.scissor_cutoff)
+            self._w90_scissor_eigenvalues=(ham_k_DFT_up.data, ham_k_DFT_dn.data)
             assert ham_k_DFT_up.nkpts==chk_up.num_kpts
             assert ham_k_DFT_dn.nkpts==chk_dn.num_kpts
             assert ham_k_DFT_up.nbands==chk_up.num_bands
@@ -140,6 +169,8 @@ class System_w90(System):
             showElapsedTime(extraInfo="chk read")
             ham_k_DFT=W90EIG(seedname=single_seed)
             self._w90_dft_eigenvalues=(ham_k_DFT.data,)
+            ham_k_DFT.data = _scissor_eigenvalues(ham_k_DFT.data, scissor_shift, scissor_cutoff)
+            self._w90_scissor_eigenvalues=(ham_k_DFT.data,)
             showElapsedTime(extraInfo=f"H_k_DFT: {ham_k_DFT.data.min():.6f} ~ {ham_k_DFT.data.max():.6f} eigs. read")
             Ham_k_W=np.array([self.toWannierGauge(H_k,ik,ik,chk) for ik,H_k in enumerate(ham_k_DFT.data)])
             chk_center=chk.wannier_centers

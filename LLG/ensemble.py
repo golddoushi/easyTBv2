@@ -93,7 +93,7 @@ def _run_job(job):
         _CACHE[key] = device, schedule
     device, schedule = _CACHE[key]
     # Paired samples across helicities and frequencies, reproducible across workers.
-    rng = np.random.default_rng(np.random.SeedSequence([c["seed"], job["temperature_index"], job["sample"]]))
+    rng = np.random.default_rng(np.random.SeedSequence([c["seed"], c.get("temperature_seed_index", job["temperature_index"]), job["sample"]]))
     initial = thermal_direction(rng, job["temperature_K"], c["cells"], c["anisotropy_eV"], job["initial_pole"])
     device.m, device.time = initial.copy(), 0.
     stopped = []
@@ -108,6 +108,12 @@ def _run_job(job):
                   initial_delta_deg=float(np.degrees(np.arccos(abs(initial[2])))),
                   initial_phi_deg=float(np.degrees(np.arctan2(initial[1], initial[0])) % 360.))
     result.update(trajectory_metrics(times, trajectory, job["initial_pole"], job["target_pole"], c["alignment_threshold"], centers))
+    if c.get("pulse_bins"):
+        # Fig. S7 uses searchsorted(centers, event, side="right").
+        # Bin n ends immediately BEFORE center n+1; the last bin ends at tf.
+        ends = np.r_[centers, times[-1]]
+        result["bin_end_target_alignment"] = (job["target_pole"] *
+            np.interp(ends, times, trajectory[:, 2])).tolist()
     result["runtime_seconds"] = perf_counter()-started
     result["stationary_pole_shortcut"] = bool(stopped)
     result["stationary_pole_time_fs"] = float(times[-2]) if stopped else None
@@ -178,6 +184,9 @@ def stationary_pole(device, direction):
     return True
 
 def main():
+    import sys
+    if "--scan" in sys.argv:
+        return scan_main()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ensemble", action="store_true", help="run thermal initial-angle ensembles")
     parser.add_argument("--data", default="mcalc/MnBi2Te4")
@@ -202,14 +211,12 @@ def main():
     parser.add_argument("--xy-plus-target", type=int, choices=[-1, 1], default=-1, help="target pole for code alias xy+; xy- uses opposite target (verify manuscript helicity labels)")
     parser.add_argument("--save-trajectories", type=int, default=0, help="save first N trajectories per matrix entry as NPZ")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--pulse-bins", action="store_true", help="record target alignment at the end of each Fig. S7 pulse-count bin")
+    parser.add_argument("--temperature-seed-index", type=int)
     parser.add_argument("--matrix-entry", type=int, help="run one zero-based frequency/pole/helicity entry at all temperatures")
     args = parser.parse_args()
     if not args.ensemble:
         parser.error("supply --ensemble to run this mode")
-    positive = [args.workers, args.samples, args.cells, args.anisotropy_mev, args.fwhm_fs, args.pulses, args.separation_fs, args.total_time_fs, args.fine_step_fs, args.coarse_step_fs]
-    numbers = positive + args.temperatures + args.omegas + [args.alpha, args.field_amplitude, args.first_center_fs, args.alignment_threshold]
-    if not all(np.isfinite(numbers)) or min(positive) <= 0 or min(args.temperatures) <= 0 or args.alpha < 0 or args.seed < 0 or args.save_trajectories < 0 or args.first_center_fs < 0 or not 0 < args.alignment_threshold < 1:
-        parser.error("invalid nonfinite, negative, or out-of-range parameter")
     if len(set(args.temperatures)) != len(args.temperatures) or len(set(args.omegas)) != len(args.omegas):
         parser.error("temperatures and frequencies must not contain duplicates")
     centers = [args.first_center_fs+i*args.separation_fs for i in range(args.pulses)]
@@ -237,6 +244,12 @@ def main():
                   code_sha256={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in Path(__file__).parent.glob("*.py")},
                   model="deterministic LLG; thermal initial angles only; uniaxial hemisphere-conditioned Boltzmann distribution")
     manifest = output/"config.json"
+    if args.temperature_seed_index is not None:
+        if len(args.temperatures) != 1 or args.temperature_seed_index < 0:
+            parser.error("temperature seed override requires one temperature and a nonnegative index")
+        config["temperature_seed_index"] = args.temperature_seed_index
+    if args.pulse_bins:
+        config["pulse_bins"] = True
     if args.matrix_entry is not None:
         config["matrix_entry"] = args.matrix_entry
     if args.resume:
@@ -291,6 +304,88 @@ def main():
         if results:
             summarize(results, output)
     print(f"Results: {output}/summary.csv", flush=True)
+
+
+def scan_main():
+    """Run the same thermal samples through a Cartesian grid of pulse protocols."""
+    import itertools
+    import subprocess
+    import sys
+
+    parser = argparse.ArgumentParser(description=scan_main.__doc__)
+    parser.add_argument("--scan", action="store_true")
+    parser.add_argument("--ensemble", action="store_true")
+    parser.add_argument("--alphas", nargs="+", type=float, required=True)
+    parser.add_argument("--anisotropies-mev", nargs="+", type=float, default=[0.2],
+                        help="K per cell; each K also sets the thermal initial distribution")
+    parser.add_argument("--fluences", nargs="+", type=float, default=[1.], help="ratios F/F_ref")
+    parser.add_argument("--fwhm-fs", type=float, default=50.)
+    parser.add_argument("--separations-ps", nargs="+", type=float, default=[100.])
+    parser.add_argument("--first-center-fs", type=float, default=100.)
+    parser.add_argument("--ref-field", type=float, default=.06)
+    parser.add_argument("--pulses", type=int, default=30)
+    parser.add_argument("--relax-ps", type=float, default=2199.9, help="common time after last center")
+    parser.add_argument("--samples", type=int, default=300)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--temperature", type=float, default=11.2)
+    parser.add_argument("--temperature-seed-index", type=int, default=1, help="11.2 K was index 1 in the production ensemble")
+    parser.add_argument("--seed", type=int, default=20261105)
+    parser.add_argument("--omega", type=float, default=.75)
+    parser.add_argument("--fine-step-fs", type=float, default=10.)
+    parser.add_argument("--coarse-step-fs", type=float, default=1000.)
+    parser.add_argument("--data", default="mcalc/MnBi2Te4")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    for values in (args.alphas, args.fluences, args.separations_ps, args.anisotropies_mev):
+        if len(set(values)) != len(values) or not all(np.isfinite(values)) or min(values) < 0:
+            parser.error("scan axes must be finite, nonnegative and distinct")
+    args.output.mkdir(parents=True, exist_ok=True)
+    points = []
+    if min(args.anisotropies_mev) <= 0:
+        parser.error("anisotropies must be positive")
+    for alpha, fluence, sep, anisotropy in itertools.product(args.alphas, args.fluences, args.separations_ps, args.anisotropies_mev):
+        label = f"a{alpha}_F{fluence}_s{sep}ps"
+        if args.anisotropies_mev != [0.2]:
+            label += f"_K{anisotropy}meV"
+        dest = args.output / label
+        total_fs = args.first_center_fs + (args.pulses-1)*sep*1000 + args.relax_ps*1000
+        command = [sys.executable, "-m", "LLG.ensemble", "--ensemble", "--matrix-entry", "1",
+                   "--xy-plus-target", "1", "--pulse-bins", "--alpha", str(alpha),
+                   "--anisotropy-mev", str(anisotropy),
+                   "--field-amplitude", str(args.ref_field*np.sqrt(fluence)),
+                   "--fwhm-fs", str(args.fwhm_fs),
+                   "--separation-fs", str(sep*1000), "--first-center-fs", str(args.first_center_fs),
+                   "--total-time-fs", str(total_fs),
+                   "--pulses", str(args.pulses), "--samples", str(args.samples),
+                   "--temperatures", str(args.temperature), "--omegas", str(args.omega),
+                   "--temperature-seed-index", str(args.temperature_seed_index),
+                   "--workers", str(args.workers), "--seed", str(args.seed),
+                   "--fine-step-fs", str(args.fine_step_fs), "--coarse-step-fs", str(args.coarse_step_fs),
+                   "--data", args.data, "--output", str(dest)]
+        if (dest/"config.json").exists():
+            command.append("--resume")
+        subprocess.run(command, check=True)
+        records = [json.loads(p.read_text()) for p in sorted((dest/"results").glob("*.json"))]
+        if len(records) != args.samples:
+            raise RuntimeError(f"Incomplete point: {dest}")
+        pulses = np.arange(args.pulses+1)
+        crossings = np.array([np.inf if r["crossing_pulse_centers_elapsed"] is None
+                              else r["crossing_pulse_centers_elapsed"] for r in records])
+        cross = (crossings[:, None] <= pulses).mean(axis=0)
+        near = (np.array([r["bin_end_target_alignment"] for r in records]) >= .95).mean(axis=0)
+        points.append((label, alpha, fluence, sep, cross, near,
+                       np.mean([r["write_success"] for r in records]), anisotropy))
+    for filename, idx in (("first_crossing", 4), ("near_target", 5)):
+        with (args.output/f"{filename}.txt").open("w", newline="") as stream:
+            writer = csv.writer(stream, delimiter="\t")
+            writer.writerow(["Pulse_centers_elapsed", *(p[0] for p in points)])
+            for n in pulses:
+                writer.writerow([n, *(p[idx][n] for p in points)])
+    with (args.output/"final_map.txt").open("w", newline="") as stream:
+        writer = csv.writer(stream, delimiter="\t")
+        writer.writerow(["alpha", "K_meV", "F_over_Fref", "separation_ps", "ever_crossed", "target_hemisphere", "near_target"])
+        for _, alpha, fluence, sep, cross, near, hemi, anisotropy in points:
+            writer.writerow([alpha, anisotropy, fluence, sep, cross[-1], hemi, near[-1]])
 
 
 if __name__ == "__main__":

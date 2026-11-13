@@ -31,9 +31,9 @@ from auxiliary import showElapsedTime, getCBM, getVBM
 from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, outputIFEcoeffs, outputIFTcoeffs,
                     output4thData, outputBZDistributionData, outputIFEResponseOnBZ, outputIFTResponseOnBZ)
 
-def run(bloch_options=None):
+def run(bloch_options=None, optical_options=None):
     # Pbene, spin hall conductance
-    mainDir="./mcalc/FeCl2/"
+    mainDir="./mcalc/MnBi2Te4/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -82,6 +82,8 @@ def run(bloch_options=None):
     model.symmerizeCollinearAndSOI()
     model.getExchangeR(provenance="pauli estimate")
     magnetizationTheta ,magnetizationPhi = 5/180*np.pi, 0/180*np.pi
+    if optical_options is not None:
+        magnetizationTheta, magnetizationPhi = np.deg2rad([optical_options.theta, optical_options.phi])
     model.includeSOCFromSOI(theta=magnetizationTheta,phi=magnetizationPhi,strength=1,keepRegularSpinAxis=True)
     #model.rotateExchangeDirection(theta=magnetizationTheta,phi=magnetizationPhi)
     #model.getExchangeR(provenance="explicit")
@@ -148,8 +150,8 @@ def run(bloch_options=None):
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    fermi=-3.0         # VASP 2H-FeCl2 U=2.0
-    #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
+    #fermi=-3.0         # VASP 2H-FeCl2 U=2.0
+    fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -164,7 +166,7 @@ def run(bloch_options=None):
 
     #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,11)
     fermiAxis=np.array([fermi,])
-    omegaAxis=np.arange(0.5,3.05,0.5)
+    omegaAxis=np.arange(0.1,3.0,0.05) #np.arange(0.5,3.05,0.5)
     #omegaAxis=[0]
     model.setFermi(fermi)
     
@@ -225,20 +227,24 @@ def run(bloch_options=None):
     calc=Z2_FHS(model=model, kgrid=(51,51,1), verbose=2, )
     #exit()#'''
 
+    if optical_options is not None:
+        from opticalAbsorptionInput import run_optical
+        return run_optical(model, fermiAxis, optical_options)
+
     if bloch_options is not None:
         from blochAccelerationInput import run_bloch_scan
         return run_bloch_scan(model, fermiAxis, bloch_options)
 
-    BZGrid=(48,48,1)
+    BZGrid=(162,162,1)
     BZSymm=False
     recordOmegaIndexList=[]#[6]
     recordFermiIndexList=[]#[0]
     BZDistributionRepeat=(1,1,0)
-    ObservableType="IFT" # "IFE" or "IFT"; must match the selected response calculator
+    ObservableType="IFE" # "IFE" or "IFT"; must match the selected response calculator
     Pt1,Pt2,Pt3,Pt4=[(0,(0,1,2,)),],[(1,(0,1,2,)),],[(2,(0,1,2,)),],[(3,(0,1,2,)),]
     Co1,Co2,Co3=[(4,(0,1,2,)),],[(5,(0,1,2,)),],[(6,(0,1,2,)),]
     # Set IFT_SOLVER=FD to run the independent finite-difference benchmark.
-    calc=BZGridTask(model, solveIFTorque_LG_FD,
+    calc=BZGridTask(model, solveIFE_LG_DM,
                     args={"fermi":fermiAxis, 
                           "projected shells for applying current":[
                               #{"source":Pt1+Pt2+Pt3+Pt4, "target":Pt1+Pt2+Pt3+Pt4},
