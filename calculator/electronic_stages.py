@@ -606,6 +606,29 @@ class Orbital(Energy):
         aa = connection[..., None, :, :, :]
         return -1j*(aa @ moment-moment @ aa)
 
+class SpinOrbitalCoupling(Spin,Orbital):
+    def __init__(self, angularProjectionList=[], **kwarg):
+        '''
+        Compute dimensionless ACA L.S/hbar^2 in eigen-basis (independent of g factors).
+    
+        Indexing:
+        self.spinOrbital_K[ik1, ik2, ik3, ieig, jeig] gives the
+        S.L matrix in eigen-basis.
+        '''
+        super().__init__(spinProjectionList=angularProjectionList, orbitalProjectionList=angularProjectionList, **kwarg)
+        if self.model.overlap:
+            raise NotImplementedError('ACA L.S requires an orthogonal basis')
+        operator = np.sum(self.model.spin @ self.model.orbital, axis=0)/2
+        u = self.vectors
+        self.spinOrbital_K = u.conj().swapaxes(-2,-1) @ operator @ u
+        self.projected_spinOrbital_K_list=[]
+        for projection in angularProjectionList:
+            ps, pt = [projectionOperator(projection[key], self.model.atomicOrbInfoList,
+                                         self.model.norbs) for key in ('source','target')]
+            projected = (ps @ operator @ pt + pt @ operator @ ps)/2
+            self.projected_spinOrbital_K_list.append(u.conj().swapaxes(-2,-1) @ projected @ u)
+        if self.verbose==2: showElapsedTime(extraInfo=f"<S.L> in eig.-basis calculated")
+
 class _OrbitalHamiltonianTorque(Orbital):
     """ACA moment commutator with a registered Hamiltonian contribution.
 

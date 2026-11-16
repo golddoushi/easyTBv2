@@ -276,6 +276,23 @@ class OrbitalExpectationOnPath(EnergyOnPath):
             self.orbital_eig=vectors.conj().swapaxes(-2,-1) @ orbital_operator[None,:,:,:] @ vectors
         if self.verbose==2: showElapsedTime(extraInfo=f"local orbital magnetic moment on path calculated")
 
+class SpinOrbitalExpectationOnPath(SpinExpectationOnPath,OrbitalExpectationOnPath):
+    def __init__(self, gS:float = 2, gL:float = 1.0, **kwarg):
+        '''
+        Compute dimensionless ACA L.S/hbar^2 along a k path, independent of g factors.
+        
+        Indexing
+        --------
+        - self.spinOrbital[ik, ieig, jeig] gives the S \cdot L matrix in eigen-basis.
+        '''
+        super().__init__(gS=gS, gL=gL, **kwarg)
+        if self.model.overlap:
+            raise NotImplementedError('ACA L.S requires an orthogonal basis')
+        operator = np.sum(self.model.spin @ self.model.orbital, axis=0)/2
+        u = self.vectors[..., self.ibmin:]
+        self.spinOrbital_eig = u.conj().swapaxes(-2,-1) @ operator @ u
+        if self.verbose==2: showElapsedTime(extraInfo=f"expectation of S \cdot L on path calculated")
+
 class OrbitalModernExpectationOnPath(VelocityOnPath):
     def __init__(self, **kwarg):
         '''

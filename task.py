@@ -12,7 +12,7 @@ from auxiliary import showElapsedTime, SYMPREC
 from system import System
 from calculator.requirements import ComputationRequirements, collision_requirements
 from calculator import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from calculator import Spin, Orbital, OrbitalModern_Full, SpinOrbital
+from calculator import Spin, Orbital, SpinOrbitalCoupling, OrbitalModern_Full, SpinOrbital
 from calculator import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM
 from calculator import BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from calculator import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
@@ -31,7 +31,8 @@ from calculator import (SpinTorque, SpintorqueGalvanicConductance,
                         SpintorqueGalvanicConductivity_LG_DM, SpintorqueGalvanicConductivity_VG_DM,
                         SpinSOCTorqueGalvanicConductivity_LG_DM, SpinSOCTorqueGalvanicConductivity_VG_DM)
 from calculator import IntrinsicNPHE_BCP, SecondOrderAHC_BCP_FermiSea, SecondOrderAHC_BCP_FermiSurf
-from calculator import EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath
+from calculator import (EnergyOnPath, SpinExpectationOnPath, OrbitalExpectationOnPath, SpinOrbitalExpectationOnPath, 
+                        OrbitalModernExpectationOnPath, SurfaceBulkSpectraOnPath)
 from calculator import AnormalousHallConductance_VG_DM, Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE
 from calculator import Opticalconductivity_VG_DM_Phonon
 
@@ -1144,6 +1145,22 @@ def solveMagneticMoment(param):
         "iq":param["iq"]
     }
 
+def solveSpinOrbitalCoupling(param):
+    skip_low=param.get('skip low',False)
+
+    calc=SpinOrbitalCoupling(model=param['model'],kgrid=param['FFT grid'],kOffset=param['kOffset'],skip_low=skip_low,
+                             verbose=param['verbose'])
+    from auxiliary import fermiDiracOccupations
+    fd=fermiDiracOccupations(calc.energies,param['fermi'],param['kBT']) # ifermi, ik1, ik2, ik3, iband
+    soc_on_eig = np.diagonal(calc.spinOrbital_K.real,axis1=-2,axis2=-1)
+    soc_on_fermi = np.sum(fd*soc_on_eig[None,...],axis=(1,2,3,4))/np.prod(param['FFT grid'])
+
+    return {
+        'energies': calc.energies,
+        'spin-orbital coupling': soc_on_fermi,
+        "iq":param["iq"]
+    }
+
 #+--------------------------+
 #| factory for BZLine tasks |
 #+--------------------------+
@@ -1159,18 +1176,18 @@ def solveSurfaceSpectraTask(param):
     }
 
 def solveBandStructure(param):
-    spin_eig, orbital_eig=None, None
+    spin_eig, orbital_eig, spinOrbital_eig=None, None, None
     degen=param.get('degen', 1e-6)
     if param['spin proj'] and param['orbital proj']:
-        calc=SpinExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
+        calc=SpinOrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
         spin_eig = calc.spin_eig.real
-        calc=OrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
         orbital_eig = calc.orbital_eig.real
+        spinOrbital_eig = calc.spinOrbital_eig.real
     elif param['spin proj']:
         calc=SpinExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
         spin_eig = calc.spin_eig.real
     elif param['orbital proj']:
-        calc=OrbitalModernExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
+        calc=OrbitalExpectationOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'], degen=degen)
         orbital_eig = calc.orbital_eig.real
     else:
         calc=EnergyOnPath(model=param['model'], kpath=param['kpath'], verbose=param['verbose'])
@@ -1179,4 +1196,5 @@ def solveBandStructure(param):
         'energies': calc.energies,
         'spin_eig': spin_eig,
         'orbital_eig': orbital_eig,
+        'spinOrbital_eig': spinOrbital_eig,
     }

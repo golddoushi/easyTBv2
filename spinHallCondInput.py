@@ -18,6 +18,7 @@ from task import solveSGC_LG_DM, solveOGC_LG_DM, solveStGC_LG_DM, solveSGC_VG_DM
 from task import solveBPVE_TDSE, solveBPVE_VG, solveBPVE_VG_DM, solveBPVE_TDSE_LG, solveBPVE_LG_Shift, solveBPVE_LG_Inject, solveBPVE_LG_DM
 from task import solveIFE_TDSE, solveIFE_BlochAcceleration_TDSE, solveIFE_VG, solveIFE_VG_DM, solveIFE_LG, solveIFE_LG_DM
 from task import solveIFTorque_TDSE, solveIFTorque_VG_DM, solveIFTorque_LG_DM, solveIFTorque_LG_FD
+from task import solveSpinOrbitalCoupling
 from task import solveINPHE_BCP
 #+------------+
 #| Line tasks |
@@ -33,7 +34,7 @@ from fileio import (DOSCAR, writeVolumeData, output3rdFreqDenpendentData, output
 
 def run(bloch_options=None, optical_options=None):
     # Pbene, spin hall conductance
-    mainDir="./mcalc/MnBi2Te4/"
+    mainDir="./mcalc/FeCl2/"
     model=System_w90(
         mainDir=mainDir,
         #hamR="omx",
@@ -150,8 +151,8 @@ def run(bloch_options=None, optical_options=None):
     #fermi=10.96516405 # VASP Pt
     #fermi=-2.63611399 # VASP PbSnH
     #fermi=-2.345       # VASP PbSn
-    #fermi=-3.0         # VASP 2H-FeCl2 U=2.0
-    fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
+    fermi=-3.0         # VASP 2H-FeCl2 U=2.0
+    #fermi=0.95         # VASP SL-MnBi2Te4 U=4.0
     #fermi=6.44577045         # VASP Mn3Sn
     #fermi=6.65112400         # VASP Mn3SnH
     #fermi=-0.09570791         # VASP Mn3Sn_2layer
@@ -164,35 +165,39 @@ def run(bloch_options=None, optical_options=None):
     #fermi=DOSCAR(mainDir+"DOSCAR").fermi   # Fermi from DOSCAR
     #fermi=0            # model hamiltonian
 
-    #fermiAxis=np.linspace(fermi-1.0,fermi+1.0,11)
-    fermiAxis=np.array([fermi,])
+    fermiAxis=np.linspace(fermi-1.0,fermi+1.0,11)
+    #fermiAxis=np.array([fermi,])
     omegaAxis=np.arange(0.1,3.0,0.05) #np.arange(0.5,3.05,0.5)
     #omegaAxis=[0]
     model.setFermi(fermi)
     
-    '''
+    #'''
     # check band intepolation
-    spin_proj, orbital_proj= False, False
+    spin_proj, orbital_proj= True, True
     calc=BZLineTask(model, solveBandStructure, KPOINTS=mainDir+"/KPOINTS", ncores=8,
                    args={"spin proj":spin_proj, "orbital proj":orbital_proj, "degen":1e-2},
                    )
     energies=np.zeros((calc.nkpt,model.norbs),dtype=float)
     if spin_proj: spin_eig=np.zeros((calc.nkpt,3,model.norbs),dtype=float)
     if orbital_proj: orbital_eig = np.zeros((calc.nkpt,3,model.norbs),dtype=float)
+    if spin_proj and orbital_proj: spinOrbital_eig = np.zeros((calc.nkpt,model.norbs),dtype=float)
     for result in calc.results:
         energies[result['indices']]   =result['energies']
         if spin_proj: spin_eig[result['indices']]   =np.diagonal(result['spin_eig'],axis1=-2,axis2=-1)
         if orbital_proj: orbital_eig[result['indices']]=np.diagonal(result['orbital_eig'],axis1=-2,axis2=-1)
+        if spin_proj and orbital_proj: spinOrbital_eig[result['indices']]=np.diagonal(result['spinOrbital_eig'],axis1=-2,axis2=-1)
     with open(mainDir+"./tbbands.txt","w") as fout:
         fout.write("#ikpt Energy(eV) ")
         if spin_proj: fout.write("<Sx> <Sy> <Sz> ")
         if orbital_proj: fout.write("<Lx> <Ly> <Lz> ")
+        if spin_proj and orbital_proj: fout.write("<S.L> ")
         fout.write("\n")
         for iband in range(model.norbs):
             for ik, energy in enumerate(energies[:,iband]):
                 fout.write(f"{ik:5d}{energy:15.6E}")
                 if spin_proj: fout.write(f"{spin_eig[ik,0,iband]:15.6E}{spin_eig[ik,1,iband]:15.6E}{spin_eig[ik,2,iband]:15.6E}")
                 if orbital_proj: fout.write(f"{orbital_eig[ik,0,iband]:15.6E}{orbital_eig[ik,1,iband]:15.6E}{orbital_eig[ik,2,iband]:15.6E}")
+                if spin_proj and orbital_proj: fout.write(f"{spinOrbital_eig[ik,iband]:15.6E}")
                 fout.write("\n")
             fout.write("\n")
     exit()#'''

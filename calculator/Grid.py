@@ -23,7 +23,7 @@ from .density_matrix import (AC_CHANNEL_DESCRIPTIONS as AC_DM_CHANNEL_DESCRIPTIO
 
 from .collision import (CollisionSpecification, PreparedCollision, resolve_collision, collision_mode,
                         prepare_phonon_background)
-from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbital,
+from .electronic_stages import (Calculator, Energy, Velocity, Dipole, Spin, Orbital, SpinOrbitalCoupling,
                                 SpinTorque, SpinExchangeTorque, SpinSOCTorque, SpinFluxTorque, OrbitalSOCTorque, OrbitalFluxTorque, OrbitalTorque, SpinVelocity, OrbitalVelocity,
                                 Orbital_BlochSelfRotate, OrbitalVelocity_BlochSelfRotate, OrbitalVelocity_BlochSelfRotateV2)
 from .response_inputs import ResponseInputs

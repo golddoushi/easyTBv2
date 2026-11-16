@@ -2,7 +2,7 @@ from .Grid import Velocity, Velocity_diag, Energy, SpinBerryCurv, PDOS
 from .Grid import AnormalousHallConductance_VG_DM, Opticalconductivity_LG_DM, Opticalconductivity_VG_DM, Opticalconductivity_TDSE
 from .Grid import Opticalconductivity_VG_DM_Phonon
 from .Grid import Opticalconductivity_VG_DM_StaticEPC
-from .Grid import Spin, Orbital, OrbitalModern_Full, SpinOrbital
+from .Grid import Spin, Orbital, SpinOrbitalCoupling, OrbitalModern_Full, SpinOrbital
 from .Grid import AnormalousHallConductance, AnormalousHallConductance_diag, AnormalousHallConductance_LG_DM, BulkPhotovoltaicEffect_VG, BulkPhotovoltaicEffect_VG_DM, BulkPhotovoltaicEffect_LG_Shift, BulkPhotovoltaicEffect_LG_Injection, BulkPhotovoltaicEffect_LG_DM, BulkPhotovoltaicEffect_TDSE, BulkPhotovoltaicEffect_TDSE_LG_Naive
 from .Grid import InverseFaradayEffect_TDSE, InverseFaradayEffect_BlochAcceleration_TDSE, InverseFaradayEffect_VG, InverseFaradayEffect_VG_DM, InverseFaradayEffect_LG, InverseFaradayEffect_LG_DM
 from .Grid import InverseFaradayTorque_TDSE, InverseFaradayTorque_VG_DM, InverseFaradayTorque_LG_DM, InverseFaradayTorque_LG_FD
@@ -32,7 +32,7 @@ from .response_contractions import (solve_bpve_lg, solve_bpve_vg, solve_ife_lg,
                                     solve_ife_vg, solve_torque_lg, solve_torque_vg)
 
 from .Path import EnergyOnPath, VelocityOnPath, BerryCurvOnPath, SpinBerryCurvOnPath
-from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath
+from .Path import SpinExpectationOnPath, OrbitalExpectationOnPath, OrbitalModernExpectationOnPath, SpinOrbitalExpectationOnPath
 from .Path import SurfaceBulkSpectraOnPath
 
 from .Grid import (SpinFluxTorque, SpinFluxTorqueGalvanicConductivity_LG_DM,
